@@ -114,7 +114,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	running *runningDomain) statelog.ReanchorInputs {
 
 	in := statelog.ReanchorInputs{
-		StreamCreatedAt: running.createdAt,
+		StreamCreatedAt: running.identity(),
 		Generation:      running.runner.Committed().Generation,
 		Position:        running.runner.Committed().Seq,
 	}
@@ -155,7 +155,7 @@ func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (
 			"build runs", stream)
 	}
 	_ = ctx
-	return running.createdAt, running.runner.Committed().Generation, nil
+	return running.identity(), running.runner.Committed().Generation, nil
 }
 
 // hydratedPeers names every peer that is caught up on the LIVE stream.

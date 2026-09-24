@@ -599,14 +599,21 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"started it cannot be continued")
 		return nil
 	}
-	// Freed only NOW, immediately before the resume, so no queued event can
-	// take the slot first.
-	c.clearBusy(run.AgentHandle)
-
-	// THE CONVERSATION WHOLE: a row that could not hold its suspension holds
-	// a reference to the parts it is kept in, and the resume re-enters what
-	// they hold. A reference is never empty, so the check above has already
-	// asked the right question of it.
+	// THE CONVERSATION WHOLE, read while the run still holds the seat: a row
+	// that could not hold its suspension holds a reference to the parts it
+	// is kept in, and the resume re-enters what they hold. A reference is
+	// never empty, so the check above has already asked the right question
+	// of it.
+	//
+	// BEFORE THE SEAT IS FREED, because each way this read fails settles the
+	// seat's count by a path of its own. A lost conversation is settled like
+	// the empty one above, by settleFailed, which frees the seat itself; and
+	// a store that could not be read hands the claim back as a failed resume
+	// does, freeing the seat first and letting the release say what the run
+	// holds after it. Freed before the read, a lost conversation would take
+	// the seat's count down twice for one run, here and in settleFailed, and
+	// a seat still running another job would stop parking its mail and take
+	// a turn beside that job.
 	state, err := c.pending.Suspension(ctx, run)
 	switch {
 	case errors.Is(err, ErrSuspensionUnreadable):
@@ -625,10 +632,15 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// read, and the retry the signal's redelivery brings may.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		c.clearBusy(run.AgentHandle)
 		c.unclaim(ctx, run, false)
 		return err
 	}
 	run.ExecuteState = state
+
+	// Freed only NOW, immediately before the resume, so no queued event can
+	// take the slot first.
+	c.clearBusy(run.AgentHandle)
 
 	// STRAIGHT TO THE RESUMER, which [NewCoordinator] refuses to be built
 	// without: "this node cannot resume this run" is the resumer's own

@@ -1,8 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -10,9 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // probe answers a sequence's stored instant from a table, and reports which
@@ -564,14 +573,12 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	}
 }
 
-// firedKind reports whether an evaluation raised one alarm.
 // THE ALARM TABLE IS EVALUATED ON EVERY PASS, AND THE TRIM ON THE PASSES A TRIM
 // INTERVAL APART.
 //
-// An alarm is only as prompt as the look that raises it, so no threshold the
-// table fires at may be shorter than the interval it is evaluated on — a
-// condition that held for its whole threshold would otherwise go unseen until
-// the next pass. The trim is a burst of purges behind a duty claim, sized in
+// An alarm is only as prompt as the look that raises it: evaluated only on the
+// passes that trim, an operator would hear of a condition up to a trim interval
+// after it began. The trim is a burst of purges behind a duty claim, sized in
 // quarter hours; taken on every alarm pass it would ask for the lease every
 // fifteen seconds for nothing the lease allows.
 //
@@ -580,20 +587,6 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 // won, and a node holding no duty asks for it on every pass.
 func TestTheAlarmTableIsEvaluatedOnEveryPassAndTheTrimOnItsOwnInterval(t *testing.T) {
 	t.Parallel()
-	for condition, threshold := range map[string]time.Duration{
-		"a run of refused reads (read_refusals)":          coord.ReconcileInterval,
-		"an unapplied record (apply_lag)":                 statelog.StallGrace,
-		"an unreadable floor (floor_unknown)":             statelog.FloorCacheStale,
-		"a record this node cannot decode (deferred_old)": statelog.DeferralGrace,
-		"an open capacity operation (maintenance_open)":   statelog.MaintenanceAlarmAfter,
-	} {
-		if AlarmInterval > threshold {
-			t.Errorf("the table is evaluated every %s and fires on %s at %s, so "+
-				"it can be raised up to %s after the condition it names",
-				AlarmInterval, condition, threshold, AlarmInterval-threshold)
-		}
-	}
-
 	evaluations, claims := 0, 0
 	r := &retention{
 		fleet:  coordmem.NewFleet(),
@@ -631,6 +624,242 @@ func TestTheAlarmTableIsEvaluatedOnEveryPassAndTheTrimOnItsOwnInterval(t *testin
 	}
 }
 
+// THE REPORT CARRIES A RUN OF REFUSED READS TO THE ALARM.
+//
+// `read_refusals` is judged on [statelog.Reading.RefusalsSince], and the one
+// thing that fills it is [series] asking the domain's own reader how long its
+// reads have been refused. A reading assembled without that question evaluates
+// a table in which reads never refuse, on a node refusing every one — so the
+// case refuses reads through the reader a running domain carries, and hands
+// that domain to the function the report hands it to.
+//
+// Mutation: drop the reader from [series] and the run reaches no reading.
+func TestTheReportCarriesARunOfRefusedReadsToTheAlarm(t *testing.T) {
+	t.Parallel()
+	began := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	clock := began
+	reader, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: tracker.Domain{},
+		DB:     untouchedStore{t},
+		Waiter: stillWaiter{},
+		// A STALLED APPLIER, which a read refuses on this node's own
+		// health before it reads or appends anything.
+		Health: func() statelog.Health {
+			return statelog.Health{Stalled: true,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: clock}}
+		},
+		Now: func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatalf("build the reader: %v", err)
+	}
+	refuse := func() {
+		t.Helper()
+		_, err := reader.Read(t.Context(), statelog.Query{Level: statelog.ReadLinearizable},
+			func(*sql.Tx) error { return nil })
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseStalled {
+			t.Fatalf("a read on a stalled applier answered %v, want a %s refusal",
+				err, statelog.RefuseStalled)
+		}
+	}
+	running := &runningDomain{domain: tracker.Domain{}, reader: reader}
+
+	// ONE REFUSAL IS NOT A RUN WORTH AN ALARM.
+	refuse()
+	var first statelog.Reading
+	series(running, clock, &first)
+	if firedKind(statelog.Evaluate(first), statelog.KindReadRefusals) {
+		t.Errorf("one refused read raised %s (refusing for %v)",
+			statelog.KindReadRefusals, first.RefusalsSince)
+	}
+
+	// A RUN LONGER THAN THE ALARM'S THRESHOLD IS.
+	clock = began.Add(coord.ReconcileInterval + time.Second)
+	refuse()
+	var reading statelog.Reading
+	series(running, clock, &reading)
+	if reading.RefusalsSince != coord.ReconcileInterval+time.Second {
+		t.Errorf("reads refused from %v to %v reached the reading as a run of %v, "+
+			"want %v", began, clock, reading.RefusalsSince,
+			coord.ReconcileInterval+time.Second)
+	}
+	if !firedKind(statelog.Evaluate(reading), statelog.KindReadRefusals) {
+		t.Errorf("reads refused for %v did not raise %s", reading.RefusalsSince,
+			statelog.KindReadRefusals)
+	}
+}
+
+// AN UNREADABLE EVICTION TABLE IS WRITTEN DOWN ONCE A TRIM INTERVAL, and at once
+// again after a read of it has answered.
+//
+// Every report reads the table, and one is assembled on every alarm pass as
+// well as on every operator request — so a table that stays unreadable,
+// written down on every read, repeats one WARN on every node four times a
+// minute. Once a [RetentionInterval] says it as often as the trim that the
+// missing tombstones hold back runs. A read that answers clears the stamp, so a
+// failure after it is news and is written at once.
+//
+// Mutation: drop the stamp check and the second read writes a second line;
+// drop the clear on a read that answers and the failure after it writes
+// nothing.
+func TestAnUnreadableEvictionTableIsWrittenDownOnceATrimInterval(t *testing.T) {
+	t.Parallel()
+	healthy := freshStore(t)
+	broken := freshStore(t)
+	if _, err := broken.Replicated().SQL().ExecContext(t.Context(),
+		`DROP TABLE tracker_evictions`); err != nil {
+		t.Fatalf("drop the eviction table: %v", err)
+	}
+	var out bytes.Buffer
+	r := &retention{logger: slog.New(slog.NewJSONHandler(&out, nil))}
+	running := &runningDomain{domain: tracker.Domain{}}
+	read := func(db *store.DB, want int, when string) {
+		t.Helper()
+		r.db = db
+		if got := r.tombstones(t.Context(), running, 1); len(got) != 0 {
+			t.Fatalf("%s: a table holding no evictions answered %v", when, got)
+		}
+		if got := countLogged(t, &out, slog.LevelWarn,
+			"retention_evictions_unreadable"); got != want {
+			t.Errorf("%s: %d line(s) written in all, want %d", when, got, want)
+		}
+	}
+
+	read(broken, 1, "the first read that fails")
+	read(broken, 1, "a second read inside the interval")
+	r.evictionsWarnedAt = r.evictionsWarnedAt.Add(-RetentionInterval)
+	read(broken, 2, "a read one interval after the last line")
+	read(healthy, 2, "a read that answers")
+	read(broken, 3, "the first failure after a read that answered")
+}
+
+// freshStore is a node's two estates in a directory of their own.
+func freshStore(t *testing.T) *store.DB {
+	t.Helper()
+	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// countLogged is how many lines a JSON handler wrote with one message at one
+// level.
+func countLogged(t *testing.T, out *bytes.Buffer, level slog.Level, msg string) int {
+	t.Helper()
+	count := 0
+	for _, line := range bytes.Split(out.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry struct {
+			Level string `json:"level"`
+			Msg   string `json:"msg"`
+		}
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("decode the log line %q: %v", line, err)
+		}
+		if entry.Level == level.String() && entry.Msg == msg {
+			count++
+		}
+	}
+	return count
+}
+
+// EACH LOG'S TRIM READS ITS OWN WAKE FEED.
+//
+// The feed term holds a log's trim at what that log's wake feed has
+// acknowledged, and each domain's feed is a consumer group on its own log,
+// under the name its translator declares. Asked for another domain's group, a
+// log answers that no such consumer exists, which the term reads as a feed that
+// has seen nothing — so the trim of that log would stay at zero for as long as
+// the node runs.
+//
+// Mutation: read the tracker's group on every log and the knowledge base's
+// term stays at zero after its feed has acknowledged two records.
+func TestEachLogsTrimReadsItsOwnWakeFeed(t *testing.T) {
+	t.Parallel()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	r := &retention{}
+	for _, tc := range []struct {
+		domain statelog.Domain
+		// group is the one the engine runs this domain's feed under.
+		group string
+	}{
+		{tracker.Domain{}, tracker.NewTranslator().Source().Group},
+		{pages.Domain{}, pages.NewTranslator(nil).Source().Group},
+	} {
+		spec := tc.domain.Stream()
+		if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
+			Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
+			MaxPerSubject: spec.MaxPerSubject, Duplicates: spec.Duplicates,
+		}); err != nil {
+			t.Fatalf("provision %s: %v", spec.Name, err)
+		}
+		domainLog, err := q.DomainLog(t.Context(), spec.Name)
+		if err != nil {
+			t.Fatalf("open %s: %v", spec.Name, err)
+		}
+		for i := range 3 {
+			if _, _, err := domainLog.Append(t.Context(),
+				fmt.Sprintf("%s.probe.%d", spec.SubjectPrefix, i),
+				fmt.Sprintf("op-%s-%d", tc.domain.Name(), i), nil,
+				[]byte("record")); err != nil {
+				t.Fatalf("append to %s: %v", spec.Name, err)
+			}
+		}
+		// THE FEED ACKNOWLEDGES TWO of the three.
+		feed, err := domainLog.Group(t.Context(), tc.group)
+		if err != nil {
+			t.Fatalf("open %s's feed: %v", tc.domain.Name(), err)
+		}
+		for range 2 {
+			delivery, err := feed.Next(t.Context())
+			if err != nil || delivery == nil {
+				t.Fatalf("read %s's feed: %v", tc.domain.Name(), err)
+			}
+			if err := delivery.Ack(); err != nil {
+				t.Fatalf("acknowledge on %s's feed: %v", tc.domain.Name(), err)
+			}
+		}
+		running := &runningDomain{domain: tc.domain, log: domainLog}
+		waitUntil(t, 10*time.Second, tc.domain.Name()+"'s trim to read its feed at 2",
+			func() bool {
+				seq, has, readable := r.feedTerm(t.Context(), running)
+				return seq == 2 && has && readable
+			})
+		_ = feed.Stop()
+	}
+}
+
+// untouchedStore is a database a read must never reach.
+type untouchedStore struct{ t *testing.T }
+
+func (s untouchedStore) Read(context.Context, func(*sql.Tx) error) error {
+	s.t.Error("a read the node's own health refuses reached the database")
+	return errors.New("this case's database is not there to be read")
+}
+
+// stillWaiter is an applier that has committed nothing and never will.
+type stillWaiter struct{}
+
+func (stillWaiter) Committed() statelog.Position { return statelog.Position{} }
+
+func (stillWaiter) WaitCommitted(context.Context, statelog.Position) error {
+	return errors.New("this case's applier does not move")
+}
+
+func (stillWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
+	return errors.New("this case's applier does not move")
+}
+
+// firedKind reports whether an evaluation raised one alarm.
 func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 	for _, a := range alarms {
 		if a.Kind == want {

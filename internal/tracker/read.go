@@ -132,8 +132,10 @@ type Blocker struct {
 
 // Incomplete says what an answer could not account for.
 type Incomplete struct {
-	// Records is how many this node holds that it cannot decode and whose
-	// scope could intersect the question.
+	// Records is how many records this node retains whose declared scope
+	// meets the question — each one this build cannot decode, or one held
+	// back behind such a record — counted once however many of a record's
+	// paths meet it.
 	Records int `json:"records"`
 
 	// From is where the lowest of them sits, which is the position a build
@@ -145,8 +147,10 @@ type Incomplete struct {
 	// decode" means.
 	Scope []string `json:"scope"`
 
-	// Version is the record version this node could not read, which is the
-	// one number an operator needs to pick a build.
+	// Version is the record version the lowest of them was written at. Above
+	// the version this build reads, it is the number an operator picks a
+	// build by; at or below it, that record is held back behind one this
+	// build cannot decode.
 	Version int `json:"version"`
 }
 
@@ -1810,58 +1814,37 @@ func readCheckpoint(ctx context.Context, tx *sql.Tx) (position, applied uint64, 
 	return packed, packed, nil
 }
 
-// coverageOf probes whether this node holds a record it cannot decode whose
-// scope could intersect one read.
+// coverageOf probes whether this node retains a record whose declared scope
+// meets one read: one it cannot decode, or one held back behind such a record.
 //
 // IT NAMES WHAT IS AFFECTED AND NOT IN WHICH DIRECTION, because this build
-// cannot compute the direction — that is what "cannot decode" means. Rows may
-// be missing, rows that should have left may still be present, and values on
-// the rows returned may be behind.
+// cannot compute the direction — the records it cannot decode are the ones
+// that would say. Rows may be missing, rows that should have left may still be
+// present, and values on the rows returned may be behind.
 //
 // A SCOPE THE CALLER BUILT rather than a query, because a detail read's scope
 // is one OBJECT and a board's is a container — and running a board's probe for
 // a single task would put a permanent warning on every task in a company
-// holding one undecodable record about one other task. The board's own probe
-// is the FRAMEWORK's (see [statelog.Reader]), and the query-shaped wrapper
-// this package kept beside it had no caller at all: a second coverage answer
-// that nothing asked for, and that nothing would have compared against the
-// one the answer actually carries.
+// holding one undecodable record about one other task.
+//
+// THE FRAMEWORK'S PROBE ([statelog.Retained]), run in the caller's own
+// transaction so it describes the rows that transaction reads. It is the one a
+// board's answer carries, so a detail read and a board count the same records
+// the same way: each record once however many of its paths meet the read, and
+// the version of the lowest one rather than the lowest version.
 func coverageOf(ctx context.Context, tx *sql.Tx, scope statelog.ScopeSet) (*Incomplete, error) {
-	closure := scope.Closure()
-	roots := scope.Roots()
-	if len(closure) == 0 {
-		return nil, nil
-	}
-	args := make([]any, 0, len(closure)+len(roots)*2)
-	for _, path := range closure {
-		args = append(args, path)
-	}
-	query := `SELECT COUNT(*), MIN(d.position), MIN(d.version)
-	          FROM tracker_log_deferred_scope s
-	          JOIN tracker_log_deferred d ON d.position = s.position
-	          WHERE s.path IN (` + placeholders(len(closure)) + `)`
-	for _, root := range roots {
-		query += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
-		args = append(args, root, store.LikePrefix(root+statelog.ScopeSeparator))
-	}
-	var count int
-	var lowest, version sql.NullInt64
-	if err := tx.QueryRowContext(ctx, query, args...).
-		Scan(&count, &lowest, &version); err != nil {
+	lowest, records, hit, err := statelog.Retained(ctx, tx, Domain{}, scope)
+	if err != nil {
 		return nil, fmt.Errorf("tracker: probe the answer's coverage: %w", err)
 	}
-	if count == 0 {
+	if !hit {
 		return nil, nil
 	}
 	return &Incomplete{
-		Records: count,
-		From: statelog.Position{
-			Stream:     trackerStream,
-			Generation: uint32(lowest.Int64 / statelog.GenerationStride),
-			Seq:        uint64(lowest.Int64 % statelog.GenerationStride),
-		},
+		Records: int(records),
+		From:    lowest.Position,
 		Scope:   scope.Paths,
-		Version: int(version.Int64),
+		Version: lowest.Version,
 	}, nil
 }
 

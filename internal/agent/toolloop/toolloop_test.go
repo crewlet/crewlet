@@ -68,7 +68,8 @@ func (s *fakeSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.To
 	return toolloop.ToolResult{Output: "ok"}, nil
 }
 
-// meter records spends and can refuse or fail.
+// meter records spends and can refuse or fail. A refused spend is counted like
+// any other, as [toolloop.BudgetMeter] requires: its tokens were billed.
 type meter struct {
 	spent    int
 	refuseAt int // refuse once cumulative spend would exceed this; 0 never
@@ -79,12 +80,13 @@ func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, err
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuseAt > 0 && m.spent+tokens > m.refuseAt {
+	before := m.spent
+	m.spent += tokens
+	if m.refuseAt > 0 && before+tokens > m.refuseAt {
 		return toolloop.SpendOutcome{
-			Scope: "role", Used: m.spent, Limit: m.refuseAt,
+			Scope: "role", Used: before, Limit: m.refuseAt,
 		}, nil
 	}
-	m.spent += tokens
 	return toolloop.SpendOutcome{OK: true}, nil
 }
 
@@ -556,13 +558,20 @@ func TestARefusedRoundsAnswerAndCostReachTheSnapshot(t *testing.T) {
 	}}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("send_email")}}
 	progress := &toolloop.Progress{}
+	m := &meter{refuseAt: 100}
 
 	if _, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 5, Budget: &meter{refuseAt: 100}, Progress: progress,
+		Provider: p, Surface: s, MaxRounds: 5, Budget: m, Progress: progress,
 	}); !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Fatalf("err = %v, want ErrBudgetExhausted", err)
 	}
 	got := progress.Snapshot()
+	// The meter was handed exactly what the snapshot counts, so a meter that
+	// counts a refusal, as every meter must, agrees with the record.
+	if m.spent != got.InputTokens+got.OutputTokens {
+		t.Errorf("the meter was charged %d for a round the snapshot counts at %d", m.spent,
+			got.InputTokens+got.OutputTokens)
+	}
 	want := toolloop.Narration{Round: 1, Reasoning: "the email is ready", Content: "Sending it now."}
 	if len(got.Abandoned) != 1 || got.Abandoned[0] != want {
 		t.Errorf("abandoned = %+v, want the refused round's answer %+v", got.Abandoned, want)

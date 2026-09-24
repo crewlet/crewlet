@@ -24,7 +24,8 @@ import (
 // building" for as long as the PAGES were.
 const itemCorpus = string(search.SourceTask)
 
-// itemRanker is [tracker.Ranker] over this node's index and fan-out.
+// itemRanker is [tracker.Ranker] over this node's index and fan-out, and it
+// needs both: [Engine.startNative] builds it with both or not at all.
 type itemRanker struct {
 	fan   *search.FanOut
 	index *search.Indexer
@@ -32,50 +33,63 @@ type itemRanker struct {
 
 // RankItems implements [tracker.Ranker].
 func (r itemRanker) RankItems(ctx context.Context, text string,
-	limit int) ([]tracker.RankedDoc, error) {
+	limit int) ([]tracker.RankedDoc, *tracker.SearchPartial, error) {
 
-	if r.fan == nil || r.index == nil {
-		return nil, nil
-	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    text,
 		Sources: []string{itemCorpus},
 		Limit:   limit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// A PARTIAL ANSWER IS LOGGED, because a short result set is
+	// A PARTIAL ANSWER IS CARRIED, because a short result set is
 	// indistinguishable from a short corpus to whoever reads it. The one
 	// cause of it that this node can know in advance — its own index still
 	// on its first build, which counts its own buckets missing — the
 	// tracker's searcher refuses on through [itemRanker.Building]; what
-	// remains is a peer that did not answer in time, or answered that its
-	// own index is still building.
+	// remains is a peer that did not answer in time or answered that its
+	// own index is still building, and a semantic half that did not run.
+	partial := itemPartialOf(answer)
 	if answer.Partial() {
 		log.WarnContext(ctx, "work_search_scoped",
 			"buckets_answered", answer.BucketsAnswered,
 			"buckets_missing", answer.BucketsMissing,
 			"absent", strings.Join(answer.Absent, ","),
-			"detail", "the ranking was complete for what was searched and "+
-				"silent about what was not")
+			"detail", "the ranking carries what it did not search")
 	}
 	hits, err := r.index.Hydrate(ctx, answer.Hits, text)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]tracker.RankedDoc, 0, len(hits))
 	for _, hit := range hits {
 		out = append(out, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
 	}
-	return out, nil
+	return out, partial, nil
+}
+
+// itemPartialOf is what a fan-out answer is missing, on the tracker's terms, or
+// nil for a whole one.
+func itemPartialOf(a search.Answer) *tracker.SearchPartial {
+	if a.Whole() {
+		return nil
+	}
+	return &tracker.SearchPartial{
+		BucketsAnswered: a.BucketsAnswered,
+		BucketsMissing:  a.BucketsMissing,
+		// NEVER NIL, so the wire reads `[]` rather than `null` for an
+		// answer that is missing only its semantic half.
+		AbsentNodes:     append([]string{}, a.Absent...),
+		SemanticSkipped: a.SemanticSkipped,
+	}
 }
 
 // Building implements [tracker.Ranker]: whether this node's index has yet to
 // finish its first lap over the work items — see [itemCorpus] for why not the
 // whole index.
 func (r itemRanker) Building(_ context.Context) bool {
-	return r.index != nil && !r.index.ReadyFor(itemCorpus)
+	return !r.index.ReadyFor(itemCorpus)
 }
 
 // WorkSearch is this node's ranked item search, or nil where this node does
@@ -99,10 +113,10 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // both the seat tools and a surface assembled outside this package take, the
 // operator's MCP endpoint being the one that is.
 //
-// IT ANSWERS AN UNTYPED NIL for a node with no index, rather than a non-nil
-// interface holding a nil [tracker.Searcher], because that is the shape a
-// `deps.Search != nil` gate reads correctly: handed the other one it registers
-// a search tool that can only fail.
+// IT ANSWERS AN UNTYPED NIL where [Engine.WorkSearch] answers nil, rather than
+// a non-nil interface holding a nil [tracker.Searcher], because that is the
+// shape a `deps.Search != nil` gate reads correctly: handed the other one it
+// registers a search tool that can only fail.
 //
 // ONE FUNCTION FOR BOTH CALLERS, so the typed-nil rule above is stated in one
 // place rather than in two that can stop matching.

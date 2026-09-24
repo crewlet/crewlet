@@ -46,13 +46,15 @@ import (
 // coordination store, and a backup that stopped a company to take itself
 // would not be taken.
 
-// backupPartSuffix names the in-progress copy.
+// backupStageSuffix names the directory a copy is written in before it is
+// placed: the destination's own name, with this after it.
 //
-// The copy is written under this name and RENAMED on success, so a crash
-// mid-copy leaves a file that is obviously incomplete rather than one sitting
-// at the destination looking like a backup. Rename within one directory is
-// atomic, which is what makes the destination's existence mean "verified".
-const backupPartSuffix = ".part"
+// The copy is written inside it and RENAMED out on success, so a crash
+// mid-copy leaves a directory that is obviously incomplete rather than a file
+// sitting at the destination looking like a backup. The rename stays on one
+// filesystem, which is what makes it atomic, and what makes the destination's
+// existence mean "verified".
+const backupStageSuffix = ".part"
 
 // BackupInfo describes a copy that was taken and verified.
 type BackupInfo struct {
@@ -160,24 +162,51 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return BackupInfo{}, fmt.Errorf("store: backup: reach %s: %w", dest, err)
 	}
-	// 0700 on the directory, because of what the copy CONTAINS: the sealed
-	// bootstrap secret rows, every config revision, and every seat's
-	// memory. The file's own mode is not ours to set at creation — the
-	// driver creates it, from the process umask — so the directory is the
-	// guard that holds regardless, and the mode below is the belt to its
-	// braces.
+	// 0700 on a directory this makes, because of what the copy CONTAINS: the
+	// sealed bootstrap secret rows, every config revision, and every seat's
+	// memory. A directory that is already there keeps the mode it has — it is
+	// the caller's, and may hold things this call has no say over — so it is
+	// not what keeps the copy private while it is written; the stage below
+	// is.
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return BackupInfo{}, fmt.Errorf("store: backup: create %s: %w", filepath.Dir(dest), err)
 	}
 
-	part := dest + backupPartSuffix
-	// A part file from a previous crashed attempt is debris, not data:
-	// only this function writes this name, and it only ever leaves one
-	// behind by dying mid-copy. Left in place it would fail every
+	// THE COPY IS WRITTEN WHERE NOBODY ELSE CAN REACH IT. The driver makes it
+	// from the process umask, which under the usual 022 is 0644, and its
+	// VACUUM INTO refuses a file made for it in advance, even an empty one
+	// (measured at the pinned driver: "output file already exists"), so the
+	// file's mode cannot be set before its bytes arrive. What closes that
+	// window is a STAGE: a directory beside the destination, made 0700 and
+	// only by this call, that the copy is written, secured and verified in
+	// and then renamed out of. Beside the destination so the rename stays on
+	// one filesystem, which is what makes it atomic.
+	stage := dest + backupStageSuffix
+	part := filepath.Join(stage, filepath.Base(dest))
+	// A stage a crashed attempt left behind is debris, not data: only this
+	// function writes this name. Left in place it would fail every
 	// subsequent backup to the same destination.
-	if err := removeDatabaseFiles(part); err != nil {
+	if err := clearStage(stage, part); err != nil {
 		return BackupInfo{}, err
 	}
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		return BackupInfo{}, fmt.Errorf("store: backup: stage the copy in %s: %w", stage, err)
+	}
+	// On every return. A copy that verified has been renamed out by then,
+	// so this removes what verifying it grew beside it — its -wal — and the
+	// stage, leaving the destination ONE file. One that did not is REMOVED
+	// rather than kept for inspection: it failed to open, failed an
+	// integrity check or holds nothing, its bytes say nothing a re-run would
+	// not say again, and the one thing it could do is be mistaken for a
+	// backup by whoever finds it.
+	defer func() {
+		if clearErr := clearStage(stage, part); clearErr != nil {
+			log.WarnContext(ctx, "store_backup_stage_not_cleared",
+				"stage", stage, "error", clearErr.Error(),
+				"detail", "the directory the copy was written in could not be removed; it is not "+
+					"part of the backup, and the next backup to this destination clears it first")
+		}
+	}()
 
 	started := now()
 	// THE PATH IS INTERPOLATED, and it has to be: the driver rejects a bind
@@ -191,7 +220,6 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// write in this package goes through: VACUUM cannot run inside a
 	// transaction.
 	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part)); err != nil {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
 	took := now().Sub(started)
@@ -202,68 +230,47 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// without this check the next step would CREATE the missing file as an
 	// empty database and then report the confusing news that it carries no
 	// schema. This is the check that says what actually happened.
-	// TWO FAILURES, reported separately. Folded into one branch, an
-	// unreadable destination — a permission change, a vanished mount, a
-	// full filesystem — was reported as "the driver wrote nothing", which
-	// sends an operator to the database rather than to the disk, and the
-	// errno that names the actual fix was dropped. It was also the one
-	// unwrapped error on a path where everything else carries %w.
+	// TWO FAILURES, reported separately: an unreadable copy — a permission
+	// change, a vanished mount, a full filesystem — is a fault of the disk,
+	// and folded into "the driver wrote nothing" it would send an operator
+	// to the database instead, without the errno that names the fix.
 	written, err := os.Stat(part)
 	if err != nil {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf(
 			"store: backup: cannot read the copy written to %s: %w", part, err)
 	}
 	if written.Size() == 0 {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup: the engine reported a successful "+
 			"copy of %s but %s holds no database, so nothing was backed up", d.path, part)
+	}
+	// OWNER-ONLY THE MOMENT IT EXISTS, before anything opens it: the copy is
+	// every credential and every seat's memory in one file, and it keeps this
+	// mode at its final name. Every open after this one — the verify's
+	// included — then finds it as the store's own files are kept (see
+	// filemode.go) rather than tightening it again.
+	if chmodErr := os.Chmod(part, fileMode); chmodErr != nil {
+		return BackupInfo{}, fmt.Errorf("store: backup: secure %s: %w", part, chmodErr)
 	}
 
 	// The source's own applied set, read before the verify so the copy is
 	// compared with what it was made from.
 	source, err := d.appliedVersions(ctx)
 	if err != nil {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, err
 	}
 	migrations, err := verifyBackup(ctx, part, source)
 	if err != nil {
-		// The unverified copy is REMOVED rather than kept for
-		// inspection. It is a database that failed to open or failed an
-		// integrity check, its bytes say nothing a re-run would not say
-		// again, and the one thing it could do is be mistaken for a
-		// backup by whoever finds it.
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, err
 	}
 
-	// The sidecars verification grew, BEFORE the rename: opening a database
-	// in WAL mode creates a -wal beside it, and renaming only the database
-	// would leave that orphan sitting in the backup directory under the
-	// part name. The artifact this produces is ONE file.
-	if sidecarErr := removeSidecars(part); sidecarErr != nil {
-		_ = removeDatabaseFiles(part)
-		return BackupInfo{}, sidecarErr
-	}
-	// 0600 BEFORE the rename, so the artifact is never readable at its
-	// final name: the driver creates the copy from this process's umask,
-	// which is typically 0644, and a backup of this database is every
-	// credential and every seat's memory in one file.
-	if chmodErr := os.Chmod(part, 0o600); chmodErr != nil {
-		_ = removeDatabaseFiles(part)
-		return BackupInfo{}, fmt.Errorf("store: backup: secure %s: %w", part, chmodErr)
-	}
 	// THE DIGEST BEFORE THE RENAME, over the file the rename will place —
-	// after the sidecars are gone and the mode is set, so what is hashed is
-	// byte-for-byte what an operator will ship.
+	// after the mode is set, so what is hashed is byte-for-byte what an
+	// operator will ship.
 	digest, err := fileDigest(part)
 	if err != nil {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, err
 	}
 	if renameErr := os.Rename(part, dest); renameErr != nil {
-		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup: place %s: %w", dest, renameErr)
 	}
 	info, err := os.Stat(dest)
@@ -378,7 +385,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 
 // databaseSidecars are the files a database grows beside itself. Named once,
 // because a list that is written twice is a list that stops matching.
-var databaseSidecars = []string{"-wal", "-shm", "-tshm"}
+var databaseSidecars = []string{walSuffix, "-shm", "-tshm"}
 
 // removeDatabaseFiles deletes a database path and every sidecar of it.
 func removeDatabaseFiles(path string) error {
@@ -390,11 +397,11 @@ func removeDatabaseFiles(path string) error {
 
 // removeSidecars deletes a database's sidecars, leaving the database.
 //
-// Verification opens the copy, and opening a database in WAL mode creates a
-// -wal beside it — so without this the finished backup would ship with an
-// empty sidecar that means nothing and invites an operator to copy or omit it
-// on restore. The copy VACUUM INTO produces is self-contained; this keeps it
-// that way.
+// Opening a database in WAL mode creates a -wal beside it, even to read it, so
+// a copy that has been opened — to verify it, scrub it or read its checkpoints
+// — grows one. VACUUM INTO produces a self-contained copy, and this is what
+// keeps it one file rather than a file and a sidecar that means nothing and
+// invites an operator to copy or omit it on restore.
 func removeSidecars(path string) error {
 	for _, suffix := range databaseSidecars {
 		if err := remove(path + suffix); err != nil {
@@ -402,6 +409,31 @@ func removeSidecars(path string) error {
 		}
 	}
 	return nil
+}
+
+// clearStage removes what a backup attempt left at its stage's name: the copy
+// in it and the copy's sidecars, then the stage itself.
+//
+// ONLY WHAT THE ATTEMPT MAKES, by name, never a recursive delete: the stage's
+// name is this package's, but a directory at it that holds anything else is
+// not this package's to empty, and removing it then fails, naming it, rather
+// than taking what is inside with it. A file at the stage's name is removed
+// with its sidecars: the name is this package's, so a database there is an
+// attempt's debris like the copy inside a stage.
+func clearStage(stage, part string) error {
+	info, err := os.Lstat(stage)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("store: clear %s: %w", stage, err)
+	case !info.IsDir():
+		return removeDatabaseFiles(stage)
+	}
+	if err := removeDatabaseFiles(part); err != nil {
+		return err
+	}
+	return remove(stage)
 }
 
 func remove(path string) error {

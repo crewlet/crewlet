@@ -120,7 +120,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			ON CONFLICT (stream) DO UPDATE SET
 				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
 			spec.Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.createdAt), store.EncodeTime(time.Now().UTC()))
+			store.EncodeTime(running.identity()), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
 		t.Fatalf("advance the copy's checkpoint: %v", err)
@@ -143,7 +143,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		registered = append(registered, statelog.Registered{
 			Domain:          domain,
 			Health:          func() statelog.Health { return statelog.Health{CaughtUp: true, Lag: &lag} },
-			StreamCreatedAt: running.createdAt,
+			StreamCreatedAt: running.identity(),
 		})
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")

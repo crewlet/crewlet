@@ -5,19 +5,27 @@ import "strings"
 // OnboardingHeader is the one-time setup contract, run on a seat's first turn
 // before the executor.
 //
-// Backend-neutral by design: it points at the team's knowledge-base MCP
-// server by CAPABILITY ("a page-search / get-page tool"), never by product,
-// so the same words read correctly whatever knowledge base the company runs.
-// Naming a product here would make the header wrong for anyone on another
-// one and right-looking for all of them.
+// ONE HEADER FOR BOTH KNOWLEDGE BASES, so it names each reader by what it is
+// rather than by product. On the engine's own knowledge base the search and
+// the page read are this engine's `search_knowledge` and `get_page`, in the
+// catalogue like every other first-party tool; on a vendor wiki they are that
+// wiki's own MCP server's tools, whose names only the server knows. The pass
+// starts with neither active — its surface is the two tools below plus the
+// discovery pair — so the header says how each is reached. Naming a vendor
+// here would make the header wrong for anyone on another one and
+// right-looking for all of them.
 const OnboardingHeader = "\n## ONBOARDING phase" +
 	"\nThis is a one-time setup pass that runs before your normal work, " +
 	"with its **own** budget. Do ONLY this now — not the task you were " +
 	"triggered on (that runs next).\n" +
-	"Your knowledge-base search / read tools are MCP tools: call " +
-	"`list_mcp_server_tools(server=...)` to find them (a page-search / " +
-	"get-page tool on your team's knowledge-base server), then " +
-	"`activate_tool(name=...)` to promote one into your `tools=[...]`. " +
+	"Read your team's pages with your knowledge-base search and page-read " +
+	"tools, and activate them before calling them with " +
+	"`activate_tool(name=...)`. Where your company's knowledge base is the " +
+	"engine's own, they are `search_knowledge` and `get_page` in your tool " +
+	"catalogue; where it is a vendor wiki, they are that wiki's MCP server's " +
+	"page-search and get-page tools — call " +
+	"`list_mcp_server_tools(server=...)` on your team's knowledge-base server " +
+	"to find their names. " +
 	"`reflect_and_persist` and `mark_onboarded` are already active — " +
 	"call them directly. Follow the steps below, then call " +
 	"`mark_onboarded` to end the pass."

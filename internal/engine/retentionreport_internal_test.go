@@ -226,9 +226,9 @@ func TestAStoppedApplierIsNamedOnTheHeartbeatAndInTheReport(t *testing.T) {
 			"(domain %q) — every read on it refuses while a peer serves the same "+
 			"seats", ok, domain)
 	}
-	if ok, refusal := s.Established(ctx, true); ok || refusal != statelog.RefuseFloorUnknown {
+	if ok, refusal := s.Established(ctx, true); ok || refusal != statelog.RefuseGenerationLeft {
 		t.Errorf("admission on a generation the fleet left = (%v, %q), want "+
-			"floor_unknown — the broker answered", ok, refusal)
+			"generation_left — the broker answered", ok, refusal)
 	}
 	s.publishPositions(ctx)
 	ahead := r.reading(ctx, time.Now().Add(statelog.FloorCacheStale+time.Second),

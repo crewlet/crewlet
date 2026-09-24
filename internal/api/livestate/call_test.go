@@ -193,34 +193,28 @@ func TestTheStragglerGuardComparesInstantsNotEncodings(t *testing.T) {
 	}
 }
 
-func TestAResumedPhaseComesBackOnScreen(t *testing.T) {
+func TestARoundNewerThanItsPhasesCompletionIsShown(t *testing.T) {
 	t.Parallel()
-	// The counterfactual to the straggler guard, and the reason it is a
-	// timestamp rather than a flag: a suspended Execute phase publishes a
-	// completion CHECKPOINT under these exact coordinates, then resumes
-	// the same loop when the detached run lands and streams more rounds
-	// under them. Those rounds are strictly newer, and swallowing them
-	// would leave a resumed sandbox phase invisible for the rest of its
-	// run.
+	// The counterfactual to the straggler guard, and the reason it compares
+	// times rather than keeping a flag: the guard drops a round its phase's
+	// completion covers — one at or before it — and nothing newer.
 	//
-	// The resumed round is spelled naive and the checkpoint aware, which
-	// is the mixed encoding that made this break: compared raw, nine
-	// minutes later sorts BEFORE the checkpoint.
+	// The newer round is spelled naive and the completion aware, which is
+	// the mixed encoding that breaks a raw comparison: compared raw, nine
+	// minutes later sorts BEFORE the completion.
 	base := with(planCall(), map[string]any{"phase": "execute"})
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", base))
-	s.Apply(env("agent_phase_completed",
-		with(base, map[string]any{"notes": "suspended: run_sandbox"}),
-		at("2026-06-14T12:00:05+00:00")))
+	s.Apply(env("agent_phase_completed", base, at("2026-06-14T12:00:05+00:00")))
 	s.Apply(env("agent_turn_progress",
-		with(base, map[string]any{"round_num": 4, "response": "back from the sandbox"}),
+		with(base, map[string]any{"round_num": 4, "response": "nine minutes on"}),
 		streamOnly, at("2026-06-14T12:09:00")))
 
 	call := liveCallOf(t, s, "Lead")
 	if call == nil {
-		t.Fatal("the resumed phase never came back on screen")
+		t.Fatal("a round newer than its phase's completion was swallowed")
 	}
-	if call.Response != "back from the sandbox" {
+	if call.Response != "nine minutes on" {
 		t.Errorf("response = %q", call.Response)
 	}
 }

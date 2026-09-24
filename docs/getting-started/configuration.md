@@ -336,9 +336,12 @@ providers:
 
   embeddings:                           # optional — similarity search for the
                                         #   agent-learning subsystem (agent_diary
-                                        #   candidate selection AND episode recall).
-                                        #   Omit it and both fall back to recency;
-                                        #   nothing else changes.
+                                        #   candidate selection AND episode recall),
+                                        #   and the semantic half of the engine's own
+                                        #   knowledge and work-item search (see
+                                        #   `knowledge.vectors`). Omit it and the
+                                        #   first two fall back to recency and those
+                                        #   searches are keyword-only.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
                                         #   one emits 3072, text-embedding-3-small
@@ -1033,7 +1036,8 @@ knowledge:
   skills_container: TS                   # tool-skill pages; excluded from routing and search
   root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page;
                                          #   searched and routed like any other container
-  vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
+  vectors: true                          # fuse semantic recall into the native searches; unset derives
+                                         #   from providers.embeddings, false embeds nothing
 ```
 
 `knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
@@ -1042,7 +1046,7 @@ knowledge:
 
 `knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved**: refused as a unit's or a seat's own `space`, and closed to a seat's own writes — on the native knowledge base a seat's `write_page` and `save_page` refuse both, because a seat writing into the skills container would be rewriting the guidance injected into its own phases, and the root holds what the company publishes rather than what one seat decides. An operator's own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant) writes both: `write_page` is the only thing that creates a native page, so that is how a native company publishes its tool skills and its root Onboarding page. The skills container is also excluded from knowledge search and from routing, because its pages are machinery; the root container is searched and routed like any other. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
 
-`knowledge.vectors` is the switch for fusing semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured, and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with. **Nothing reads the switch yet.** The embedding duty embeds the company's pages and work items whenever `providers.embeddings` is configured, whatever `vectors` says, and no search computes a query embedding, so every knowledge search is keyword-only today — see [Knowledge System § Native backend](../concepts/knowledge-system.md#native-backend--the-engines-own-pages).
+`knowledge.vectors` is the switch for fusing semantic recall into the engine's own searches — the knowledge search over its own pages and the ranked work-item search. **On**, the embedding duty embeds every page and work item with `providers.embeddings`, and each search embeds its query **once** with the same provider and model and fuses the keyword and semantic rankings, so a page that shares no word with the query but means what it asks is found. **Off** (`vectors: false`), nothing is embedded for search at all — no page, no item, no query — and every search is keyword-only; the provider stays in use for the diary and episode recall. **Unset derives** from whether `providers.embeddings` is configured, and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with. The switch is read per search and per duty tick, so an apply that flips it takes effect with no restart. A query the provider will not embed is answered on its words alone, and the answer is marked partial with `semantic_skipped` rather than passed off as whole. A Confluence knowledge base is searched by Confluence and embeds nothing either way — see [Knowledge System § Native backend](../concepts/knowledge-system.md#native-backend--the-engines-own-pages).
 
 ---
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/subagent"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -115,6 +116,49 @@ func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 		if done.DurationMS != 1500 {
 			t.Errorf("duration_ms = %d, want the 1500 the worker measured",
 				done.DurationMS)
+		}
+	}
+	if !found {
+		t.Fatal("no subagent phase was published")
+	}
+}
+
+// A WORKER'S RECORD CARRIES WHAT NO ROUND KEPT.
+//
+// The worker's Result holds what it wrote that no round committed, and its
+// phase record is where an operator reads it, as abandoned_attempts, beside
+// the narration it did commit: the same split the turn's own phases publish.
+func TestASubagentPhaseCarriesWhatNoRoundKept(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	base := emitter{
+		pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"},
+		role: "Lead", tally: &Spend{}, mu: &mu,
+	}
+	base.nestedAt(1).subagentCompleted(context.Background(), subagent.Result{
+		ID: "research", Worker: "researcher", Status: subagent.StatusBudget,
+		Narration: []toolloop.Narration{{Round: 1, Content: "reading the notes"}},
+		Abandoned: []toolloop.Narration{{Round: 2, Reasoning: "enough to answer", Content: "The deploy did it."}},
+	})
+
+	var found bool
+	for _, ev := range pub.events {
+		done, ok := ev.Data.(*types.AgentPhaseCompleted)
+		if !ok || done.Phase != types.PhaseSubagent {
+			continue
+		}
+		found = true
+		if len(done.AbandonedAttempts) != 1 {
+			t.Fatalf("abandoned_attempts = %v, want the one attempt the worker left uncommitted",
+				done.AbandonedAttempts)
+		}
+		got := done.AbandonedAttempts[0]
+		if got["round"] != 2 || got["reasoning"] != "enough to answer" || got["content"] != "The deploy did it." {
+			t.Errorf("abandoned attempt = %v, want round 2 with its reasoning and content", got)
+		}
+		if len(done.RoundNarration) != 1 {
+			t.Errorf("round_narration = %v, want the committed round alone", done.RoundNarration)
 		}
 	}
 	if !found {

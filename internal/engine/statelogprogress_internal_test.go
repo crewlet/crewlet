@@ -7,9 +7,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -301,14 +304,17 @@ func (f failingBounds) Bounds(context.Context) (uint64, uint64, error) {
 // A READ REFUSES AS THE HEALTH READ THAT FAILED.
 //
 // A broker that did not answer for the log's bounds leaves the published floor
-// unread behind it, so a refusal decided from what is left names the floor —
-// `floor_unknown`, which a caller is told not to come back from — about a
-// failure the next read usually does not meet. Every other failure leaves the
-// floor unestablished and refuses as that, carrying its own words.
+// unread behind it, so a refusal decided from what is left names the floor
+// about a failure that was the broker's. A floor published at a generation
+// this node has left was read perfectly well, and it is its own code, one a
+// caller is told not to come back to this node for. Every other failure leaves
+// the floor unestablished and refuses as that — worth coming back for, since
+// the next read usually answers.
 //
-// Mutation: read the bounds without marking the failure as the broker's, or
-// map every failure to the health's error, and the unanswered broker refuses
-// `floor_unknown`.
+// Mutation: read the bounds without marking the failure as the broker's and
+// the unanswered broker refuses `floor_unknown`; map the left generation like
+// every other failure and it refuses `floor_unknown`, which sends its caller
+// back to a node only an adoption clears.
 func TestAReadRefusesAsTheHealthReadThatFailed(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -323,10 +329,10 @@ func TestAReadRefusesAsTheHealthReadThatFailed(t *testing.T) {
 			statelog.RefuseBrokerUnreachable, true},
 		{"a floor at a generation this node has left",
 			fmt.Errorf("%w: the published floor is at generation 3", errGenerationLeft),
-			statelog.RefuseFloorUnknown, false},
+			statelog.RefuseGenerationLeft, false},
 		{"coordination did not answer for the floor",
 			errors.New("engine: read the fleet's published trim floors: nats: timeout"),
-			statelog.RefuseFloorUnknown, false},
+			statelog.RefuseFloorUnknown, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -340,5 +346,138 @@ func TestAReadRefusesAsTheHealthReadThatFailed(t *testing.T) {
 	// AND A HEALTH THAT WAS READ IS THE ONE A READ IS CERTIFIED AGAINST.
 	if got := readerHealth(statelog.Health{Stalled: true}, nil); !got.Stalled {
 		t.Error("a health read that answered was replaced")
+	}
+}
+
+// A REPLICATION ROW IS NOT READY WHEREVER A READ ON THE NODE REFUSES.
+//
+// An evicted node, one below the trim floor and one whose log was rebuilt
+// under it can each be caught up on what they hold, and every read on them
+// refuses; a row that read ready there would be the one statement about the
+// node that is false. And a stall the heartbeat's clock still reports after
+// the node drained says so without counting "0 records waiting" as its
+// reason.
+//
+// Mutation: derive the row from the applier's arms alone and the evicted, the
+// below-floor and the rebuilt cases read ready; render every stall with its
+// lag and the drained one counts zero records waiting.
+func TestAReplicationRowIsNotReadyWhereReadsRefuse(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	ready := func() statelog.Health {
+		zero := uint64(0)
+		end := uint64(40)
+		return statelog.Health{
+			Position: statelog.Position{Stream: "S", Seq: 40},
+			CaughtUp: true, Lag: &zero, LastSeq: &end,
+			Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+		}
+	}
+	if row := replicationRow("tracker", ready(), nil, now); !row.Ready {
+		t.Fatalf("the control reads %+v, so every case below is vacuous", row)
+	}
+
+	for _, tc := range []struct {
+		name string
+		set  func(*statelog.Health)
+		says string
+	}{
+		{"an evicted node", func(h *statelog.Health) { h.Evicted = true }, "evicted"},
+		{"a node below the trim floor", func(h *statelog.Health) {
+			h.Floor.State = statelog.FloorBelow
+		}, "below the trim floor"},
+		{"a log rebuilt under the node", func(h *statelog.Health) {
+			h.StreamRecreated = true
+		}, "rebuilt"},
+		{"a halted applier", func(h *statelog.Health) {
+			h.Err = "statelog: the applier stopped: a gate at version 4"
+		}, "a gate at version 4"},
+		{"a stall the heartbeat reports after the node drained", func(h *statelog.Health) {
+			h.Stalled = true
+		}, "none are waiting now"},
+		{"a stall with records waiting", func(h *statelog.Health) {
+			owed := uint64(7)
+			h.Stalled, h.Lag = true, &owed
+		}, "7 record(s) waiting"},
+	} {
+		health := ready()
+		tc.set(&health)
+		row := replicationRow("tracker", health, nil, now)
+		if row.Ready {
+			t.Errorf("%s reads ready", tc.name)
+			continue
+		}
+		if !strings.Contains(row.Detail, tc.says) {
+			t.Errorf("%s reads %q, which does not say %q", tc.name, row.Detail, tc.says)
+		}
+		if strings.Contains(row.Detail, "0 record(s) waiting") {
+			t.Errorf("%s counts zero records waiting as its reason: %q",
+				tc.name, row.Detail)
+		}
+	}
+
+	if row := replicationRow("tracker", statelog.Health{},
+		errors.New("nats: timeout"), now); row.Ready || !strings.Contains(row.Detail, "nats: timeout") {
+		t.Errorf("a health read that failed reads %+v", row)
+	}
+}
+
+// THE AGE OF A COMPACTED LOG'S BACKLOG IS ITS FIRST SURVIVOR'S.
+//
+// A compacted log keeps one record per subject, so the record after a node's
+// checkpoint can be gone — superseded by a later one on its subject before
+// this node reached it, and never applied here. What this node still owes
+// begins at the first record the log holds past the checkpoint, wherever that
+// is, and its age is the backlog's.
+//
+// Mutation: read the record at checkpoint+1 by its own sequence rather than
+// the first survivor at or after it, and a compacted backlog has no age.
+func TestACompactedBacklogIsAsOldAsItsFirstSurvivor(t *testing.T) {
+	t.Parallel()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	spec := search.Domain{}.Stream()
+	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
+		MaxPerSubject: spec.MaxPerSubject, Duplicates: spec.Duplicates,
+	}); err != nil {
+		t.Fatalf("provision the compacted log: %v", err)
+	}
+	log, err := q.DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	// ONE, TWO, AND A THIRD THAT SUPERSEDES THE FIRST on its subject.
+	for i, subject := range []string{"doc-a", "doc-b", "doc-a"} {
+		if _, _, err := log.Append(t.Context(), spec.SubjectPrefix+"."+subject,
+			fmt.Sprintf("op-%d", i), nil, []byte("vector")); err != nil {
+			t.Fatalf("append %d: %v", i+1, err)
+		}
+	}
+	if _, _, _, held, err := log.At(t.Context(), 1); err != nil || held {
+		t.Fatalf("the superseded first record is held=%v (%v), so this log is not "+
+			"the shape this case names", held, err)
+	}
+	_, _, survivor, held, err := log.At(t.Context(), 2)
+	if err != nil || !held {
+		t.Fatalf("read the first survivor: held=%v %v", held, err)
+	}
+
+	backlog, end := uint64(3), uint64(3)
+	health := statelog.Health{
+		Position: statelog.Position{Stream: spec.Name}, Lag: &backlog, LastSeq: &end,
+	}
+	running := &runningDomain{domain: search.Domain{}, log: log}
+	now := survivor.Add(90 * time.Second)
+	age, err := (&stateLog{}).applyAge(t.Context(), running, health, now)
+	if err != nil {
+		t.Fatalf("the age of a compacted backlog: %v", err)
+	}
+	if want := now.Sub(survivor); age != want {
+		t.Errorf("the backlog reads %s old, want %s — the age of the first record "+
+			"the log still holds past the checkpoint", age, want)
 	}
 }

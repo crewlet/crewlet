@@ -39,6 +39,11 @@
 // the secret-store CLIs open this database from a second process as their
 // documented gesture, and before the lock the only defence was this comment.
 //
+// The files are the owner's alone on disk as well: every open makes a
+// database and its -wal owner-only before the driver sees them, and takes
+// every permission beyond the owner's from one it finds wider. See
+// filemode.go for why the driver cannot be left to it.
+//
 // Everything that genuinely needs cross-process coordination — seat leases,
 // config activations, the completion ledger, dedupe and rate valves — lives in
 // the KV layer instead, and that separation is why nothing
@@ -521,8 +526,8 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 	return db, nil
 }
 
-// openPrepared readies the native library and returns a live pool with this
-// package's bounds and session state applied.
+// openPrepared readies the native library and the database's files, and
+// returns a live pool with this package's bounds and session state applied.
 //
 // ONE PATH TO A CONNECTION, and that is the whole reason it exists. [Open] and
 // [Pending] both need a pool, and Pending used to build its own: it resolved
@@ -544,6 +549,11 @@ func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, erro
 	// first query into an error a caller can read, and stops two engines
 	// starting at once from corrupting that cache at all.
 	if err := prepareTursoLibrary(); err != nil {
+		return nil, err
+	}
+	// THE FILES BEFORE THE DRIVER, because the driver makes whatever it does
+	// not find from the process umask: see filemode.go.
+	if err := ownerOnly(path); err != nil {
 		return nil, err
 	}
 	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -95,7 +96,7 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 		t.Fatalf("NewSearcher: %v", err)
 	}
 
-	hidden := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	hidden := searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits
 	if got := hitIDs(hidden); !sameMembers(got, []string{reviewed.Page.ID,
 		prefixed.Page.ID, moved.Page.ID, stray.Page.ID}) {
 		t.Errorf("the default search returned %v, want %q, the two drafts moved "+
@@ -106,7 +107,7 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 
 	shown := searcher.Search(t.Context(), knowledge.Query{
 		Text: words, ExcludeAncestors: []string{},
-	})
+	}).Hits
 	want := []string{under.Page.ID, deeper.Page.ID, prefixed.Page.ID,
 		reviewed.Page.ID, moved.Page.ID, orphaned.Page.ID, stray.Page.ID}
 	if got := hitIDs(shown); !sameMembers(got, want) {
@@ -140,7 +141,7 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	if err := r.db.CloseReplicated(); err != nil {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
-	if got := searcher.Search(t.Context(), knowledge.Query{Text: words}); len(got) != 0 {
+	if got := searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits; len(got) != 0 {
 		t.Errorf("a search whose chains could not be read returned %v, want "+
 			"nothing", hitTitles(got))
 	}
@@ -186,7 +187,7 @@ func TestAChainThatLoopsIsKnownWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSearcher: %v", err)
 	}
-	hits := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	hits := searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits
 	if ids := hitIDs(hits); !slices.Equal(ids, []string{draft.Page.ID}) {
 		t.Fatalf("the search returned %v, want the draft on the loop — hidden "+
 			"by its prefix, its chain was judged unknown", hitTitles(hits))
@@ -222,7 +223,7 @@ func TestAHitTheIndexHasNotDroppedYetIsNotReturned(t *testing.T) {
 	// THE CONTROL: all three are indexed and returned, so what goes missing
 	// below went missing at the read rather than never being there.
 	all := []string{kept.Page.ID, trashed.Page.ID, purged.Page.ID}
-	if got := hitIDs(searcher.Search(t.Context(), knowledge.Query{Text: words})); !sameMembers(got, all) {
+	if got := hitIDs(searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits); !sameMembers(got, all) {
 		t.Fatalf("before any removal the search returned %v, want all three", got)
 	}
 
@@ -234,7 +235,7 @@ func TestAHitTheIndexHasNotDroppedYetIsNotReturned(t *testing.T) {
 	}
 	r.drain()
 	// NO SWEEP: the index still holds both rows, which is the window.
-	got := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	got := searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits
 	if ids := hitIDs(got); !slices.Equal(ids, []string{kept.Page.ID}) {
 		t.Errorf("with the index not yet swept the search returned %v, want %q "+
 			"alone — a trashed page and a purged one are not answers",
@@ -348,10 +349,113 @@ func TestAKnowledgeSearchWaitsForThePagesFirstBuildAlone(t *testing.T) {
 		t.Error("the pages are built and the searcher still says it is building — " +
 			"the prefetch would search none of them until another corpus finished")
 	}
-	got := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	got := searcher.Search(t.Context(), knowledge.Query{Text: words}).Hits
 	if ids := hitIDs(got); !slices.Equal(ids, []string{written.Page.ID}) {
 		t.Errorf("the search returned %v, want the one page", hitTitles(got))
 	}
+}
+
+// A NATIVE ANSWER CARRIES WHAT IT IS MISSING.
+//
+// Every reader of the seam renders [knowledge.Answer.Partial] — the turn-start
+// block, `search_knowledge`, the dashboard — so the searcher is where a divided
+// search's own count has to reach it. Two ways in: a participant whose index is
+// still on its first lap replies that it covered nothing, which here is this
+// node's own range and so every bucket; and a query the meaning half could not
+// embed is answered on its words alone. The control is the same search once
+// the index is built and the query embeds, which carries nothing.
+func TestANativeAnswerCarriesWhatItIsMissing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	written := r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	r.drain()
+
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	embedder := embeddings.NewFake(16)
+	var fails bool
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{
+		Index: index, DB: r.db, Node: "node-a",
+		Space: func() (search.QuerySpace, bool) {
+			if fails {
+				return search.QuerySpace{Embedder: failingEmbedder{embedder},
+					Model: "fake"}, true
+			}
+			return search.QuerySpace{Embedder: embedder, Model: "fake"}, true
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+
+	building := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if p := building.Partial; p == nil || p.BucketsMissing != search.SearchShards ||
+		!slices.Equal(p.AbsentNodes, []string{"node-a"}) {
+		t.Fatalf("a search over an index on its first lap carries %+v — want every "+
+			"bucket missing and this node named", building.Partial)
+	}
+
+	indexUntilQuiet(t, index)
+	whole := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if whole.Partial != nil {
+		t.Errorf("a whole answer carries %+v", whole.Partial)
+	}
+	if ids := hitIDs(whole.Hits); !slices.Equal(ids, []string{written.Page.ID}) {
+		t.Errorf("the search returned %v, want the one page", hitTitles(whole.Hits))
+	}
+
+	fails = true
+	lexical := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if p := lexical.Partial; p == nil || !p.SemanticSkipped || p.BucketsMissing != 0 ||
+		p.AbsentNodes == nil {
+		t.Errorf("a query that could not be embedded carries %+v — want the "+
+			"meaning half named as skipped, every bucket answered, and an "+
+			"empty list of absent nodes rather than none", lexical.Partial)
+	}
+	if ids := hitIDs(lexical.Hits); !slices.Equal(ids, []string{written.Page.ID}) {
+		t.Errorf("the lexical answer returned %v, want the page its words match",
+			hitTitles(lexical.Hits))
+	}
+}
+
+// A NATIVE SEARCH THAT FAILS SAYS IT FAILED. The seam is best effort, so a
+// failure is still an answer a caller can render — and what it must not
+// render is "nothing matched", which sends a seat to try other words against a
+// search that did not run, or to write the page it could not find. The
+// failure here is the fan-out's own refusal of an ask past what one fan-out
+// can answer; the control is the same search within it.
+func TestANativeSearchThatFailsSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	written := r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	r.drain()
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: r.db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+
+	failed := searcher.Search(t.Context(), knowledge.Query{Text: words, Limit: search.FuseN})
+	if !failed.Failed || len(failed.Hits) != 0 {
+		t.Errorf("a search the fan-out refused answered %+v, want an empty "+
+			"answer marked failed", failed)
+	}
+	whole := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if whole.Failed {
+		t.Error("a search that ran is marked failed")
+	}
+	if ids := hitIDs(whole.Hits); !slices.Equal(ids, []string{written.Page.ID}) {
+		t.Errorf("the control returned %v, want the one page", hitTitles(whole.Hits))
+	}
+}
+
+// failingEmbedder is a provider that refuses every text.
+type failingEmbedder struct{ embeddings.Embedder }
+
+func (failingEmbedder) Embed(context.Context, string) ([]float32, error) {
+	return nil, errors.New("the provider refused")
 }
 
 // errUnfinished is what [unfinishedSource] answers every scan with.

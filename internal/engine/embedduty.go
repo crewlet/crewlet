@@ -12,16 +12,13 @@ import (
 
 // The embedding duty, armed — the loop that fills the semantic half.
 //
-// # Without it the vector domain is a log nobody writes to
+// # It is the vector domain's only writer
 //
-// Everything downstream of a vector existed and was certified: the domain is
-// registered, its applier writes `kb_vectors` on every node, the two-stage
-// retrieval reads them and the fusion ranks them. What did not exist was the
-// only thing that ever PUBLISHES a vector record — so a company's semantic
-// search returned nothing, for ever, while every surface reported a healthy
-// domain applying a log that happened to be empty. That is the worst shape a
-// missing wire has: `search_degraded` is a fraction of answers that skipped the
-// semantic half, and an answer over an empty corpus does not skip it.
+// The domain's applier writes `kb_vectors` on every node and the two-stage
+// retrieval reads them, but nothing else PUBLISHES a vector record. A node
+// that never armed this loop applies an empty log and reports it healthy, and
+// `search_degraded` cannot see it: that alarm is a fraction of answers that
+// skipped the semantic half, and a scan over an empty corpus skips nothing.
 //
 // # Why it is a fleet singleton and why it is here
 //
@@ -67,9 +64,10 @@ type embedDuty struct {
 // startEmbedding arms the duty, or does nothing on a node that cannot run it.
 //
 // THE GATE IS THE PUBLISHER, not the provider: a company with no
-// `providers.embeddings` legitimately has no vectors, and that is checked per
-// TICK rather than here — an epoch that adds the block must start embedding
-// without a restart, and one that removes it must stop.
+// `providers.embeddings`, or with `knowledge.vectors: false`, legitimately has
+// no vectors, and that is checked per TICK rather than here
+// ([Engine.vectorSpace]) — an epoch that turns vectors on must start embedding
+// without a restart, and one that turns them off must stop.
 func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil {
 		return
@@ -130,15 +128,26 @@ func (e *Engine) corpora() []search.Corpus {
 	}
 }
 
-// embedModel is the model id and width the current epoch embeds at, and false
-// when this company has no embeddings configured.
+// vectorSpace is the embedding space the CURRENT epoch's knowledge search runs
+// in — the provider and the model id every vector carries — and false when the
+// company's search has no semantic half: `knowledge.vectors` is off (unset, it
+// derives from `providers.embeddings`), the provider cannot batch, or the
+// model id resolves to nothing.
 //
-// READ PER TICK rather than captured at start, because the provider is
-// replaced on every config apply: a duty holding the embedder it was built
-// with would go on writing rows at the retired model's id after an operator
-// changed it, and the rows a change is meant to supersede would never be
-// selected again.
-func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
+// ONE FUNCTION FOR THE DUTY AND FOR THE QUERY. A query vector is comparable
+// only with vectors of its own model and width, so the search has to embed its
+// query with exactly what the duty embeds the corpus with; and
+// `knowledge.vectors: false` has to stop both, since a query embedded against
+// a corpus nothing fills is a provider call for an answer the scan cannot give.
+//
+// READ PER CALL rather than captured, because the provider is replaced on
+// every config apply: a duty holding the embedder it was built with would go
+// on writing rows at the retired model's id after an operator changed it, and
+// the rows a change is meant to supersede would never be selected again.
+func (e *Engine) vectorSpace() (embeddings.BatchEmbedder, string, bool) {
+	if !e.Company().Config.VectorsEnabled() {
+		return nil, "", false
+	}
 	held := e.embeddings.Load()
 	if held == nil || *held == nil {
 		return nil, "", false
@@ -161,6 +170,16 @@ func (e *Engine) embedModel() (embeddings.BatchEmbedder, string, bool) {
 		return nil, "", false
 	}
 	return batch, model, true
+}
+
+// querySpace is [Engine.vectorSpace] as a knowledge or work search asks it,
+// once per search.
+func (e *Engine) querySpace() (search.QuerySpace, bool) {
+	provider, model, ok := e.vectorSpace()
+	if !ok {
+		return search.QuerySpace{}, false
+	}
+	return search.QuerySpace{Embedder: provider, Model: model}, true
 }
 
 // run ticks until the context ends.
@@ -193,7 +212,7 @@ func (d *embedDuty) tick(ctx context.Context) {
 			return
 		}
 	}
-	provider, model, configured := d.engine.embedModel()
+	provider, model, configured := d.engine.vectorSpace()
 	if !configured {
 		return
 	}
@@ -225,14 +244,15 @@ func (d *embedDuty) tick(ctx context.Context) {
 }
 
 // vectorCoverage is the fraction of this node's sources carrying a current
-// vector, and false when this company has no embeddings configured.
+// vector, and false when this company's search has no semantic half — see
+// [Engine.vectorSpace].
 //
 // FROM THE SAME CORPORA THE DUTY EMBEDS, at the model and width it is
 // embedding at right now. A coverage measured against a different model would
 // read as zero the instant an operator changed one — which is true of the rows
 // and useless as an alarm, because the duty is already refilling them.
 func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
-	provider, model, configured := e.embedModel()
+	provider, model, configured := e.vectorSpace()
 	if !configured {
 		return 0, false, nil
 	}

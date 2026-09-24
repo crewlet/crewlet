@@ -368,12 +368,14 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 
 // joinBullets renders a block's bullets, dropping the empty ones.
 //
-// NO CHARACTER BUDGET. What bounds these blocks is the ITEM cap each one
-// already has (the candidate pool the memory filter picks from, the episodes
+// NO CHARACTER BUDGET. An ITEM cap bounds the memory, episode and knowledge
+// blocks (the candidate pool the memory filter picks from, the episodes
 // recalled, the knowledge hits searched for), every one of which is a number a
-// reader can reason about. A character ceiling lands mid-list instead, and one
-// that drops the bullets past it unmarked empties a block of everything after
-// its first entry while it still looks like a block.
+// reader can reason about; the skills menu is bounded by the seat's own
+// catalogue, and caps no skills — see [Fetcher.synthesizedSkills]. A character
+// ceiling lands mid-list instead, and one that drops the bullets past it
+// unmarked empties a block of everything after its first entry while it still
+// looks like a block.
 //
 // The empty-drop is load-bearing: renderEpisode and renderSkill both return
 // "" for an entry with nothing to say, and joining those blindly leaves blank

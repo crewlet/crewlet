@@ -46,7 +46,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps := builtin.Deps{
 		A2A:               e.a2aFor(c),
 		Sandbox:           e.sandboxLauncher(),
-		Knowledge:         knowledgeSearch(e, c),
+		Knowledge:         KnowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
@@ -246,8 +246,12 @@ func (e *Engine) tuneBatching(c *Company) {
 		c.Config.NotificationCoalesceMaxBatch)
 }
 
-// knowledgeSearch wires a seat's search_knowledge, or nil where the company
-// has no knowledge base at all.
+// KnowledgeSearch wires search_knowledge for a surface serving revision c, or
+// nil where the company has no knowledge base at all.
+//
+// ONE RULE FOR EVERY SURFACE: a seat's registry is equipped with it on every
+// apply, and the operator's own assistant is served it per call, so the two
+// cannot disagree about whether a company can be searched.
 //
 // The GATE reads the company's config; the SEARCHER is resolved per call.
 // Those cannot be the same read: this runs before an apply reconciles the
@@ -256,7 +260,7 @@ func (e *Engine) tuneBatching(c *Company) {
 // credential is the pre-rotation one. Capturing it would give a seat a tool
 // that reads the company it used to be, silently, since a stale-credential
 // search returns an empty result exactly like a real one.
-func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
+func KnowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 	if c.Config.KnowledgeBackendFor() == config.KnowledgeNone {
 		// A NIL INTERFACE, not a live adapter over a nil searcher: the
 		// tool is omitted rather than registered-and-empty, so a seat is
@@ -273,7 +277,7 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 }
 
 // LiveKnowledge is the node's knowledge search as the tool layer takes it,
-// resolved against [Engine.Knowledge] on every call.
+// resolved against [Engine.KnowledgeServed] on every call.
 //
 // ONE ADAPTER FOR EVERY SURFACE: a seat's registry and the operator's own
 // assistant both search through it. Per call, because an apply REPLACES the
@@ -287,12 +291,26 @@ func LiveKnowledge(e *Engine) builtin.KnowledgeSearcher { return liveKnowledge{e
 // liveKnowledge resolves the node's current knowledge searcher per call.
 type liveKnowledge struct{ engine *Engine }
 
-// CanSearch answers false while nothing is wired, which is what the tool
-// reports to the model — a company whose knowledge block is configured but
-// whose backend failed to start is a real state, and one the seat can act on.
-func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
-	s := k.engine.Knowledge()
-	return s != nil && s.CanSearch(seat, o)
+// CanSearch reports which of the three states a search that cannot run is in,
+// so the tool names the one that is true: no knowledge base, one this node is
+// not serving, or one with nothing this caller may read.
+//
+// A SERVED BACKEND REFUSES ON ONE CONDITION ONLY — the scope rule of
+// [knowledge.Permitted] — which is why its own false is reported as
+// [knowledge.NoScope]: the native backend never answers false, and Confluence
+// answers false exactly when that rule does.
+func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) knowledge.Refusal {
+	s, refused := k.engine.KnowledgeServed()
+	if s == nil {
+		return refused
+	}
+	if !s.CanSearch(seat, o) {
+		return knowledge.Refusal{State: knowledge.NoScope,
+			Detail: "no read scope (`knowledge.scope`) is declared, and this " +
+				"search has no " + s.Backend() + " credential of its own to " +
+				"search unscoped with"}
+	}
+	return knowledge.Refusal{}
 }
 
 // Building forwards the current searcher's own answer, and is false with none
@@ -302,10 +320,15 @@ func (k liveKnowledge) Building(ctx context.Context) bool {
 	return s != nil && s.Building(ctx)
 }
 
-func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+// Search runs the current searcher's search. With none wired it is an answer
+// marked failed rather than an empty one: search_knowledge asks
+// [liveKnowledge.CanSearch] first, so a searcher gone by now was taken by an
+// apply between the two reads, and the search did not run — which "nothing
+// matched" would misstate.
+func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
 	s := k.engine.Knowledge()
 	if s == nil {
-		return nil
+		return knowledge.Answer{Failed: true}
 	}
 	return s.Search(ctx, q)
 }

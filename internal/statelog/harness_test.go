@@ -197,12 +197,19 @@ type fakeRows struct {
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
-	decide func(*sql.Tx) (statelog.Decision, error)) (statelog.Snap, error) {
+	opID string, decide func(*sql.Tx) (statelog.Decision, error)) (statelog.Snap, error) {
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]
 	r.calls++
 	r.mu.Unlock()
+	// THE LEDGER FIRST, and a hit decides nothing — the real seam's order,
+	// read from what this node's applier recorded.
+	if at, applied, lerr := r.Op(ctx, opID); lerr != nil {
+		return statelog.Snap{}, lerr
+	} else if applied {
+		return statelog.Snap{Applied: at, AlreadyApplied: true}, nil
+	}
 	// THE ANCHOR IS WHATEVER THIS NODE'S APPLIER LAST WROTE for this
 	// subject. A staged override stands for a row the applier wrote
 	// BEFORE a trim or a reanchor and has not written since — so it holds
@@ -356,6 +363,10 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	c.probes.Add(1)
 	return c.inner.LastSeq(ctx, subject)
+}
+
+func (c *countingAppender) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return c.inner.At(ctx, seq)
 }
 
 // expectations is every expectation the publisher formed, in order.

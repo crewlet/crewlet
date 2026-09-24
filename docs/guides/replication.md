@@ -128,16 +128,19 @@ This is the sentence the backup schedule hangs on.
 **Above the trim floor**, the log holds every record on R replicas and every
 node holds the applied rows. Losing a node loses nothing.
 
-**Below the trim floor the log holds nothing, and each node's replicated
-estate is the only copy of that history** — the database file at
+**Below the trim floor the log holds nothing, and that history is in two
+places**: each node's replicated estate — the database file at
 `store.replicated_path`, which every node derives from the log and which, once
-the records it came from are trimmed, nothing can derive again. N of them, one
-per node's disk. Losing history below the floor takes all N disks, and it is
-covered **only** by the backup gate.
+the records it came from are trimmed, nothing can derive again, N of them, one
+per node's disk — and the newest backup the fleet has recorded. The trim
+deletes a record only once that backup covers it (under
+`stream.tracker_retention.backup_floor: operator`, the newest one an operator
+acknowledged with `crewlet retention ack`), so the floor never passes it.
+Losing history below the floor takes all N disks **and** that backup.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
-[Retention](retention.md).
+[Retention](retention.md) and [Backups & Restore](backup.md).
 
 ## Replication lag is two positions
 

@@ -250,13 +250,15 @@ Those dedicated events are what the dashboard's `afk` state is derived from. A r
 
 The failure texts these events carry — the summary's `error`, the breach's `detail`, `llm_unavailable`'s `last_error` — are as long as whatever failed made them, so each is cut at 64 KiB for its event to be publishable at all, keeping its start and saying where the rest is. The rest is in the node's log: when any of them is cut, the node that ran the turn logs `turn_failure_cut` at WARN, naming the run by `turn_id` and carrying every cut text whole, once.
 
+These closing events — `agent_turn_completed`, `turn_completed` and any dedicated event beside them — are published without the turn's cancellation, as its phase records are. Releasing a seat detaches its mailbox, which cancels the context its running turn was handed, and a broker client refuses a publish under a context that is already done; published on that context, a released seat's turn would end with no event saying so, and its live row would stay working.
+
 A panic is the one cause that is both an error and a breach: the error says what broke and names the phase and round, the breach names the guard. The summary carries both, keeping the error's own text and taking the guard as its `error_kind`.
 
-**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on and what that round had written (among its `abandoned_attempts`, see [What streams during a turn](#what-streams-during-a-turn)), folded onto the rounds of any earlier extension. The record is published without the phase's cancellation, as a delegated worker's is: a phase whose context was cancelled under it is one that most needs its record, and a broker client refuses a publish under a context that is already done. It then returns the original error unchanged, so the failure classification above is unaffected.
+**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, and without one it would leave nothing behind but the `agent_phase_started` that opened it: an in-flight LLM call whose response never arrived, where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes that record with `failed: true`, the error, and whatever the loop managed before it died, folded onto the rounds of any earlier extension: the conversation, the tool calls that ran — those of the round it failed in included — and the tokens already billed. What the round it failed in had written is in its `round_narration` once that round committed, and among its `abandoned_attempts` when the phase failed before the round did (see [What streams during a turn](#what-streams-during-a-turn)). The record is published without the phase's cancellation, as a delegated worker's is: a phase whose context was cancelled under it is one that most needs its record, and a broker client refuses a publish under a context that is already done. It then returns the original error unchanged, so the failure classification above is unaffected.
 
-**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
+**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) first publishes the phase's failure record, exactly as an error does — with `error_kind: "unhandled_exception"`, and with what the phase did before it, the round it was writing among its `abandoned_attempts` — and then goes on as the same panic. It is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`; the record on the way does not change the value the breach names or the stack the log carries. A panic raised while that record is being published is logged as `phase_record_panicked` with its own stack, and the phase's panic goes on regardless. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
 
-A delegated worker is the one exception, and it is contained one frame nearer. `delegate` runs its workers on goroutines of their own, where a panic the turn loop cannot see would end the whole process, so each worker recovers its own and hands it back to the executor as that worker's result, with status `failed` and the panic's value as its error, logged as `subagent_panicked` with its stack. The executor reads it beside its siblings' answers and the turn goes on.
+A delegated worker is the one exception, and it is contained one frame nearer. `delegate` runs its workers on goroutines of their own, where a panic the turn loop cannot see would end the whole process, so each worker recovers its own and hands it back to the executor as that worker's result, with status `failed`, the panic's value as its error, and what the worker did before the panic — its transcript, its calls, the tokens it was billed — logged as `subagent_panicked` with its stack. The executor reads it beside its siblings' answers and the turn goes on.
 
 The dashboard renders that record as a failed invocation (error first, partial work beneath it) and keeps it on screen. AFK is sticky until the agent does real work again: the projection leaves `afk` only on a new phase or turn activity, so the `agent_turn_completed` published beside the failure cannot flip a stopped seat back to a healthy idle one.
 
@@ -294,7 +296,7 @@ A worker that produced prose and never submitted reports `no_result` **with its 
 
 Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses — a call that ran out of time reports the broken chain rather than a scattering of timeouts. Results always come back in the order the parent wrote the tasks.
 
-A worker whose model hit its output cap in some round carries **`output_truncated: true`** beside its answer, for the reason a phase record carries [`output_truncated`](#round-cap-extension-judge): its prose or its submission may stop short, and nothing else about it says so. A failed task's `error` is an excerpt — about 500 characters, keeping its **start and its end** with ` … ` marking the gap, because an error chain says what stopped at its start and what to change at its end. For a task that started, the whole text is on the worker's own `agent_phase_completed` event, as `error`. A record too large for one event is published cut, and its error is the last text any of its forms shortens — only once every other text on the record is at its mark and every row is given up, counted in `tool_executions_omitted` and `round_narration_omitted` — keeping its start and ending in `…`; the record's whole, the error included, is kept in parts that [`GET /phases/{id}`](../reference/api-endpoints.md#ws-wsstream) reassembles, unless a part could not be published, which the record's `notes` then say. A task that never started (`skipped_dependency_failed`, `never_started`) has no phase event: its status is on the call's `subagent_batched` event, and a skip's reason names the dependencies whose own entries in the same result carry their status and error. A timed-out or cancelled worker still gets its event, and a call whose parent turn was torn down still gets its `subagent_batched`: both are published after the context that ended them, without its cancellation.
+A worker whose model hit its output cap in some round carries **`output_truncated: true`** beside its answer, for the reason a phase record carries [`output_truncated`](#round-cap-extension-judge): its prose or its submission may stop short, and nothing else about it says so. A failed task's `error` is an excerpt — about 500 characters, keeping its **start and its end** with ` … ` marking the gap, because an error chain says what stopped at its start and what to change at its end. For a task that started, the whole text is on the worker's own `agent_phase_completed` event, as `error`. A record too large for one event is published cut, and its error is the last text any of its forms shortens — only once every other text on the record is at its mark and every row is given up, counted in `abandoned_attempts_omitted`, `tool_executions_omitted` and `round_narration_omitted` — keeping its start and ending in `…`; the record's whole, the error included, is kept in parts that [`GET /phases/{id}`](../reference/api-endpoints.md#ws-wsstream) reassembles, unless a part could not be published, which the record's `notes` then say. A task that never started (`skipped_dependency_failed`, `never_started`) has no phase event: its status is on the call's `subagent_batched` event, and a skip's reason names the dependencies whose own entries in the same result carry their status and error. A timed-out or cancelled worker still gets its event, and a call whose parent turn was torn down still gets its `subagent_batched`: both are published after the context that ended them, without its cancellation.
 
 ### Worker templates
 
@@ -458,10 +460,12 @@ where every other model call is metered, so its tokens go through the
 turn's shared budget explicitly. A refusal there does not fail the
 turn — the extension is a generosity on a phase that has already run
 out of rounds, so a seat at its cap simply stops extending, which is
-the same outcome as the judge saying no. Its spend is reported apart
-from the turn's own totals for the same reason a worker's is: it is
-already counted once by the meter, and folding it in would stop the
-phase events summing to the turn's number.
+the same outcome as the judge saying no — and refunds nothing: the
+judge had answered before it was charged, so the meter counts its
+tokens either way, as the judge's own record does. Its spend is
+reported apart from the turn's own totals for the same reason a
+worker's is: it is already counted once by the meter, and folding it
+in would stop the phase events summing to the turn's number.
 
 **Forced tool calls are enforced, not just requested.** A phase whose
 whole contract is one submission calls the tool loop with
@@ -594,7 +598,7 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 1. **Workers cannot delegate, contact colleagues, or write to shared surfaces.** `subagent.Permit` denies the first-party control tools (`delegate`, `run_sandbox`, `a2a_ask`, the discovery pair) and any tool whose [MCP annotations](tool-capabilities.md) classify it a write to an external shared surface — regardless of what the task or its template named. It also denies anything the parent cannot itself call, read LIVE: a tool the executor activated mid-phase is inheritable, and one it never had is not. The latter is derived from capability, not a tool-name list, so it covers any tool stack. **A `workers:` template is subject to every one of these**, which is what keeps founder-owned Tier B config out of the privilege-escalation path. Workers **can** discover and activate *read-only* tools themselves (see invariant 7): the discovery catalogue is built from the same three filters as the grant, so a worker can find the read tool it needs (e.g. a Jira JQL search) but can never widen itself into a write or a control tool.
 2. **No recruitment.** Colleague tools require an explicit handle / channel / issue_key / PR URL. There is no "find someone to help me" primitive that would auto-create a role.
 3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes a `turn.guard_breach(kind="depth_cap")` and terminates the turn as `failed` before any phase runs. This is the always-on backstop against runaway / circular delegation: it is checked at the top of every turn regardless of how the turn was triggered, and `a2a_ask` propagates the chain so the recipient's turn inherits the accumulated depth.
-4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` and marks the turn failed. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper reserves tokens under a lock before charging, so concurrent workers can't both pass the cap check and overshoot. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing.
+4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` and marks the turn failed. A round is charged once its model call has answered — its size is only known then — so the round a budget refuses has been billed all the same: the meter counts it, and the refusal stops the round before its tools run, which is why a phase's record and the budget's counter agree on what a refused round cost. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper counts each round under a lock and decides its answer from that count before charging the parent, so concurrent workers can't both be admitted past the cap, and a round it refuses is on the slice and on the parent's counter like any other. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing.
 5. **Worker timeouts.** A per-task deadline from `turn_engine.delegation.task_timeout_seconds` (default 300 s) and an aggregate `call_timeout_seconds` (default 900 s) over the whole call, waves included, plus a `max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the workers that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way.
 6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. The threshold is a constant, not a knob: two identical rounds is the earliest point at which "unchanged" is a fact rather than a single sample, and the round cap already bounds how long a turn that IS changing may run. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
 7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. The executor and its workers carry the same *slim* catalogue (builtins + MCP server names) and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools — a worker's catalogue is the safety-filtered universe the grant was cut from (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge carry no catalogue and cannot discover tools. A `self_iterate` builds a fresh surface, which is correct: its LLM context started over too. A RESUMED executor is the exception — it replays the surface and the skill-guard state it suspended with, because it is re-entering the same conversation.
@@ -748,13 +752,14 @@ next key — is not erased: the retry starts from empty beside it, and the frame
 carries it in `partial_round`'s `abandoned` while the round is open. The
 phase's completed record keeps every such attempt whole, as
 `abandoned_attempts` — one `{round, reasoning, content}` each, the shape of a
-round's narration — and, when the phase fails during a round, that round's
-last attempt too: as far as it had streamed when the provider call failed, or
-its whole answer when the answer arrived and its token charge failed. An
-executor that suspends on a coding run carries these only from its last entry:
-the pending-run row that carries its earlier rounds into the resumed record has
-no field for one, so each attempt before the suspension is logged whole, once,
-as `abandoned_attempt_suspended` at WARN. Streaming is opt-in per CALL, not a
+round's narration — and, when the phase fails or panics during a round that
+never commits, that round's last attempt too: as far as it had streamed when
+the provider call failed or panicked, or its whole answer when the answer
+arrived and the round went no further — its token charge failed, or a panic
+came before it committed. An executor that suspends on a coding run publishes
+no record until it resumes, so the pending-run row carries its attempts beside
+its earlier rounds into the record the resumed phase publishes. A delegated
+worker's record carries its own. Streaming is opt-in per CALL, not a
 property of a backend: only the tool loop sets `OnDelta`, because every other provider
 call in the engine (reflection, summaries, the extension judge) wants an
 answer rather than a running commentary. An endpoint that accepts a streaming
@@ -774,10 +779,10 @@ call's arguments past 4,000 bytes are a one-member object keyed `…` saying how
 long they are and that they are whole on the phase's completed record. 48 is
 the executor's default round ceiling, so an executor phase within its default
 budget has every narrated round on the frame. The completed record carries
-every call, every round and every abandoned attempt whole, save an executor's
-attempts before a suspension, as above — or, on a record published cut, in the
-whole that `GET /phases/{id}` reassembles from its parts, unless a part could
-not be published, which the record's `notes` then say.
+every call, every round and every abandoned attempt whole — or, on a record
+published cut, in the whole that `GET /phases/{id}` reassembles from its
+parts, unless a part could not be published, which the record's `notes` then
+say.
 
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot
@@ -827,10 +832,17 @@ update, which fires before the provider is called at all: a publish error
 returned there would end a phase that had not yet run.
 
 On a **resumed** executor phase — one that suspended on `run_sandbox` and
-picked up when the detached run landed — both events are scoped to the
-post-resume slice of the conversation, because the pre-suspend segment
-was already published as its own record. The live row and the record
-therefore still agree across a suspend.
+picked up when the detached run landed — both events cover the **whole**
+phase. A suspending phase publishes no completed record and its frames are
+stream-only, so the pending-run row carries what the rounds before the
+suspension did — their calls, their narration, their abandoned attempts, their
+tokens and their clock — and the resumed phase continues from it: its frames
+carry those rounds and number the new ones after them, and its one record
+reports the phase from its first round, with the `run_sandbox` call that
+suspended it in the round it was made in, answered with what the resume gave
+it — the run's findings, or a person's reply to its question. Neither carries
+the phase's prompt again — the resumed phase re-entered a conversation rather
+than opening one — so the live row and the record agree across a suspend.
 
 ### Turn source (the triggering event)
 

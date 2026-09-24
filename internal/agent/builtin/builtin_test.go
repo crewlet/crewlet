@@ -775,11 +775,15 @@ func (toolSkills) Body(string) (string, bool) { return "", false }
 
 type searcher struct{}
 
-func (searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (searcher) CanSearch(*org.Role, *org.Organization) knowledge.Refusal {
+	return knowledge.Refusal{}
+}
 
 func (searcher) Building(context.Context) bool { return false }
 
-func (searcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
+func (searcher) Search(context.Context, knowledge.Query) knowledge.Answer {
+	return knowledge.Answer{}
+}
 
 func fullDeps(t *testing.T) builtin.Deps {
 	t.Helper()

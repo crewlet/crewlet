@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -605,6 +606,10 @@ func (unreachable) LastSeq(context.Context, string) (uint64, bool, error) {
 	return 0, false, fmt.Errorf("no response from stream")
 }
 
+func (unreachable) At(context.Context, uint64) (string, []byte, time.Time, bool, error) {
+	return "", nil, time.Time{}, false, fmt.Errorf("no response from stream")
+}
+
 // THE WAIT FOR A PEER'S POSITION IS BOUNDED, AND EXPIRY IS A REASON.
 //
 // # The failure this exists to catch
@@ -831,6 +836,10 @@ func (s *scripted) LastSeq(ctx context.Context, subject string) (uint64, bool, e
 	return s.log.LastSeq(ctx, subject)
 }
 
+func (s *scripted) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return s.log.At(ctx, seq)
+}
+
 // answer is a script step that stores nothing and says err.
 func answer(err error) func(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
 	return func(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
@@ -967,6 +976,40 @@ func TestAFullQueueAfterAnUnansweredAttemptLeavesTheWriteUnknown(t *testing.T) {
 	}
 }
 
+// A WRITE WHOSE PROPOSAL WAS STILL IN FLIGHT, AND WHOSE RETAKES MEET A FULL
+// QUEUE UNTIL THE BUDGET RUNS OUT, IS UNKNOWN — NOT BUSY.
+//
+// The broker answered the first attempt that a record under this op id was
+// still being proposed, and nothing had landed when the write looked. That
+// proposal may still commit after every later attempt was refused, so "stored
+// nothing" is not something the write can say about itself: it answers the
+// third value, with the op id a retry collapses it by.
+//
+// Mutation: drop the in-flight branch's mark on the write's pacing and the
+// write is refused busy, a record that may yet land reported as one that never
+// will.
+func TestAnInFlightProposalThenAFullQueueLeavesTheWriteUnknown(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	established(t, h)
+	h.appends.inner = &scripted{log: h.log,
+		next:   []func(context.Context, string, string, *uint64, []byte) (uint64, bool, error){answer(idStillInProgress)},
+		always: tooManyRequests,
+	}
+
+	res, err := h.write(probeSubject("a"), "op-1", "two")
+	if err != nil {
+		t.Fatalf("write = %v, want the third value rather than a refusal", err)
+	}
+	if res.Outcome != statelog.OutcomeUnknown || res.OpID != "op-1" {
+		t.Fatalf("result = %+v, want unknown carrying op-1", res)
+	}
+	if res.Position.Seq != 0 {
+		t.Errorf("an unknown write names position %d, and nothing was "+
+			"established about one", res.Position.Seq)
+	}
+}
+
 // A MESSAGE ID STILL BEING PROPOSED IS RESOLVED, NOT REFUSED — BY THE LEDGER,
 // OR BY THE DUPLICATE ACKNOWLEDGEMENT A LATER APPEND GETS.
 //
@@ -976,10 +1019,15 @@ func TestAFullQueueAfterAnUnansweredAttemptLeavesTheWriteUnknown(t *testing.T) {
 func TestAMessageIDStillBeingProposedIsResolvedRatherThanRefused(t *testing.T) {
 	t.Parallel()
 
+	// Mutation: skip the resolution in the in-flight branch and go straight
+	// to the pause — the next round's snapshot answers the same position
+	// from the ledger, so only the probe count tells the two paths apart.
 	t.Run("the ledger, when the first record has landed", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		established(t, h)
+		appended := h.appends.appends.Load()
+		h.appends.probes.Store(0)
 		// THE FIRST PROPOSAL COMMITTED AND THIS NODE APPLIED IT; this
 		// attempt's own answer was the conflict.
 		h.appends.fail(idStillInProgress, false)
@@ -998,6 +1046,20 @@ func TestAMessageIDStillBeingProposedIsResolvedRatherThanRefused(t *testing.T) {
 		if res.Position.Seq != last {
 			t.Errorf("the write answered position %d and its record is at %d",
 				res.Position.Seq, last)
+		}
+		// WHAT ONLY THE RESOLUTION DOES: it reads the subject back in the
+		// round that met the conflict, and appends nothing more.
+		if got := h.appends.appends.Load() - appended; got != 1 {
+			t.Errorf("the write appended %d time(s), want 1 — the in-flight "+
+				"record is its own and nothing else was sent", got)
+		}
+		if got := h.appends.probes.Load(); got != 1 {
+			t.Errorf("the write probed the subject %d time(s), want 1 — the "+
+				"in-flight answer is resolved by reading the subject back in the "+
+				"round that met it, not by pausing for a later round", got)
+		}
+		if res.Rounds != 1 {
+			t.Errorf("the write took %d round(s), want 1", res.Rounds)
 		}
 	})
 
@@ -1070,4 +1132,217 @@ func TestAMessageIDStillBeingProposedIsResolvedRatherThanRefused(t *testing.T) {
 				"established about one", res.Position.Seq)
 		}
 	})
+}
+
+// shortWindow is the probe domain on a log whose duplicate window is the
+// broker's own minimum, so a case can outlive it.
+type shortWindow struct{ probeDomain }
+
+// shortWindowDuplicates is the broker's floor for a stream's duplicate window:
+// it refuses a smaller one.
+const shortWindowDuplicates = 100 * time.Millisecond
+
+func (shortWindow) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.Duplicates = shortWindowDuplicates
+	return spec
+}
+
+// A RETRY OF AN OPERATION THIS NODE HAS APPLIED PUBLISHES NOTHING, HOWEVER LATE
+// IT COMES.
+//
+// Inside the broker's duplicate window a retry under the same op id is
+// collapsed by the broker; past it the broker has forgotten the id, and a
+// retry that decided again would land a second record of one operation and
+// hand its caller that second decision's values while every node also holds
+// the first's. The snapshot reads this node's ledger first, so the retry is
+// answered at the first record's position whatever the window says.
+//
+// Mutation: drop the publisher's answer from the ledger and the retry appends
+// a second record.
+func TestARetryPastTheDuplicateWindowPublishesNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarnessFor(t, shortWindow{})
+	subject := probePrefix + ".object.a"
+
+	first, err := h.write(probeSubject("a"), "op-1", "one")
+	if err != nil {
+		t.Fatalf("the first attempt: %v", err)
+	}
+	if first.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the first attempt answered %q, want applied", first.Outcome)
+	}
+	appended := h.appends.appends.Load()
+	h.appends.probes.Store(0)
+
+	// PAST THE WINDOW: the broker purges an id once it is a window old, on a
+	// timer of the same period, so several windows is past it.
+	time.Sleep(5 * shortWindowDuplicates)
+
+	retried, err := h.write(probeSubject("a"), "op-1", "one, decided again")
+	if err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if retried.Outcome != statelog.OutcomeApplied || retried.Position != first.Position {
+		t.Fatalf("the retry answered %q at %s, want applied at the first "+
+			"attempt's %s", retried.Outcome, retried.Position, first.Position)
+	}
+	if retried.Version != first.Version {
+		t.Errorf("the retry answered version %d and the first attempt %d — one "+
+			"operation has one version", retried.Version, first.Version)
+	}
+	if got := h.appends.appends.Load() - appended; got != 0 {
+		t.Errorf("the retry appended %d record(s) of an operation this node had "+
+			"already applied", got)
+	}
+	if got := h.appends.probes.Load(); got != 0 {
+		t.Errorf("the retry asked the broker %d time(s) about a write this "+
+			"node's own ledger answers", got)
+	}
+	last, _, err := h.log.LastSeq(t.Context(), subject)
+	if err != nil {
+		t.Fatalf("read the subject: %v", err)
+	}
+	if last != first.Position.Seq {
+		t.Errorf("the subject's last record is %d and the operation's is %d — "+
+			"one operation landed twice", last, first.Position.Seq)
+	}
+
+	// THE CONTROL: the broker really has forgotten the id, or the case above
+	// is the window's work rather than the ledger's.
+	_, duplicate, err := h.log.Append(t.Context(), probePrefix+".object.control",
+		"op-1", nil, []byte("control"))
+	if err != nil {
+		t.Fatalf("append the control: %v", err)
+	}
+	if duplicate {
+		t.Fatal("the broker still remembers op-1, so this case never left the " +
+			"duplicate window it is named for")
+	}
+}
+
+// enveloped is a probe record whose envelope names its own operation, which is
+// what [statelog.Publisher.Landed] checks a record against. The value rides
+// the one field nothing in these cases reads.
+func enveloped(t *testing.T, opID, value string) string {
+	t.Helper()
+	body, err := json.Marshal(statelog.Envelope{
+		V: 1, Kind: "object", Op: value, OpID: opID,
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{"object/a"}},
+	})
+	if err != nil {
+		t.Fatalf("encode a probe record: %v", err)
+	}
+	return string(body)
+}
+
+// A WRITE'S CALLER READS BACK THE RECORD ITS RESULT NAMES, AND ONLY ITS OWN.
+//
+// A value a decision computed is recovered from the record that landed, never
+// from the closure, because a write answered from the ledger ran no decide
+// that landed. So the read-back has to refuse every result it cannot vouch
+// for: one with no position, one whose record is some other operation's, one
+// the log no longer holds, and one from a generation the log has left.
+//
+// Mutation: drop the operation check and another write's record is handed
+// back as this one's; drop the held check and a trimmed record fails as an
+// undecodable envelope rather than as unavailable.
+func TestLandedReadsBackTheRecordTheWriteResolvedTo(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	body := enveloped(t, "op-1", "the first")
+	first, err := h.write(probeSubject("a"), "op-1", body)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := h.pub.Landed(t.Context(), first)
+	if err != nil {
+		t.Fatalf("read back an applied write: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("read back %q, want the record the write published, %q", got, body)
+	}
+
+	for _, tc := range []struct {
+		name string
+		res  statelog.Result
+	}{
+		{"a result with no position", statelog.Result{
+			Outcome: statelog.OutcomeUnknown, OpID: "op-1"}},
+		{"a result naming another operation's record", statelog.Result{
+			Outcome: statelog.OutcomeApplied, Position: first.Position, OpID: "op-2"}},
+		{"a result from a generation the log has left", statelog.Result{
+			Outcome: statelog.OutcomeApplied, OpID: "op-1",
+			Position: statelog.Position{Stream: probeStream,
+				Generation: first.Position.Generation + 1, Seq: first.Position.Seq}}},
+	} {
+		if payload, err := h.pub.Landed(t.Context(), tc.res); err == nil {
+			t.Errorf("%s read back %q", tc.name, payload)
+		}
+	}
+
+	// A RECORD THE LOG NO LONGER HOLDS is unavailable, which a caller can
+	// tell from a broker that did not answer.
+	if _, err := h.write(probeSubject("a"), "op-2", enveloped(t, "op-2", "the second")); err != nil {
+		t.Fatalf("a second write: %v", err)
+	}
+	if err := h.log.Purge(t.Context(), first.Position.Seq+1); err != nil {
+		t.Fatalf("trim the first record: %v", err)
+	}
+	if _, err := h.pub.Landed(t.Context(), first); !errors.Is(err, statelog.ErrUnavailable) {
+		t.Errorf("a trimmed record read back as %v, want it unavailable", err)
+	}
+}
+
+// THE SNAPSHOT READS THE OPERATION LEDGER IN ITS OWN TRANSACTION, AND AN
+// APPLIED OPERATION IS NOT DECIDED AGAIN.
+//
+// Over the framework's own read seam and a real estate, because the fakes the
+// publisher's cases run on are the publisher's seams and this is the seam's
+// own contract: a ledger hit answers where the operation applied and never
+// runs the domain's decide, and a miss decides exactly as a first attempt
+// does.
+//
+// Mutation: drop the ledger read from the snapshot and the applied operation
+// is decided again.
+func TestTheSnapshotAnswersAnAppliedOperationFromItsLedger(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("apply op-1: %v", err)
+	}
+	rows, err := statelog.NewRows(h.db, probeDomain{}, nil)
+	if err != nil {
+		t.Fatalf("NewRows: %v", err)
+	}
+	scope := statelog.ScopeSet{Paths: []string{"object/a"}}
+	decided := 0
+	decide := func(*sql.Tx) (statelog.Decision, error) {
+		decided++
+		return statelog.Decision{Payload: []byte("again"), Version: 1}, nil
+	}
+
+	applied, err := rows.Snapshot(t.Context(), probeSubject("a"), scope, "op-1", decide)
+	if err != nil {
+		t.Fatalf("snapshot for op-1: %v", err)
+	}
+	if !applied.AlreadyApplied || applied.Applied.Seq != 1 {
+		t.Fatalf("the snapshot for an applied operation reports %+v, want it "+
+			"applied at sequence 1", applied)
+	}
+	if decided != 0 || !applied.Decision.Empty() {
+		t.Fatalf("the domain decided %d time(s) about an operation that had "+
+			"already landed", decided)
+	}
+
+	fresh, err := rows.Snapshot(t.Context(), probeSubject("a"), scope, "op-2", decide)
+	if err != nil {
+		t.Fatalf("snapshot for op-2: %v", err)
+	}
+	if fresh.AlreadyApplied || decided != 1 || fresh.Decision.Empty() {
+		t.Fatalf("an operation this node never applied reads as applied=%v with "+
+			"%d decision(s), want it decided once", fresh.AlreadyApplied, decided)
+	}
 }

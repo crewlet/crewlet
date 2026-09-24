@@ -403,19 +403,20 @@ type AgentPhaseCompleted struct {
 	//   - an attempt a provider or a credential gave up on partway through,
 	//     after which another attempt at the same round began;
 	//   - on a failed record, the last attempt at the round the phase failed
-	//     in: as far as it had streamed when its provider call failed, or the
-	//     whole answer when the call returned and its token charge failed.
+	//     or panicked in, when that round never committed: as far as it had
+	//     streamed when its provider call failed or panicked, or the whole
+	//     answer when the call returned and the round went no further.
 	//
 	// A live frame shows each of these while its round is open, as
 	// `partial_round`'s `abandoned` and the round in flight; this is where
-	// they are whole once it closes. SEPARATE from RoundNarration, which is
-	// what the model committed to. Set on the turn's own phases —
-	// onboarding, execute, review — and on no nested one.
-	//
-	// An executor that suspended carries only the attempts since it last
-	// resumed: the pending-run row that carries its earlier rounds into this
-	// record holds none, so each earlier one is logged whole, once, when it
-	// suspends (abandoned_attempt_suspended).
+	// they are kept once it closes — whole on a record published whole, and
+	// on one published cut in the whole GET /phases/{id} reassembles from
+	// its parts, unless a part could not be published, which Notes then
+	// says. An executor that suspended and resumed carries the attempts from
+	// before its suspension too: the pending-run row brings them into this
+	// record with its earlier rounds. SEPARATE from RoundNarration, which is
+	// what the model committed to. Set on the phases that run a tool loop —
+	// the turn's own and a delegated worker's.
 	AbandonedAttempts []RoundNarration `json:"abandoned_attempts,omitempty"`
 	InputTokens       int              `json:"input_tokens"`
 	OutputTokens      int              `json:"output_tokens"`
@@ -499,13 +500,13 @@ type AgentPhaseCompleted struct {
 	SandboxID     string         `json:"sandbox_id"`
 	CostUSD       float64        `json:"cost_usd"`
 	DeliveredRefs []string       `json:"delivered_refs,omitempty"`
-	// Failed is true when the phase died instead of finishing.
+	// Failed is true when the phase died instead of finishing — its loop
+	// failed, or panicked.
 	//
-	// A phase that raises used to publish NOTHING: the only durable record was
-	// the started event, leaving a dashboard showing an in-flight call with no
-	// response and no reason. The runners now emit on the failure path too, so
-	// Response, ToolExecutions and the token counts are PARTIAL on a failed
-	// event rather than absent.
+	// Response, ToolExecutions and the token counts are then PARTIAL rather
+	// than absent: what the phase managed before it stopped. Without this
+	// record the only durable trace of the phase would be its started event,
+	// an in-flight call with no response and no reason.
 	Failed bool `json:"failed"`
 	// Error is the failure's message, whole on a record published whole.
 	// On a record published cut it is the LAST text any form shortens —
@@ -513,13 +514,14 @@ type AgentPhaseCompleted struct {
 	// counted in [AgentPhaseCompleted.AbandonedAttemptsOmitted],
 	// [AgentPhaseCompleted.ToolExecutionsOmitted] and
 	// [AgentPhaseCompleted.RoundNarrationOmitted] — and the record's whole
-	// carries it as the phase returned it, unless a part of that whole
-	// could not be published, which Notes then says. Empty unless Failed.
+	// carries all of it, unless a part of that whole could not be
+	// published, which Notes then says. Empty unless Failed.
 	Error string `json:"error"`
 	// ErrorKind is the failure's class, one word a dashboard prints beside
 	// it: on a phase the provider's error kind (a deadline reads as
-	// `timeout`), `budget_exhausted`, `canceled`, or `error` for anything
-	// unclassified; on a delegated worker the task's own status.
+	// `timeout`), `budget_exhausted`, `canceled`, `unhandled_exception` for a
+	// phase that panicked — the kind the turn's own breach names — or `error`
+	// for anything unclassified; on a delegated worker the task's own status.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.
 	//
@@ -732,9 +734,8 @@ type AgentTurnProgress struct {
 	// round is open. Its texts are whole on the phase's completed record,
 	// by the route ToolExecutions names: the round as its RoundNarration
 	// once it commits, and each abandoned attempt, and the last attempt at a
-	// round the phase failed in, among its
-	// [AgentPhaseCompleted.AbandonedAttempts], save the executor's attempts
-	// before a suspension, which that field says where to find.
+	// round the phase failed or panicked in, among its
+	// [AgentPhaseCompleted.AbandonedAttempts].
 	PartialRound map[string]any `json:"partial_round,omitempty"`
 	A2AContext   map[string]any `json:"a2a_context,omitempty"`
 }

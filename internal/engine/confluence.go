@@ -281,11 +281,26 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 //
 // Nil means no backend is wired, and every consumer treats that as "search
 // nothing" rather than as an error — a turn must not die because a company
-// has no wiki.
+// has no wiki. [Engine.KnowledgeServed] is the same answer with the reason
+// beside it.
 func (e *Engine) Knowledge() knowledge.Searcher {
+	searcher, _ := e.KnowledgeServed()
+	return searcher
+}
+
+// KnowledgeServed is [Engine.Knowledge] and, when nothing answers, which of
+// the two reasons it is: the company runs no knowledge base, or it runs one
+// this node is not serving.
+//
+// ONE ANSWER RATHER THAN A SEARCHER AND A SEPARATE STATUS, because the two
+// are read together — a reader told "no knowledge backend is configured" about
+// a company that configured one goes and checks a setting that is already
+// right — and two reads could straddle an apply and disagree.
+func (e *Engine) KnowledgeServed() (knowledge.Searcher, knowledge.Refusal) {
 	c := e.Company()
 	if c == nil || c.Config == nil {
-		return nil
+		return nil, knowledge.Refusal{State: knowledge.NoBackend,
+			Detail: "no company configuration is active on this node"}
 	}
 	// A NIL INTERFACE, never a typed nil wrapping a nil pointer: the
 	// consumers check `searcher == nil`, and a typed nil passes that check
@@ -295,14 +310,64 @@ func (e *Engine) Knowledge() knowledge.Searcher {
 	switch c.Config.KnowledgeBackendFor() {
 	case config.KnowledgeNative:
 		if native := e.NativeSearcher(); native != nil {
-			return native
+			return native, knowledge.Refusal{}
 		}
+		return nil, knowledge.Refusal{State: knowledge.NotServed,
+			Detail: "the company's knowledge base is the engine's own " +
+				"(`knowledge.backend: native`), and this node started without " +
+				"it, so it holds no copy of the pages to search; a restart " +
+				"starts it"}
 	case config.KnowledgeConfluence:
 		e.notify.mu.Lock()
-		defer e.notify.mu.Unlock()
-		if searcher := e.notify.confluence.searcher; searcher != nil {
-			return searcher
+		searcher := e.notify.confluence.searcher
+		e.notify.mu.Unlock()
+		if searcher != nil {
+			return confluenceSearch{searcher}, knowledge.Refusal{}
 		}
+		return nil, knowledge.Refusal{State: knowledge.NotServed,
+			Detail: e.confluenceUnserved(c.Config.Integrations.Confluence)}
 	}
-	return nil
+	return nil, knowledge.Refusal{State: knowledge.NoBackend,
+		Detail: "the company runs no knowledge base (`knowledge.backend: none`)"}
+}
+
+// confluenceUnserved says why a company on Confluence has no searcher here.
+//
+// THE CREDENTIAL IS NAMED WHEN IT IS THE CAUSE, because it is the one cause
+// this can read for itself: [Engine.startConfluence] builds no searcher
+// without the org token, and logs `confluence_has_no_org_token` when it does
+// not. Anything else is a connection that failed to build, whose own log line
+// carries the reason.
+func (e *Engine) confluenceUnserved(cfg *config.Confluence) string {
+	// NIL ONLY FOR A REVISION THE VALIDATOR REFUSES (`knowledge.backend:
+	// confluence` with no block), which cannot be applied — answered
+	// rather than dereferenced, because this runs on a search path.
+	if cfg == nil {
+		return "the company's knowledge base is Confluence, and it declares no " +
+			"`integrations.confluence` block"
+	}
+	if strings.TrimSpace(e.resolver().Value(cfg.Token)) == "" {
+		return "the company's knowledge base is Confluence, and " +
+			"`integrations.confluence.token` resolves to no credential, so no " +
+			"search runs for anybody; set it"
+	}
+	return "the company's knowledge base is Confluence, and its connection did " +
+		"not build on this node — the `confluence_unavailable` or " +
+		"`confluence_reconcile_failed` line in this node's log says why"
+}
+
+// confluenceSearch is the Confluence searcher on the seam's terms.
+//
+// A LIVE QUERY IS WHOLE WHENEVER IT ANSWERS: there is no fan-out and no index
+// of this node's own behind it, so nothing here is ever partial.
+//
+// ITS FAILURE IS NOT MARKED. [confluence.Searcher.Search] logs a query the
+// site refused (`confluence_search_failed`) and returns no hits, which this
+// adapter cannot tell from a search that matched nothing — so a failed
+// Confluence search reaches a reader as an unmarked empty answer.
+type confluenceSearch struct{ *confluence.Searcher }
+
+// Search implements [knowledge.Searcher].
+func (s confluenceSearch) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
+	return knowledge.Answer{Hits: s.Searcher.Search(ctx, q)}
 }

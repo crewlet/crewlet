@@ -336,8 +336,10 @@ const partBytes = coord.MaxRecordBytes
 // through a server set lower. A server refusing parts of this size is not one a
 // size can chase: the refusal is a setting to fix — on the KV backend its error
 // names max_payload, and `sandbox_bridge_call_whole_not_kept` carries that
-// error — and a call's record says its whole was not kept, while a suspension
-// that cannot be kept fails its run with that error.
+// error — and a call's record says its whole was not kept. A suspension that
+// cannot be kept fails its run instead: the run's `sandbox_run_failed`
+// announcement names max_payload and the value to raise it to, and the node's
+// `sandbox_suspension_unwritable` line carries that error.
 const partFloorBytes = 64 << 10
 
 // ArgsNotKept is the [BridgeCall.Args] a call's FITTED form is recorded with

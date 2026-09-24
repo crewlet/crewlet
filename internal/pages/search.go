@@ -36,9 +36,9 @@ import (
 //
 // # Best effort, as the seam requires
 //
-// Every failure path is an empty result and a log line. A turn must not die
-// because an index was rebuilding — but "not indexed yet" and "nothing
-// matched" are different facts, and [Searcher.Building] is how a caller tells
+// Every failure path is an empty answer marked [knowledge.Answer.Failed], and
+// a log line saying why. A turn must not die because an index was rebuilding
+// — but "not indexed yet" and "nothing matched" are different facts, and [Searcher.Building] is how a caller tells
 // them apart so a seat on a fresh node is not told the company has written
 // nothing down.
 //
@@ -98,6 +98,12 @@ type SearcherOptions struct {
 	// so scans in flight can be counted. Nil counts nothing.
 	Enter func() func()
 
+	// Space is the embedding space the company's pages are embedded in,
+	// asked once per search. Nil, or false, answers on words alone — a
+	// company whose search has no semantic half; what each does is
+	// [search.FanOut.Space]'s to say.
+	Space func() (search.QuerySpace, bool)
+
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
 	// or one returning empty, excludes nothing — which is the company that
@@ -138,6 +144,7 @@ func NewSearcher(opts SearcherOptions) (*Searcher, error) {
 			Corpus: opts.Index.Corpus,
 			Report: opts.Report,
 			Enter:  opts.Enter,
+			Space:  opts.Space,
 		},
 	}, nil
 }
@@ -188,11 +195,11 @@ func (s *Searcher) Building(_ context.Context) bool {
 	return !s.index.ReadyFor(string(search.SourcePage))
 }
 
-// Search returns up to Limit ranked hits. Best effort: every failure path is
-// an empty result.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+// Search returns up to Limit ranked hits, and what the ranking behind them is
+// missing. Best effort: every failure path is an empty answer marked failed.
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
 	if strings.TrimSpace(q.Text) == "" {
-		return nil
+		return knowledge.Answer{}
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
 	answer, err := s.fan.Search(ctx, search.FanQuery{
@@ -209,25 +216,25 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the knowledge block degrades to empty; a turn must not "+
 				"die because an index was slow")
-		return nil
+		return knowledge.Answer{Failed: true}
 	}
+	// CARRIED, NEVER REFUSED. The block is best effort by contract, and an
+	// answer over part of the corpus is better than none — but a short
+	// result set is indistinguishable from a short corpus, so the answer
+	// says what it is missing and every reader of the seam renders it.
+	partial := partialOf(answer)
 	if answer.Partial() {
-		// LOGGED, NEVER REFUSED. The block is best effort by contract,
-		// and an answer over part of the corpus is better than none —
-		// but a short result set is indistinguishable from a short
-		// corpus, so the one place that knows says so.
 		log.WarnContext(ctx, "pages_search_scoped",
 			"buckets_answered", answer.BucketsAnswered,
 			"buckets_missing", answer.BucketsMissing,
 			"absent", strings.Join(answer.Absent, ","),
-			"detail", "the answer was complete for what was searched and "+
-				"silent about what was not")
+			"detail", "the answer carries what it did not search")
 	}
 	hits, err := s.index.Hydrate(ctx, answer.Hits, q.Text)
 	if err != nil {
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the fused answer could not be read back")
-		return nil
+		return knowledge.Answer{Failed: true}
 	}
 	ids := make([]string, 0, len(hits))
 	for _, hit := range hits {
@@ -242,7 +249,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the hits' parent chains could not be read, so the "+
 				"ancestor exclusion could not be judged")
-		return nil
+		return knowledge.Answer{Failed: true}
 	}
 
 	excluded := q.Excluded()
@@ -278,7 +285,23 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 			break
 		}
 	}
-	return out
+	return knowledge.Answer{Hits: out, Partial: partial}
+}
+
+// partialOf is what a fan-out answer is missing, on the seam's terms, or nil
+// for a whole one.
+func partialOf(a search.Answer) *knowledge.Partial {
+	if a.Whole() {
+		return nil
+	}
+	return &knowledge.Partial{
+		BucketsAnswered: a.BucketsAnswered,
+		BucketsMissing:  a.BucketsMissing,
+		// NEVER NIL, so the wire reads `[]` rather than `null` for an
+		// answer that is missing only its semantic half.
+		AbsentNodes:     append([]string{}, a.Absent...),
+		SemanticSkipped: a.SemanticSkipped,
+	}
 }
 
 // hitChain is what one hit's own row said when its parent chain was read.
@@ -356,10 +379,10 @@ func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string]hitCh
 // this node's rows no longer hold as published — indexed and gone, or trashed
 // or unpublished since; and a page under an excluded ancestor. Together they
 // leave an answer SHORT of the limit only when more than two in three of the
-// hits the fan-out ranked are dropped — and short silently, because the
-// seam's answer is a list of hits with nothing beside it. The first drop is
-// the one that can be large, on a node whose index is still on its first
-// build, and that node says it is building ([Searcher.Building]).
+// hits the fan-out ranked are dropped — and short silently, because none of
+// these drops is something [knowledge.Partial] counts. The first drop is the
+// one that can be large, on a node whose index is still on its first build,
+// and that node says it is building ([Searcher.Building]).
 //
 // EXPORTED BECAUSE IT IS HALF OF AN INVARIANT NOTHING ELSE CAN SEE: it
 // multiplies the caller's limit into what the fan-out is asked for, and a

@@ -207,3 +207,57 @@ func TestQueryDefaults(t *testing.T) {
 		t.Fatalf("Hits = %d", got)
 	}
 }
+
+// THE STATES A SEARCH THAT CANNOT RUN IS IN ARE A CLOSED SET, so a caller
+// branching on one reads an unknown value as a value rather than a match.
+func TestUnsearchableIsAClosedSet(t *testing.T) {
+	t.Parallel()
+	for _, state := range []knowledge.Unsearchable{
+		knowledge.NoBackend, knowledge.NotServed, knowledge.NoScope,
+	} {
+		if !state.Valid() {
+			t.Errorf("%q is a state this build names and reports itself invalid", state)
+		}
+	}
+	for _, state := range []knowledge.Unsearchable{"", "no_company", "NotServed"} {
+		if state.Valid() {
+			t.Errorf("%q reports itself a state", state)
+		}
+	}
+}
+
+// A REFUSAL NAMES ONE STATE, and each state sends a reader somewhere else — a
+// backend to choose, a connection to repair, a scope to declare — so no two
+// may share a sentence, and a refuser's own sentence outranks the state's.
+func TestARefusalSaysWhichStateItIsIn(t *testing.T) {
+	t.Parallel()
+	if (knowledge.Refusal{}).Refused() {
+		t.Error("the zero refusal refuses a search")
+	}
+	seen := map[string]knowledge.Unsearchable{}
+	for _, state := range []knowledge.Unsearchable{
+		knowledge.NoBackend, knowledge.NotServed, knowledge.NoScope,
+	} {
+		r := knowledge.Refusal{State: state}
+		if !r.Refused() {
+			t.Errorf("a refusal in state %q does not refuse", state)
+		}
+		reason := r.Reason()
+		if reason == "" {
+			t.Errorf("state %q has no sentence for a person", state)
+		}
+		if other, dup := seen[reason]; dup {
+			t.Errorf("%q and %q share the sentence %q", other, state, reason)
+		}
+		seen[reason] = state
+	}
+	const detail = "the company's knowledge base is Confluence, and its connection did not build"
+	if got := (knowledge.Refusal{State: knowledge.NotServed, Detail: detail}).Reason(); got != detail {
+		t.Errorf("a refuser's own sentence became %q", got)
+	}
+	// A BLANK DETAIL IS NO DETAIL: the state's own sentence stands.
+	blank := knowledge.Refusal{State: knowledge.NoScope, Detail: "  "}
+	if got := blank.Reason(); got != (knowledge.Refusal{State: knowledge.NoScope}).Reason() {
+		t.Errorf("a blank detail answered %q", got)
+	}
+}

@@ -74,9 +74,97 @@ func TestAWorkSearchWaitsForTheItemsFirstBuildAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search the work items: %v", err)
 	}
-	if len(got) != 1 || got[0].Key != "ENG-1" {
-		t.Errorf("the search returned %+v, want ENG-1", got)
+	if len(got.Items) != 1 || got.Items[0].Key != "ENG-1" {
+		t.Errorf("the search returned %+v, want ENG-1", got.Items)
 	}
+}
+
+// A WORK SEARCH A PEER DID NOT COVER SAYS SO, through the tracker's own seam.
+//
+// A peer that replied its own index is still building covered none of its
+// bucket range, and the fan-out counts that range missing. The items this node
+// ranked from its own range are real, so they come back — with the ranking's
+// count beside them, naming the peer, because a short list with nothing beside
+// it reads as every match there is and a seat acts on that by filing the
+// duplicate. The control is the same search with the peer answering.
+func TestAWorkSearchAPeerDidNotCoverSaysSo(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(), `
+		INSERT INTO tracker_tasks (id, key, project_key, root_id, type, title,
+		                           status, status_group, rank, document,
+		                           version, created_at, updated_at)
+		VALUES ('t.1', 'ENG-1', 'ENG', 't.1', 'task', 'Rotate the signing key',
+		        'todo', 'not_started', 'a0', json_object('body', 'before it expires'),
+		        1, 0, 0)`); err != nil {
+		t.Fatalf("insert a work item: %v", err)
+	}
+	index := search.NewIndexerOver(db, []search.LexicalSource{search.TaskSource{}})
+	for sweeps := 0; !index.ReadyFor(itemCorpus); sweeps++ {
+		if sweeps == 100 {
+			t.Fatal("the work items never finished their first lap")
+		}
+		if _, err := index.Sweep(t.Context()); err != nil {
+			t.Fatalf("index the work items: %v", err)
+		}
+	}
+	ask := func(peer search.Slice) tracker.Ranking {
+		t.Helper()
+		items := tracker.NewSearcher(db, itemRanker{index: index, fan: &search.FanOut{
+			Self: "node-a", Local: search.NodeScanner{Index: index},
+			Peers: scatterFunc(func(table []search.Assigned) []search.Slice {
+				out := make([]search.Slice, 0, len(table))
+				for _, a := range table {
+					reply := peer
+					reply.Node, reply.Shards = a.Node, a.Shards
+					out = append(out, reply)
+				}
+				return out
+			}),
+			Roster: func(context.Context) ([]string, error) {
+				return []string{"node-a", "node-b"}, nil
+			},
+			// ABOVE THE FLOOR, so the search is divided between the two
+			// nodes rather than answered by this one alone.
+			Corpus: func(context.Context) (int, error) { return search.FanOutFloor, nil },
+		}})
+		got, err := items.Search(t.Context(), "signing key", 0)
+		if err != nil {
+			t.Fatalf("search the work items: %v", err)
+		}
+		return got
+	}
+
+	building := ask(search.Slice{Building: true})
+	if p := building.Partial; p == nil || p.BucketsMissing == 0 ||
+		!slices.Equal(p.AbsentNodes, []string{"node-b"}) ||
+		p.BucketsAnswered+p.BucketsMissing != search.SearchShards {
+		t.Fatalf("a search a building peer did not cover carries %+v — want the "+
+			"peer's buckets missing and the peer named", building.Partial)
+	}
+	for _, item := range building.Items {
+		if item.Key != "ENG-1" {
+			t.Errorf("the covered half answered %+v", building.Items)
+		}
+	}
+
+	answered := ask(search.Slice{})
+	if answered.Partial != nil {
+		t.Errorf("a search every participant covered carries %+v", answered.Partial)
+	}
+}
+
+// scatterFunc is a peer set answering whatever the function returns for the
+// table it was handed.
+type scatterFunc func([]search.Assigned) []search.Slice
+
+func (f scatterFunc) Scatter(_ context.Context, _ search.FanQuery,
+	table []search.Assigned) ([]search.Slice, error) {
+	return f(table), nil
 }
 
 // errUnfinishedCorpus is what [unfinishedCorpus] answers every scan with.

@@ -633,9 +633,23 @@ func a2aChannelTotals(matched []coord.Channel) map[string]int {
 // to prevent. The native backend has no per-seat credential, so there the
 // answer is every page, as it is for every seat.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
-	text := p.String("q")
+	// THE FIELD THE CALLER SENT, so a refusal names the one they wrote.
+	// Trimmed as a seat's own search trims, so the bound below is on what
+	// is searched.
+	field := "q"
+	text := strings.TrimSpace(p.String(field))
 	if text == "" {
-		text = p.String("text")
+		field = "text"
+		text = strings.TrimSpace(p.String(field))
+	}
+	// REFUSED PAST THE BOUND EVERY CALLER OF THE SEAM HOLDS, whatever state
+	// the backend is in, because it is the request that has to change —
+	// see [knowledge.MaxQueryBytes] for why never a cut.
+	if len(text) > knowledge.MaxQueryBytes {
+		return nil, fmt.Errorf("%w: `%s` is %d bytes, and a knowledge search "+
+			"takes at most %d (knowledge.MaxQueryBytes, the bound a seat's "+
+			"search_knowledge holds too) — send keywords rather than prose",
+			ErrBadParams, field, len(text), knowledge.MaxQueryBytes)
 	}
 	organization := s.organization()
 	out := map[string]any{
@@ -645,6 +659,9 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		"available": true,
 		"reason":    string(KnowledgeRan),
 		"note":      "",
+		// What the ranking behind `hits` did not cover, or null for a
+		// whole one — see [knowledge.Partial].
+		"partial": nil,
 	}
 	unavailable := func(reason KnowledgeReason, note string) (any, error) {
 		out["available"] = false
@@ -655,12 +672,17 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if organization == nil {
 		return unavailable(KnowledgeNoCompany, "no company configuration is active")
 	}
-	// A nil searcher is the ANSWER, not a reason to be unregistered: exactly
-	// one backend serves a company, chosen by which integration is
-	// configured, so "none is" is a fact the company establishes on its own.
-	searcher := s.searcher()
+	// A nil searcher is the ANSWER, not a reason to be unregistered, and the
+	// refusal beside it says which one: a company that runs no knowledge
+	// base, and one that runs a knowledge base this node is not serving,
+	// send an operator to different settings.
+	searcher, refused := s.searcher()
 	if searcher == nil {
-		return unavailable(KnowledgeNoBackend, "no knowledge backend is configured for this company")
+		if refused.State == knowledge.NotServed {
+			return unavailable(KnowledgeNotServed, refused.Reason())
+		}
+		refused.State = knowledge.NoBackend
+		return unavailable(KnowledgeNoBackend, refused.Reason())
 	}
 	out["backend"] = searcher.Backend()
 	// The seam's own pre-gate, and it is free: it answers "could this search
@@ -688,13 +710,29 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if text == "" {
 		return out, nil
 	}
-	hits := searcher.Search(ctx, knowledge.Query{
+	answer := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
+		// THE EXCLUSION A SEAT'S SEARCH APPLIES, or this would show an
+		// operator the unreviewed drafts no agent is shown — and answer
+		// "what would an agent find" with pages an agent would not.
+		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	rows := make([]map[string]any, 0, len(hits))
-	for _, hit := range hits {
+	// A SEARCH THAT STARTED AND DEGRADED, which is what `note` beside the
+	// zero reason is for: the answer is still the answer, and the note says
+	// what a reader must not conclude from it.
+	switch {
+	case answer.Failed:
+		out["note"] = "the search failed on this node, so its empty answer " +
+			"says nothing about what the knowledge base holds — this node's " +
+			"log says why"
+	case answer.Partial != nil:
+		out["partial"] = answer.Partial
+		out["note"] = partialNote(answer.Partial, "pages")
+	}
+	rows := make([]map[string]any, 0, len(answer.Hits))
+	for _, hit := range answer.Hits {
 		rows = append(rows, map[string]any{
 			"id":        hit.PageID,
 			"title":     hit.Title,
@@ -709,6 +747,36 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	out["hits"] = rows
 	return out, nil
+}
+
+// partialNote is the sentence for a person beside an answer ranked over part
+// of what it searched: how much went unsearched, and what a reader must not
+// conclude from the rows. `things` names what is being searched for.
+//
+// THE KNOWLEDGE SEAM'S [knowledge.Partial] for both search answers here — a
+// ranked item search's is converted to it ([knowledgePartial]) — because a
+// reader should meet one sentence for one state.
+func partialNote(p *knowledge.Partial, things string) string {
+	var missing []string
+	if p.BucketsMissing > 0 {
+		sentence := fmt.Sprintf("%d of %d slices of the index were not "+
+			"searched", p.BucketsMissing, p.BucketsAnswered+p.BucketsMissing)
+		if nodes := p.AbsentNodes; len(nodes) > 0 {
+			who, verb := "node "+nodes[0], "is"
+			if len(nodes) > 1 {
+				who, verb = "nodes "+strings.Join(nodes, ", "), "are"
+			}
+			sentence += fmt.Sprintf(" (%s did not answer in time or %s "+
+				"still indexing)", who, verb)
+		}
+		missing = append(missing, sentence)
+	}
+	if p.SemanticSkipped {
+		missing = append(missing, "the half of the search that matches by "+
+			"meaning did not run, so only the words themselves were matched")
+	}
+	return "this answer is partial: " + strings.Join(missing, "; ") +
+		" — " + things + " it does not list may still exist"
 }
 
 // KnowledgeReason says WHY a knowledge search did not run, as a stable value
@@ -729,8 +797,13 @@ const (
 	KnowledgeRan KnowledgeReason = ""
 	// KnowledgeNoCompany — no company configuration is active on this node.
 	KnowledgeNoCompany KnowledgeReason = "no_company"
-	// KnowledgeNoBackend — a company is active and wired no knowledge backend.
+	// KnowledgeNoBackend — a company is active and runs no knowledge base.
 	KnowledgeNoBackend KnowledgeReason = "no_backend"
+	// KnowledgeNotServed — a company is active and runs a knowledge base
+	// this node is not serving ([knowledge.NotServed]): a Confluence
+	// connection that did not build here, or the engine's own knowledge
+	// base on a node that did not start with it. `note` names which.
+	KnowledgeNotServed KnowledgeReason = "not_served"
 	// KnowledgeNoScope — a backend is wired, with no org-wide read scope.
 	KnowledgeNoScope KnowledgeReason = "no_scope"
 
@@ -753,8 +826,8 @@ const (
 // off the wire is a value rather than a panic.
 func (r KnowledgeReason) Valid() bool {
 	switch r {
-	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope,
-		KnowledgeBuilding:
+	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNotServed,
+		KnowledgeNoScope, KnowledgeBuilding:
 		return true
 	}
 	return false
@@ -844,12 +917,13 @@ func skillRow(sk learning.Skill) map[string]any {
 	}
 }
 
-// searcher resolves the knowledge backend for this call.
+// searcher resolves the knowledge backend for this call, or nil and why.
 //
 // Per call rather than per process: see [Sources.Knowledge].
-func (s Sources) searcher() knowledge.Searcher {
+func (s Sources) searcher() (knowledge.Searcher, knowledge.Refusal) {
 	if s.Knowledge == nil {
-		return nil
+		return nil, knowledge.Refusal{State: knowledge.NoBackend,
+			Detail: "no knowledge search is wired on this node"}
 	}
 	return s.Knowledge()
 }

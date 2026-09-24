@@ -23,10 +23,17 @@ import (
 // spaces.
 type stubSearcher struct{}
 
-func (stubSearcher) Backend() string                                         { return "stub" }
-func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool             { return false }
-func (stubSearcher) Building(context.Context) bool                           { return false }
-func (stubSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
+func (stubSearcher) Backend() string                             { return "stub" }
+func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return false }
+func (stubSearcher) Building(context.Context) bool               { return false }
+func (stubSearcher) Search(context.Context, knowledge.Query) knowledge.Answer {
+	return knowledge.Answer{}
+}
+
+// served wires a searcher this node serves.
+func served(s knowledge.Searcher) func() (knowledge.Searcher, knowledge.Refusal) {
+	return func() (knowledge.Searcher, knowledge.Refusal) { return s, knowledge.Refusal{} }
+}
 
 // A TURN IS ITS OWN QUESTION, and it is not a slice of the trace.
 //
@@ -408,7 +415,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// the integration and no spaces — is a DIFFERENT state, and says so
 	// rather than answering an empty search as though it had run.
 	gated := asMap(t, answer(t, queries.Sources{
-		Knowledge: func() knowledge.Searcher { return stubSearcher{} },
+		Knowledge: served(stubSearcher{}),
 		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if gated["available"] != false || gated["note"] == "" {
@@ -459,19 +466,25 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 }
 
 // indexSearcher is a searchable backend with an index of its own: whether it
-// is still on its first build, what it ranks, and what it was asked.
+// is still on its first build, what it ranks and what that ranking missed,
+// whether the search failed, and what it was asked.
 type indexSearcher struct {
 	building bool
 	hits     []knowledge.Hit
+	partial  *knowledge.Partial
+	failed   bool
 	asked    *[]knowledge.Query
 }
 
 func (indexSearcher) Backend() string                             { return "native" }
 func (indexSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 func (s indexSearcher) Building(context.Context) bool             { return s.building }
-func (s indexSearcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+func (s indexSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
 	*s.asked = append(*s.asked, q)
-	return s.hits
+	if s.failed {
+		return knowledge.Answer{Failed: true}
+	}
+	return knowledge.Answer{Hits: s.hits, Partial: s.partial}
 }
 
 // A NODE STILL INDEXING SAYS SO, and searches nothing.
@@ -488,10 +501,8 @@ func TestKnowledgeSaysWhenThisNodeIsStillIndexing(t *testing.T) {
 	hits := []knowledge.Hit{{Title: "Deploy runbook", Container: "ENG", PageID: "p-1"}}
 
 	building := asMap(t, answer(t, queries.Sources{
-		Knowledge: func() knowledge.Searcher {
-			return indexSearcher{building: true, hits: hits, asked: &asked}
-		},
-		Company: company,
+		Knowledge: served(indexSearcher{building: true, hits: hits, asked: &asked}),
+		Company:   company,
 	}, "knowledge", map[string]any{"q": "deploy"}))
 	if building["available"] != false ||
 		building["reason"] != string(queries.KnowledgeBuilding) {
@@ -503,10 +514,8 @@ func TestKnowledgeSaysWhenThisNodeIsStillIndexing(t *testing.T) {
 	}
 
 	built := asMap(t, answer(t, queries.Sources{
-		Knowledge: func() knowledge.Searcher {
-			return indexSearcher{hits: hits, asked: &asked}
-		},
-		Company: company,
+		Knowledge: served(indexSearcher{hits: hits, asked: &asked}),
+		Company:   company,
 	}, "knowledge", map[string]any{"q": "deploy"}))
 	if built["available"] != true || built["reason"] != string(queries.KnowledgeRan) {
 		t.Errorf("a built index answered %v, want the search to have run", built)
@@ -522,6 +531,141 @@ func TestKnowledgeSaysWhenThisNodeIsStillIndexing(t *testing.T) {
 	}
 	if row["id"] != "p-1" || row["container"] != "ENG" {
 		t.Errorf("the hits are %#v, want the page with its id and container", built["hits"])
+	}
+}
+
+// A KNOWLEDGE BASE THIS NODE IS NOT SERVING IS ITS OWN STATE, not "no
+// backend": the company configured one, and an operator told otherwise goes and
+// re-checks a setting that is already right. The note is the refuser's own
+// sentence, because the refuser is the one that knows what to fix.
+func TestKnowledgeNamesAKnowledgeBaseThisNodeIsNotServing(t *testing.T) {
+	t.Parallel()
+	const detail = "the company's knowledge base is Confluence, and " +
+		"`integrations.confluence.token` resolves to no credential"
+	got := asMap(t, answer(t, queries.Sources{
+		Knowledge: func() (knowledge.Searcher, knowledge.Refusal) {
+			return nil, knowledge.Refusal{State: knowledge.NotServed, Detail: detail}
+		},
+		Company: func() *config.Company { return &config.Company{Name: "Acme"} },
+	}, "knowledge", map[string]any{"q": "deploy"}))
+	if got["available"] != false || got["reason"] != string(queries.KnowledgeNotServed) {
+		t.Errorf("a knowledge base this node is not serving answered %v, want "+
+			"reason %q", got, queries.KnowledgeNotServed)
+	}
+	if got["note"] != detail {
+		t.Errorf("note = %q, want the refuser's own sentence %q", got["note"], detail)
+	}
+	if !queries.KnowledgeNotServed.Valid() {
+		t.Errorf("%q is emitted and the enum does not admit it", queries.KnowledgeNotServed)
+	}
+}
+
+// A QUERY PAST THE BOUND A SEAT'S SEARCH HOLDS IS REFUSED, naming the field the
+// caller sent and the limit — and never cut, because a cut query is a
+// different search whose hits nobody can tell from hits for what was typed.
+func TestKnowledgeRefusesAQueryPastTheBoundNamingIt(t *testing.T) {
+	t.Parallel()
+	var asked []knowledge.Query
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Knowledge: served(indexSearcher{asked: &asked}),
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	})
+	long := strings.Repeat("x", knowledge.MaxQueryBytes+1)
+	for _, field := range []string{"q", "text"} {
+		_, err := r.Answer(t.Context(), "knowledge", map[string]any{field: long}, "")
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Fatalf("a %d-byte `%s` answered %v, want bad params", len(long), field, err)
+		}
+		for _, want := range []string{"`" + field + "`", fmt.Sprint(knowledge.MaxQueryBytes)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal %q does not name %s", err, want)
+			}
+		}
+	}
+	if len(asked) != 0 {
+		t.Fatalf("a refused query was searched anyway: %d asks", len(asked))
+	}
+	// AT THE BOUND IS NOT PAST IT, and what is searched is what was sent.
+	at := strings.Repeat("x", knowledge.MaxQueryBytes)
+	if _, err := r.Answer(t.Context(), "knowledge", map[string]any{"q": at}, ""); err != nil {
+		t.Fatalf("a query exactly at the bound answered %v", err)
+	}
+	if len(asked) != 1 || asked[0].Text != at {
+		t.Errorf("the search was asked %d times, want once with the query whole", len(asked))
+	}
+}
+
+// A PARTIAL RANKING SAYS WHAT IT MISSED, AND A FAILED SEARCH SAYS IT FAILED.
+// Either one shown as a bare list reads as everything that matched, which is
+// the one conclusion this screen must not invite. Both are searches that RAN
+// and degraded, so the reason stays the zero one and `note` says the rest.
+func TestKnowledgeMarksAPartialAnswerAndAFailedOne(t *testing.T) {
+	t.Parallel()
+	company := func() *config.Company { return &config.Company{Name: "Acme"} }
+	hits := []knowledge.Hit{{Title: "Deploy runbook", Container: "ENG", PageID: "p-1"}}
+	var asked []knowledge.Query
+	ask := func(s indexSearcher) map[string]any {
+		s.asked = &asked
+		return asMap(t, answer(t, queries.Sources{Knowledge: served(s), Company: company},
+			"knowledge", map[string]any{"q": "deploy"}))
+	}
+
+	whole := ask(indexSearcher{hits: hits})
+	if p, carried := whole["partial"]; !carried || p != nil {
+		t.Errorf("a whole answer's partial = %v (present %v), want an explicit null", p, carried)
+	}
+	if whole["note"] != "" {
+		t.Errorf("a whole answer carries the note %q", whole["note"])
+	}
+
+	partial := ask(indexSearcher{hits: hits, partial: &knowledge.Partial{
+		BucketsAnswered: 42, BucketsMissing: 22, AbsentNodes: []string{"node-b"},
+	}})
+	if partial["available"] != true || partial["reason"] != string(queries.KnowledgeRan) {
+		t.Errorf("a partial answer reports the search as not having run: %v", partial)
+	}
+	if rows, _ := partial["hits"].([]any); len(rows) != 1 {
+		t.Errorf("a partial answer dropped its hits: %v", partial["hits"])
+	}
+	missing, _ := partial["partial"].(map[string]any)
+	absent, _ := missing["absent_nodes"].([]any)
+	if missing["buckets_answered"] != float64(42) || missing["buckets_missing"] != float64(22) ||
+		len(absent) != 1 || absent[0] != "node-b" || missing["semantic_skipped"] != false {
+
+		t.Errorf("partial = %v, want what the ranking missed", partial["partial"])
+	}
+	note, _ := partial["note"].(string)
+	for _, want := range []string{"22 of 64", "node-b", "may still exist"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the partial note %q does not say %q", note, want)
+		}
+	}
+
+	failed := ask(indexSearcher{failed: true})
+	if failed["available"] != true || failed["reason"] != string(queries.KnowledgeRan) {
+		t.Errorf("a failed search reports itself as never having started: %v", failed)
+	}
+	if note, _ := failed["note"].(string); !strings.Contains(note, "failed") {
+		t.Errorf("a failed search's note %q does not say it failed", note)
+	}
+	if failed["partial"] != nil {
+		t.Errorf("a failed search carries partial %v", failed["partial"])
+	}
+}
+
+// THE SCREEN HIDES WHAT A SEAT IS NOT SHOWN. It answers "what would an agent
+// find", and an agent's search excludes the auto-drafted pages nobody has
+// reviewed — so this one does too, or it shows an operator pages no agent sees.
+func TestKnowledgeHidesTheDraftsASeatsSearchHides(t *testing.T) {
+	t.Parallel()
+	var asked []knowledge.Query
+	answer(t, queries.Sources{
+		Knowledge: served(indexSearcher{asked: &asked}),
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	}, "knowledge", map[string]any{"q": "deploy"})
+	if len(asked) != 1 || !slices.Contains(asked[0].ExcludeAncestors, knowledge.AutoDraftedParent) {
+		t.Errorf("the search was asked %+v, want the auto-drafts excluded", asked)
 	}
 }
 

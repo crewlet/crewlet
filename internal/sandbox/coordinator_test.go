@@ -2577,3 +2577,155 @@ func TestASuspensionTheStoreCannotReadHandsTheClaimBack(t *testing.T) {
 		t.Errorf("announced %+v for a run that is not lost", rig.failures())
 	}
 }
+
+// busyCount is how many runs the coordinator counts as holding a seat.
+func (r *coordRig) busyCount(handle string) int {
+	r.coordinator.mu.Lock()
+	defer r.coordinator.mu.Unlock()
+	return r.coordinator.busy[handle]
+}
+
+// A LOST CONVERSATION GIVES UP ITS OWN HOLD ON THE SEAT, AND NO OTHER. A seat
+// holds a second run whenever a resumed turn launched another job, and an
+// answer is offered to a parked run only while another run holds the seat. So
+// the run lost for want of its parts is, on the answer path always and on the
+// completion path often, one of two runs the seat's count holds — and its
+// settle must leave the other's hold in place, or the seat's mail stops being
+// parked and a turn starts beside a job that is still running.
+func TestALostSuspensionGivesUpOnlyItsOwnHoldOnTheSeat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// signal brings the lost run's tail to the coordinator.
+		signal func(t *testing.T, rig *coordRig)
+		// holding is the seat's count once the other run holds it and the
+		// lost run's signal has not arrived: two runs when both are
+		// running, one when the lost run is parked on its question.
+		holding int
+	}{
+		{
+			name: "its completion",
+			signal: func(t *testing.T, rig *coordRig) {
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Fatalf("OnCompleted: %v", err)
+				}
+			},
+			holding: 2,
+		},
+		{
+			name: "the answer to its question",
+			signal: func(t *testing.T, rig *coordRig) {
+				handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "main", nil)
+				if err != nil || !handled {
+					t.Fatalf("TryResumeFromAnswer = %v, %v; want the answer taken", handled, err)
+				}
+			},
+			holding: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRigOn(t, suspensionLost{memory.NewFleet()})
+			rig.launching("t1")
+			rig.suspendLarge("t1")
+			rig.runner.Finish(Result{Success: true, Text: "fixed"})
+			if tc.holding == 1 {
+				rig.park("t1")
+			}
+			rig.launch("t2")
+			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+				AgentHandle: "swe", TurnID: "t2",
+			}); err != nil {
+				t.Fatalf("OnStarted: %v", err)
+			}
+			if got := rig.busyCount("swe"); got != tc.holding {
+				t.Fatalf("the seat's count is %d before the signal, want %d: the premise", got, tc.holding)
+			}
+
+			tc.signal(t, rig)
+
+			rig.finished("t1")
+			if failures := rig.failures(); len(failures) != 1 ||
+				failures[0].Reason != types.SandboxFailureNoConversation {
+				t.Fatalf("announced %+v, want the lost run failed for want of its conversation", failures)
+			}
+			if got := rig.get("t2"); got.Status != StatusRunning {
+				t.Fatalf("the other run is %q, want it still running", got.Status)
+			}
+			if got := rig.busyCount("swe"); got != 1 {
+				t.Errorf("the seat's count is %d after the lost run settled, want 1: the "+
+					"other run still holds it", got)
+			}
+			if !rig.coordinator.AwaitingSandbox("swe") {
+				t.Error("the seat takes new turns while its other run is still running")
+			}
+		})
+	}
+}
+
+// AND A CONVERSATION THE STORE COULD NOT READ LEAVES THE SEAT'S COUNT WHERE IT
+// WAS. The claim goes back to the status it was taken from, and the count
+// follows it: a run back in running holds the seat again, one back waiting on
+// its question does not, and the other run's hold is untouched either way. A
+// count one too high parks the seat's mail on a run that is not running; one
+// too low starts a turn beside one that is.
+func TestAnUnreadableStoreLeavesTheSeatsCountWhereItWas(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signal func(t *testing.T, rig *coordRig) error
+		// back is the status the claim goes back to, and holding the
+		// seat's count before the signal and after it.
+		back    string
+		holding int
+	}{
+		{
+			name: "its completion",
+			signal: func(t *testing.T, rig *coordRig) error {
+				payload, ev := rig.completion("t1")
+				return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			},
+			back: StatusRunning, holding: 2,
+		},
+		{
+			name: "the answer to its question",
+			signal: func(t *testing.T, rig *coordRig) error {
+				handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "main", nil)
+				if !handled {
+					t.Error("the answer was not taken as the parked run's")
+				}
+				return err
+			},
+			back: StatusAwaiting, holding: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRigOn(t, suspensionUnreachable{memory.NewFleet()})
+			rig.launching("t1")
+			rig.suspendLarge("t1")
+			rig.runner.Finish(Result{Success: true, Text: "fixed"})
+			if tc.back == StatusAwaiting {
+				rig.park("t1")
+			}
+			rig.launch("t2")
+			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+				AgentHandle: "swe", TurnID: "t2",
+			}); err != nil {
+				t.Fatalf("OnStarted: %v", err)
+			}
+			if got := rig.busyCount("swe"); got != tc.holding {
+				t.Fatalf("the seat's count is %d before the signal, want %d: the premise", got, tc.holding)
+			}
+
+			if err := tc.signal(t, rig); !errors.Is(err, coord.ErrUnavailable) {
+				t.Fatalf("the signal = %v, want the store's refusal handed back for a retry", err)
+			}
+
+			if got := rig.get("t1"); got.Status != tc.back {
+				t.Fatalf("the run is %q, want the claim handed back to %q", got.Status, tc.back)
+			}
+			if got := rig.busyCount("swe"); got != tc.holding {
+				t.Errorf("the seat's count is %d after the claim went back, want the %d it was",
+					got, tc.holding)
+			}
+		})
+	}
+}

@@ -1,7 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,13 +16,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE THREE ALARMS ABOUT THE MACHINE, and the fields nothing filled.
+// THE ALARMS ABOUT THE MACHINE FIRE ON WHAT THIS NODE'S STORAGE MEASURES.
 //
-// `volume_low`, `wal_large` and `pool_starved` each read a field of
-// [statelog.Reading] that no code assigned, so all three were permanently
-// silent — which on a node running out of disk is the worst possible silence.
-// Filling the field is only half of it: a field filled in and never read is
-// the same silence with an extra step, so this asserts the table fires too.
+// `volume_low` and `wal_large` each fire on a field of [statelog.Reading] that
+// [retention.space] fills from this node's own files and volume, and
+// `pool_starved` on one [retention.observed] fills; a field nothing fills is a
+// condition that never fires, which on a node running out of disk is the worst
+// possible silence. Filling the field is only half of it: a field filled in and
+// never read is the same silence with an extra step, so this asserts the table
+// fires too.
 func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -137,15 +144,13 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	}
 }
 
-// THE FOUR WINDOWED COUNTERS FOUR MORE ALARMS READ, and nothing read them.
+// THE WINDOWED COUNTERS REACH THE ALARMS THAT FIRE ON THEM.
 //
 // `pool_starved`, `records_gated`, `feed_unreadable` and `census_drift` each
-// take a field of [statelog.Reading] off this process's own recorder. Every
-// one of those fields was left at its zero value, so four conditions in a
-// twenty-row table could not fire — and three of them are the only report
-// their subject has: a gated record is recoverable by nothing, an
-// untranslatable change record blocks every wake behind it, and a company that
-// has outgrown its log's sizing has no other symptom until the log is full.
+// take a field of [statelog.Reading] off this process's own recorder, through
+// [retention.observed], and a field left at its zero value is a condition that
+// cannot fire. So both halves are asserted: what the recorder counted reaches
+// the reading, and the table fires on it.
 func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -211,18 +216,18 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	}
 }
 
-// THE ALARM TABLE HAD ONE SURFACE OF THREE.
+// THE ALARM TABLE REACHES A COLLECTOR, FROM A NODE THAT HOLDS NO DUTY.
 //
 // [statelog.Tracker] turns each evaluation into the two surfaces that are not
 // a screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes, and
-// one WARN on entry and one on exit — and it had no production caller at all.
-// So an alarm reached whoever happened to be looking at `work_retention` and
-// nothing else: no collector series, no log line, no page.
+// one WARN on entry and one on exit. An alarm that reached only
+// `work_retention` would reach whoever happened to be looking at it and
+// nothing else: no collector series and no log line.
 //
-// AND IT IS EVALUATED ON A NODE THAT HOLDS NO DUTY, which is the other half. A
-// reading describes ONE node, so a table evaluated only where the trim's
-// singleton lease happens to sit would report the lease holder's health as the
-// fleet's — and the wedged node is the one nobody hears from.
+// AND IT IS EVALUATED ON A NODE THAT HOLDS NO DUTY. A reading describes ONE
+// node, so a table evaluated only where the trim's singleton lease happens to
+// sit would report the lease holder's health as the fleet's — and the wedged
+// node is the one nobody hears from.
 func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -260,4 +265,106 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 			"not, because a series that disappears reads as `no data` on "+
 			"every dashboard", series, len(statelog.Kinds()))
 	}
+}
+
+// A COVERAGE SCAN THAT FAILS IS TRIED AGAIN A TRIM INTERVAL LATER, not on the
+// next report.
+//
+// The scan reads the whole source corpus, and a report asks for it on every
+// alarm pass and every operator request. Cached as nothing known, a failure
+// costs one scan and one WARN per trim interval while it lasts; uncached, both
+// repeat on every report. The answer meanwhile is nil rather than a fraction:
+// an unreadable corpus is not an uncovered one, so `recall_below_floor` has
+// nothing to judge.
+//
+// Mutation: leave a failed attempt uncached and the second report scans again.
+func TestAFailedCoverageScanIsTriedAgainATrimIntervalLater(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	scans, failing := 0, true
+	r := &retention{
+		logger: slog.New(slog.NewJSONHandler(&out, nil)),
+		coverage: func(context.Context) (float64, bool, error) {
+			scans++
+			if failing {
+				return 0, false, errors.New("the corpus could not be read")
+			}
+			return 0.5, true, nil
+		},
+	}
+	began := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	for _, after := range []time.Duration{0, AlarmInterval, RetentionInterval - time.Second} {
+		if got := r.semanticCoverage(t.Context(), began.Add(after)); got != nil {
+			t.Errorf("%v after a failed scan the coverage read %s, want nothing "+
+				"known", after, coverageText(got))
+		}
+	}
+	if scans != 1 {
+		t.Errorf("three reports inside one trim interval scanned %d time(s), want 1",
+			scans)
+	}
+	if got := countLogged(t, &out, slog.LevelWarn, "vector_coverage_unreadable"); got != 1 {
+		t.Errorf("one failed scan was written down %d time(s), want 1", got)
+	}
+
+	// ONE INTERVAL ON, the next report scans again, and what it measures is
+	// the answer.
+	failing = false
+	got := r.semanticCoverage(t.Context(), began.Add(RetentionInterval))
+	if scans != 2 || got == nil || *got != 0.5 {
+		t.Errorf("a report a trim interval after the failure scanned %d time(s) "+
+			"in all and read %s, want 2 and 0.5", scans, coverageText(got))
+	}
+}
+
+// A REPORT ASSEMBLED WHILE A COVERAGE SCAN RUNS DOES NOT START ANOTHER.
+//
+// The tick and every API request assemble a report on goroutines of their own,
+// and the scan reads the whole source corpus. The attempt is claimed before it
+// is made, so a report that finds the cache due while another is scanning
+// answers from what was measured before — here, nothing yet — rather than
+// scanning the same corpus a second time.
+//
+// Mutation: stamp the attempt only once the scan returns and the second report
+// scans too.
+func TestAReportAssembledDuringACoverageScanDoesNotStartAnother(t *testing.T) {
+	t.Parallel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var scans atomic.Int32
+	r := &retention{coverage: func(context.Context) (float64, bool, error) {
+		if scans.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return 0.5, true, nil
+	}}
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	first := make(chan *float64, 1)
+	go func() { first <- r.semanticCoverage(context.Background(), now) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first report never started its scan")
+	}
+
+	second := r.semanticCoverage(t.Context(), now)
+	close(release)
+	if second != nil {
+		t.Errorf("a report during the first scan read %s, want nothing known yet",
+			coverageText(second))
+	}
+	if got := <-first; got == nil || *got != 0.5 {
+		t.Errorf("the report that claimed the scan read %s, want 0.5", coverageText(got))
+	}
+	if n := scans.Load(); n != 1 {
+		t.Errorf("two reports at one instant scanned %d time(s), want 1", n)
+	}
+}
+
+// coverageText renders a coverage answer for a failure message.
+func coverageText(fraction *float64) string {
+	if fraction == nil {
+		return "nothing known"
+	}
+	return strconv.FormatFloat(*fraction, 'g', -1, 64)
 }

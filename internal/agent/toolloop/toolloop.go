@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -168,7 +169,9 @@ type Narration struct {
 //
 // It carries the REFUSING SCOPE rather than just a boolean, because the
 // alternative — re-reading the caps to work out which budget said no — is a
-// read a peer's spend can invalidate between the refusal and the report.
+// read a peer's spend can invalidate between the refusal and the report. On a
+// refusal, Used is that scope's spend as the refusal found it, before these
+// tokens, and Limit is its cap.
 type SpendOutcome struct {
 	OK    bool
 	Scope string
@@ -177,10 +180,24 @@ type SpendOutcome struct {
 }
 
 // BudgetMeter is the shared token counter a turn charges.
+//
+// A CHARGE IS SPENT BEFORE IT IS ASKED ABOUT. The tokens a caller charges are
+// those of a model call that has already answered — a call's size is known
+// only from its answer — so the provider has billed them whatever the counter
+// then says. What the counter decides is whether the caller may go on: run the
+// round's tools, start another round.
 type BudgetMeter interface {
-	// Spend checks and increments in ONE operation against the shared
-	// counter. An error means the counter could not be reached, which is
-	// not the same as a refusal and must not be treated as one.
+	// Spend counts tokens a model call has billed and reports whether the
+	// budget had room for them, checking and counting in ONE operation so
+	// two callers racing for the last of a budget cannot both be told yes.
+	//
+	// A REFUSAL IS NOT A REFUND: OK false still counts the tokens, and the
+	// caller must stop. A counter that dropped a refused charge would
+	// under-state the company's spend by exactly the rounds that found it
+	// at its cap — the moment a cap binds — and disagree with every record
+	// of those rounds, which report what the provider billed. An error
+	// means the counter could not be reached, which is not a refusal and
+	// must not be treated as one.
 	Spend(ctx context.Context, tokens int) (SpendOutcome, error)
 }
 
@@ -208,11 +225,12 @@ func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhauste
 // Progress is the in-flight view of a running loop.
 //
 // Its whole reason to exist is the FAILURE path. When the loop returns an
-// error there is no Result to publish, so a phase that died used to leave
-// behind only its "phase started" event — the dashboard showed an in-flight
-// call with no response and no reason. The caller holds this, so its error
-// branch can still publish what the phase managed: the conversation so far,
-// the calls that ran, the tokens already billed, and which round it died on.
+// error, or panics, there is no Result to publish, and a phase with nothing
+// else to report leaves only its "phase started" event: an in-flight call with
+// no response and no reason. The caller holds this, so its error branch — and
+// a recovery around a panic — can still publish what the phase managed: the
+// conversation so far, the calls that ran, the tokens already billed, what no
+// round committed, and which round it died on.
 //
 // Guarded because the caller reads it from a different goroutine than the one
 // running the loop — which is exactly the situation it exists for.
@@ -262,9 +280,10 @@ func (p *Progress) Snapshot() Result {
 	}
 }
 
-// abandon records the attempts the loop did not commit, for a return that no
-// publish follows: a provider call that failed while its round was being
-// written adds that round's last attempt, and nothing else has changed.
+// abandon records the attempts the loop did not commit, for an exit that no
+// publish follows: a provider call that failed or panicked while its round
+// was being written adds that round's last attempt, and nothing else has
+// changed.
 func (p *Progress) abandon(abandoned []Narration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -330,18 +349,19 @@ type Result struct {
 	//   - an attempt a provider or a credential gave up on partway through,
 	//     after which another attempt at the same round began (see
 	//     [Partial]);
-	//   - on a snapshot of a loop that failed during a round
+	//   - on a snapshot of a loop that failed or panicked during a round
 	//     ([Progress.Snapshot]), that round's last attempt: as far as it had
-	//     streamed when the provider call failed, or the whole answer when
-	//     the call returned and its token charge failed.
+	//     streamed when the provider call failed or panicked, or the whole
+	//     answer when the call returned and the round went no further — its
+	//     token charge failed, or a panic came before the round committed.
 	//
 	// SEPARATE from Narration, for the reason [Partial] is: a round's
 	// narration is what the model committed to, and these are what it wrote
 	// that nothing took up. A live frame shows each of them while its round
 	// is open; this is what keeps them once it closes. Only a streamed call
-	// leaves text behind when it fails, so a loop without
+	// leaves text behind when it fails mid-answer, so a loop without
 	// [Config.StreamPartials] can hold one entry here at most: the answer
-	// whose charge failed.
+	// its round never committed.
 	Abandoned []Narration
 
 	// Partial is the round being written RIGHT NOW, present only on a live
@@ -537,7 +557,8 @@ func (c Config) validate() error {
 // including a suspend and an exhausted round budget, both of which are things
 // the phase did rather than things that went wrong. An error means the
 // provider, the budget or the surface itself failed, and the caller publishes
-// Progress.Snapshot() alongside it.
+// Progress.Snapshot() alongside it. A panic leaves the same account in
+// Progress and goes on as the same panic.
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -585,6 +606,61 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	roundsUsed := 0
+	// answeredRounds is how many rounds the provider has answered, and so
+	// billed; uncommitted is the latest answer from the moment it arrives
+	// until its round commits, and nil otherwise. Each error path below knows
+	// where in its round it stands, and a panic does not: these tell the
+	// account below.
+	answeredRounds := 0
+	var uncommitted *llm.Completion
+	// roundSpan is the span of the provider call in flight, and nil between
+	// calls: a panic inside the call ends it, failed, rather than leaving it
+	// open and never exported.
+	var roundSpan trace.Span
+
+	// A PANIC LEAVES THE ACCOUNT AN ERROR DOES, and goes on as the same panic.
+	// The caller's failure view is Progress, which this loop brings up to date
+	// only when it publishes — so a panic between two publishes would leave
+	// out everything since: the round in flight, an answer not yet committed,
+	// the calls the round had run. Each case is recorded as the matching
+	// error path records it. Re-panicking with the recovered value hands
+	// whoever recovers it the same panic, with the frames it came from still
+	// on the stack: they stay there until a deferred call returns.
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		if roundSpan != nil {
+			tracing.Fail(roundSpan, fmt.Errorf("toolloop: %s round %d: panic: %v",
+				cfg.Surface.Phase(), roundsUsed, recovered))
+			roundSpan.End()
+		}
+		if cfg.Progress != nil {
+			kept := append([]Narration(nil), abandoned...)
+			switch {
+			case uncommitted != nil:
+				// Answered, not committed: where a refused charge leaves an
+				// answer.
+				if narrated(uncommitted.ReasoningContent, uncommitted.Content) {
+					kept = append(kept, Narration{Round: roundsUsed,
+						Reasoning: uncommitted.ReasoningContent, Content: uncommitted.Content})
+				}
+				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model)
+			case partial != nil:
+				// A streamed answer still arriving: where a failed provider
+				// call leaves its attempt.
+				if attempt, ok := partial.attempt(); ok {
+					kept = append(kept, attempt)
+				}
+				cfg.Progress.abandon(kept)
+			default:
+				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model)
+			}
+		}
+		panic(recovered)
+	}()
+
 	for round := range cfg.MaxRounds {
 		roundsUsed = round + 1
 
@@ -617,7 +693,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// round and tell a reader nothing they could act on. Which member
 		// and which credential answered is on the completion, and reaches
 		// the record through the phase event.
-		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
+		var roundCtx context.Context
+		roundCtx, roundSpan = tracing.Start(ctx, "agent.toolloop", "llm.round",
 			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
 		// The CONFIGURED identity, as a placeholder, so a streamed round
@@ -701,6 +778,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			}
 			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 		}
+		// BILLED THE MOMENT IT ARRIVES, so an account taken from here on counts
+		// it, whatever then becomes of the round.
+		inTokens += completion.InputTokens
+		outTokens += completion.OutputTokens
+		answeredRounds, uncommitted = roundsUsed, completion
 		roundSpan.SetAttributes(
 			attribute.String("crewlet.model", completion.Model),
 			attribute.Int("crewlet.input_tokens", completion.InputTokens),
@@ -708,6 +790,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
 			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
 		roundSpan.End()
+		roundSpan = nil
 		if !served && completion.Model != "" {
 			// The completion names the model that actually served this
 			// round, which is what the per-model token breakdown is built
@@ -723,8 +806,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if model == "" {
 			model = cfg.Provider.Model()
 		}
-		inTokens += completion.InputTokens
-		outTokens += completion.OutputTokens
 		if completion.Truncated() {
 			// LATCHED, never per-round: the phase's question is whether
 			// anything it is about to stand behind was cut, and a round
@@ -749,7 +830,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// answering, changes neither. So the answer joins the abandoned
 			// attempts and the tokens stay counted, in the snapshot the
 			// caller publishes on this error — recorded here, because no
-			// publish follows this return.
+			// publish follows this return. A refusing meter has counted the
+			// same tokens (see [BudgetMeter]), so the record and the counter
+			// agree on what this round cost.
 			if narrated(completion.ReasoningContent, completion.Content) {
 				abandoned = append(abandoned, Narration{
 					Round: roundsUsed, Reasoning: completion.ReasoningContent, Content: completion.Content,
@@ -780,7 +863,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// the partial (with any abandoned attempts) goes. Cleared BEFORE
 		// the publish below so the live view never shows a finished round
 		// and a fragment of the same round at once.
-		partial = nil
+		partial, uncommitted = nil, nil
 		if narrated(completion.ReasoningContent, completion.Content) {
 			narration = append(narration, Narration{
 				Round:     roundsUsed,
@@ -872,6 +955,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		suspended, pendingID, pendingName, payload, err := runCalls(
 			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs)
 		if err != nil {
+			// THE CALLS THAT RAN ARE PART OF THE ACCOUNT. A fence that closed,
+			// or a surface that broke, partway through a round ends the loop
+			// after the calls before it had run — and those calls reached
+			// outside the engine. No publish follows this return, so the
+			// failure view is brought up to date here.
+			if cfg.Progress != nil {
+				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model)
+			}
 			return nil, err
 		}
 
@@ -987,6 +1078,10 @@ func runCalls(
 	return false, "", "", nil, nil
 }
 
+// charge meters one answered round's tokens, and says whether the loop may run
+// that round's tools. A refusal stops the round and refunds nothing: the
+// provider billed the tokens and the meter has counted them (see
+// [BudgetMeter]).
 func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil

@@ -141,14 +141,26 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			want: statelog.RefuseFloorUnknown,
 		},
 		// A HEALTH READ THAT FAILED BEFORE IT REACHED THE FLOOR says why in
-		// its own words: an unanswered coordination read and a floor at a
-		// generation this node has left refuse alike and are fixed apart.
+		// its own words.
 		"a health read that failed before it established the floor": {
 			health: func() statelog.Health {
-				return statelog.Health{Err: "the published floor for probe is at " +
-					"generation 3 and this node is on 1"}
+				return statelog.Health{Err: "engine: read the fleet's published " +
+					"trim floors: nats: timeout"}
 			},
 			want: statelog.RefuseFloorUnknown,
+			says: "nats: timeout",
+		},
+		// A FLOOR READ AT ANOTHER GENERATION is its own code, carrying the
+		// read's words, which name both generations.
+		"a floor at a generation this node has left": {
+			health: func() statelog.Health {
+				return statelog.Health{
+					Floor: statelog.Floor{State: statelog.FloorLeft, ReadAt: time.Now()},
+					Err: "the published floor for probe is at generation 3 and " +
+						"this node is on 1",
+				}
+			},
+			want: statelog.RefuseGenerationLeft,
 			says: "generation 3",
 		},
 		// A BROKER THAT DID NOT ANSWER THE HEALTH READ is named as the
@@ -224,6 +236,10 @@ func (c *countingAppends) Append(ctx context.Context, subject, msgID string, exp
 
 func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	return c.inner.LastSeq(ctx, subject)
+}
+
+func (c *countingAppends) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return c.inner.At(ctx, seq)
 }
 
 // A STALE READ SURVIVES A FULL LOG, and a linearizable one is told the log is
@@ -503,6 +519,55 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Valid() {
 		t.Error("an unknown refusal code reports itself valid")
+	}
+}
+
+// AN UNREAD FLOOR IS WORTH COMING BACK FOR, AND A LEFT GENERATION IS NOT.
+//
+// Both refuse, for the same reason — nothing this node holds can be compared
+// against the floor — and they differ in what clears them. A floor read that
+// did not answer is a coordination blip, and the next read usually answers: a
+// caller told not to come back gives up on a node that serves again seconds
+// later. A floor published at a generation this node has left answered
+// perfectly well, and nothing but this node adopting the new generation clears
+// it: a caller told to come back loops.
+//
+// Mutation: drop floor_unknown from the retryable set and the first half
+// fails; add generation_left to it and the second does.
+func TestAnUnreadFloorIsWorthComingBackForAndALeftGenerationIsNot(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	unread := statelog.Health{Err: "engine: read the fleet's published trim floors: " +
+		"nats: timeout"}
+	if code := unread.Refusal(now); code != statelog.RefuseFloorUnknown {
+		t.Fatalf("an unread floor refuses %q, want %q", code, statelog.RefuseFloorUnknown)
+	}
+	if !statelog.RefuseFloorUnknown.Retryable() {
+		t.Errorf("%s is not retryable, so a caller gives up on a node over a "+
+			"coordination read the next attempt usually answers",
+			statelog.RefuseFloorUnknown)
+	}
+	if got := statelog.RetryHint(statelog.RefuseFloorUnknown, 0, 0); got != statelog.ElectionRetryHint {
+		t.Errorf("an unread floor hints %s, want %s — the floor is a coordination "+
+			"record on the broker's own connection, so it waits on the broker's "+
+			"election", got, statelog.ElectionRetryHint)
+	}
+
+	left := statelog.Health{
+		Floor: statelog.Floor{State: statelog.FloorLeft, ReadAt: now},
+		Err:   "the published floor is at generation 3 and this node is on 1",
+	}
+	if code := left.Refusal(now); code != statelog.RefuseGenerationLeft {
+		t.Fatalf("a floor at a generation this node has left refuses %q, want %q",
+			code, statelog.RefuseGenerationLeft)
+	}
+	if statelog.RefuseGenerationLeft.Retryable() {
+		t.Errorf("%s is retryable, so a caller comes back to a node that nothing "+
+			"but an adoption clears", statelog.RefuseGenerationLeft)
+	}
+	if got := statelog.RetryHint(statelog.RefuseGenerationLeft, 0, 0); got != 0 {
+		t.Errorf("a left generation hints %s, and waiting on this node cannot "+
+			"clear it", got)
 	}
 }
 

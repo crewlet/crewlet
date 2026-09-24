@@ -125,12 +125,30 @@ var locksHeld = struct {
 	by map[string]*fileLock
 }{by: map[string]*fileLock{}}
 
-// lockStore takes the exclusive lock for a database path.
+// lockStore takes the exclusive lock for a database path, making its sidecar
+// — and the directory it goes in — when there is none.
 //
 // The holder's identity is written into the sidecar AFTER the lock is held,
 // so what a refused opener reads is always a live holder's — never a
 // half-written line from a racing one.
 func lockStore(dbPath string) (*fileLock, error) {
+	return claimStore(dbPath, true)
+}
+
+// lockExisting is [lockStore] for a caller that must make nothing: it takes
+// the lock only where a sidecar already stands, and answers (nil, nil) where
+// none does.
+//
+// NO SIDECAR IS NO HOLDER. Every holder makes the sidecar before it locks it
+// and leaves it in place when it lets go (see [fileLock.release]), so a path
+// with no sidecar is one no process holds.
+func lockExisting(dbPath string) (*fileLock, error) {
+	return claimStore(dbPath, false)
+}
+
+// claimStore is [lockStore] and [lockExisting]: create says whether a missing
+// sidecar is made or answered with no lock at all.
+func claimStore(dbPath string, create bool) (*fileLock, error) {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// An in-memory database is per-connection by construction: there
 		// is no file for a second process to find, so there is nothing to
@@ -146,13 +164,20 @@ func lockStore(dbPath string) (*fileLock, error) {
 	}
 
 	path := dbPath + lockSuffix
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("store: preparing %s: %w", dir, err)
+	flags := os.O_RDWR
+	if create {
+		if dir := filepath.Dir(path); dir != "" {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return nil, fmt.Errorf("store: preparing %s: %w", dir, err)
+			}
 		}
+		flags |= os.O_CREATE
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
+	file, err := os.OpenFile(path, flags, 0o600)
+	switch {
+	case !create && errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
 		return nil, fmt.Errorf("store: opening the lock beside %s: %w", dbPath, err)
 	}
 	held, err := tryLock(file)

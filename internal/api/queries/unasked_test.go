@@ -1,4 +1,4 @@
-// The four readers that existed and nothing asked.
+// The four readers of records the engine keeps for its own use.
 
 package queries_test
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -38,10 +40,9 @@ func answeredAsOperator(t *testing.T, s queries.Sources, what string,
 
 // ---- work_search --------------------------------------------------------- //
 
-// SEARCH IS GATED ON ITS OWN INDEX, not on the tracker. A node holding the
-// whole board and no lexical index is a real state — it joined recently — and
-// registering the two together would leave the board unanswerable on a node
-// that can answer every question on it.
+// THE SEARCH IS ITS OWN SOURCE. The board is answered by
+// [queries.Sources.Work] and the ranking by [queries.Sources.WorkSearch], and
+// neither one's presence registers the other's question.
 func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 	t.Parallel()
 	s := queries.Sources{Work: &stubWork{}}
@@ -110,6 +111,85 @@ func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 	// the index would rank it against terms nobody typed.
 	if w.searchText != "billing" {
 		t.Errorf("text = %q, want it trimmed", w.searchText)
+	}
+}
+
+// rankerThatMustNotRun is an index a refused search never reaches.
+type rankerThatMustNotRun struct{ t *testing.T }
+
+func (r rankerThatMustNotRun) RankItems(context.Context, string, int) (
+	[]tracker.RankedDoc, *tracker.SearchPartial, error) {
+
+	r.t.Error("a search the tracker refuses reached the index")
+	return nil, nil, nil
+}
+
+func (rankerThatMustNotRun) Building(context.Context) bool { return false }
+
+// A LIMIT PAST THE CEILING IS THE CALLER'S TO CHANGE, so it is refused as bad
+// params, in the tracker's own words naming `limit` and the most it takes —
+// never answered as a failure of this node, which tells a client to give up
+// on a request it only has to shorten.
+//
+// THROUGH THE TRACKER'S OWN SEARCHER, because the refusal is its: a stub
+// returning the sentinel would pass however the tracker spelled it.
+func TestASearchPastTheLimitIsRefusedAsBadParams(t *testing.T) {
+	t.Parallel()
+	search := tracker.NewSearcher(&store.DB{}, rankerThatMustNotRun{t})
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: search},
+		"work_search", map[string]any{"q": "billing", "limit": tracker.MaxSearchLimit + 1})
+	if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tracker.ErrSearchLimit) {
+		t.Fatalf("a search for %d answered %v, want bad params carrying the "+
+			"tracker's refusal", tracker.MaxSearchLimit+1, err)
+	}
+	for _, want := range []string{"`limit`", fmt.Sprint(tracker.MaxSearchLimit)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %s", err, want)
+		}
+	}
+}
+
+// A PARTIAL RANKING SAYS WHAT IT MISSED. A short list with nothing beside it
+// reads as every match there is, and a reader acts on that by filing the
+// duplicate. A whole ranking carries an explicit null, so a client reads one
+// shape.
+func TestAPartialRankingCarriesWhatItMissed(t *testing.T) {
+	t.Parallel()
+	found := []tracker.Ranked{{ID: "t-1", Key: "ENG-1", Title: "Retry backoff", Rank: 1}}
+	ask := func(w *stubWork) map[string]any {
+		got, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+			"work_search", map[string]any{"q": "backoff"})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		return asMap(t, got)
+	}
+
+	whole := ask(&stubWork{ranked: found})
+	if p, carried := whole["partial"]; !carried || p != nil {
+		t.Errorf("a whole ranking's partial = %v (present %v), want an explicit null",
+			p, carried)
+	}
+
+	partial := ask(&stubWork{ranked: found, rankedPartial: &tracker.SearchPartial{
+		BucketsAnswered: 42, BucketsMissing: 22, AbsentNodes: []string{"node-b"},
+		SemanticSkipped: true,
+	}})
+	if hits, _ := partial["hits"].([]any); len(hits) != 1 || partial["available"] != true {
+		t.Errorf("a partial ranking lost its items or its availability: %v", partial)
+	}
+	missing, _ := partial["partial"].(map[string]any)
+	absent, _ := missing["absent_nodes"].([]any)
+	if missing["buckets_answered"] != float64(42) || missing["buckets_missing"] != float64(22) ||
+		len(absent) != 1 || absent[0] != "node-b" || missing["semantic_skipped"] != true {
+
+		t.Errorf("partial = %v, want what the ranking missed", partial["partial"])
+	}
+	note, _ := partial["note"].(string)
+	for _, want := range []string{"22 of 64", "node-b", "meaning", "items it does not list"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note %q does not say %q", note, want)
+		}
 	}
 }
 

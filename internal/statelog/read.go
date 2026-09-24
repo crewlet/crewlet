@@ -82,10 +82,18 @@ const (
 	// trimmed, so its rows are missing state no replay can supply.
 	RefuseBelowFloor ReadRefusal = "below_floor"
 
-	// RefuseFloorUnknown — the published floor could not be read, and the
-	// third value BLOCKS. Guessing here keeps a node serving over a hole
-	// it cannot see.
+	// RefuseFloorUnknown — the published floor could not be established:
+	// the read of it did not answer, or a read this node makes before it
+	// failed. The third value BLOCKS, because guessing here keeps a node
+	// serving over a hole it cannot see — and it clears the moment a read
+	// answers, so it is worth coming back for.
 	RefuseFloorUnknown ReadRefusal = "floor_unknown"
+
+	// RefuseGenerationLeft — the published floor was read, and it is at a
+	// generation this node's rows are not on: the fleet re-anchored the
+	// domain and this node did not follow. Waiting does not clear it; this
+	// node adopting the fleet's generation does.
+	RefuseGenerationLeft ReadRefusal = "generation_left"
 
 	// RefuseEvicted — this node has been removed from the fleet.
 	RefuseEvicted ReadRefusal = "evicted"
@@ -132,9 +140,9 @@ const (
 // two lists, and the comment is the one nobody updates.
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
-	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseBrokerBusy, RefuseLogFull, RefuseBarrierRefused,
-	RefuseWrongStream, RefuseTooStale,
+	RefuseBelowFloor, RefuseFloorUnknown, RefuseGenerationLeft, RefuseEvicted,
+	RefuseBrokerUnreachable, RefuseNoQuorum, RefuseBrokerBusy, RefuseLogFull,
+	RefuseBarrierRefused, RefuseWrongStream, RefuseTooStale,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -150,7 +158,7 @@ func (r ReadRefusal) Valid() bool { return slices.Contains(ReadRefusals, r) }
 func (r ReadRefusal) Retryable() bool {
 	switch r {
 	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseBrokerBusy,
-		RefuseStalled:
+		RefuseStalled, RefuseFloorUnknown:
 		return true
 	}
 	return false
@@ -235,7 +243,14 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 		return 0
 	}
 	switch code {
-	case RefuseNoQuorum, RefuseBrokerUnreachable:
+	case RefuseNoQuorum, RefuseBrokerUnreachable, RefuseFloorUnknown:
+		// AN UNREAD FLOOR TAKES THE ELECTION'S HINT. The floor is a
+		// coordination record and coordination rides the broker's own
+		// connection, so a read of it that did not answer is waiting on
+		// the same election an uncommitted barrier is. The code's other
+		// cause — this node's own store failing a read the health makes
+		// before the floor — has no measured recovery time of its own,
+		// so it is given the same one.
 		return ElectionRetryHint
 	case RefuseBrokerBusy:
 		return BusyRetryHint
@@ -609,15 +624,8 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 	}
 	var found *gap
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		d, hit, err := r.tables.deferredIn(ctx, tx, s)
+		d, n, hit, err := r.tables.meeting(ctx, tx, s)
 		if err != nil || !hit {
-			return err
-		}
-		// THE COUNT IN THE SAME TRANSACTION as the earliest, so a record
-		// retained between the two cannot make the block name one record
-		// and count another.
-		n, err := r.tables.retainedCount(ctx, tx, s)
-		if err != nil {
 			return err
 		}
 		found = &gap{records: n, found: d}
@@ -627,6 +635,25 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 		return nil, err
 	}
 	return found, nil
+}
+
+// Retained is the coverage probe a read makes, for a domain reader that
+// certifies an answer from a transaction of its own: the earliest record this
+// node retains whose declared scope meets s, how many retained records meet
+// it, and false when none does.
+//
+// THE FRAMEWORK'S OWN PROBE, run in the caller's transaction so it describes
+// the rows that transaction reads. A domain that wrote the SQL again would own
+// a second copy of the one predicate whose clauses decide what a refusal
+// covers: counted over the scope index's rows rather than over records, a
+// record meeting a read on two of its paths is two records, and the earliest
+// record's version is not the smallest version among them.
+func Retained(ctx context.Context, tx *sql.Tx, d Domain, s ScopeSet) (Deferral, uint64, bool, error) {
+	t, err := newTables(d)
+	if err != nil {
+		return Deferral{}, 0, false, err
+	}
+	return t.meeting(ctx, tx, s)
 }
 
 // target is the position this read must wait for, by level.
@@ -823,9 +850,9 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 		if h.Floor.ReadAt.IsZero() {
 			if h.Err != "" {
 				// THE HEALTH READ ITSELF FAILED before it established the
-				// floor, and its error is the one statement of why: an
-				// unanswered coordination read, or a floor at a generation
-				// this node has left, which need different remedies.
+				// floor, and its error is the one statement of why — an
+				// unanswered coordination read, or a read of this node's
+				// own store that came before the floor.
 				return h.Err
 			}
 			return "the published trim floor has never been read on this node, " +
@@ -835,6 +862,14 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 			"the %s a cached value stays credible for — an unreadable floor is "+
 			"UNKNOWN rather than satisfied",
 			h.Floor.Age(now).Round(time.Second), FloorCacheStale)
+	case RefuseGenerationLeft:
+		if h.Err != "" {
+			// The health read's own words name both generations.
+			return h.Err
+		}
+		return "the published trim floor is at a generation this node's rows " +
+			"are not on; this node adopting a snapshot of the fleet's " +
+			"generation is what clears it"
 	case RefuseBelowFloor:
 		return "records this node never applied have been trimmed, so its rows " +
 			"are missing state no replay can supply; it adopts a peer's snapshot"

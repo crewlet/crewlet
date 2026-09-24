@@ -90,9 +90,10 @@ const (
 	// it publishes will be applied anywhere. There is no retry.
 	ReasonEvicted Reason = "evicted"
 
-	// ReasonDeferred — this node holds a record it cannot decode whose
-	// scope covers this object, so its rows are stale and any decision
-	// taken from them is unsafe. Another node can serve this write.
+	// ReasonDeferred — this node retains a record whose scope covers this
+	// object: one it cannot decode, or one held back behind such a record.
+	// Either way its rows are stale and any decision taken from them is
+	// unsafe. Another node can serve this write.
 	ReasonDeferred Reason = "deferred"
 
 	// ReasonBehind — this node has not yet applied the caller's own

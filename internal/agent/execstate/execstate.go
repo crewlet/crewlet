@@ -108,6 +108,19 @@ type State struct {
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
+	// AbandonedAttempts is what the pre-suspend rounds wrote that no round
+	// committed, one `{round, reasoning, content}` each on the round numbers
+	// RoundNarration carries — the phase record's own abandoned_attempts, in
+	// the same shape. Carried for the reason RoundNarration is: a suspended
+	// phase publishes no record, the live frames that showed these held only
+	// their tails, and the resumed phase's record is where they are kept.
+	//
+	// Additive within v2, and read by the plain decode below, which ignores a
+	// key it does not know: a build that predates the field resumes the
+	// phase without these attempts, and a row written before it decodes to
+	// none.
+	AbandonedAttempts []types.RoundNarration `json:"abandoned_attempts,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.

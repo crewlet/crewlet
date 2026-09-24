@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -766,5 +767,78 @@ func TestARowCarriesItsType(t *testing.T) {
 	column := groupOf(t, board, "bug")
 	if len(column.Rows) != 1 || column.Rows[0].Type != "bug" {
 		t.Errorf("the bug column carries %+v, want one row typed bug", column.Rows)
+	}
+}
+
+// A DETAIL READ COUNTS EACH RETAINED RECORD ONCE, AND NAMES THE EARLIEST ONE'S
+// VERSION.
+//
+// A record's scope is stored one row per path, and a record can meet a task on
+// more than one of them — its container and the task itself. Counted over
+// those rows rather than over records, one record reads as two; and the
+// version that names a build to upgrade to is the earliest record's, which is
+// where a build that can read them resumes — not the smallest version among
+// the records, which can belong to a later one held back behind it.
+//
+// Mutation: count scope rows rather than records and the answer reports three;
+// take the smallest version and it reports the later record's.
+func TestADetailReadCountsEachRetainedRecordOnceAndNamesTheEarliest(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := r.createTask("carries two retained records")
+
+	object := tracker.ScopeTerm{
+		Kind: tracker.TermObject, ID: task.ID, Container: task.Project,
+	}.Path()
+	container := tracker.ScopeTerm{Kind: tracker.TermContainer, ID: task.Project}.Path()
+	earliest := int64(1)<<40 | 9_000_000
+	later := earliest + 1
+	retain := func(position int64, version int, paths ...string) {
+		t.Helper()
+		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO tracker_log_deferred
+					(position, subject, subject_kind, subject_id, version, payload, stored_at)
+				VALUES (?, ?, 'task', ?, ?, x'00', 0)`,
+				position, "task."+task.ID, task.ID, version); err != nil {
+				return err
+			}
+			for _, path := range paths {
+				if _, err := tx.ExecContext(t.Context(), `
+					INSERT INTO tracker_log_deferred_scope (position, path) VALUES (?, ?)`,
+					position, path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("retain a record at %d: %v", position, err)
+		}
+	}
+	// THE EARLIEST meets the task on two paths and is at the higher version;
+	// the LATER one meets it on one, at a version this build reads — held
+	// back behind the first.
+	retain(earliest, tracker.ReadableRecordVersion+2, container, object)
+	retain(later, tracker.ReadableRecordVersion, object)
+
+	detail, err := r.reader.Task(t.Context(), task.ID, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if detail.Complete || detail.Incomplete == nil {
+		t.Fatalf("a task two retained records meet reads complete: %+v", detail.Incomplete)
+	}
+	if got := detail.Incomplete.Records; got != 2 {
+		t.Errorf("the answer counts %d record(s), want 2 — one record meeting the "+
+			"task on two of its paths is still one record", got)
+	}
+	if got := detail.Incomplete.From.Packed(); got != earliest {
+		t.Errorf("the answer names position %d, want the earliest, %d", got, earliest)
+	}
+	if got := detail.Incomplete.Version; got != tracker.ReadableRecordVersion+2 {
+		t.Errorf("the answer names record version %d, want %d — the earliest "+
+			"record's, which is the build a node resumes with", got,
+			tracker.ReadableRecordVersion+2)
 	}
 }

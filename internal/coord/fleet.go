@@ -768,8 +768,12 @@ type Record struct {
 //
 // A record is one message, so a run's value is bounded by [MaxRecordBytes],
 // on both backends, and a write past it is [ErrTooLarge] — stored neither
-// whole nor cut. What a run's own record cannot hold goes to part records
-// filed under its launch ([BridgeCalls.CreateSuspensionPart]).
+// whole nor cut. ONE FIELD HAS ANOTHER HOME: a suspended conversation the
+// record cannot hold goes to part records filed under the run's launch
+// ([BridgeCalls.CreateSuspensionPart]), and the record names them in its
+// place. Nothing else does — a question too large for the record is refused,
+// and older builds' view of the run's calls is fitted into the record rather
+// than filed in parts.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)

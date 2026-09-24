@@ -107,8 +107,8 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// The phase already published its completion and this round is not
 	// newer than it: a straggler that lost a cross-topic race, not live
 	// work. Seeding a call from it would put a permanent in-flight row on
-	// a finished phase. A RESUMED phase's rounds are newer than its
-	// suspend checkpoint and pass through. Keyed on turn id, so a loop run
+	// a finished phase. A round newer than the completion is not one the
+	// completion covered, and passes. Keyed on turn id, so a loop run
 	// outside the turn engine is never matched against an unrelated one.
 	if turnID != "" {
 		if finished, ok := s.finishedCalls.get(callKey(turnID, phase, iteration)); ok {

@@ -169,7 +169,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
-| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
+| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Serves what the company's current revision runs, and answers `404` while that is nothing |
 
 Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
@@ -1238,7 +1238,10 @@ row's own `timestamp` and `failed` — names the fields a live call does:
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `total_tokens`. The round in flight, `partial_round`, is a
 live call's alone; a finished record carries `abandoned_attempts` instead —
-the attempts no round kept, whole — and `cost_usd`, which a live call does not.
+the attempts no round kept, whole on a record published whole, and on one
+published cut in the whole `GET /phases/{id}` reassembles, unless a part could
+not be published, which the record's `notes` then say — and `cost_usd`, which
+a live call does not.
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
@@ -1322,9 +1325,11 @@ many came before each counted in `tool_executions_earlier` and
 `round_narration_earlier`) — and surfaces it as a `live_call` field on
 the agent in every snapshot.  Its `response` is built by the same
 function that builds the finished phase record's, so the live row shows
-the end of the text the turn you expand afterwards holds whole, rather
-than a second assembly of it — see [Turn Engine §
-What streams during a
+the end of the text the turn you expand afterwards holds, rather than a
+second assembly of it — whole on a record published whole, and on one
+published cut in the whole `GET /phases/{id}` reassembles, unless a part
+could not be published, which the record's `notes` then say. See [Turn
+Engine § What streams during a
 turn](../concepts/turn-engine.md#what-streams-during-a-turn).
 Each phase publishes an opening
 `agent_turn_progress` (`round_num = -1`) before its first provider call
@@ -1715,14 +1720,15 @@ runs, and the projection reassembles what it can:
 The durable `agent_phase_completed` record carries every call and every round
 whole, and as `abandoned_attempts` — one `{round, reasoning, content}` each —
 every attempt a provider gave up on partway through and, on a failed record,
-the last attempt at the round the phase failed in (see
-[Turn Engine § What streams during a turn](../concepts/turn-engine.md#what-streams-during-a-turn);
-an executor that suspended carries the attempts from its last entry, and each
-earlier one is logged whole as `abandoned_attempt_suspended`). A record too
-large for one event is cut, with its whole kept in parts that
-`GET /phases/{id}` reassembles unless a part could not be published, which the
-record's `notes` then say. That record is what a reader opens the finished card
-for.
+the last attempt at a round the phase failed or panicked in before that round
+committed (see
+[Turn Engine § What streams during a turn](../concepts/turn-engine.md#what-streams-during-a-turn)).
+An executor that suspended on a coding run publishes its record when it
+resumes, and that record carries the rounds and the attempts from before the
+suspension too, brought across on the pending run. A record too large for one
+event is cut, with its whole kept in parts that `GET /phases/{id}` reassembles
+unless a part could not be published, which the record's `notes` then say.
+That record is what a reader opens the finished card for.
 
 **A record too large for one event is published cut, and its whole is kept.**
 Past `queue.MaxPayloadBytes` (8 MiB) the transport refuses an event outright,
@@ -1881,7 +1887,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `sandbox_runs` | `{turn_id, calls_after, calls_limit}` | `GET /sandbox-runs`. `turn_id` narrows the answer to one run, and `calls_after` pages that run's bridged calls from the cursor a row carries as `bridge_calls_next`, at most `calls_limit` at a time (100 by default, at most 500) — see [`GET /sandbox-runs`](#get-sandbox-runs). `calls_after` must be a non-negative integer, and a non-zero one needs `turn_id`, because a cursor is a place in one run's log; either fault is `bad_params`. `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{state, seat, id, limit, before_time, before_id}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `state` is `open`, `closed` or `all`, and defaults to `open` for a listing and to `all` when `id` is given; `seat` matches a channel at either end; `id` narrows to one channel wherever it falls in the order, closed or open unless `state` narrows it. Most recently active first, the id breaking a tie, at most 200 to a page. A cut page says `truncated: true` and carries `next` — `{before_time, before_id}`, the cursor to send back for the rest; either key without the other is refused. `totals` — `{channels, open, messages, pairs}` — counts every channel the filters matched rather than the page, so it does not move as a reader pages. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
-| `knowledge` | `{q}` | The company's own knowledge search, through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses, and answered by the backend the running revision names — this node's own index on the native knowledge base, a live query on Confluence. Searched as the ORG with no seat: natively that is every page, as it is for every seat, and on Confluence it is the org credential within a declared `knowledge.scope` and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. At most six hits, the count a seat's turn-start block shows. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers four states: no company, no backend, a Confluence backend with no org-wide read scope, and a node whose index is still on its first build — a list this node cannot vouch for would read as everything that matched. `reason` (`no_company` / `no_backend` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. A search that ran is best effort by contract: one that failed answers `available: true` with no hits, exactly as one that matched nothing does, and the node's log is where the two differ |
+| `knowledge` | `{q}` | The company's own knowledge search, through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses, and answered by the backend the running revision names — this node's own index on the native knowledge base, a live query on Confluence. Searched as the ORG with no seat: natively that is every page, as it is for every seat, and on Confluence it is the org credential within a declared `knowledge.scope` and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. At most six hits, the count a seat's turn-start block shows, with the unreviewed pages under `Auto-Drafted Skills` hidden exactly as a seat's search hides them. `q` (or `text`) past 400 bytes is refused as `bad_params` naming the field — the bound a seat's `search_knowledge` holds too, and never a cut, because a cut query is a different search. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers five states: no company, no backend, a knowledge base this node is not serving (a Confluence connection that did not build here or whose org token resolves to nothing, or the native knowledge base on a node that started on another backend), a Confluence backend with no org-wide read scope, and a node whose index is still on its first build — a list this node cannot vouch for would read as everything that matched. `reason` (`no_company` / `no_backend` / `not_served` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope` and the `not_served` note names what to fix, because an operator whose integration is correct must not be sent to re-check it. A search that ran and degraded keeps the empty `reason` and says so in `note`: one ranked over part of the corpus carries `partial` — `{buckets_answered, buckets_missing, absent_nodes, semantic_skipped}`, `null` on a whole answer — and a note naming what it missed; one that failed on the native knowledge base answers no hits and a note saying it failed. A Confluence query the site refused still answers no hits and no note, exactly as one that matched nothing, and the node's log is where the two differ |
 | `integrations` | `{}` | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A board of several columns mints no cursor and REFUSES one, as `bad_params`: across a set of columns there is no single order to resume after, so a cursor applied to each would cut every column at a row from another, and one ignored would hand a pager the first page again. A board loads one column further with `group=<value>`, which narrows the WHOLE query, so the hint and the totals describe that column too — and that single column is the grouped answer that PAGES: it comes back as `groups` holding that one column, carries `next_cursor` while the column holds more, takes it back as `cursor=`, and each page is bounded by the same `group_limit`. The column of tasks with NO value on the axis, which every answer reports with the key `""`, is named `group=(none)`, because an empty `group=` means no column at all; a free-text value that is literally `(none)` — a unit's name, a custom field's text — is reached with that axis's own filter instead (`unit=`, `routing_unit=`, `f.<slug>=`). `group_by2=` adds swimlanes inside each column and `subgroup=` names one (`subgroup=(none)` for the lane with no value): `group=` with `subgroup=` is one cell and pages the same way, while `group=` beside `group_by2=` alone is still a board, that column's lanes, and takes no cursor. A swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_truncated` says a column has lanes beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` and `group_by=f.<slug>` on a multi-valued custom field are the axes where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_truncated` says columns did not fit. Both are FLAGS rather than counts: the read takes one row past the bound as evidence, so a count computed from it could only ever be 1 — a board with two hundred assignee columns reported "1 more", which is a wrong number stated as a fact and worse than the silence the rule exists against. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend`, `status_entered` and `removed`, each reversible with a leading `-`; `removed` is when a task went to the trash, which is what the trash (`removed=true`) is ordered by when no `sort=` is given, most recent first. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
 | `work_item` | `{id, comments_cursor, comment}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, fields, blocked}` plus the same coverage half. `comments` is a PAGE of the thread — its newest 20, oldest first — and each body on it is an EXCERPT — its first 2 KiB, with `…` where it was cut. Both cuts are reachable: `comments_cursor` on the answer is present when older comments exist, and handed back as `comments_cursor=` it answers the next page; `comment=<id>` answers that one comment WHOLE in place of the page, which is the only read that returns a body past the excerpt. A comment id the task does not hold is `not_found`. `history` is CAPPED at the read's limit and `history_truncated` says when it was cut — a flag rather than a cursor, because the reader that pages the same rows properly is `work_activity`, and a count over a table that grows for the life of the task would buy one bit at the price of a scan. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open. `fields` are the task's CUSTOM fields resolved against the company's catalogue — each carrying its declared name, type and whether its declaration was archived — because a stored choice is an option's UUID and a panel rendering the raw value would print it under a heading |
@@ -1893,7 +1899,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the twenty-eight change kinds and nothing else. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle — which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, unlike `kinds`: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing |
 | `work_my_work` | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object  `handle` DEFAULTS to the caller's own seat and naming anybody else's needs an operator credential — see below |
 | `work_inbox` | `{handle, unread, primary_only, include_snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of nineteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the nineteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
-| `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, which is the same ranking a seat gets from `search_work`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A score is comparable WITHIN one answer and nowhere else, because the statistics it is computed against are this corpus's |
+| `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, fused with the semantic ranking while `knowledge.vectors` is on, which is the same ranking a seat gets from `search_work_items`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered where this node runs the engine's own tracker, and answered only while the current revision does: after a live move to `tracker.backend: jira` it is `unknown_query`, like every `work_*` question. A node whose index is still on its first build answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. `limit` past 50 is refused as `bad_params` naming it. Every answer carries `hits`, `available`, `reason`, `note` and `partial`: a ranking that did not cover the whole corpus keeps its hits, and carries in `partial` what it missed — `{buckets_answered, buckets_missing, absent_nodes, semantic_skipped}`, `null` on a whole ranking — with a `note` saying so. A hit carries its 1-based `rank` and no score |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of nineteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
 | `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
@@ -2235,11 +2241,21 @@ its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the
 one that is not.
 
-Each tool appears only where its half of the company is native: a company on
-`tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets no endpoint at all. `search_knowledge` is the exception and is
-offered against **any** knowledge backend, Confluence included — a ranked
-search over the company's own wiki is exactly as useful to an assistant there.
+Each tool appears only where its half of the company is native **in the
+revision running now**: a company on `tracker.backend: jira` gets the page
+tools and not the work tools. Nothing here is decided at boot — the catalogue
+is brought into line with the current revision on every request, and a
+connected client is sent the changed tool list. A call to a tool whose half a
+live apply has since closed, from a list read before it, is refused as a tool
+result naming the setting (`tracker.backend`, `knowledge.backend`) rather
+than answered as a tool that never existed. `search_knowledge` is the
+exception and is offered against **any** knowledge backend, Confluence
+included — a ranked search over the company's own wiki is exactly as useful to
+an assistant there — and is withdrawn only on `knowledge.backend: none`; where
+this node is not serving the knowledge base the company runs, it says which
+state it is in, exactly as a seat's does. A company with nothing to serve here
+answers `404`, as an unmounted route does, and the first revision that serves
+something is served with no restart.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
@@ -2259,7 +2275,10 @@ does not need to be one:
 The assistant calls `write_page` per file. That handles what a flag-driven CLI
 handles badly: the parent chain, a title that already exists (`save_page` with
 the version it read), and a file that turns out to be a tool skill rather than
-prose. The reserved containers are refused to it exactly as they are to a seat.
+prose. It writes the reserved containers — the tool-skills container and the
+org root — which a seat's own `write_page` and `save_page` refuse:
+`write_page` is the only thing that creates a native page, so this is how a
+native company publishes its tool skills and its root `Onboarding` page.
 
 ### Who a write is attributed to
 
@@ -2851,8 +2870,9 @@ opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
-Copies this node's durable state — its store file, and every JetStream stream
-and coordination bucket — into `?dir=`, a directory **on the engine's host**.
+Copies this node's durable state — both of its store files, and every
+JetStream stream and coordination bucket — into `?dir=`, a directory **on the
+engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -2865,48 +2885,63 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "finished_at": "2026-08-30T18:00:01.412Z",
   "node_id": "node-0",
   "engine_version": "v0.1.0",
-  "store": {
-    "file": "store.db", "source": "/data/company.db",
-    "bytes": 258048, "migrations": ["0001_events.sql", "…"]
-  },
+  "stores": [
+    {"estate": "node", "file": "store.db", "source": "/data/company.db",
+     "bytes": 258048, "sha256": "9f2c…", "migrations": ["0001_events.sql", "…"]},
+    {"estate": "replicated", "file": "store-replicated.db",
+     "source": "/data/crewlet-replicated.db", "bytes": 1245184,
+     "sha256": "41ab…", "migrations": ["…"]}
+  ],
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
      "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}
-  ]
+  ],
+  "domains": {
+    "CREWLET_TRACKER_LOG": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 4211}
+  }
 }
 ```
 
 The answer is the **manifest**, which is also written into the directory as
 `manifest.json` — and its presence there is what marks the backup complete. A
 failure anywhere leaves the directory without one, because a backup missing an
-estate is unrestorable rather than partial.
+estate is unrestorable rather than partial. `stores` holds one entry per
+store file, each with the sha256 of the copy as it was verified; `domains` is
+where each state-log domain's applier stood **in the replicated copy**, read
+from the copy itself, which is the position a restore replays the log from.
 
-This route exists for the same reason the budget reset does, twice over. The
-store is locked to the engine's process and the driver refuses a second
-process on a database file, so nothing outside can read it; the embedded
+This route exists for the same reason the budget reset does, twice over. Each
+store file is locked to the engine's process and the driver refuses a second
+process on a database file, so nothing outside can read either; the embedded
 broker binds no socket, so nothing outside can reach the stream estate either.
 `crewlet backup` is a client of this route.
 
 It is **synchronous and can take a while** — the duration is a property of the
 data, not of this handler. That is deliberate: a job outliving its request
 would need somewhere durable to record itself, and the only place is the store
-being copied. The work is safe to be cut off, since the store copy is renamed
+being copied. The work is safe to be cut off, since each store copy is renamed
 into place only after it verifies and the manifest is written last, so a
 client that gives up leaves an unfinished directory rather than a false one.
 
-Three refusals, each pointing somewhere different:
+The refusals, each pointing somewhere different:
 
 - **401 without a token.** `allow_anonymous_read` is on by default and opens
   the read surface; this writes every credential the company holds to a path
   the caller chooses, so it is never eligible.
-- **400 for a destination this node cannot use** — relative, already occupied,
-  or a path the database engine mishandles. The reason is returned in `detail`
-  rather than only logged, unlike every other route here, because it is the
-  caller's own command to fix.
-- **A copy without the stream estate.** A node that dialled an external NATS
-  cluster has no connection to snapshot the streams over, so its manifest
-  carries the store copies alone and `crewlet backup` says where the rest
-  lives. Back that half up at the cluster, from the same moment.
+- **400 for a request this node cannot act on** — no `?dir=` at all
+  (`no_destination`), or a destination it cannot use: relative, already
+  occupied, or a path the database engine mishandles. The reason is returned in
+  `detail` rather than only logged, unlike every other route here, because it
+  is the caller's own command to fix.
+- **500 `backup_failed`** for a copy that failed on the engine's side. The body
+  says nothing more; the reason is on the node's `api_backup_failed` log line.
+- **503 during a drain**, like every other write — see
+  [During a drain](#during-a-drain).
+
+**A copy without the stream estate** is not a refusal. A node that dialled an
+external NATS cluster has no connection to snapshot the streams over, so its
+manifest carries the store copies alone and `crewlet backup` says where the
+rest lives. Back that half up at the cluster, from the same moment.
 
 ### `GET /integrations`
 

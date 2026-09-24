@@ -48,12 +48,12 @@ const (
 // [ErrUnavailable]'s "not yet" is not, so a Retry-After for a source this node
 // will never have would send a client round a loop.
 //
-// Only a few are absent on a real node: Work and Pages on a company that runs
-// the vendor tracker and wiki, Knowledge where no knowledge backend is
-// configured, and Retention where no state log runs. The rest are held by every
-// node, and the API wires every one of them. Leaving one of those out is what a
-// caller that asks a subset of the questions does, which is how this package's
-// own suite exercises one question at a time.
+// Only a few are absent on a real node: Work, Pages and WorkSearch on a node
+// that did not boot on the engine's own tracker or knowledge base, and
+// Retention where no state log runs. The rest are held by every node, and the
+// API wires every one of them. Leaving one of those out is what a caller that
+// asks a subset of the questions does, which is how this package's own suite
+// exercises one question at a time.
 type Sources struct {
 	State  *livestate.LiveState
 	Events *store.EventLog
@@ -109,7 +109,9 @@ type Sources struct {
 	// Knowledge resolves the company's ONE knowledge backend, behind the
 	// same seam a seat's own turn searches through, so an operator
 	// asking "what would an agent find" gets the answer an agent would
-	// get, rather than one from an index somebody has to keep fresh.
+	// get — and, when nothing answers, which of the two reasons it is:
+	// the company runs no knowledge base, or this node is not serving
+	// the one it runs.
 	//
 	// A FUNCTION, not a value, for the reason [Sources.Company] is one: an
 	// apply REPLACES the searcher. A credential rotation, a retired
@@ -117,9 +119,10 @@ type Sources struct {
 	// — each rebuilds it, and a value captured when the API was assembled
 	// keeps searching with the credential that was revoked, against the
 	// wiki that was removed, or answers "no backend" forever for a company
-	// that has had one since its second minute. Nil, and a nil answer from
-	// it, both mean the same thing and leave the question unregistered.
-	Knowledge func() knowledge.Searcher
+	// that has had one since its second minute. Nil answers every search
+	// `no_backend`, saying no search is wired here; the question itself is
+	// registered on [Sources.Company] — see [Register].
+	Knowledge func() (knowledge.Searcher, knowledge.Refusal)
 
 	// Budget is the DURABLE token counter — what the engine actually
 	// enforces against, across every node and every restart. Nil answers
@@ -173,10 +176,17 @@ type Sources struct {
 	// surface is unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are this node's copies of the company's own tracker
+	// and knowledge base. Nil leaves their questions unregistered, which
+	// is the honest answer for a node that runs neither: there is no
+	// native record for this node to have a copy of.
+	//
+	// The readers belong to the NODE and outlive a revision, so each
+	// question they answer is gated PER CALL as well, on the backend the
+	// CURRENT revision names ([Sources.nativeTracker],
+	// [Sources.nativeKnowledge]): a company that moves to Jira or to
+	// Confluence by a live apply stops being answered from the copy this
+	// node still holds.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this
@@ -185,12 +195,11 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
-	// WorkSearch is the ranked item search, and it is SEPARATE from
-	// [Sources.Work] because the two fail independently: the rows are the
-	// fleet's and the lexical index is this node's own, so a node still
-	// building one answers every board question and cannot rank a word.
-	// Nil leaves `work_search` unregistered, which is what a screen needs
-	// in order to offer the board's filters instead of an empty ranking.
+	// WorkSearch is the ranked item search, its own seam because it is its
+	// own question: a ranking over what items SAY, answered through the
+	// node's index, where the board filters the rows. Nil leaves
+	// `work_search` unregistered, and it is gated per call on the current
+	// tracker exactly as [Sources.Work] is.
 	WorkSearch WorkSearcher
 
 	// Conversations is the seat's own thread ledger — what it has said on
@@ -264,6 +273,55 @@ func (s Sources) clock() time.Time {
 		return time.Now().UTC()
 	}
 	return s.Now()
+}
+
+// nativeTracker answers a question about the engine's own tracker only while
+// the CURRENT revision runs it.
+//
+// The readers belong to the node: they start with the revision it booted on
+// and stay when a live apply moves the company to another tracker, over rows
+// nothing writes any more. Answering from those rows would show an operator a
+// board the company left, with the work that moved nowhere on it — so the
+// question is answered exactly as a node that booted on the new backend
+// answers it: [ErrUnknown], a source this node does not have.
+//
+// Nothing in scope to say otherwise — no [Sources.Company], or a nil revision
+// — answers from the reader, which is how this package's suite asks one
+// question at a time.
+func (s Sources) nativeTracker(answer Answer) Answer {
+	return func(ctx context.Context, p Params) (any, error) {
+		if c := s.current(); c != nil {
+			if backend := c.TrackerBackendFor(); backend != config.TrackerNative {
+				return nil, fmt.Errorf("%w: the company's tracker is %q "+
+					"(`tracker.backend`), so this node's copy of the engine's "+
+					"own tracker is not the company's work", ErrUnknown, backend)
+			}
+		}
+		return answer(ctx, p)
+	}
+}
+
+// nativeKnowledge is [Sources.nativeTracker] for the engine's own knowledge
+// base, on `knowledge.backend`.
+func (s Sources) nativeKnowledge(answer Answer) Answer {
+	return func(ctx context.Context, p Params) (any, error) {
+		if c := s.current(); c != nil {
+			if backend := c.KnowledgeBackendFor(); backend != config.KnowledgeNative {
+				return nil, fmt.Errorf("%w: the company's knowledge base is %q "+
+					"(`knowledge.backend`), so this node's copy of the engine's "+
+					"own pages is not the company's knowledge", ErrUnknown, backend)
+			}
+		}
+		return answer(ctx, p)
+	}
+}
+
+// current is the revision in scope, or nil where there is none to read.
+func (s Sources) current() *config.Company {
+	if s.Company == nil {
+		return nil
+	}
+	return s.Company()
 }
 
 // ErrUnavailable is a question this node understood and cannot answer YET: its
@@ -405,27 +463,32 @@ func Register(r *Registry, s Sources) {
 	// Jira, and registering the pair together would offer one screen a
 	// question its half of the company cannot answer.
 	if s.Work != nil {
-		r.Register("work_items", s.workItems)
-		r.Register("work_item", s.workItem)
+		// EVERY ONE GATED PER CALL on the tracker the current revision
+		// names — see [Sources.nativeTracker].
+		work := func(name string, answer Answer) {
+			r.Register(name, s.nativeTracker(answer))
+		}
+		work("work_items", s.workItems)
+		work("work_item", s.workItem)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
-		r.Register("work_views", s.workViews)
+		work("work_views", s.workViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here
 		// are three MAINTAINED columns rather than an aggregate over
 		// every task in the company.
-		r.Register("work_projects", s.workProjects)
-		r.Register("work_project", s.workProject)
+		work("work_projects", s.workProjects)
+		work("work_project", s.workProject)
 		// AND WHO IS CARRYING HOW MUCH, across every project at once.
 		// A caller that grouped it itself paid one round trip per
 		// project and rewrote the arithmetic per surface.
-		r.Register("work_workload", s.workWorkload)
+		work("work_workload", s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
-		r.Register("work_activity", s.workActivity)
+		work("work_activity", s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
 		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
@@ -438,35 +501,40 @@ func Register(r *Registry, s Sources) {
 		// dashboard is for — is fictional. `work_person` has always
 		// been registered ungated, so this is what already ships rather
 		// than a new posture.
-		r.Register("work_my_work", s.workMyWork)
+		work("work_my_work", s.workMyWork)
 		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
-		r.Register("work_inbox", s.workInbox)
+		work("work_inbox", s.workInbox)
 		// WHO ONE CHANGE WOKE. The applier has written the set
 		// since the domain landed and its only trace on any surface
 		// was `work_activity.notified`: a boolean saying that
 		// somebody, somewhere, was told.
-		r.Register("work_routing", s.workRouting)
-		r.Register("work_goals", s.workGoals)
-		r.Register("work_catalogue", s.workCatalogue)
-		r.Register("work_person", s.workPerson)
+		work("work_routing", s.workRouting)
+		work("work_goals", s.workGoals)
+		work("work_catalogue", s.workCatalogue)
+		work("work_person", s.workPerson)
 	}
 	if s.Pages != nil {
-		r.Register("pages", s.pageList)
-		r.Register("page", s.page)
+		// EVERY ONE GATED PER CALL on the knowledge base the current
+		// revision names — see [Sources.nativeKnowledge].
+		pages := func(name string, answer Answer) {
+			r.Register(name, s.nativeKnowledge(answer))
+		}
+		pages("pages", s.pageList)
+		pages("page", s.page)
 		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
 		// draws the container list once and the page list on every
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
-		r.Register("containers", s.containers)
+		pages("containers", s.containers)
 		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
 		// since the domain landed with two indexes naming readers nobody
 		// wrote — and ONE REVISION'S BODY, which the detail's summaries
 		// could say existed and never show.
-		r.Register("page_activity", s.pageActivity)
-		r.Register("page_revision", s.pageRevision)
+		pages("page_activity", s.pageActivity)
+		pages("page_revision", s.pageRevision)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
 		s.Counterparties != nil {
@@ -482,12 +550,12 @@ func Register(r *Registry, s Sources) {
 		r.Register("a2a_channels", s.a2aChannels)
 	}
 	if s.WorkSearch != nil {
-		// SEARCH IS A QUESTION, not a filter on the board, and it is
-		// gated on its own index rather than on the tracker: the ranked
-		// reader is what `search_work` gives a seat, and the operator
-		// reading the same company had only `q=` — an escaped LIKE over
-		// the excerpt, gated to a span of days.
-		r.Register("work_search", s.workSearch)
+		// SEARCH IS A QUESTION, not a filter on the board: the same
+		// ranking `search_work_items` gives a seat, so an operator and an
+		// agent asking one company what its work says get one answer.
+		// Gated per call on the current tracker, like every question
+		// above that reads the engine's own work.
+		r.Register("work_search", s.nativeTracker(s.workSearch))
 	}
 	if s.Conversations != nil {
 		// SCOPED, like every other per-seat question — see
@@ -495,7 +563,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {
-		// OPERATOR-ONLY, all three. Reading the config document exposes
+		// OPERATOR-ONLY, every one. Reading the config document exposes
 		// the whole company — its org chart, which integrations are
 		// wired, and every ${VAR} reference by name — which is what makes
 		// /config the one prefix never eligible for anonymous read.

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -68,13 +70,20 @@ const RetentionInterval = 15 * time.Minute
 // loop's own cadence, with the trim taken on the passes a [RetentionInterval]
 // apart.
 //
-// [coord.ReconcileInterval] — FIFTEEN SECONDS — because an alarm is only as
-// prompt as the look that raises it, and the tightest threshold in the table
-// is that same interval: `read_refusals` fires on a run of refusals longer than
-// it, and `apply_lag` and `floor_unknown` at a minute. Evaluated on the trim's
-// quarter-hour, each would be raised up to fifteen minutes after the state it
-// names — for a node that has stopped applying, fifteen minutes of seats
-// answering from rows that no longer move before anybody is told.
+// # What it bounds, and what it does not
+//
+// The table's surfaces are how an OPERATOR hears — the `crewlet.alarm.active`
+// gauge and the WARN on entry and exit — and the interval bounds how late: a
+// condition is raised no later than one interval after it starts to hold.
+// Nothing the engine does in response waits on it. A node whose applier has
+// stopped refuses its reads on its own health read and gives its seats back
+// through [stateLog.Healthy] on the seat host's own sweep, whatever this loop
+// does.
+//
+// [coord.ReconcileInterval] — FIFTEEN SECONDS — so that lateness is small
+// beside the minute `apply_lag` and `floor_unknown` each wait before firing.
+// Evaluated on the trim's quarter-hour instead, an operator would hear of a
+// stopped applier up to fifteen minutes after that minute had passed.
 //
 // THE COST is one report assembly per node per interval, the same one
 // `crewlet retention status` makes: reads of the fleet register, the presence
@@ -120,14 +129,15 @@ type retention struct {
 
 	// alarms turns each evaluation into the two surfaces that are not a
 	// screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes,
-	// and one WARN on entry and one on exit.
-	//
-	// WITHOUT IT THE TABLE HAD ONE SURFACE OF THREE: `work_retention`
-	// rendered the alarms to whoever asked, and nothing at all reached a
-	// collector or a log. An alarm nobody is looking at a dashboard for is
-	// an alarm that fires into an empty room, which is indistinguishable
-	// from a fleet with nothing wrong.
+	// and one WARN on entry and one on exit — beside the report
+	// `work_retention` renders. An alarm that reached only a screen would
+	// fire into an empty room whenever nobody was looking at one, which is
+	// indistinguishable from a fleet with nothing wrong.
 	alarms *statelog.Tracker
+
+	// logger is where this loop writes; nil is the engine's own component
+	// logger ([retention.logs]).
+	logger *slog.Logger
 
 	// coverage is the fraction of this node's sources carrying a current
 	// vector, or false when this company has no embeddings configured.
@@ -135,22 +145,35 @@ type retention struct {
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
 
-	// mu guards the coverage cache below. The tick and every API request
-	// assemble a report, on different goroutines.
+	// mu guards the coverage cache and the eviction warning's stamp below.
+	// The tick and every API request assemble a report, on different
+	// goroutines.
 	mu sync.Mutex
 
 	// coverAt, coverFraction and coverKnown are the last coverage
-	// measurement and when it was taken.
+	// measurement and when it was taken — or when it was ATTEMPTED and
+	// failed, which caches as nothing known.
 	//
 	// CACHED FOR ONE [RetentionInterval], because the measurement is a scan
 	// of the whole source corpus and a report is assembled on every
 	// [AlarmInterval] pass, every operator request and every dashboard
 	// poll. The alarm it feeds compares a fraction of the corpus against a
 	// floor, so the figure it is judged on is at most one trim interval
-	// old.
+	// old. A FAILED scan is cached for the same interval: a corpus that
+	// cannot be read now is one the next pass cannot read either, and
+	// re-scanning it every pass would repeat the scan's cost and its WARN
+	// on every node four times a minute.
 	coverAt       time.Time
 	coverFraction float64
 	coverKnown    bool
+
+	// evictionsWarnedAt is when this loop last wrote
+	// `retention_evictions_unreadable`, and zero once a read of the
+	// eviction rows answers again. Reports read the rows on every pass, so
+	// a table that stays unreadable would otherwise write the same WARN on
+	// every node four times a minute; it is written once per
+	// [RetentionInterval] while the failure lasts.
+	evictionsWarnedAt time.Time
 
 	// trimmedAt is when this node last took the trim's pass — asked for
 	// the duty, whatever the answer. Read and written by the loop's own
@@ -303,7 +326,7 @@ func (r *retention) tick(ctx context.Context) {
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
 		if err != nil {
-			log.WarnContext(ctx, "retention_duty_unclaimed", "err", err)
+			r.logs().WarnContext(ctx, "retention_duty_unclaimed", "err", err)
 			return
 		}
 		if !mine {
@@ -319,12 +342,12 @@ func (r *retention) tick(ctx context.Context) {
 		// line carries a domain and a term, and one with neither would
 		// be counted by anything filtering on that name as a domain
 		// blocked by a term called "register".
-		log.WarnContext(ctx, "retention_inputs_unreadable", "err", err)
+		r.logs().WarnContext(ctx, "retention_inputs_unreadable", "err", err)
 		return
 	}
 	for _, name := range r.state.order {
 		if err := r.domain(ctx, name, shared); err != nil {
-			log.WarnContext(ctx, "retention_trim_failed", "domain", name, "err", err)
+			r.logs().WarnContext(ctx, "retention_trim_failed", "domain", name, "err", err)
 		}
 	}
 }
@@ -439,7 +462,7 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 		if err := running.log.Purge(ctx, decision.To); err != nil {
 			return fmt.Errorf("purge below %d: %w", decision.To, err)
 		}
-		log.InfoContext(ctx, "retention_trimmed", "domain", name,
+		r.logs().InfoContext(ctx, "retention_trimmed", "domain", name,
 			"trim_to", decision.To, "was", stats.FirstSeq,
 			"generation", generation)
 	}
@@ -503,7 +526,7 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 		// it has and what it wants — because the published field is
 		// invisible to anyone watching logs and the log line is
 		// invisible to anyone watching a dashboard.
-		log.WarnContext(ctx, "retention_trim_blocked", "domain", name,
+		r.logs().WarnContext(ctx, "retention_trim_blocked", "domain", name,
 			"term", decision.BlockedBy, "detail", decision.Detail,
 			"blocked_since", row.BlockedSince, "trim_to", decision.To)
 	}
@@ -600,14 +623,15 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	seq uint64, has, readable bool) {
 
-	if !running.domain.ClaimsIdentity() {
+	group, fed := feedGroupOf(running.domain)
+	if !fed {
 		// THIS DOMAIN HAS NO WAKE FEED, which is absent rather than
 		// unreadable: a compacted domain never had one, and reporting
 		// zero would block its trim for ever on a term it does not
 		// have.
 		return 0, false, false
 	}
-	floor, exists, err := running.log.GroupAckFloor(ctx, tracker.FeedGroup)
+	floor, exists, err := running.log.GroupAckFloor(ctx, group)
 	switch {
 	case err != nil:
 		return 0, true, false
@@ -622,6 +646,25 @@ func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	return floor, true, true
 }
 
+// feedGroupOf is the consumer group a domain's wake feed runs on its log, and
+// false for a domain with no wake feed.
+//
+// EACH DOMAIN'S OWN, because a group is a consumer on ONE stream: asked for
+// another domain's group, a log answers that no such consumer exists, which
+// [retention.feedTerm] reads as a feed that has seen nothing — and that holds
+// the log's trim at zero for as long as the node runs. The names are the ones
+// each domain's feed translator declares ([tracker.Translator.Source],
+// [pages.Translator.Source]), which is what the engine runs each feed under.
+func feedGroupOf(d statelog.Domain) (string, bool) {
+	switch d.Name() {
+	case tracker.Domain{}.Name():
+		return tracker.FeedGroup, true
+	case pages.Domain{}.Name():
+		return pages.FeedGroup, true
+	}
+	return "", false
+}
+
 // tombstones is every eviction this node has applied for one domain's log.
 //
 // READ FROM THE REPLICATED ROWS rather than from coordination, because that is
@@ -632,14 +675,19 @@ func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 // A read failure yields NO tombstones, which is the conservative direction: an
 // evicted node stays counted and pins the floor, rather than the trim
 // advancing past a node it could not establish was gone.
+//
+// ONLY THE TRACKER'S LOG CARRIES EVICTIONS READ HERE. Its applier writes every
+// eviction published on it into `tracker_evictions`, keyed by that log, and
+// nothing else writes the table — so asked under another domain's stream name
+// it answers with nothing. A domain that does not claim identity has no say in
+// who the fleet counts. The knowledge base's applier keeps its evictions in
+// `pages_evictions`, which nothing outside its package reads and no verb
+// publishes to, so an evicted node stays counted in that log's trim: the
+// conservative direction again.
 func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 	generation uint32) []statelog.Tombstone {
 
-	if r.db == nil || !running.domain.ClaimsIdentity() {
-		// ONLY THE IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A
-		// domain that does not claim identity has no say in who the
-		// fleet counts, and asking it would be reading another
-		// domain's table under this one's stream name.
+	if r.db == nil || running.domain.Name() != (tracker.Domain{}).Name() {
 		return nil
 	}
 	rows, err := tracker.Evictions(ctx, r.db.Replicated(), running.domain.Stream().Name)
@@ -652,9 +700,15 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// it at WARN would put a line in every clean shutdown.
 		return nil
 	case err != nil:
-		log.WarnContext(ctx, "retention_evictions_unreadable", "err", err)
+		if r.evictionsWarnDue(time.Now()) {
+			r.logs().WarnContext(ctx, "retention_evictions_unreadable", "err", err,
+				"detail", "an evicted node stays counted and pins the trim's "+
+					"floor until the table can be read; while this lasts the "+
+					"line repeats once per trim interval")
+		}
 		return nil
 	}
+	r.evictionsReadable()
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
 		if row.IsBack {
@@ -668,6 +722,36 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		})
 	}
 	return out
+}
+
+// evictionsWarnDue reports whether an unreadable eviction table is worth a WARN
+// now — the first failure after a read that answered, or one a
+// [RetentionInterval] after the last line — and stamps it when it is.
+func (r *retention) evictionsWarnDue(now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.evictionsWarnedAt.IsZero() && now.Sub(r.evictionsWarnedAt) < RetentionInterval {
+		return false
+	}
+	r.evictionsWarnedAt = now
+	return true
+}
+
+// evictionsReadable clears the warning's stamp, so the next failure is written
+// at once rather than an interval after one that has since cleared.
+func (r *retention) evictionsReadable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.evictionsWarnedAt = time.Time{}
+}
+
+// logs is where this loop writes: the logger it was built with, or the
+// engine's own.
+func (r *retention) logs() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return log
 }
 
 // ageFloor is the first sequence the age term will keep.

@@ -2,14 +2,20 @@ package opsmcp_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -17,13 +23,74 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A COMPANY ON JIRA GETS NO SURFACE AT ALL. An endpoint that exists and lists
-// no tools reads to an operator as broken; one that is not there matches what
-// their config says.
-func TestNoNativeBackendServesNothing(t *testing.T) {
+// fixed is a surface serving these deps for as long as a test runs.
+func fixed(deps builtin.OperatorDeps) opsmcp.Options {
+	return opsmcp.Options{Surface: func() opsmcp.Surface {
+		return opsmcp.Surface{Deps: deps}
+	}}
+}
+
+// stubWork is the tracker half with every stub a catalogue check needs.
+func stubWork() builtin.WorkDeps {
+	return builtin.WorkDeps{
+		Reader: stubWorkReader{}, Writer: stubWorkWriter,
+		Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+	}
+}
+
+// stubPages is the knowledge base's half on the same terms.
+func stubPages() builtin.PageDeps {
+	return builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{},
+		Actor: opsmcp.PageActor}
+}
+
+// NOTHING TO ASK IS NO SURFACE: with no surface to consult there is nothing a
+// request could ever be served from, so the route is not mounted at all.
+func TestNoSurfaceBuildsNoServer(t *testing.T) {
 	t.Parallel()
 	if s := opsmcp.New(opsmcp.Options{}); s != nil {
-		t.Errorf("a company with no native backend got a surface serving %v", s.Tools())
+		t.Errorf("a surface with nothing to consult was built, serving %v", s.Tools())
+	}
+}
+
+// NOTHING SERVED NOW ANSWERS AS AN UNMOUNTED ROUTE DOES, and the same route
+// serves the moment a revision serves something — with no restart, because the
+// surface is asked on every request.
+func TestNothingServedAnswersAsAnAbsentRouteUntilSomethingIs(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	now := opsmcp.Surface{Closed: map[opsmcp.Half]string{
+		opsmcp.Work: "the company's tracker is \"jira\" (`tracker.backend`)",
+	}}
+	s := opsmcp.New(opsmcp.Options{Surface: func() opsmcp.Surface {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}})
+	if s == nil {
+		t.Fatal("a surface that serves nothing yet got no server, so no later " +
+			"revision could ever be served")
+	}
+	post := func() int {
+		body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize",` +
+			`"params":{"protocolVersion":"2025-06-18","capabilities":{},` +
+			`"clientInfo":{"name":"t","version":"1"}}}`)
+		req := httptest.NewRequestWithContext(auth.WithOperator(t.Context(), "founder"),
+			http.MethodPost, opsmcp.Path, body)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := post(); got != http.StatusNotFound {
+		t.Errorf("a surface serving nothing answered %d, want %d", got, http.StatusNotFound)
+	}
+	mu.Lock()
+	now = opsmcp.Surface{Deps: builtin.OperatorDeps{Work: stubWork()}}
+	mu.Unlock()
+	if got := post(); got == http.StatusNotFound {
+		t.Error("the tracker is served now and the route still answers 404")
 	}
 }
 
@@ -33,12 +100,7 @@ func TestNoNativeBackendServesNothing(t *testing.T) {
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	only := opsmcp.New(opsmcp.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
-		},
-	})
+	only := opsmcp.New(fixed(builtin.OperatorDeps{Work: stubWork()}))
 	if only == nil {
 		t.Fatal("a company with only the native tracker got no surface")
 	}
@@ -156,13 +218,7 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 // implementation, which is what this whole seam exists to avoid.
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
-	s := opsmcp.New(opsmcp.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
-		},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
-	})
+	s := opsmcp.New(fixed(builtin.OperatorDeps{Work: stubWork(), Pages: stubPages()}))
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
 	}
@@ -294,16 +350,7 @@ func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, 
 // client that skips the prompt for a read prompted on every one.
 func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	t.Parallel()
-	s := opsmcp.New(opsmcp.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
-		},
-		Pages: builtin.PageDeps{
-			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: opsmcp.PageActor,
-		},
-	})
+	s := opsmcp.New(fixed(builtin.OperatorDeps{Work: stubWork(), Pages: stubPages()}))
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
 	}
@@ -324,4 +371,127 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+
 			"board and moves its subtasks, which is what the flag asks", got)
 	}
+}
+
+// A HALF IS A CLOSED SET, and the three a surface names are the three it serves.
+func TestEveryHalfIsValidAndNothingElseIs(t *testing.T) {
+	t.Parallel()
+	for _, half := range []opsmcp.Half{opsmcp.Work, opsmcp.Pages, opsmcp.Knowledge} {
+		if !half.Valid() {
+			t.Errorf("%q is a half this surface serves and reports itself invalid", half)
+		}
+	}
+	for _, half := range []opsmcp.Half{"", "tracker", "Work"} {
+		if half.Valid() {
+			t.Errorf("%q reports itself a half", half)
+		}
+	}
+}
+
+// THE CATALOGUE FOLLOWS THE CURRENT REVISION, and a call to a tool whose half
+// has closed since a session listed it is REFUSED NAMING THE SETTING. The
+// session here is one client for the whole case, exactly as an operator's
+// assistant holds one across an apply: a surface decided when the session
+// opened would go on filing work into a tracker the company has left.
+func TestTheCatalogueFollowsTheCurrentRevision(t *testing.T) {
+	t.Parallel()
+	const moved = "the company's tracker is \"jira\" (`tracker.backend`), not the engine's own"
+	var mu sync.Mutex
+	now := opsmcp.Surface{Deps: builtin.OperatorDeps{Work: stubWork(), Pages: stubPages()}}
+	s := opsmcp.New(opsmcp.Options{Surface: func() opsmcp.Surface {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}})
+	// ONE HANDLER, mounted once as the app mounts it: the sessions live in
+	// it, so a handler per request would lose the session it just opened.
+	handler := s.Handler()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// THE APP'S GUARD, reduced to what it leaves on the context.
+		handler.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "founder")))
+	}))
+	t.Cleanup(server.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	// ITS OWN POOL, for [httpxtest]'s reason: left unset the SDK reaches for
+	// http.DefaultClient, which every httptest.Server.Close in this binary
+	// sweeps.
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: server.URL, HTTPClient: httpxtest.Pool(t),
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	listed := func() []string {
+		t.Helper()
+		res, err := session.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatalf("list tools: %v", err)
+		}
+		var names []string
+		for _, tool := range res.Tools {
+			names = append(names, tool.Name)
+		}
+		return names
+	}
+	if names := listed(); !slices.Contains(names, builtin.CreateWorkItemTool) ||
+		!slices.Contains(names, builtin.WritePageTool) {
+
+		t.Fatalf("both halves are served and the catalogue lists %v", names)
+	}
+
+	mu.Lock()
+	now = opsmcp.Surface{
+		Deps:   builtin.OperatorDeps{Pages: stubPages()},
+		Closed: map[opsmcp.Half]string{opsmcp.Work: moved},
+	}
+	mu.Unlock()
+	names := listed()
+	if slices.Contains(names, builtin.CreateWorkItemTool) {
+		t.Errorf("the tracker half closed and the catalogue still lists %s", builtin.CreateWorkItemTool)
+	}
+	if !slices.Contains(names, builtin.WritePageTool) {
+		t.Errorf("the knowledge base stayed and the catalogue dropped %s", builtin.WritePageTool)
+	}
+
+	// THE STALE CALL, named as a client that listed before the move would
+	// send it: refused as a tool result naming the setting, not a protocol
+	// error saying the tool never existed.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: builtin.CreateWorkItemTool, Arguments: map[string]any{"title": "x"},
+	})
+	if err != nil {
+		t.Fatalf("a call to a closed tool failed as a protocol error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(text(res), "tracker.backend") {
+		t.Errorf("a call to a closed tool answered %q (error %v), want a refusal "+
+			"naming tracker.backend", text(res), res.IsError)
+	}
+	// AND A NAME THIS SURFACE NEVER SERVED IS STILL THE SDK'S UNKNOWN TOOL:
+	// the refusal is for what changed, not a blanket over every typo.
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "no_such_tool"}); err == nil {
+		t.Error("a tool this surface never served was answered rather than refused as unknown")
+	}
+
+	mu.Lock()
+	now = opsmcp.Surface{Deps: builtin.OperatorDeps{Work: stubWork(), Pages: stubPages()}}
+	mu.Unlock()
+	if names := listed(); !slices.Contains(names, builtin.CreateWorkItemTool) {
+		t.Errorf("the tracker half is served again and the catalogue lists %v", names)
+	}
+}
+
+// text is a tool result's text, joined.
+func text(res *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
 }

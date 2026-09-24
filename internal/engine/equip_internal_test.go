@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestSearchKnowledgeIsGatedOnTheBackend(t *testing.T) {
 	off := &Company{Config: &config.Company{
 		Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
 	}}
-	if got := knowledgeSearch(&Engine{}, off); got != nil {
+	if got := KnowledgeSearch(&Engine{}, off); got != nil {
 		t.Errorf("a company that turned its knowledge base off got %v", got)
 	}
 
@@ -96,25 +97,107 @@ func TestSearchKnowledgeIsGatedOnTheBackend(t *testing.T) {
 	// search_knowledge while the pages it was meant to find sat in the
 	// index.
 	bare := &Company{Config: &config.Company{}}
-	if got := knowledgeSearch(&Engine{}, bare); got == nil {
+	if got := KnowledgeSearch(&Engine{}, bare); got == nil {
 		t.Error("a company on the default backend got no search tool")
 	}
 
 	wired := &Company{Config: &config.Company{
 		Integrations: config.Integrations{Confluence: &config.Confluence{}},
 	}}
-	got := knowledgeSearch(&Engine{}, wired)
+	e := &Engine{}
+	e.epoch.current.Store(wired)
+	got := KnowledgeSearch(e, wired)
 	if got == nil {
 		t.Fatal("a company with a knowledge block got no search tool")
 	}
 	// And with nothing started yet it answers CLOSED rather than
 	// panicking: a configured backend that failed to start is a real
 	// state, and one the seat can act on.
-	if got.CanSearch(nil, nil) {
-		t.Error("an unstarted knowledge base reported itself searchable")
+	if refused := got.CanSearch(nil, nil); refused.State != knowledge.NotServed {
+		t.Errorf("an unstarted knowledge base answered %+v, want it named as "+
+			"not served", refused)
 	}
-	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}); hits != nil {
-		t.Errorf("an unstarted knowledge base returned %v", hits)
+	// AND A SEARCH THAT REACHES NO SEARCHER DID NOT RUN, so it says it
+	// failed: "nothing matched" would send a seat to try other words, or
+	// to write the page it could not find.
+	if answer := got.Search(t.Context(), knowledge.Query{Text: "x"}); len(answer.Hits) != 0 ||
+		answer.Partial != nil || !answer.Failed {
+		t.Errorf("an unstarted knowledge base answered %+v, want a search "+
+			"marked failed", answer)
+	}
+}
+
+// A KNOWLEDGE BASE THIS NODE IS NOT SERVING IS NAMED AS ONE, apart from the
+// two other reasons a search cannot run.
+//
+// The company runs a knowledge base, so "no knowledge backend is configured"
+// is false, and so is anything about a read scope: nothing on this node would
+// read the scope. Each of the ways into the state says what to change — the
+// org credential Confluence searches on, or the restart that brings up the
+// engine's own knowledge base on a node that did not start with it.
+func TestAKnowledgeBaseThisNodeIsNotServingIsNamedAsOne(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		cfg   *config.Company
+		names string
+	}{
+		"confluence, with an org token that does not resolve": {
+			cfg: &config.Company{
+				Knowledge: config.Knowledge{Backend: config.KnowledgeConfluence},
+				Integrations: config.Integrations{Confluence: &config.Confluence{
+					Token: "${CREWLET_TEST_UNSET_CONFLUENCE_TOKEN}",
+				}},
+			},
+			names: "`integrations.confluence.token` resolves to no credential",
+		},
+		"confluence, whose connection did not build": {
+			cfg: &config.Company{
+				Knowledge: config.Knowledge{Backend: config.KnowledgeConfluence},
+				Integrations: config.Integrations{Confluence: &config.Confluence{
+					Token: "a-token",
+				}},
+			},
+			names: "`confluence_unavailable`",
+		},
+		"the engine's own, on a node that did not start with it": {
+			cfg:   &config.Company{},
+			names: "this node started without it",
+		},
+	} {
+		e := &Engine{}
+		e.epoch.current.Store(&Company{Config: tc.cfg})
+		refused := LiveKnowledge(e).CanSearch(nil, &org.Organization{Name: "Acme"})
+		if refused.State != knowledge.NotServed || !strings.Contains(refused.Reason(), tc.names) {
+			t.Errorf("%s: the adapter answered %+v — want it named not served, "+
+				"saying %q", name, refused, tc.names)
+		}
+		for _, wrong := range []string{"no knowledge base", "`knowledge.scope`"} {
+			if strings.Contains(refused.Reason(), wrong) {
+				t.Errorf("%s: the refusal names a cause that is not the one: %q",
+					name, refused.Reason())
+			}
+		}
+	}
+
+	// THE OTHER TWO STATES, through the same adapter, each named as itself.
+	none := &Engine{}
+	none.epoch.current.Store(&Company{Config: &config.Company{
+		Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
+	}})
+	if refused := LiveKnowledge(none).CanSearch(nil, nil); refused.State != knowledge.NoBackend {
+		t.Errorf("a company with no knowledge base answered %+v", refused)
+	}
+	scoped := &Engine{}
+	scoped.notify.confluence = confluenceParts{
+		searcher: confluence.NewSearcher(confluence.SearcherOptions{}),
+	}
+	scoped.epoch.current.Store(&Company{Config: &config.Company{
+		Knowledge:    config.Knowledge{Backend: config.KnowledgeConfluence},
+		Integrations: config.Integrations{Confluence: &config.Confluence{}},
+	}})
+	if refused := LiveKnowledge(scoped).CanSearch(nil, &org.Organization{}); refused.State != knowledge.NoScope ||
+		!strings.Contains(refused.Reason(), "`knowledge.scope`") {
+		t.Errorf("a served backend with nothing to read answered %+v", refused)
 	}
 }
 
@@ -143,12 +226,12 @@ func TestSearchKnowledgeIsResolvedAtTheCall(t *testing.T) {
 	e := &Engine{native: &native{searcher: pagesSearcher}}
 	onNative := &Company{Config: &config.Company{}}
 	e.epoch.current.Store(onNative)
-	adapter := knowledgeSearch(e, onNative)
+	adapter := KnowledgeSearch(e, onNative)
 	chart := &org.Organization{Name: "Acme"}
 
 	// THE PREMISE: the native searcher can always search, and this node's
 	// index has built nothing yet.
-	if !adapter.CanSearch(nil, chart) || !adapter.Building(t.Context()) {
+	if adapter.CanSearch(nil, chart).Refused() || !adapter.Building(t.Context()) {
 		t.Fatal("the adapter does not answer from the native searcher to begin with")
 	}
 
@@ -163,7 +246,7 @@ func TestSearchKnowledgeIsResolvedAtTheCall(t *testing.T) {
 		Knowledge:    config.Knowledge{Backend: config.KnowledgeConfluence},
 		Integrations: config.Integrations{Confluence: &config.Confluence{}},
 	}})
-	if adapter.CanSearch(nil, chart) {
+	if !adapter.CanSearch(nil, chart).Refused() {
 		t.Error("after the move the adapter still answers CanSearch from the native searcher")
 	}
 	if adapter.Building(t.Context()) {
@@ -198,7 +281,7 @@ func TestSearchKnowledgeHearsTheIndexIsStillBuilding(t *testing.T) {
 	native := &Company{Config: &config.Company{}}
 	e.epoch.current.Store(native)
 
-	adapter := knowledgeSearch(e, native)
+	adapter := KnowledgeSearch(e, native)
 	if !adapter.Building(t.Context()) {
 		t.Error("a node whose index has built nothing is not reported as building")
 	}
@@ -234,7 +317,7 @@ func TestANodeWithNoIndexIsNeverBuilding(t *testing.T) {
 		searcher: confluence.NewSearcher(confluence.SearcherOptions{}),
 	}
 	e.epoch.current.Store(onConfluence)
-	adapter := knowledgeSearch(e, onConfluence)
+	adapter := KnowledgeSearch(e, onConfluence)
 	// THE CONTROL: this adapter is answering from the Confluence searcher,
 	// so the false below is that searcher's and not an absent one's.
 	if got := e.Knowledge(); got == nil || got.Backend() != confluence.Backend {

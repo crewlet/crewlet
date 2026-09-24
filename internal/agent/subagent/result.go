@@ -276,6 +276,14 @@ type Result struct {
 	// tags and all. It is the same contract the turn's own phases publish.
 	Narration []toolloop.Narration
 
+	// Abandoned is what the worker wrote that no round committed — the
+	// loop's own [toolloop.Result.Abandoned], carried through, whose doc says
+	// what puts an attempt there. SEPARATE from Narration for the reason the
+	// loop keeps them apart: a round's narration is what the model committed
+	// to. The worker's phase record carries them as its abandoned_attempts,
+	// as the turn's own phases' records do.
+	Abandoned []toolloop.Narration
+
 	// Truncated is true when a round of this worker ended at the model's
 	// OUTPUT cap rather than because it had finished — the loop's own
 	// [toolloop.Result.Truncated], carried through. Its Text or its
@@ -295,6 +303,23 @@ type Result struct {
 
 // Tokens is the task's total spend.
 func (r Result) Tokens() int { return r.InputTokens + r.OutputTokens }
+
+// keep carries the loop's own account onto the record: what the worker wrote
+// and left uncommitted, what it ran, what it spent and whether a round was cut.
+//
+// ONE COPY FOR EVERY WAY A LOOP ENDS — a finished Result, the failure view's
+// snapshot, the snapshot a panic leaves — so a field the record gains reaches
+// all three rather than the one somebody remembered.
+func (r *Result) keep(loop toolloop.Result) {
+	r.Text = loop.Text
+	r.Rounds = loop.RoundsUsed
+	r.InputTokens, r.OutputTokens = loop.InputTokens, loop.OutputTokens
+	r.Model = loop.Model
+	r.Executions = loop.Executions
+	r.Narration = loop.Narration
+	r.Abandoned = loop.Abandoned
+	r.Truncated = loop.Truncated
+}
 
 // Failed reports whether this task is worth the parent's attention.
 func (r Result) Failed() bool { return r.Status.Failed() }

@@ -17,10 +17,9 @@ import (
 //
 // The board's `text` argument is a substring of the key or the title, composed
 // into the board query with every other filter. It is the right thing for "the
-// item whose key I am half sure of", and it cannot see a description at all —
-// so the whole of what somebody wrote down about a piece of work was
-// unreachable from a seat, while the engine had been paying to embed every one
-// of those descriptions the entire time.
+// item whose key I am half sure of", and it cannot see a description at all:
+// what somebody wrote down about a piece of work is reachable only by this
+// ranking.
 //
 // The two are not one verb because they answer differently shaped questions. A
 // board narrows a list and keeps the board's own order; this ranks a corpus
@@ -36,11 +35,10 @@ import (
 
 // WorkSearcher ranks work items by text, declared by the consumer.
 //
-// Nil on a build with no index — a company on Jira, or a node whose index has
-// not been wired — and the tool is then OMITTED rather than refusing at the
-// call, on [Register]'s own rule.
+// Nil where the node does not run the engine's own tracker, and the tool is
+// then OMITTED rather than refusing at the call, on [Register]'s own rule.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, text string, limit int) (tracker.Ranking, error)
 }
 
 // ---- search_work_items --------------------------------------------------- //
@@ -98,7 +96,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_work_items needs `text` — what the work is " +
 			"about, in plain words."), nil
 	}
-	hits, err := t.deps.Search.Search(ctx, text, argInt(args, "limit", 0))
+	ranking, err := t.deps.Search.Search(ctx, text, argInt(args, "limit", 0))
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
@@ -107,10 +105,25 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("This node is still building its search index, so it " +
 			"cannot answer that yet — it says nothing about whether the work " +
 			"exists. Try again shortly, or narrow it with list_work_items."), nil
+	case errors.Is(err, tracker.ErrSearchLimit):
+		// A REFUSAL OF THE ARGUMENT, in the tracker's own words, which
+		// name `limit` and the most it takes. Reported as a read failure
+		// it would tell the model to try the same call again later.
+		return failed(err.Error()), nil
 	case err != nil:
 		return failed(readFailure(tracker.SearchWorkItemsTool, err)), nil
 	}
-	return jsonAnswer(map[string]any{
-		"query": text, "matches": hits, "count": len(hits),
-	}, "Ask for fewer with `limit`.")
+	answer := map[string]any{
+		"query": text, "matches": ranking.Items, "count": len(ranking.Items),
+	}
+	if ranking.Partial != nil {
+		// WHAT THE RANKING IS MISSING, beside what it found: a short
+		// list with nothing beside it reads as every match there is, and
+		// a model acts on that by filing the duplicate.
+		answer["partial"] = ranking.Partial
+		answer["note"] = "This ranking is partial — see `partial` for what it " +
+			"did not search. Before concluding an item does not exist, search " +
+			"again shortly or narrow it with list_work_items."
+	}
+	return jsonAnswer(answer, "Ask for fewer with `limit`.")
 }

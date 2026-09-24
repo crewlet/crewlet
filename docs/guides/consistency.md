@@ -194,17 +194,19 @@ rather than downgraded. Each code names a different thing to do.
 | `broker_busy` | The stream's ingest queue was full, so the broker stored nothing and said so. The broker answered, and no majority was asked. | Retry after the hint (1 s). It clears as the queue drains; if it persists, something is publishing to the stream faster than the stream stores. Like `log_full`, it costs `linearizable` reads alone. |
 | `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `barrier_refused` | The broker refused the barrier for a reason other than a full log or a full ingest queue — a message-size limit set on the stream below a barrier's own size, a sealed stream, a server at its storage limit. The broker's own words are the detail. | Change the setting the detail names; waiting on this node changes nothing. Like `log_full`, it costs `linearizable` reads alone — `session`, `stale` and `consistent_prefix` append no barrier and keep answering. |
-| `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
+| `deferred` | This node retains a record covering what this read is about: one it cannot decode, or one held back behind such a record because their scopes meet. | Ask another node, or upgrade this one — a build that decodes the first applies both. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
-| `floor_unknown` | The published trim floor could not be established: coordination did not answer, or the floor it holds is at a generation this node's rows are not on — the fleet re-anchored the domain and this node did not follow — or this node could not read its own store before it got as far as the floor. The detail says which. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. For an unanswered read, check coordination. For a generation this node has left, restart it: its boot asks the fleet for a snapshot of the current generation and adopts it, and until then its seats are with a peer. For the store, the detail names the error. |
+| `floor_unknown` | The published trim floor could not be established: coordination did not answer, or this node could not read its own eviction row, which the health read takes before the floor. The detail names the error. | Retry after the hint (4 s, the broker's own minimum election timeout: coordination rides the broker's connection, so an unanswered read of the floor is waiting on the same election an uncommitted barrier is). The third value blocks, because guessing here keeps a node serving over a hole it cannot see, and it clears the moment a read of the floor answers. If it persists, check coordination, or the store error the detail names. Meanwhile this node keeps the seats it holds and claims no new ones: a health that cannot be read gives none back and admits none. |
+| `generation_left` | The published trim floor was read, and it is at a generation this node's rows are not on: the fleet re-anchored the domain and this node did not follow. | Restart the node. Waiting does not clear it; its boot asks the fleet for a snapshot of the current generation and adopts it. Until then it gives back its seats — both domains that answer reads through this ladder, the tracker and the knowledge base, gate seat admission — and a peer on the current generation serves them. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
 | `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
-Five of them are worth coming back to **this** node for — `behind`,
-`no_quorum`, `broker_unreachable`, `broker_busy` and `stalled`. The rest are
-not, and the distinction is in the code rather than in a retry loop's
-guesswork: a caller that retried `deferred` would loop forever.
+Six of them are worth coming back to **this** node for — `behind`,
+`no_quorum`, `broker_unreachable`, `broker_busy`, `stalled` and
+`floor_unknown`. The rest are not, and the distinction is in the code rather
+than in a retry loop's guesswork: a caller that retried `deferred` or
+`generation_left` would loop forever.
 
 A **write** meets the same full queue differently, because it is holding
 nothing a caller has to see: it pauses and decides again from a fresh
@@ -217,6 +219,20 @@ write's own operation id is the other answer that is not a refusal: the write
 resolves it from its ledger or from the duplicate acknowledgement its next
 attempt gets, and answers `unknown` if the proposal is still pending when the
 budget runs out.
+
+That ledger is also what a **retried write** meets first. Every attempt's
+snapshot reads it before deciding anything, so a write retried under an
+operation id this node has already applied answers `applied` at the position
+it applied at and publishes nothing — however long after the first attempt it
+comes, since the broker forgets a message id after its duplicate window and
+the ledger keeps one for thirty days. A retry whose first record is on the log
+and not yet applied on this node finds no row: an arbitrated write is still
+refused by the broker, because its expectation is formed below that record,
+and waits for this node to apply it; the additive kinds take no expectation,
+which is why their applies fold a second record under one operation id to
+nothing. The ledger has nothing to say about an operation applied before this
+node adopted a peer's snapshot either, since an artefact carries no ledger —
+past the duplicate window, a retry of one of those is decided again.
 
 ## Completeness is a different fact from freshness
 

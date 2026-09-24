@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -188,6 +190,73 @@ type opaque struct{ inner error }
 
 func (o opaque) Error() string { return "the executor gave up" }
 func (o opaque) Unwrap() error { return o.inner }
+
+// A TURN WHOSE CONTEXT ENDED UNDER IT STILL CLOSES.
+//
+// Releasing a seat detaches its mailbox, which cancels the context its running
+// turn was handed, and a broker client refuses a publish under a context that
+// is already done. Published on that context, a released turn's closing events
+// are refused — the summary that ends the seat's live row, the learning
+// record, and the event that names why the turn stopped — while its phase
+// records, published without the cancellation, land.
+func TestACancelledTurnStillPublishesItsClosingEvents(t *testing.T) {
+	t.Parallel()
+	exhausted := &chain.Error{
+		Attempted: []string{"primary"},
+		Err:       &llm.Error{Kind: llm.KindServer, Provider: "p", Model: "m", Err: errors.New("503")},
+	}
+	for _, tc := range []struct {
+		name string
+		res  turn.Result
+		err  error
+		want []string
+	}{
+		{
+			name: "a guard breach beside a refused charge",
+			res: turn.Result{Decision: phase.Failed,
+				Breach: &turn.Breach{Kind: types.GuardStall, Detail: "no progress"}},
+			err:  &toolloop.BudgetError{Scope: "org", Used: 90, Limit: 100},
+			want: []string{"agent_turn_completed", "turn.guard_breach", "budget_exhausted", "turn_completed"},
+		},
+		{
+			name: "an exhausted provider chain",
+			res:  turn.Result{Decision: phase.Failed},
+			err:  fmt.Errorf("runner: execute: %w", exhausted),
+			want: []string{"agent_turn_completed", "llm_unavailable", "turn_completed"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, p, tel := failing(t)
+			e.backends.Queue = refusesWhenDone{p}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			e.publishTurnCompleted(ctx, tel, runner.Spend{}, tc.res, tc.err)
+
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			var got []string
+			for _, ev := range p.events {
+				got = append(got, ev.Type)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("a turn closed under a cancelled context published %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// refusesWhenDone refuses a publish under a context that is already done, as
+// the broker client does, and hands every other to the recording queue.
+type refusesWhenDone struct{ *pub }
+
+func (r refusesWhenDone) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.pub.Publish(ctx, topic, ev)
+}
 
 // A turn whose texts all fit logs no such line: its events carry them whole.
 func TestATurnWhoseTextsFitLogsNoCut(t *testing.T) {
