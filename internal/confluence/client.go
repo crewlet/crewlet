@@ -86,7 +86,7 @@ const wikiPrefix = "/wiki"
 // The search runs INSIDE the turn, before a model call the turn is
 // waiting on, so a slow wiki costs the turn directly. Fifteen seconds is
 // generous for one CQL page and short enough that a hung instance degrades
-// to an empty knowledge block rather than stalling a seat.
+// to a knowledge search marked failed rather than stalling a seat.
 const ClientTimeout = 15 * time.Second
 
 // Client is one authenticated Confluence session.

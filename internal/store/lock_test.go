@@ -10,12 +10,11 @@ import (
 
 // WHAT THE LOCK IS FOR.
 //
-// "One file, one process" was a rule the package doc stated and nothing
-// enforced. The driver does not support two processes on a database file and
-// does not refuse the second opener either, so the failure was silent — and
-// `crewlet secrets`, `crewlet llm export -secret-store` and every
-// provisioner's secret-store sink opened the engine's live file from a second
-// OS process as their documented gesture.
+// "One file, one process" is a rule the driver does not enforce: it does not
+// support two processes on a database file and does not reliably refuse the
+// second opener either (see lock.go). Every `crewlet` command that opens the
+// store's files does so from its own OS process, so the lock is what refuses
+// one run beside a live engine.
 
 // RELEASING FREES IT for the next opener. A lock that outlived its holder
 // would make a clean restart impossible.

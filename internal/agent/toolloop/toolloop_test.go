@@ -69,11 +69,15 @@ func (s *fakeSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.To
 }
 
 // meter records spends and can refuse or fail. A refused spend is counted like
-// any other, as [toolloop.BudgetMeter] requires: its tokens were billed.
+// any other, as [toolloop.BudgetMeter] requires: its tokens were billed. Its
+// room is the same counter read against the same cap: none once the spend has
+// reached it.
 type meter struct {
 	spent    int
 	refuseAt int // refuse once cumulative spend would exceed this; 0 never
 	err      error
+	roomErr  error // a room read that fails while charges still land
+	rooms    int   // how many times the loop asked for room
 }
 
 func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
@@ -86,6 +90,19 @@ func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, err
 		return toolloop.SpendOutcome{
 			Scope: "role", Used: before, Limit: m.refuseAt,
 		}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+func (m *meter) Room(context.Context) (toolloop.SpendOutcome, error) {
+	m.rooms++
+	switch {
+	case m.err != nil:
+		return toolloop.SpendOutcome{}, m.err
+	case m.roomErr != nil:
+		return toolloop.SpendOutcome{}, m.roomErr
+	case m.refuseAt > 0 && m.spent >= m.refuseAt:
+		return toolloop.SpendOutcome{Scope: "role", Used: m.spent, Limit: m.refuseAt}, nil
 	}
 	return toolloop.SpendOutcome{OK: true}, nil
 }
@@ -582,6 +599,88 @@ func TestARefusedRoundsAnswerAndCostReachTheSnapshot(t *testing.T) {
 	}
 	if len(got.Narration) != 0 || got.Text != "" {
 		t.Errorf("the refused round was committed: narration %+v, text %q", got.Narration, got.Text)
+	}
+}
+
+// A SPENT BUDGET STOPS THE ROUND BEFORE ITS CALL.
+//
+// A round is charged once its model call has answered, because that is when
+// its size is known, so without a read beforehand a seat whose counter is
+// already at its cap pays for one more model call every time a round is asked
+// for and learns it is out only when that call's charge is refused.
+func TestASpentBudgetStopsTheRoundBeforeItsCall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{{InputTokens: 50, Content: "hi"}}}
+	s := &fakeSurface{}
+	m := &meter{spent: 100, refuseAt: 100}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Budget: m,
+	})
+	var be *toolloop.BudgetError
+	if !errors.As(err, &be) || !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want a budget refusal", err)
+	}
+	if be.Scope != "role" || be.Used != 100 || be.Limit != 100 {
+		t.Errorf("refusal = %+v, want the spent scope with its figures", be)
+	}
+	if p.calls != 0 {
+		t.Errorf("the provider was called %d times on a budget with no room", p.calls)
+	}
+	if m.spent != 100 {
+		t.Errorf("the counter moved to %d on a round that was never sent", m.spent)
+	}
+}
+
+// THE ROOM IS READ BEFORE EVERY ROUND, not once per phase: a round that spends
+// the budget's last token leaves nothing for the next one, and the next one
+// must not be sent to find that out.
+func TestTheRoomIsReadBeforeEveryRound(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		// Exactly the cap: admitted, and nothing left after it.
+		{InputTokens: 100, ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{InputTokens: 10, Content: "never sent"},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+	m := &meter{refuseAt: 100}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Budget: m,
+	})
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want the second round refused for room", err)
+	}
+	if p.calls != 1 {
+		t.Errorf("the provider was called %d times; want the one round the budget admitted", p.calls)
+	}
+	if m.rooms != 2 {
+		t.Errorf("room was read %d times over two rounds, want 2", m.rooms)
+	}
+	if len(s.ran) != 1 {
+		t.Errorf("tools ran %v; want the admitted round's one read", s.ran)
+	}
+}
+
+// AN UNREADABLE ROOM IS NOT A REFUSAL AND NOT A YES: the round stops, nothing
+// is sent, and the error is not reported as the budget running out.
+func TestAnUnreadableRoomSendsNothingAndIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{{InputTokens: 10, Content: "hi"}}}
+	s := &fakeSurface{}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 2,
+		Budget: &meter{roomErr: errors.New("store unreachable")},
+	})
+	if err == nil {
+		t.Fatal("an unreadable budget was read as room")
+	}
+	if errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Error("an unreadable budget was reported as a refusal")
+	}
+	if p.calls != 0 {
+		t.Errorf("the provider was called %d times on a budget nobody could read", p.calls)
 	}
 }
 

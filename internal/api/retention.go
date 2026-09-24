@@ -49,29 +49,26 @@ type retentionWriter interface {
 }
 
 // NodeGate is the eviction half, which is a RECORD on the log rather than a
-// coordination write — so it goes through the same writer a seat's tools do,
-// and its outcome is the same three-valued answer every other write has.
+// coordination write — one on every log whose applier installs the eviction
+// gate, each answering with the same three-valued outcome every other write
+// has.
 //
-// EXPORTED, unlike its neighbour, because the caller has to convert a typed
-// nil to a genuine one before handing it over: a nil *tracker.Writer inside a
-// non-nil interface passes this route's own check and panics on the first
-// press.
+// EXPORTED, unlike its neighbour, because the caller has to convert a node
+// that runs no state log into a genuine nil before handing it over: a seam
+// that answered "no log" on every press would be registered and broken.
 type NodeGate interface {
-	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
-	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+	EvictNode(ctx context.Context, req engine.GateRequest) ([]engine.GateResult, error)
+	ReadmitNode(ctx context.Context, req engine.GateRequest) ([]engine.GateResult, error)
 }
 
 // TaskPurger is the purge half, and it is a SEPARATE seam rather than a third
 // method on [NodeGate].
 //
-// Every other write on that surface is the FLEET's — an eviction is a decision
-// about a machine, and the process's own writer is the right author. A purge
-// destroys a company's data, and the record has to carry the PERSON who asked
-// for it, so the identity is an argument rather than a property of the writer
-// this process happens to hold. Keeping it apart is also what lets this route
-// be exercised without a broker: the alternative signature hands back a
-// concrete `*tracker.Writer`, which no test can supply without a publisher, a
-// store and a log.
+// A gate is a decision about a machine and is recorded on every gated log; a
+// purge destroys one task's rows on one log. Keeping it apart is also what lets
+// this route be exercised without a broker: the alternative signature hands
+// back a concrete `*tracker.Writer`, which no test can supply without a
+// publisher, a store and a log.
 type TaskPurger interface {
 	// PurgeAs destroys a task as the named operator, reporting the same
 	// three-valued outcome every other write has.
@@ -100,7 +97,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	generation, err := a.generationOf(r.Context(), stream)
+	generation, err := a.generationOf(stream)
 	if err != nil {
 		// A BARE SEQUENCE NAMES A NUMBER SPACE. Publishing one at the
 		// wrong generation pins a position on a log that no longer
@@ -152,12 +149,10 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 // An acknowledgement is filed under a STREAM — [coord.BackupPoint.Streams] is
 // what the trim's backup term looks its reach up in — while the published
 // floors are keyed by DOMAIN and every node's positions heartbeat by domain
-// too, and neither record carries a stream name at all. So there was no lookup
-// to perform in them, and what the two sources here actually did was take the
-// FIRST row of whichever one answered. That is not "the fleet's generation":
-// a reanchor moves ONE domain's, so on an estate where the tracker has been
-// re-anchored and the pages log has not, the two numbers differ and which one
-// came back was whichever key the store happened to list first.
+// too, and neither record carries a stream name at all. So there is no lookup
+// to perform in them: a reanchor moves ONE domain's generation, and on an
+// estate where the tracker has been re-anchored and the pages log has not, the
+// two numbers differ.
 //
 // # And a generation that is too HIGH is not a refused acknowledgement
 //
@@ -173,21 +168,10 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 // It is the SAME number the trim compares against: both read that stream's
 // applier committed cursor. A node that has not yet applied a reanchor answers
 // LOW, which the trim's own guard refuses — the safe direction, and a visible
-// one, because the acknowledgement echoes back the generation it recorded.
-//
-// A stream this build does not run has no such cursor and is REFUSED, where
-// the register sources answered it confidently with some other log's number:
-// a mistyped stream name used to read back as a successful acknowledgement
-// that nothing would ever count.
-func (a *App) generationOf(ctx context.Context, stream string) (uint32, error) {
-	// The instant is the reanchor confirmation's business and not this
-	// route's; the generation beside it is this node's own answer for the
-	// stream, which is exactly what has to be stamped on the point.
-	_, generation, err := a.capacity.ReanchorStatus(ctx, stream)
-	if err != nil {
-		return 0, err
-	}
-	return generation, nil
+// one, because the acknowledgement echoes back the generation it recorded. A
+// stream this build does not run has no such cursor and is refused.
+func (a *App) generationOf(stream string) (uint32, error) {
+	return a.capacity.StreamGeneration(stream)
 }
 
 // mountRetention registers the write half of the retention surface.
@@ -329,14 +313,13 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 // gate answers the eviction and readmission routes.
 //
 // ONE HANDLER FOR BOTH, because they are one gesture with a sign: a
-// readmission is the INVERSE COMMIT rather than a delete, written by the same
-// writer onto the same subject, so two handlers would be two copies of one
-// refusal vocabulary.
+// readmission is the INVERSE COMMIT rather than a delete, written onto the same
+// subjects, so two handlers would be two copies of one refusal vocabulary.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
 			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]string{"error": "no_tracker"})
+				map[string]string{"error": "no_state_log"})
 			return
 		}
 		node := r.PathValue("node")
@@ -352,38 +335,74 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
-		operator, _ := auth.OperatorFrom(r.Context())
-		// A FRESH ID PER PRESS, unlike the chart apply's derived one:
-		// every node computes the chart's id from the revision so the
-		// losers collapse, but two operators evicting one node are two
-		// decisions and the ledger should record both.
-		opID := uuid.NewString()
-		var result tracker.WriteResult
+		operator, ok := auth.OperatorFrom(r.Context())
+		if !ok || operator == "" {
+			// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so
+			// this is a build with no operator identity on the context.
+			// Every log's record names who ran the gesture, and one
+			// naming nobody is a removal nobody can account for.
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "operator_required",
+				"detail": "an eviction is an operator gesture and this request " +
+					"carries no operator identity",
+			})
+			return
+		}
+		req := engine.GateRequest{
+			Node: node, By: operator,
+			// A FRESH ID PER PRESS, shared by every log's record: two
+			// operators evicting one node are two decisions and each
+			// ledger records both, while one press is one decision an
+			// audit can follow across the logs.
+			OpID:  uuid.NewString(),
+			Force: evict && r.URL.Query().Get("force") == "true",
+		}
+		var results []engine.GateResult
 		var err error
 		if evict {
-			result, err = a.nodes.EvictNode(r.Context(), opID, node)
+			results, err = a.nodes.EvictNode(r.Context(), req)
 		} else {
-			result, err = a.nodes.ReadmitNode(r.Context(), opID, node)
+			results, err = a.nodes.ReadmitNode(r.Context(), req)
 		}
-		if err != nil {
+		body := map[string]any{
+			"node": node, "evicted": evict, "op_id": req.OpID,
+			// THE THREE-VALUED OUTCOME, whole and per log. A gate the
+			// caller believes landed and which is only `pending` is the
+			// difference between a node that has stopped writing and
+			// one that is about to — and a gesture that reached one log
+			// and not the next is two different facts.
+			"domains": gateDomains(results),
+		}
+		var refused *statelog.EvictionRefusal
+		switch {
+		case errors.As(err, &refused):
+			log.Warn("api_retention_gate_refused", "node", node, "error", err)
+			body["error"], body["detail"] = "eviction_refused", err.Error()
+			writeJSON(w, http.StatusConflict, body)
+			return
+		case err != nil:
 			log.Warn("api_retention_gate_failed", "node", node,
 				"evict", evict, "error", err)
-			writeJSON(w, http.StatusInternalServerError,
-				map[string]string{"error": "gate_failed", "detail": err.Error()})
+			body["error"], body["detail"] = "gate_failed", err.Error()
+			writeJSON(w, http.StatusInternalServerError, body)
 			return
 		}
 		log.Info("retention_gate", "operator", operator, "node", node, "evict", evict)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"node": node, "evicted": evict,
-			// THE THREE-VALUED OUTCOME, whole. A gate the caller
-			// believes landed and which is only `pending` is the
-			// difference between a node that has stopped writing and
-			// one that is about to.
-			"outcome":  result.Outcome,
-			"position": result.Position,
-			"op_id":    result.OpID,
+		writeJSON(w, http.StatusOK, body)
+	}
+}
+
+// gateDomains renders each log's answer to a gate: the domain, its stream,
+// the outcome and where its record landed.
+func gateDomains(results []engine.GateResult) []map[string]any {
+	out := make([]map[string]any, 0, len(results))
+	for _, res := range results {
+		out = append(out, map[string]any{
+			"domain": res.Domain, "stream": res.Stream,
+			"outcome": res.Outcome, "position": res.Position,
 		})
 	}
+	return out
 }
 
 // capacityRunner is the slice of the engine the capacity routes need.
@@ -393,6 +412,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 type capacityRunner interface {
 	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
 	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
+	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
@@ -434,9 +454,17 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
-	if err != nil {
+	switch {
+	case errors.Is(err, engine.ErrNotADomainLog):
 		writeJSON(w, http.StatusNotFound,
 			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		return
+	case err != nil:
+		// THE BROKER DID NOT ANSWER, which is worth coming back for: the
+		// instant to confirm is the live stream's, and nothing else can
+		// stand in for it.
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "stream_unreadable", "detail": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -457,7 +485,18 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	operator, ok := auth.OperatorFrom(r.Context())
+	if !ok || operator == "" {
+		// THE GATE'S OWN REFUSAL, for its reason: the generation record
+		// and the audit row both name who re-anchored, and a transition
+		// naming nobody is one nobody can account for.
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "operator_required",
+			"detail": "a reanchor is an operator gesture and this request " +
+				"carries no operator identity",
+		})
+		return
+	}
 	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
 		Force: r.URL.Query().Get("force") == "true",

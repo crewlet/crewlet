@@ -61,6 +61,15 @@ type Company struct {
 	// than here: it belongs to the seat's LEASE, and an epoch is replaced
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
+
+	// vectors is this epoch's embedding backend, or nil for a company that
+	// configures no providers.embeddings and for an epoch no node equipped
+	// (`crewlet validate` builds one without). [Engine.equip] builds it
+	// from this revision before the epoch is published, so publishing the
+	// epoch publishes it: a reader takes the provider, the model id it
+	// embeds under and the search switch from the one epoch it pinned, and
+	// a revision an apply refused never reaches one.
+	vectors *vectorBackend
 }
 
 // NewCompany builds an epoch from a validated config.

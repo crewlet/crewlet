@@ -334,8 +334,9 @@ type Config struct {
 	// Nil keeps the prompt free of skill scaffolding.
 	Skills prompts.SkillCatalogue
 
-	// Budget is the parent turn's shared token counter. Nil disables
-	// charging entirely, which is the embedded single-node case.
+	// Budget is the parent turn's shared token counter, read for room
+	// before each worker round and charged once the round has answered. Nil
+	// disables both: a turn with no ceiling to enforce is given none.
 	Budget toolloop.BudgetMeter
 
 	// Fence is the PARENT's seat fence, handed down unchanged. A worker
@@ -929,6 +930,29 @@ func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutco
 		return toolloop.SpendOutcome{
 			OK: false, Scope: ScopeSubagent, Used: before, Limit: m.cap,
 		}, nil
+	}
+	return outcome, nil
+}
+
+// Room reports whether a worker's next model call may be sent: the parent's
+// counter first, then the slice.
+//
+// THE PARENT'S ANSWER FIRST, for the reason [sliceMeter.Spend] reports the
+// parent's refusal first: the company or the seat out of room is the fact an
+// operator acts on. An unreadable parent is an error whatever the slice holds,
+// because the slice cannot say anything about the counter it sits on top of.
+// A slice already spent to its cap has no room, since any call's charge would
+// then be refused by it.
+func (m *sliceMeter) Room(ctx context.Context) (toolloop.SpendOutcome, error) {
+	outcome, err := m.inner.Room(ctx)
+	if err != nil || !outcome.OK {
+		return outcome, err
+	}
+	m.mu.Lock()
+	used := m.used
+	m.mu.Unlock()
+	if used >= m.cap {
+		return toolloop.SpendOutcome{OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap}, nil
 	}
 	return outcome, nil
 }

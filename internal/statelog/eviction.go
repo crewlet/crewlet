@@ -116,19 +116,17 @@ func (e *EvictionRefusal) Error() string {
 
 // PermitEviction decides whether a node may be evicted at all.
 //
-// # A LIVE LEASE REFUSES, and that refusal is a precondition of the whole
-// design
+// # A LIVE LEASE REFUSES
 //
-// Evicting a node that is still talking to coordination would let the trim
-// advance past a node that is about to write — and the write-path fence that
-// is supposed to catch that reads a CACHED tombstone, refreshed on the same
-// coordination loop the node has by definition still got.
-//
-// So the only state in which an eviction is permitted is one where the target
-// has missed at least three consecutive coordination round trips. Which is
-// exactly why the publisher's fence checks a THIRD source — that node's own
-// applied eviction rows, fresh to its applied prefix and the only one still
-// fresh when its coordination path is wedged.
+// A node holding its presence lease is still reaching coordination, which is
+// to say it is running. An eviction takes a node out of service: every record
+// it publishes above the eviction's position is dropped by every applier, it
+// refuses its own reads once its applier has applied the eviction, and the
+// trim stops counting it after [EvictionFenceWindow] — so a running node that
+// is merely behind is trimmed past and can come back only by adopting a
+// snapshot. That is the remedy for a node that has STOPPED, whose lease has
+// lapsed; done to a running one it is an outage caused by the wrong node id.
+// So a live lease refuses unless the operator forces it.
 func PermitEviction(nodeID string, live []Presence, force bool) error {
 	if nodeID == "" {
 		return &EvictionRefusal{Detail: "no node was named"}
@@ -136,10 +134,9 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	held := slices.ContainsFunc(live, func(p Presence) bool { return p.NodeID == nodeID })
 	if held && !force {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
-			"lease, so it is still reaching coordination — and an eviction is " +
-			"only safe once the target has missed enough round trips to be out " +
-			"of contact, because the fence that stops it writing reads a value " +
-			"refreshed on the connection it still has"}
+			"lease, so it is still reaching coordination — an eviction is for a " +
+			"node that has stopped: a running one's writes above it apply " +
+			"nowhere, and the trim stops counting it"}
 	}
 	return nil
 }

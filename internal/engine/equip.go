@@ -37,7 +37,21 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
-	e.tuneBatching(c)
+	// THE EMBEDDING BACKEND FIRST, onto the epoch being equipped rather than
+	// beside it: the memory tools below write and recall with it, so they
+	// embed with THIS revision's provider, and storing the epoch is what
+	// publishes it — a reader that takes it from the epoch it pinned (the
+	// embedding duty's tick, a search, a turn's prefetch) never meets a
+	// revision an apply refused. Built at the apply, which is also what
+	// makes a width change fail where somebody is watching rather than
+	// weeks later at the first recall. A company with none configured gets
+	// nil, and every consumer treats that as "no similarity search" rather
+	// than a fault.
+	vectors, err := e.buildEmbedder(c)
+	if err != nil {
+		return err
+	}
+	c.vectors = vectors
 	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults: each is a
 	// validated, documented setting, and a builtin left on its own default
 	// would make setting one a revision that changes nothing an operator
@@ -67,7 +81,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 			deps.Refinable = skills
 		}
 		deps.Episodes = learning.NewEpisodes(db)
-		deps.Diary = e.diary(db)
+		deps.Diary = e.diary(db, c)
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
 	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered
@@ -97,7 +111,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c.Config.KnowledgeBackendFor() == config.KnowledgeNative {
 		deps.Pages = e.pageDeps(c)
 	}
-	if _, err := builtin.Register(c.Tools, deps); err != nil {
+	if _, err = builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
 	// THE SHARED MCP SERVERS, into the same registry and straight after
@@ -110,26 +124,15 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// server's tools; refusing the epoch over it would take a working
 	// company down because one vendor's binary was missing.
 	e.startSharedServers(ctx, c)
-	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
-	// unlike the skills themselves, which come from the knowledge base and
-	// outlive one. A variable a revision removed then surfaces here rather
-	// than on that skill's next edit, which might be never. The trigger
-	// audit is NOT here: it reads the epoch that is current, so it runs
-	// once this one is (see [Engine.installEpoch]).
-	e.refreshSkillVariables(c)
+	// The tool skills' ${var} map is NOT refreshed here, and their trigger
+	// audit does not run here: the map is written into the node's skill
+	// registry, which every seat reads, and the audit reads the epoch that
+	// is current — so both wait for this one to be installed
+	// ([Engine.installEpoch]).
 
-	// THE EMBEDDER IS BUILT AT THE APPLY, which is what makes a width
-	// change fail where somebody is watching rather than weeks later at
-	// the first recall. A company with none configured gets nil, and every
-	// consumer treats that as "no similarity search" rather than a fault.
-	embedder, err := e.buildEmbedder(c)
-	if err != nil {
-		return err
-	}
-	e.embeddings.Store(&embedder)
 	// THE FLEET'S CREDENTIAL LEDGER, onto the pools this epoch just built.
 	// Local and infallible — it stores a handle — which is why it can sit
-	// after the one step here that can fail: an epoch that is refused never
+	// after the steps here that can fail: an epoch that is refused never
 	// reaches this line, and one that is not must never be published with
 	// pools that publish nothing. See cooldowns.go.
 	e.shareCooldowns(c)
@@ -238,6 +241,11 @@ func (e *Engine) telemetry() builtin.Telemetry {
 // Without it every seat attachment takes queue.DefaultBatchOptions, and setting
 // notification_coalesce_window_seconds or notification_coalesce_max_batch
 // would be a revision that changes nothing an operator can observe.
+//
+// CALLED WHEN THE EPOCH IS INSTALLED ([Engine.installEpoch]), never while one
+// is being equipped: the value is the NODE's, shared by every seat it holds,
+// so written for a revision an apply then refused it would go on coalescing
+// every inbox by that revision's numbers while the node serves the one before.
 func (e *Engine) tuneBatching(c *Company) {
 	if e.batch == nil || c == nil || c.Config == nil {
 		return
@@ -256,10 +264,10 @@ func (e *Engine) tuneBatching(c *Company) {
 // The GATE reads the company's config; the SEARCHER is resolved per call.
 // Those cannot be the same read: this runs before an apply reconciles the
 // knowledge base (see [Engine.reconcileConfluence]), so a searcher captured
-// here is the PREVIOUS epoch's — its lead map is the old org chart and its
-// credential is the pre-rotation one. Capturing it would give a seat a tool
-// that reads the company it used to be, silently, since a stale-credential
-// search returns an empty result exactly like a real one.
+// here is the PREVIOUS epoch's — the backend the company may have left, the
+// credentials resolved before a rotation, the skills space before a move.
+// Capturing it would give a seat a tool that searches the company it used to
+// be.
 func KnowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 	if c.Config.KnowledgeBackendFor() == config.KnowledgeNone {
 		// A NIL INTERFACE, not a live adapter over a nil searcher: the

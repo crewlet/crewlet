@@ -46,10 +46,18 @@ func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
-		return time.Time{}, 0, fmt.Errorf(
-			"engine: %q is not a domain log this build runs", stream)
+		return time.Time{}, 0, fmt.Errorf("%w: %q", engine.ErrNotADomainLog, stream)
 	}
 	return time.Unix(1700000000, 0).UTC(), generation, nil
+}
+
+func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
+	f.asked = stream
+	generation, runs := f.generations[stream]
+	if !runs {
+		return 0, fmt.Errorf("%w: %q", engine.ErrNotADomainLog, stream)
+	}
+	return generation, nil
 }
 
 func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32, error) {
@@ -181,5 +189,86 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 	if register.calls != 0 {
 		t.Errorf("a point was written anyway: %v", register.point)
+	}
+}
+
+// fakeGate answers the eviction routes and records what each was asked.
+type fakeGate struct {
+	asked   []engine.GateRequest
+	results []engine.GateResult
+	err     error
+}
+
+func (f *fakeGate) EvictNode(_ context.Context, req engine.GateRequest) (
+	[]engine.GateResult, error) {
+
+	f.asked = append(f.asked, req)
+	return f.results, f.err
+}
+
+func (f *fakeGate) ReadmitNode(_ context.Context, req engine.GateRequest) (
+	[]engine.GateResult, error) {
+
+	f.asked = append(f.asked, req)
+	return f.results, f.err
+}
+
+// AN EVICTION ANSWERS FOR EVERY LOG IT REACHED, AND NAMES WHO RAN IT.
+//
+// A node is evicted from each log whose applier installs the gate, and each
+// record lands — or stays pending — on its own; an answer carrying one outcome
+// would report two different facts as one. The records name the operator who
+// pressed, which is what the trim's tombstone and the status report show. And
+// a refusal because the node is still reaching coordination is the caller's to
+// act on, not a server fault — with whatever did land still named.
+//
+// Mutation: answer one outcome for the gesture and the second log's is lost;
+// map the permission refusal to a 500 and the operator is told the node failed.
+func TestAnEvictionAnswersForEveryLogItReached(t *testing.T) {
+	t.Parallel()
+	gate := &fakeGate{results: []engine.GateResult{
+		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", Result: statelog.Result{
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 41},
+		}},
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", Result: statelog.Result{
+			Outcome:  statelog.OutcomePending,
+			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 9},
+		}},
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+
+	code, body := postAck(t, a, "/work/retention/evict/node-b?confirm=node-b")
+	if code != http.StatusOK {
+		t.Fatalf("the route answered %d: %v", code, body)
+	}
+	domains, _ := body["domains"].([]any)
+	if len(domains) != 2 {
+		t.Fatalf("the answer carries %v, want one entry per log reached", body["domains"])
+	}
+	second, _ := domains[1].(map[string]any)
+	if second["domain"] != "pages" || second["outcome"] != "pending" {
+		t.Errorf("the second log's entry is %v, want pages pending", second)
+	}
+	if len(gate.asked) != 1 || gate.asked[0].By != "founder" ||
+		gate.asked[0].Node != "node-b" || gate.asked[0].OpID == "" {
+		t.Errorf("the gate was asked %+v, want node-b, a fresh op id and the "+
+			"operator who pressed", gate.asked)
+	}
+
+	gate.err = &statelog.EvictionRefusal{NodeID: "node-b", Detail: "it holds a live lease"}
+	gate.results = gate.results[:1]
+	code, body = postAck(t, a, "/work/retention/evict/node-b?confirm=node-b")
+	if code != http.StatusConflict || body["error"] != "eviction_refused" {
+		t.Fatalf("a refused permission answered %d %v, want 409 eviction_refused",
+			code, body)
+	}
+	if reached, _ := body["domains"].([]any); len(reached) != 1 {
+		t.Errorf("the refusal names %v, want the one log that did land", body["domains"])
+	}
+
+	if code, _ := postAck(t, a, "/work/retention/evict/node-b?confirm=node-c"); code != http.StatusBadRequest {
+		t.Errorf("a confirmation naming another node answered %d, want 400", code)
 	}
 }

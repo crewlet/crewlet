@@ -317,6 +317,51 @@ func TestAFailedCoverageScanIsTriedAgainATrimIntervalLater(t *testing.T) {
 	}
 }
 
+// A SCAN ITS CALLER GAVE UP ON IS NOT A FAILED SCAN.
+//
+// A report runs on the API request's context, so a client that disconnects
+// mid-scan ends the scan with its own cancellation — which says nothing about
+// the corpus. Cached as a failure it would blank this node's coverage for a
+// whole trim interval and write `vector_coverage_unreadable` about a corpus
+// that reads perfectly well. So nothing is cached or written, and the next
+// report, however soon, scans and answers.
+//
+// Mutation: drop the arm that reads the caller's context and the cancellation
+// is cached as a failure — the next report inside the interval answers nothing
+// known without scanning.
+func TestACoverageScanItsCallerAbandonedIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	scans := 0
+	r := &retention{
+		logger: slog.New(slog.NewJSONHandler(&out, nil)),
+		coverage: func(ctx context.Context) (float64, bool, error) {
+			scans++
+			if err := ctx.Err(); err != nil {
+				return 0, false, err
+			}
+			return 0.5, true, nil
+		},
+	}
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := r.semanticCoverage(gone, now); got != nil {
+		t.Errorf("a scan its caller abandoned read %s, want nothing known",
+			coverageText(got))
+	}
+	if got := countLogged(t, &out, slog.LevelWarn, "vector_coverage_unreadable"); got != 0 {
+		t.Errorf("an abandoned scan was written down as unreadable %d time(s), "+
+			"want 0 — the corpus was never the problem", got)
+	}
+
+	got := r.semanticCoverage(t.Context(), now.Add(AlarmInterval))
+	if scans != 2 || got == nil || *got != 0.5 {
+		t.Errorf("the report after an abandoned scan scanned %d time(s) in all "+
+			"and read %s, want 2 and 0.5", scans, coverageText(got))
+	}
+}
+
 // A REPORT ASSEMBLED WHILE A COVERAGE SCAN RUNS DOES NOT START ANOTHER.
 //
 // The tick and every API request assemble a report on goroutines of their own,

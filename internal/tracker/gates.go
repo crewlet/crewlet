@@ -137,43 +137,10 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // at or below this node's own cursor, then nothing was trimmed that this node
 // has not already consumed, so an absent anchor really does mean an empty
 // subject. That reading has to be FRESH — a cached floor is a floor that moved
-// — and A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
-// departure from the fail-open rule the delivery claim uses: failing open
-// there is a duplicate delivery and is recoverable, failing open here is a
-// lost update and is not.
+// — and a read that answers unknown refuses. [statelog.VerifyZero] is the
+// check, and every refusal it makes names its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("tracker: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil {
-		return fmt.Errorf("tracker: no published trim floor is readable, so " +
-			"this node cannot establish that an absent anchor means an empty " +
-			"subject rather than a record trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx)
-	if err != nil {
-		return fmt.Errorf("tracker: read the published trim floor: %w — a floor "+
-			"that cannot be read is not a floor that is low, and publishing at "+
-			"zero on the guess is a lost update nothing recovers", err)
-	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone. Compared against the cursor itself the
-	// check refused a node exactly at the floor, which is the ordinary
-	// state of every node the instant the trim advances to it.
-	if floor > cursor.Seq+1 {
-		return fmt.Errorf("tracker: the trim may have removed everything below %d "+
-			"and this node has consumed through %d, so an absent anchor may be a "+
-			"record trimmed beneath it rather than a subject that was never "+
-			"written: %w", floor, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.VerifyZero(ctx, f.Evicted, f.Floor, cursor)
 }
 
 // Gates answers whether a durable record produced rows on NO node.
@@ -275,7 +242,7 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 // applying every record the evicted node appends, and there is no inverse that
 // repairs it. So an un-decodable gate record STOPS that build's applier
 // instead. For the eviction that stop is the outcome worth never paying: an
-// eviction is written about a node that has already gone silent
+// eviction is ordinarily written about a node that has already gone silent
 // ([Writer.EvictNode]), and a stop would halt more appliers at the same moment.
 // Pinned at one, every build decodes it and none stops on it — so its SHAPE can
 // only ever grow by addition, never by reshaping, for the life of the
@@ -522,10 +489,10 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 // is the log's own — so every node reaches the same verdict about every record
 // with no clock, no coordination read and no agreement beyond the order they
 // all already have. That is what makes it the fence that holds when
-// coordination cannot be reached at all, which is the only state in which an
-// eviction is permitted: the fleet refuses one while the target's presence
-// lease is live, so an evicted node has already been silent for at least
-// three coordination round trips.
+// coordination cannot be reached at all, which is the state an eviction is
+// for: the fleet refuses one while the target's presence lease is live unless
+// an operator forces it, so an evicted node has ordinarily stopped reaching
+// coordination already.
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, false)
 }

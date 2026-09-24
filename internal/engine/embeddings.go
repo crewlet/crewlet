@@ -24,14 +24,45 @@ import (
 // open time, and an embedder nobody asked for would write rows at whatever
 // width its default model happens to produce.
 
-// buildEmbedder constructs the company's embedder, or nil.
+// vectorBackend is one epoch's embedding backend: the provider, the model id
+// it embeds under, and whether the company's search uses it.
+//
+// ONE VALUE, CARRIED BY THE EPOCH ([Company]), because the three are only
+// meaningful together. A vector is comparable only with vectors of its own
+// model, so the id the embedding duty files rows under and the id a search
+// selects them by must be the model the provider actually asks for — and the
+// switch that says whether the company's search has a semantic half must be
+// the same revision's. Held anywhere but on the epoch, one of them can move
+// without the others: a provider stored for a revision that an apply then
+// refused would embed under the served revision's model id.
+type vectorBackend struct {
+	// embedder is the provider. Never nil: a company with no provider has
+	// no backend at all.
+	embedder embeddings.Embedder
+
+	// model is the model id the provider was built with, resolved in the
+	// same read of the resolver as its credentials.
+	model string
+
+	// search is `knowledge.vectors` as this revision resolves it: whether
+	// the engine's own knowledge and work-item search has a semantic half.
+	// The diary and episode recall use the provider either way.
+	search bool
+}
+
+// buildEmbedder constructs an epoch's embedding backend, or nil.
 //
 // PER EPOCH like every other provider, because an apply can change the model
 // — but NOT the width: the store was sized at open and a revision that moved
 // the width is refused here rather than allowed to write rows the reader
 // cannot match. That check belongs at the apply, where an operator is
 // watching, not at the first recall weeks later.
-func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
+//
+// ONE READ OF THE RESOLVER for the model id and every credential, so the id
+// the backend carries is the model its provider asks for: resolved in two
+// reads, a secret snapshot installed between them would pair one model's
+// provider with another model's id.
+func (e *Engine) buildEmbedder(c *Company) (*vectorBackend, error) {
 	cfg := c.Config.Providers.Embeddings
 	if cfg == nil {
 		return nil, nil
@@ -43,8 +74,9 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 			"to change the width", cfg.Width(), opened)
 	}
 	env := e.resolver()
+	model := env.Value(cfg.Model)
 	provider, err := embeddings.New(embeddings.Config{
-		Model:      env.Value(cfg.Model),
+		Model:      model,
 		Dimensions: cfg.Width(),
 		APIKey:     strings.TrimSpace(env.Value(cfg.APIKey)),
 		BaseURL:    env.Value(cfg.BaseURL),
@@ -53,7 +85,9 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return provider, nil
+	return &vectorBackend{
+		embedder: provider, model: model, search: c.Config.VectorsEnabled(),
+	}, nil
 }
 
 // storeWidth is the width this node's store was opened at, or 0.
@@ -64,17 +98,22 @@ func (e *Engine) storeWidth() int {
 	return e.backends.Store.EmbeddingDim()
 }
 
-// embedder is the company's embedder as the prefetch takes it, or nil.
+// embed is the epoch's embedder as the prefetch and the learning stores take
+// it, or nil.
 //
-// A FUNCTION rather than the interface, because that is what the prefetch's
-// seam asks for — and because it is where the one rule the callers share
-// lives: an error is no vector, never a failure to propagate. Every consumer
-// of a vector here is ranking, and a ranking that could not be computed
-// costs relevance rather than correctness.
-func (e *Engine) embedder() func(context.Context, string) ([]float32, error) {
-	embed := e.embeddings.Load()
-	if embed == nil || *embed == nil {
+// A FUNCTION rather than the interface, because that is what their seams ask
+// for — and because it is where the one rule the callers share lives: an
+// error is no vector, never a failure to propagate. Every consumer of a
+// vector here is ranking, and a ranking that could not be computed costs
+// relevance rather than correctness.
+//
+// NIL-SAFE on both counts — no epoch, and an epoch with no backend — because
+// nil is how every consumer learns there is no similarity search, and a
+// method value closing over a nil interface is not nil and panics on its
+// first call.
+func (c *Company) embed() func(context.Context, string) ([]float32, error) {
+	if c == nil || c.vectors == nil {
 		return nil
 	}
-	return (*embed).Embed
+	return c.vectors.embedder.Embed
 }

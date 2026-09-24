@@ -130,13 +130,21 @@ The three search alarms are kept apart because they cost different things:
 | Alarm | What happened | What the answer lost |
 |---|---|---|
 | `search_scoped` | A node did not cover its assignment — it was silent, or its own lexical index has not finished its first lap. | A range of the corpus went unscanned. |
-| `search_degraded` | A semantic scan was asked for and did not run. | Over the range it *did* scan, only what shares words with the query was found. |
+| `search_degraded` | The semantic half was meant to run and did not: the query could not be embedded, or a node's vector scan failed. | Over the range it *did* scan, only what shares words with the query was found. |
 | `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
 
-**A company with no embeddings provider is not degraded.** `search_degraded`
-counts semantic scans that were asked for and failed, never searches that asked
-for one half by design — an alarm red for the life of a deployment is one
-nobody reads.
+**A query the provider will not embed is still answered**, on its words
+alone, and the answer is labelled partial with `semantic_skipped` rather than
+passed off as whole — a page that says the same thing in other words can be
+missing from it. `search_degraded` counts it: the alarm is the fraction of
+`crewlet.tracker.search.answers` whose `semantic` attribute is `skipped`, which
+is every answer whose semantic half was meant to run and did not, whether the
+query went unembedded or a node's vector scan failed.
+
+**A company with no embeddings provider is not degraded**, and neither is one
+with `knowledge.vectors: false`. Their searches ask for one half by design, and
+`search_degraded` never counts them — an alarm red for the life of a
+deployment is one nobody reads.
 
 **The asking node always scans its own range itself**, never through the
 broker. A search that returned nothing because the broker hiccupped would be a

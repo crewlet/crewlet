@@ -17,11 +17,13 @@ const RecordVersion = 1
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.
 //
-// An eviction whose version this build could not read would be deferred, and a
-// deferred gate leaves this node's own gate table empty while it goes on
-// applying every record the evicted node appends — with no inverse that
-// repairs it. So the two gate kinds are pinned at 1 and never evolve: a field
-// they need that they cannot have is a field that belongs somewhere else.
+// A gate record whose version a build cannot read STOPS that build's applier
+// at it rather than being deferred — a deferred gate would leave the node's own
+// gate table empty while it went on applying every record the evicted node
+// appends, with no inverse that repairs it — and the stop lands on every node
+// still running that build at once. So the two gate kinds, the eviction and
+// the purge, are pinned at 1 and never evolve: a field they need that they
+// cannot have is a field that belongs somewhere else.
 const GateRecordVersion = 1
 
 // OpKind is what a record does.

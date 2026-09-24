@@ -27,17 +27,15 @@ import (
 //
 // So the defence, where there is one, is a message an operator cannot act on,
 // and in the window between the engine's connections there is none at all.
-// This lock is taken before any driver work, on every path, and names the
-// holder. (The retired fallback driver, mainline SQLite, did not refuse the
-// second opener at all — two writers, no error, corruption on the first
-// collision. That is what the measurement above was originally a comparison
-// against, and it is why the answer is a lock rather than a better error.)
+// This lock is taken before any driver work on every path that opens a node's
+// own database, and names the holder, so the refusal does not depend on
+// whether the driver happens to give one.
 //
-// That is not a theoretical shape. `crewlet secrets`, `crewlet llm export
-// -secret-store` and every provisioner's secret-store sink all open the
-// database the engine is running on, from a second OS process, as their
-// documented gesture. Before this lock the only defence was a printed
-// warning, which is a defence against an operator who reads it.
+// That is not a theoretical shape. Every `crewlet` command that opens the
+// store's files does so from its own OS process, on the host the engine runs
+// on. The lock turns one run beside a live engine into a refusal naming the
+// engine, and it is how the commands that can write through a running node
+// instead tell that one is running (see openSecretStore in cmd/crewlet).
 //
 // # Why an OS lock rather than a pid file
 //
@@ -256,11 +254,11 @@ const maxHolderStamp = 8 << 10
 
 // readHolder describes the process holding the lock, for the error message.
 //
-// THE WHOLE STAMP. It used to read into a fixed 256-byte buffer, and stamp()
-// writes "pid N on HOST since TIMESTAMP" — a hostname may be up to 253 bytes,
-// so the one diagnostic an operator gets for a locked store could lose the
-// host, which is the single field telling them WHICH machine to go and look
-// at. The file is one line this process wrote; reading it whole costs nothing.
+// THE WHOLE STAMP, up to [maxHolderStamp]. stamp() writes "pid N on HOST since
+// TIMESTAMP", and a hostname may be up to 253 bytes, so a short fixed buffer
+// would cut the host out of the one diagnostic an operator gets for a locked
+// store — the single field telling them WHICH machine to go and look at. The
+// file is one line a crewlet process wrote; reading it whole costs nothing.
 func readHolder(file *os.File) string {
 	raw, err := io.ReadAll(io.NewSectionReader(file, 0, maxHolderStamp))
 	if err != nil {

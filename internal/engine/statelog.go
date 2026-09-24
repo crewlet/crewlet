@@ -140,6 +140,12 @@ type runningDomain struct {
 	// has one; see [stateLog.readerFor] for the domain that has no read
 	// index behind it.
 	reader *statelog.Reader
+
+	// applyStop ends this domain's apply loop and applyDone is closed once
+	// the loop has returned; both nil while no loop runs. Written only
+	// under the state log's applyMu — see [stateLog.launchAppliers].
+	applyStop context.CancelFunc
+	applyDone chan struct{}
 }
 
 // identity is the stream creation instant this domain's applier runs against.
@@ -331,15 +337,16 @@ type stateLog struct {
 	stop context.CancelFunc
 	done sync.WaitGroup
 
-	// THE APPLY LOOPS RUN UNDER A CONTEXT OF THEIR OWN, a child of run,
+	// THE APPLY LOOPS RUN UNDER CONTEXTS OF THEIR OWN, children of run,
 	// because they are the one set of loops a running node ENDS AND
 	// STARTS AGAIN: an adoption replaces the replicated file, which can
 	// only happen while nothing holds a pinned connection on it, and the
-	// pins are the appliers'. applyStop ends them, applyDone joins them,
-	// and launchAppliers starts them again over whatever file is there.
-	applyMu   sync.Mutex
-	applyStop context.CancelFunc
-	applyDone sync.WaitGroup
+	// pins are the appliers' — and a reanchor moves ONE domain's
+	// checkpoint, which that domain's own loop would commit over. Each
+	// domain's loop is stopped and joined through its own
+	// [runningDomain.applyStop] and [runningDomain.applyDone], which
+	// applyMu guards.
+	applyMu sync.Mutex
 
 	// rejoin is what the heartbeat calls when it finds this node below
 	// the log's floor while running; the engine sets it, because the
@@ -351,6 +358,44 @@ type stateLog struct {
 	rejoining   bool
 	rejoinAfter time.Time
 	rejoinPause time.Duration
+
+	// reanchoring marks a reanchor in progress, under rejoinMu beside
+	// rejoining, because the two are the transitions that rewrite this
+	// node's replicated estate with appliers halted, and AT MOST ONE RUNS:
+	// an adoption replaces the file a reanchor is writing and relaunches
+	// every applier — the one the reanchor halted among them — in the
+	// middle of the transition, and a second reanchor halts and relaunches
+	// the loop the first is holding down. See [stateLog.beginReanchor].
+	reanchoring bool
+}
+
+// errTransitionRunning refuses a reanchor while this node is already
+// rewriting its replicated estate.
+var errTransitionRunning = errors.New("engine: this node is already " +
+	"rewriting its replicated estate")
+
+// beginReanchor claims the one estate transition this node may run, or
+// refuses naming the one already running.
+func (s *stateLog) beginReanchor() error {
+	s.rejoinMu.Lock()
+	defer s.rejoinMu.Unlock()
+	switch {
+	case s.rejoining:
+		return fmt.Errorf("%w: it is adopting a peer's snapshot, which "+
+			"replaces the estate a reanchor writes — run the reanchor once the "+
+			"adoption has finished", errTransitionRunning)
+	case s.reanchoring:
+		return fmt.Errorf("%w: another reanchor is running on it", errTransitionRunning)
+	}
+	s.reanchoring = true
+	return nil
+}
+
+// endReanchor releases what [stateLog.beginReanchor] claimed.
+func (s *stateLog) endReanchor() {
+	s.rejoinMu.Lock()
+	defer s.rejoinMu.Unlock()
+	s.reanchoring = false
 }
 
 // RejoinRetryCeiling bounds how long a node below the floor waits between
@@ -581,33 +626,46 @@ func (s *stateLog) Stop() {
 func (s *stateLog) launchAppliers(base context.Context) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
-	if s.applyStop != nil {
+	for _, name := range s.order {
+		s.launchLocked(base, s.domains[name])
+	}
+}
+
+// launchApplier starts one domain's apply loop, for the reanchor that halted
+// it alone. A no-op while the loop runs.
+func (s *stateLog) launchApplier(base context.Context, running *runningDomain) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	s.launchLocked(base, running)
+}
+
+// launchLocked starts one domain's loop under applyMu.
+func (s *stateLog) launchLocked(base context.Context, running *runningDomain) {
+	if running.applyStop != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(base)
-	s.applyStop = cancel
-	for _, name := range s.order {
-		running := s.domains[name]
-		// THE LATCH STARTS AGAIN WITH THE LOOP: after an adoption the rows
-		// under it are a peer's, and this node has not yet drained those.
-		running.progress.restart()
-		s.applyDone.Add(1)
-		go func() {
-			defer s.applyDone.Done()
-			if err := running.runner.Run(ctx); err != nil && ctx.Err() == nil {
-				// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows
-				// are frozen and every read of them says so through
-				// the coverage it reports, so what this costs is that
-				// the node stops taking seats — which is what the
-				// readiness gate below already does with it.
-				log.ErrorContext(ctx, "statelog_applier_stopped",
-					"domain", running.domain.Name(), "error", err.Error(),
-					"detail", "this node stops claiming seats for that domain and "+
-						"its rows are going stale; a build that can read what it "+
-						"could not, or an operator's reanchor, is what resumes it")
-			}
-		}()
-	}
+	done := make(chan struct{})
+	running.applyStop, running.applyDone = cancel, done
+	// THE LATCH STARTS AGAIN WITH THE LOOP: after an adoption the rows under
+	// it are a peer's, and after a reanchor they are keyed to a stream this
+	// node has not yet drained.
+	running.progress.restart()
+	go func() {
+		defer close(done)
+		if err := running.runner.Run(ctx); err != nil && ctx.Err() == nil {
+			// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows are
+			// frozen and every read of them says so through the
+			// coverage it reports, so what this costs is that the node
+			// stops taking seats — which is what the readiness gate
+			// below already does with it.
+			log.ErrorContext(ctx, "statelog_applier_stopped",
+				"domain", running.domain.Name(), "error", err.Error(),
+				"detail", "this node stops claiming seats for that domain and "+
+					"its rows are going stale; a build that can read what it "+
+					"could not, or an operator's reanchor, is what resumes it")
+		}
+	}()
 }
 
 // haltAppliers ends every apply loop and waits for them, releasing the pinned
@@ -615,14 +673,41 @@ func (s *stateLog) launchAppliers(base context.Context) {
 // first launch.
 func (s *stateLog) haltAppliers() {
 	s.applyMu.Lock()
-	stop := s.applyStop
-	s.applyStop = nil
+	var halting []*runningDomain
+	for _, name := range s.order {
+		if running := s.domains[name]; running.applyStop != nil {
+			halting = append(halting, running)
+		}
+	}
+	stops := make([]context.CancelFunc, 0, len(halting))
+	dones := make([]chan struct{}, 0, len(halting))
+	for _, running := range halting {
+		stops, dones = append(stops, running.applyStop), append(dones, running.applyDone)
+		running.applyStop, running.applyDone = nil, nil
+	}
+	s.applyMu.Unlock()
+	// ALL STOPPED BEFORE ANY IS WAITED FOR, so the loops wind down together
+	// rather than one after another.
+	for _, stop := range stops {
+		stop()
+	}
+	for _, done := range dones {
+		<-done
+	}
+}
+
+// haltApplier ends one domain's apply loop and waits for it. A no-op when it
+// is not running.
+func (s *stateLog) haltApplier(running *runningDomain) {
+	s.applyMu.Lock()
+	stop, done := running.applyStop, running.applyDone
+	running.applyStop, running.applyDone = nil, nil
 	s.applyMu.Unlock()
 	if stop == nil {
 		return
 	}
 	stop()
-	s.applyDone.Wait()
+	<-done
 }
 
 // registeredDomains is every domain this build runs, in a FIXED order.
@@ -1593,7 +1678,10 @@ func liveIdentity(ctx context.Context, stream interface {
 func (s *stateLog) requestRejoin(now time.Time) {
 	s.rejoinMu.Lock()
 	defer s.rejoinMu.Unlock()
-	if s.rejoin == nil || s.rejoining || now.Before(s.rejoinAfter) {
+	// A REANCHOR IN PROGRESS PASSES THIS BY rather than waiting: the
+	// heartbeat that asked will ask again on its next beat, while the node
+	// is still below the floor.
+	if s.rejoin == nil || s.rejoining || s.reanchoring || now.Before(s.rejoinAfter) {
 		return
 	}
 	s.rejoining = true
@@ -1984,7 +2072,7 @@ func replicationRow(name string, health statelog.Health, err error, now time.Tim
 			break
 		}
 		// STALLED BEFORE THE CAUGHT-UP ARMS, whatever the latch says: a
-		// drain seen before the stall began keeps the latch set.
+		// drain seen after the stall began keeps the latch set.
 		row.Detail = stalledDetail(lagOf(health))
 	case "":
 		switch {

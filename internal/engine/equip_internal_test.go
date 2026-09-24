@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -64,7 +65,7 @@ func TestAnApplyRetunesTheSeatsAlreadyAttached(t *testing.T) {
 	}
 }
 
-// A NODE WITH NOTHING TO TUNE DOES NOT PANIC. equip runs on every apply,
+// A NODE WITH NOTHING TO TUNE DOES NOT PANIC. Every epoch installed tunes it,
 // including on an engine a test built without a broker.
 func TestTuningBatchingWithoutAnythingToTuneIsHarmless(t *testing.T) {
 	t.Parallel()
@@ -205,12 +206,12 @@ func TestAKnowledgeBaseThisNodeIsNotServingIsNamedAsOne(t *testing.T) {
 //
 // equip runs BEFORE an apply reconciles the knowledge base and before the new
 // epoch is published, so a searcher captured there is the PREVIOUS epoch's —
-// its backend may be one the company has left, its lead map the old org chart
-// and its credential the pre-rotation one. Captured, a seat's tool would read
-// the company it used to be, silently, since a stale search returns an empty
-// result exactly like a real one. So one adapter, built while the node answers
-// from its native pages, must answer the very next call from Confluence once
-// the epoch moves there.
+// its backend may be one the company has left, and its credentials the ones
+// resolved before a rotation. Captured, a seat's tool would search the company
+// it used to be, and a search of pages the company has left answers with real
+// pages, so nothing in the answer would say so. So one adapter, built while
+// the node answers from its native pages, must answer the very next call from
+// Confluence once the epoch moves there.
 func TestSearchKnowledgeIsResolvedAtTheCall(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -325,5 +326,53 @@ func TestANodeWithNoIndexIsNeverBuilding(t *testing.T) {
 	}
 	if adapter.Building(t.Context()) {
 		t.Error("a live search that keeps no index reported itself building")
+	}
+}
+
+// WHAT A REVISION WRITES INTO THE NODE WAITS FOR ITS EPOCH TO BE INSTALLED.
+//
+// The inbox batch options and the tool skills' variable map are the NODE's —
+// every seat it holds reads one value of each — and an apply equips a revision
+// before steps that can still refuse it. Written while equipping, a refused
+// revision would go on coalescing every inbox by its numbers and rendering
+// every seat's skills with its variables while the node served the epoch
+// before it. So equipping must leave both alone, and installing the same epoch
+// must move both.
+//
+// Mutation: tune the batch, or refresh the variables, in equip again, and the
+// first checks fail.
+func TestWhatARevisionWritesIntoTheNodeWaitsForItsEpoch(t *testing.T) {
+	t.Parallel()
+	e := engineOver(t)
+	e.batch = queue.DefaultBatchOptions()
+	e.skills = skills.NewRegistry()
+	const variable = "${wiki_base}"
+	c := companyWith(t, noEmbeddingsDoc+`
+notification_coalesce_window_seconds: 2.5
+notification_coalesce_max_batch: 7
+skill_variables:
+  wiki_base: https://wiki.example.com
+`)
+	if err := e.equip(t.Context(), c); err != nil {
+		t.Fatalf("equip: %v", err)
+	}
+	if got := e.batch.EffectiveLinger(); got != 0 {
+		t.Errorf("equipping a revision nobody has installed moved the node's "+
+			"linger to %v", got)
+	}
+	if got := e.skills.Render(variable); got != variable {
+		t.Errorf("equipping a revision nobody has installed rendered %q as %q",
+			variable, got)
+	}
+	e.installEpoch(c)
+	if got := e.batch.EffectiveLinger(); got != 2500*time.Millisecond {
+		t.Errorf("linger = %v after the epoch was installed, want its 2.5s", got)
+	}
+	if got := e.batch.EffectiveMaxBatch(); got != 7 {
+		t.Errorf("max batch = %d after the epoch was installed, want its 7", got)
+	}
+	if got := e.skills.Render(variable); got != "https://wiki.example.com" {
+		t.Errorf("after the epoch was installed %q renders as %q, want its value",
+			variable, got)
 	}
 }

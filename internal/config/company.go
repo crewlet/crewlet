@@ -639,7 +639,7 @@ type Knowledge struct {
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
-	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces."`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope: the containers every knowledge search reads. Empty is unscoped: the whole company natively; on Confluence, what the searching seat's own account can read, and nothing for a seat without one."`
 
 	// SkillsContainer is where tool-skill pages live.
 	//
@@ -675,7 +675,7 @@ type Knowledge struct {
 	// explicit false keeps both searches purely lexical — no page, item or
 	// query is embedded — on a company that has a provider for its diary
 	// and does not want its pages embedded.
-	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into the engine's own knowledge and work-item search, embedding pages, items and queries with providers.embeddings. Unset derives from providers.embeddings; false embeds nothing."`
+	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into the engine's own knowledge and work-item search, embedding pages, items and queries with providers.embeddings. Unset derives from providers.embeddings; false embeds nothing for search."`
 }
 
 // KnowledgeBackend is which knowledge base a company runs.

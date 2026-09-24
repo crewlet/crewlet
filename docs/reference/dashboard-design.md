@@ -356,16 +356,17 @@ has ever shipped a route from this tree, so there is nobody holding an old link;
 `NotFound` names the screen and offers the palette.
 
 **Three of those surfaces are the engine answering a question it has always
-been able to answer.** Search is the ranking a seat gets from `search_work` —
-BM25 over the engine's own index — which the operator reading the same company
-had no access to at all; the board's `q=` is an escaped substring over an
-excerpt and answers something else. The item's **Woke** tab is who one change
-actually reached and under which of nineteen reasons, which is the fact no
-commercial tracker records: all of them can say you were notified and none can
-say why. And a seat's **Conversations** tab is its own thread ledger — the only
-account of what a seat said on a surface this engine does not own. Every one of
-those readers was written, tested and swept on a retention horizon before any
-of them reached a screen.
+been able to answer.** Search is the ranking a seat gets from
+`search_work_items` — BM25 over the engine's own index, fused with the semantic
+ranking while `knowledge.vectors` is on — which the operator reading the same
+company had no access to at all; the board's `q=` is an escaped match on the
+start of a key or anywhere in a title, and answers something else. The item's
+**Woke** tab is who one change actually reached and under which of nineteen
+reasons, which is the fact no commercial tracker records: all of them can say
+you were notified and none can say why. And a seat's **Conversations** tab is
+its own thread ledger — the only account of what a seat said on a surface this
+engine does not own. Every one of those readers was written, tested and swept
+on a retention horizon before any of them reached a screen.
 
 ### `window=` — one vocabulary for every time range
 

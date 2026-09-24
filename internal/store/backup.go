@@ -35,9 +35,10 @@ import (
 // continuous writes: the copy runs to completion, a concurrent writer commits
 // throughout with zero failures, and the result is a self-consistent
 // point-in-time image of the database as of some instant during the copy.
-// Crucially the copy is SELF-CONTAINED — it lands with no -wal beside it —
-// so restoring a node's store is moving one file into place rather than a
-// set that has to travel together.
+// Crucially the copy is SELF-CONTAINED: every page is in the file, and the -wal
+// VACUUM INTO writes beside it is empty and stays behind in the stage when the
+// copy is placed (see [DB.Backup]). So restoring a node's store is moving one
+// file into place rather than a set that has to travel together.
 //
 // The copy is a snapshot of a MOMENT, not of the instant the call returned.
 // Nothing here pauses the engine, so rows committed while the copy ran may or
@@ -193,8 +194,8 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 		return BackupInfo{}, fmt.Errorf("store: backup: stage the copy in %s: %w", stage, err)
 	}
 	// On every return. A copy that verified has been renamed out by then,
-	// so this removes what verifying it grew beside it — its -wal — and the
-	// stage, leaving the destination ONE file. One that did not is REMOVED
+	// so this removes what was written beside it — its -wal — and the stage,
+	// leaving the destination ONE file. One that did not is REMOVED
 	// rather than kept for inspection: it failed to open, failed an
 	// integrity check or holds nothing, its bytes say nothing a re-run would
 	// not say again, and the one thing it could do is be mistaken for a
@@ -204,7 +205,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 			log.WarnContext(ctx, "store_backup_stage_not_cleared",
 				"stage", stage, "error", clearErr.Error(),
 				"detail", "the directory the copy was written in could not be removed; it is not "+
-					"part of the backup, and the next backup to this destination clears it first")
+					"part of the backup, so remove it by hand")
 		}
 	}()
 
@@ -245,11 +246,13 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	}
 	// OWNER-ONLY THE MOMENT IT EXISTS, before anything opens it: the copy is
 	// every credential and every seat's memory in one file, and it keeps this
-	// mode at its final name. Every open after this one — the verify's
-	// included — then finds it as the store's own files are kept (see
-	// filemode.go) rather than tightening it again.
-	if chmodErr := os.Chmod(part, fileMode); chmodErr != nil {
-		return BackupInfo{}, fmt.Errorf("store: backup: secure %s: %w", part, chmodErr)
+	// mode at its final name. The -wal VACUUM INTO writes beside it comes from
+	// the umask too, so it gets the same mode. Every open after this — the
+	// verify's included — then finds both as the store keeps its own files
+	// (see filemode.go) rather than tightening them and logging that at WARN
+	// on every backup and snapshot.
+	if secureErr := ownerOnlyCopy(part); secureErr != nil {
+		return BackupInfo{}, secureErr
 	}
 
 	// The source's own applied set, read before the verify so the copy is
@@ -406,6 +409,26 @@ func removeSidecars(path string) error {
 	for _, suffix := range databaseSidecars {
 		if err := remove(path + suffix); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ownerOnlyCopy gives a copy the driver has just written, and every sidecar it
+// wrote beside it, the store's own [fileMode].
+//
+// EVERY SIDECAR THAT IS THERE, not the copy alone: measured at the pinned
+// driver, VACUUM INTO writes an empty -wal beside its output, and both come
+// from the process umask. SILENTLY, unlike [ownerOnly]: a mode the umask gave a
+// file this call made a moment ago is nobody's grant, so there is nothing to
+// report.
+func ownerOnlyCopy(path string) error {
+	if err := os.Chmod(path, fileMode); err != nil {
+		return fmt.Errorf("store: backup: secure %s: %w", path, err)
+	}
+	for _, suffix := range databaseSidecars {
+		if err := os.Chmod(path+suffix, fileMode); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("store: backup: secure %s: %w", path+suffix, err)
 		}
 	}
 	return nil

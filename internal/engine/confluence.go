@@ -19,10 +19,8 @@ import (
 // # Two halves with different failure postures, from one credential
 //
 // The PARSER routes page events, and a broken one costs notifications. The
-// SEARCHER answers a turn's "what do we already know about this",
-// and a broken one costs every seat its company's written knowledge on every
-// turn — silently, because an empty knowledge block is indistinguishable
-// from a company that has written nothing down.
+// SEARCHER answers a turn's "what do we already know about this", and a
+// broken one costs every seat its company's written knowledge on every turn.
 //
 // So the org credential is optional for routing (a page's mentions are in
 // the payload) and REQUIRED for search, and the two are reported separately.
@@ -142,8 +140,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 // activity to the seat that led that space under the old one — silently,
 // because a lead-fallback notification looks identical whoever it reached.
 // The CREDENTIAL is the other half: after a rotation the old client 401s on
-// every read, and a turn's knowledge block goes empty with nothing saying
-// why.
+// every read, so every knowledge search the node runs fails.
 //
 // The tracker beside this one is reconciled for the first reason, and this
 // package needed the same edge from the moment it had a lead map.
@@ -322,7 +319,7 @@ func (e *Engine) KnowledgeServed() (knowledge.Searcher, knowledge.Refusal) {
 		searcher := e.notify.confluence.searcher
 		e.notify.mu.Unlock()
 		if searcher != nil {
-			return confluenceSearch{searcher}, knowledge.Refusal{}
+			return searcher, knowledge.Refusal{}
 		}
 		return nil, knowledge.Refusal{State: knowledge.NotServed,
 			Detail: e.confluenceUnserved(c.Config.Integrations.Confluence)}
@@ -354,20 +351,4 @@ func (e *Engine) confluenceUnserved(cfg *config.Confluence) string {
 	return "the company's knowledge base is Confluence, and its connection did " +
 		"not build on this node — the `confluence_unavailable` or " +
 		"`confluence_reconcile_failed` line in this node's log says why"
-}
-
-// confluenceSearch is the Confluence searcher on the seam's terms.
-//
-// A LIVE QUERY IS WHOLE WHENEVER IT ANSWERS: there is no fan-out and no index
-// of this node's own behind it, so nothing here is ever partial.
-//
-// ITS FAILURE IS NOT MARKED. [confluence.Searcher.Search] logs a query the
-// site refused (`confluence_search_failed`) and returns no hits, which this
-// adapter cannot tell from a search that matched nothing — so a failed
-// Confluence search reaches a reader as an unmarked empty answer.
-type confluenceSearch struct{ *confluence.Searcher }
-
-// Search implements [knowledge.Searcher].
-func (s confluenceSearch) Search(ctx context.Context, q knowledge.Query) knowledge.Answer {
-	return knowledge.Answer{Hits: s.Searcher.Search(ctx, q)}
 }

@@ -228,6 +228,18 @@ type Query struct {
 	// a caller deliberately search drafts and a caller who passed nothing
 	// get the safe behaviour.
 	ExcludeAncestors []string
+
+	// Prefetch marks the search a turn makes for its own context before its
+	// first round, as opposed to somebody's deliberate search: a person's
+	// on the dashboard, an operator's assistant's, or a seat's own
+	// `search_knowledge`. The zero value is the deliberate search, which is
+	// every caller but the prefetch.
+	//
+	// It changes nothing about the answer. The native backend files each
+	// scan's duration under it, because a deliberate search and the
+	// prefetch are held to different latency figures, and one series
+	// holding both would describe neither.
+	Prefetch bool
 }
 
 // Excluded is the ancestor exclusion this query asks for, applying the

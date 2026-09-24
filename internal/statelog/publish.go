@@ -322,20 +322,30 @@ func NewPublisher(d Deps) (*Publisher, error) {
 // # What that leaves uncovered, and why
 //
 // A retry of a first record that is ON THE LOG AND NOT YET APPLIED HERE has no
-// ledger row to find. An arbitrated or first-writer-wins retry is still safe:
-// its expectation is formed below the first record, so the broker refuses it,
-// the write waits for this node to apply the winner, and the next round's
-// snapshot finds the ledger row. A [PatternAdditive] retry carries no
-// expectation, so past the duplicate window nothing refuses it and a second
-// record lands — which is why that pattern is correct only where the apply
-// folds a second record under one op id to nothing. Closing it would take an
-// expectation on the additive subject or a wait for the log's end before
-// every additive write, and either is the serialization the pattern exists to
-// avoid.
+// ledger row to find. An arbitrated or first-writer-wins retry is still safe,
+// and appends nothing. With an anchor at this generation its expectation is
+// formed below the first record, so the broker refuses it. With none — a
+// create, or a write on a subject this node has consumed nothing on in this
+// generation — it forms no expectation at all: the subject's last sequence on
+// the broker says this node is behind. Either way the write waits for this
+// node to apply through that record, under the write path's budget and refused
+// `behind` past it, and the next round's snapshot finds the ledger row. A
+// [PatternAdditive] retry carries no expectation, so past the duplicate window
+// nothing refuses it and a second record lands — which is why that pattern is
+// correct only where the apply folds a second record under one op id to
+// nothing. Closing it would take an expectation on the additive subject or a
+// wait for the log's end before every additive write, and either is the
+// serialization the pattern exists to avoid.
 //
-// So is a retry whose ledger row this node no longer holds: one older than
-// [OpsRetention], or one applied before this node adopted a snapshot, whose
-// ledger is scrubbed from every artefact ([Gates.AdoptedAt]).
+// A retry whose ledger row this node no longer holds is decided again: one
+// older than [OpsRetention], whose row the sweep removed, and one whose first
+// record reached this node only inside an adopted snapshot, whose ledger is
+// scrubbed from every artefact ([Gates.AdoptedAt]). The second is answered
+// instead on two paths, and only when [Request.MintedAt] says the operation
+// predates the adoption: an append the broker acknowledges as its first
+// record's duplicate is `applied` at that record, and an unanswered append is
+// `unknown` when a record its ledger does not name has landed above the anchor
+// it decided against — see [Publisher.Resolve].
 func (p *Publisher) Publish(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	res, err := p.publish(ctx, req)
@@ -929,9 +939,12 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 //
 // mine says whether the caller KNOWS the record at at is its own — true when
 // the broker acknowledged it, false when the ambiguous path merely found
-// something above the anchor. The two differ in one arm and it matters: an
-// absent ledger row means "somebody else won" only when the record might have
-// been somebody else's.
+// something above the anchor. The two differ wherever the ledger is silent: a
+// record known to be this operation's was applied when an adoption scrubbed
+// its row and is a contract violation when none did, while one that might be
+// somebody else's is `unknown` or a lost race by that same test — an absent
+// ledger row means "somebody else won" only when the record might have been
+// somebody else's.
 func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine bool) (Result, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
 	defer cancel()
@@ -1002,28 +1015,44 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		}, nil
 	}
 
-	if mine {
-		// THE BROKER ACKNOWLEDGED THIS RECORD, this node applied past
-		// it, and no gate dropped it — so the applier applied it and
-		// wrote no ledger row. That is a contract violation rather than
-		// a race, and re-deciding would republish a record that already
-		// landed, so it is reported instead of guessed at.
-		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
-			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
-			"publish is resolved by, and a record applied without one cannot be "+
-			"answered for", p.domain.Name(), at, p.domain.OpsTable(), req.OpID)
-	}
-
 	adopted, ever, err := p.gates.AdoptedAt(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("statelog: read the adoption record: %w", err)
 	}
-	if ever && !req.MintedAt.IsZero() && req.MintedAt.Before(adopted) {
-		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE. It
-		// is scrubbed from every donated snapshot, so a node that
-		// adopted one arrives with an empty table — and reading that
-		// absence as "somebody else won" would re-decide against a row
-		// that moved because of this very write.
+	// THE LEDGER CANNOT ANSWER FOR AN OPERATION MINTED BEFORE THIS NODE
+	// ADOPTED A SNAPSHOT. The ledger is scrubbed from every donated one, so
+	// the table arrives empty, and the operation's own record may be among
+	// the rows the adoption brought.
+	predates := ever && !req.MintedAt.IsZero() && req.MintedAt.Before(adopted)
+	switch {
+	case mine && predates:
+		// THE BROKER NAMED THIS RECORD AS THIS OPERATION'S — a duplicate
+		// acknowledgement of the record an earlier attempt landed — and
+		// this node holds everything through it with no gate dropping
+		// it. It was applied, into the rows the adoption brought; its
+		// ledger row is what the scrub took.
+		return Result{
+			Outcome:  OutcomeApplied,
+			Position: at,
+			OpID:     req.OpID,
+			Version:  at.Packed(),
+		}, nil
+	case mine:
+		// THE BROKER ACKNOWLEDGED THIS RECORD, this node applied past
+		// it, no gate dropped it, and no adoption scrubbed its ledger —
+		// so the applier applied it and wrote no ledger row. That is a
+		// contract violation rather than a race, and re-deciding would
+		// republish a record that already landed, so it is reported
+		// instead of guessed at.
+		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
+			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
+			"publish is resolved by, and a record applied without one cannot be "+
+			"answered for", p.domain.Name(), at, p.domain.OpsTable(), req.OpID)
+	case predates:
+		// SOMEBODY ELSE'S RECORD MAY HAVE LANDED HERE, and this
+		// operation's may have landed before the adoption: reading the
+		// ledger's silence as "somebody else won" would re-decide against
+		// a row that moved because of this very write.
 		return Result{Outcome: OutcomeUnknown, Position: at, OpID: req.OpID}, nil
 	}
 
@@ -1084,22 +1113,10 @@ func (p *Publisher) Landed(ctx context.Context, res Result) ([]byte, error) {
 
 // checkEvicted is fence 0.
 func (p *Publisher) checkEvicted(ctx context.Context) error {
-	evicted, err := p.fence.Evicted(ctx)
-	if err != nil {
-		// THE THIRD VALUE BLOCKS. An eviction that cannot be read is
-		// not an eviction that did not happen, and publishing under it
-		// produces durable records every node drops.
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
-		}
-	}
-	if evicted {
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: "this node has been removed from the fleet; nothing it " +
-				"publishes will be applied anywhere. An operator readmits it",
-		}
+	// RETURNED THROUGH THE INTERFACE ONLY WHEN IT IS A REFUSAL: a nil
+	// *Unavailable in an error is not a nil error.
+	if refusal := evictionRefusal(p.fence.Evicted(ctx)); refusal != nil {
+		return refusal
 	}
 	return nil
 }

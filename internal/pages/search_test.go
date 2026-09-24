@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -448,6 +451,158 @@ func TestANativeSearchThatFailsSaysSo(t *testing.T) {
 	}
 	if ids := hitIDs(whole.Hits); !slices.Equal(ids, []string{written.Page.ID}) {
 		t.Errorf("the control returned %v, want the one page", hitTitles(whole.Hits))
+	}
+}
+
+// A NATIVE SEARCH WHOSE HITS CANNOT BE READ BACK SAYS IT FAILED.
+//
+// The fan-out answers with keys alone, and the page each key names — its
+// title, its container, its snippet — is read back from this node's index
+// afterwards. When that read fails there is nothing to render, and the answer
+// must say the search failed rather than that nothing matched. The failure is
+// the caller's context ending at the fan-out's report, which runs after every
+// scan and before the read-back; the control is the same search with the
+// context left alone.
+func TestANativeSearchWhoseHitsCannotBeReadBackSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	written := r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	r.drain()
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	var end atomic.Pointer[context.CancelFunc]
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{
+		Index: index, DB: r.db,
+		Report: func(search.Answer, time.Duration) {
+			if cancel := end.Load(); cancel != nil {
+				(*cancel)()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+
+	whole := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if whole.Failed || !slices.Equal(hitIDs(whole.Hits), []string{written.Page.ID}) {
+		t.Fatalf("the control answered %+v, want the one page", whole)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	end.Store(&cancel)
+	failed := searcher.Search(ctx, knowledge.Query{Text: words})
+	if !failed.Failed || len(failed.Hits) != 0 {
+		t.Errorf("a search whose hits could not be read back answered %+v, want "+
+			"an empty answer marked failed", failed)
+	}
+}
+
+// A NATIVE SEARCH WHOSE PARENT CHAINS CANNOT BE READ SAYS IT FAILED.
+//
+// The chain is what the ancestor exclusion is judged against, so an answer
+// served without it would carry an unreviewed draft into a seat's prompt —
+// which is why the searcher answers nothing instead. That nothing must be
+// marked, or it reads as a knowledge base with no page on the subject. The
+// chains are read from the replicated estate, which is closed here; the scan
+// and the read-back use this node's own estate and still answer, so what
+// fails is the chain read alone. The control is the same search before the
+// close.
+func TestANativeSearchWhoseChainsCannotBeReadSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	written := r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	r.drain()
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: r.db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+
+	whole := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if whole.Failed || !slices.Equal(hitIDs(whole.Hits), []string{written.Page.ID}) {
+		t.Fatalf("the control answered %+v, want the one page", whole)
+	}
+	if err := r.db.CloseReplicated(); err != nil {
+		t.Fatalf("close the replicated estate: %v", err)
+	}
+	failed := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if !failed.Failed || len(failed.Hits) != 0 {
+		t.Errorf("a search whose chains could not be read answered %+v, want an "+
+			"empty answer marked failed", failed)
+	}
+}
+
+// THE REPORT IS TOLD WHO ASKED AND HOW THE SEARCH RANKED.
+//
+// A scan's duration is filed under both — whether a turn's prefetch asked or
+// somebody searched deliberately, and whether the query carried a vector — so
+// the searcher has to carry the caller's mark from the query to the report,
+// and the rung has to be read off what was sent rather than off the company's
+// settings: a company with a semantic half whose query could not be embedded
+// ran a lexical search.
+func TestTheReportIsToldWhoAskedAndHowTheSearchRanked(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	r.write(author("jane"), pages.NewPage{Title: "Key rotation", Body: words})
+	r.drain()
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	embedder := embeddings.NewFake(16)
+	var (
+		mu       sync.Mutex
+		fails    bool
+		reported []search.Answer
+	)
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{
+		Index: index, DB: r.db,
+		Space: func() (search.QuerySpace, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			if fails {
+				return search.QuerySpace{Embedder: failingEmbedder{embedder},
+					Model: "fake"}, true
+			}
+			return search.QuerySpace{Embedder: embedder, Model: "fake"}, true
+		},
+		Report: func(answer search.Answer, _ time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			reported = append(reported, answer)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+
+	searcher.Search(t.Context(), knowledge.Query{Text: words})
+	searcher.Search(t.Context(), knowledge.Query{Text: words, Prefetch: true})
+	mu.Lock()
+	fails = true
+	mu.Unlock()
+	searcher.Search(t.Context(), knowledge.Query{Text: words, Prefetch: true})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reported) != 3 {
+		t.Fatalf("three searches made %d reports", len(reported))
+	}
+	for i, want := range []struct {
+		prefetch, hybrid bool
+		why              string
+	}{
+		{false, true, "a deliberate search whose query was embedded"},
+		{true, true, "a prefetch whose query was embedded"},
+		{true, false, "a prefetch whose query the provider refused"},
+	} {
+		got := reported[i]
+		if got.Prefetch != want.prefetch || got.Hybrid != want.hybrid {
+			t.Errorf("%s was reported with prefetch=%v hybrid=%v, want %v and %v",
+				want.why, got.Prefetch, got.Hybrid, want.prefetch, want.hybrid)
+		}
 	}
 }
 

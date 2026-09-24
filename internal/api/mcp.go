@@ -75,13 +75,14 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux))
 }
 
-// mountOperator registers the operator MCP surface, or says why it did not.
+// mountOperator registers the operator MCP surface.
 //
-// A nil server is an ordinary configuration — a company on Jira and
-// Confluence has no native record for this to manage — and the route is then
-// ABSENT rather than answering 404 from a registered handler: an endpoint
-// that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says.
+// A nil server mounts no route. `crewlet run` always hands one over, and the
+// route is registered whatever the company runs: which halves are served is
+// the CURRENT revision's to say, and a live apply moves it, so a route decided
+// here would be decided once for a company that changes. While the current
+// revision serves nothing on it, the server answers 404 itself, as a route
+// that is not there answers ([opsmcp.Server.Handler]).
 func (a *App) mountOperator(mux *http.ServeMux, server *opsmcp.Server) {
 	if server == nil {
 		return

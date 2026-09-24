@@ -550,11 +550,18 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is not redelivered into a conversation a retry must not
 			// re-enter.
 			//
-			// A resumed turn is the one most likely to qualify. It
-			// re-enters the executor's suspended loop with the whole
-			// pre-suspend conversation, and the round that called
-			// run_sandbox was never closed, so its writes are in no
-			// ledger and a replay would repeat every one of them.
+			// A retry re-enters the conversation the pending-run row
+			// holds, in which every call made before the suspend is
+			// already answered and is not made again. So a round that
+			// broke while re-entering it is judged on the calls it made
+			// itself (see [runner.Runner.Resume]): a post or an ask it
+			// made before it broke is what a retry would repeat, and a
+			// provider that failed before it made either is retried. A
+			// round that re-entered it and FINISHED hands back the whole
+			// phase's calls — the launch among them, or an agentic run's
+			// own — so a turn that breaks after that round is judged on
+			// those, and the launch, being open-world, is enough to
+			// abandon it.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
 		return err

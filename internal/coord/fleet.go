@@ -273,13 +273,15 @@ type Usage struct {
 	// RefusedAt is when this scope last turned a charge away, and zero
 	// once it has admitted one since.
 	//
-	// It is what "exhausted" means, and Used compared against the cap is
-	// not: a refused charge increments nothing, so a seat charged in
-	// 3 000-token rounds against a 100 000 cap stops near 99 000 and never
-	// reads as full. Kept HERE, in the shared counter, because the refusal
-	// is the gate's own decision and every node reports this counter: a
-	// stamp one node kept in memory would appear and vanish on a dashboard
-	// as the reports of different nodes arrived.
+	// It is the gate's own record of saying no, which Used compared against
+	// the cap cannot stand in for: [Budgets.Charge] counts nothing it
+	// refuses. A refused spend that has already happened — a model call is
+	// charged once it has answered, because that is when its size is
+	// known — is added afterwards with [Budgets.PostCharge], so the counter
+	// can read past its cap by it. Kept HERE, in the shared counter, because
+	// the refusal is the gate's own decision and every node reports this
+	// counter: a stamp one node kept in memory would appear and vanish on a
+	// dashboard as the reports of different nodes arrived.
 	//
 	// Cleared by an ADMITTED charge and by nothing weaker, plus a
 	// [Budgets.Reset], which drops the scope's whole record and this stamp
@@ -347,14 +349,15 @@ type Budgets interface {
 	// figures at zero rather than reading two counters to report what it
 	// did not change.
 	//
-	// Charge is the gate: it decides whether a round may run, before the
-	// round has spent anything. Some spend is only known after it happened
-	// (a detached coding run is collected minutes or hours after it
-	// started, possibly on another node), and no answer can un-spend it.
-	// Put through the gate, it was recorded NOT AT ALL whenever it did not
-	// fit, which is exactly when a cap binds: the counter under-stated the
-	// company's spend by the whole run, and the next round was admitted
-	// against room the run had already used.
+	// Charge is the gate: it decides whether spending may go on, and counts
+	// nothing it refuses. Some spend is only known after it happened, and no
+	// answer can un-spend it: a model call's tokens, known once it has
+	// answered, and a detached coding run's, known when it is collected
+	// minutes or hours after it started, possibly on another node. Put
+	// through the gate alone, such spend would be recorded NOT AT ALL
+	// whenever it did not fit, which is exactly when a cap binds: the
+	// counter would under-state the company's spend by it, and the next
+	// round would be admitted against room already used.
 	//
 	// It leaves both scopes' refusal stamps alone, because it is not a
 	// decision about room: it neither says the gate turned a charge away

@@ -260,23 +260,23 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)
 	}
+	// The pass has run; what follows is its record's to publish. See
+	// [closing].
+	base := ranRecord(phase.Onboarding, onboardingIteration, system, user, res, surface)
+	closer := r.closing(phaseCtx, base)
+	defer closer.onPanic()
 
 	// MARKED is read off what actually ran, not off the model's prose: a
 	// pass that said it was done without calling the tool has not marked,
 	// and treating its claim as the fact would leave a seat permanently
 	// unmarked in the store while never onboarding again in this process.
 	marked := calledSuccessfully(surface, MarkOnboardedTool)
-	notes := "did not mark (will retry next turn)"
-	decision := ""
+	rec := base
+	rec.Notes = "did not mark (will retry next turn)"
 	if marked {
-		notes, decision = "marked", "done"
+		rec.Notes, rec.Decision = "marked", "done"
 	}
-	r.emitter().completed(phaseCtx, phaseRecord{
-		Phase: phase.Onboarding, Iteration: onboardingIteration,
-		System: system, User: user, Result: res.Result, Exhausted: res.Exhausted,
-		Elapsed:  res.Elapsed,
-		Decision: decision, Notes: notes, Available: surface.Active(),
-	})
+	closer.publish(rec)
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
 		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.RunID,
 		"marked", marked, "rounds", res.Rounds, "chain", chain)

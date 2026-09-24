@@ -734,6 +734,151 @@ func TestAnUnreadableEvictionTableIsWrittenDownOnceATrimInterval(t *testing.T) {
 	read(broken, 3, "the first failure after a read that answered")
 }
 
+// EACH GATED LOG'S TOMBSTONES COME FROM ITS OWN APPLIER'S ROWS.
+//
+// An eviction is one record on every log whose applier installs the gate, and
+// each applier keeps its own table — so a log stops counting an evicted node
+// once ITS record has applied, whatever the other log's table says. Read from
+// the tracker's table alone, a node evicted from the fleet pinned the knowledge
+// base's floor for ever. A log whose applier installs no gate has no say.
+//
+// Mutation: read `tracker_evictions` for every domain and the pages log
+// answers no tombstone for the node evicted on it.
+func TestEachGatedLogsTombstonesComeFromItsOwnRows(t *testing.T) {
+	t.Parallel()
+	db := freshStore(t)
+	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`INSERT INTO pages_evictions (node_id, at, by, from_position, version)
+			 VALUES ('node-pages', ?, 'ops', 7, 7)`,
+			`INSERT INTO pages_evictions
+			 (node_id, at, by, from_position, readmitted_position, version)
+			 VALUES ('node-back', ?, 'ops', 7, 9, 9)`,
+			`INSERT INTO tracker_evictions (node_id, log_stream, from_position, at, by)
+			 VALUES ('node-tracker', 'CREWLET_TRACKER_LOG', 5, ?, 'ops')`,
+		} {
+			if _, err := tx.ExecContext(t.Context(), stmt, store.EncodeTime(at)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the evictions: %v", err)
+	}
+	r := &retention{db: db, logger: slog.New(slog.DiscardHandler)}
+	nodes := func(d statelog.Domain) []string {
+		var out []string
+		for _, tomb := range r.tombstones(t.Context(), &runningDomain{domain: d}, 1) {
+			out = append(out, tomb.NodeID)
+		}
+		return out
+	}
+	if got := nodes(pages.Domain{}); !slices.Equal(got, []string{"node-pages"}) {
+		t.Errorf("the pages log's tombstones are %v, want the node evicted on it "+
+			"and not the one readmitted there", got)
+	}
+	if got := nodes(tracker.Domain{}); !slices.Equal(got, []string{"node-tracker"}) {
+		t.Errorf("the tracker log's tombstones are %v, want node-tracker", got)
+	}
+	if got := nodes(search.Domain{}); len(got) != 0 {
+		t.Errorf("the vector log, whose applier installs no gate, answered %v", got)
+	}
+}
+
+// AN EVICTION LANDS ON EVERY GATED LOG, AND ONLY FOR A NODE THAT IS SILENT.
+//
+// Each applier drops an evicted node's records by its own domain's table, so a
+// gesture that recorded the eviction on one log left the node's writes to the
+// other applying on every peer. And the permission the whole design rests on —
+// an eviction only once the node has stopped reaching coordination — is
+// checked by the gesture itself rather than stated beside it.
+//
+// Mutation: skip the pages log and its table never names the node; drop the
+// presence check and a node holding a live lease is evicted unforced.
+func TestAnEvictionLandsOnEveryGatedLog(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = t.TempDir() + "/crewlet.db"
+	b.Stream.StoreDir = t.TempDir() + "/stream"
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+
+	// A NODE STILL REACHING COORDINATION IS REFUSED UNFORCED.
+	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource("node-live"),
+		coord.AcquireOptions{Owner: "node-live", TTL: time.Minute}); err != nil {
+		t.Fatalf("take node-live's presence: %v", err)
+	}
+	_, err = e.EvictNode(t.Context(), GateRequest{
+		Node: "node-live", OpID: "op-live", By: "ops",
+	})
+	var refused *statelog.EvictionRefusal
+	if !errors.As(err, &refused) {
+		t.Fatalf("evicting a node that holds a live presence lease = %v, want "+
+			"the permission refused", err)
+	}
+
+	results, err := e.EvictNode(t.Context(), GateRequest{
+		Node: "node-gone", OpID: "op-gone", By: "ops",
+	})
+	if err != nil {
+		t.Fatalf("EvictNode: %v", err)
+	}
+	var domains []string
+	for _, res := range results {
+		domains = append(domains, res.Domain)
+	}
+	if !slices.Equal(domains, []string{tracker.Domain{}.Name(), pages.Domain{}.Name()}) {
+		t.Fatalf("the eviction reached %v, want every log whose applier installs "+
+			"the gate", domains)
+	}
+	evicted := func() (inTracker, inPages bool) {
+		trackerRows, err := tracker.Evictions(t.Context(), back.Store.Replicated(),
+			tracker.Domain{}.Stream().Name)
+		if err != nil {
+			t.Fatalf("read the tracker's evictions: %v", err)
+		}
+		pagesRows, err := pages.Evictions(t.Context(), back.Store.Replicated())
+		if err != nil {
+			t.Fatalf("read the pages log's evictions: %v", err)
+		}
+		gone := func(node string, back bool, by string) bool {
+			return node == "node-gone" && !back && by == "ops"
+		}
+		return slices.ContainsFunc(trackerRows, func(r tracker.EvictionRow) bool {
+				return gone(r.NodeID, r.IsBack, r.By)
+			}), slices.ContainsFunc(pagesRows, func(r pages.EvictionRow) bool {
+				return gone(r.NodeID, r.IsBack, r.By)
+			})
+	}
+	waitUntil(t, 20*time.Second, "both logs to apply the eviction", func() bool {
+		inTracker, inPages := evicted()
+		return inTracker && inPages
+	})
+
+	if _, err := e.ReadmitNode(t.Context(), GateRequest{
+		Node: "node-gone", OpID: "op-back", By: "ops",
+	}); err != nil {
+		t.Fatalf("ReadmitNode: %v", err)
+	}
+	waitUntil(t, 20*time.Second, "both logs to apply the readmission", func() bool {
+		inTracker, inPages := evicted()
+		return !inTracker && !inPages
+	})
+}
+
 // freshStore is a node's two estates in a directory of their own.
 func freshStore(t *testing.T) *store.DB {
 	t.Helper()

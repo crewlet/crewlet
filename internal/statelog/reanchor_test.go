@@ -122,6 +122,73 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 	}
 }
 
+// THE CONFIRMATION IS THE LIVE INSTANT AS AN OPERATOR WAS SHOWN IT.
+//
+// The broker reports a creation instant with fractional seconds, and the
+// status verb prints it that way; the confirmation it tells an operator to
+// re-run with carries those digits. Compared as TEXT against a
+// whole-second rendering, the one command the verb prints is refused. And a
+// zero instant is a broker nobody could ask: confirming it would commit the
+// moved checkpoint under an instant no stream has, and the applier resuming
+// from it would stop again.
+//
+// Mutation: compare the confirmation as text and the fractional form is
+// refused; drop the zero-instant refusal and an operator who echoes the year
+// one re-anchors onto nothing.
+func TestAReanchorConfirmsTheLiveInstantAsItWasShown(t *testing.T) {
+	t.Parallel()
+	live := time.Date(2031, 4, 2, 3, 0, 0, 123_456_789, time.UTC)
+	in := reanchorInputs()
+	in.StreamCreatedAt = live
+	for _, confirm := range []string{
+		live.Format(time.RFC3339Nano), live.Format(time.RFC3339),
+	} {
+		if _, err := statelog.PermitReanchor(in, statelog.ReanchorGuard{Confirm: confirm}); err != nil {
+			t.Errorf("confirming %q was refused: %v", confirm, err)
+		}
+	}
+	if _, err := statelog.PermitReanchor(in, statelog.ReanchorGuard{
+		Confirm: live.Add(time.Second).Format(time.RFC3339Nano),
+	}); !errors.Is(err, statelog.ErrReanchorRefused) {
+		t.Errorf("confirming the next second = %v, want a refusal", err)
+	}
+
+	unread := reanchorInputs()
+	unread.StreamCreatedAt = time.Time{}
+	_, err := statelog.PermitReanchor(unread, statelog.ReanchorGuard{
+		Confirm: time.Time{}.Format(time.RFC3339),
+	})
+	if !errors.Is(err, statelog.ErrReanchorRefused) ||
+		!strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("a reanchor with no live instant = %v, want a refusal saying "+
+			"the broker could not be read", err)
+	}
+}
+
+// A DOMAIN THAT CLAIMS IDENTITY PUBLISHES ITS GENERATION RECORD.
+//
+// The record is a claim, and it is what a second node re-anchoring the same
+// stream meets instead of moving a checkpoint of its own. A transition that
+// skipped it for such a domain would let two nodes each keep their own history
+// under one identity claim.
+//
+// Mutation: drop the requirement and a probe domain — which claims identity —
+// re-anchors with nothing published.
+func TestAnIdentityClaimingReanchorPublishesItsRecord(t *testing.T) {
+	t.Parallel()
+	db := reanchorStore(t)
+	_, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
+		Domain: probeDomain{}, DB: db,
+	}, reanchorInputs(), confirmed())
+	if err == nil || !strings.Contains(err.Error(), "claims identity") {
+		t.Fatalf("a reanchor of an identity-claiming domain with no generation "+
+			"record = %v, want it refused naming the claim", err)
+	}
+	if got := cursorGeneration(t, db); got != 0 {
+		t.Fatalf("the refused reanchor moved the cursor to generation %d", got)
+	}
+}
+
 // THE TRANSITION MOVES EVERY CURSOR AND THE AUDIT ROW IN ONE TRANSACTION.
 //
 // A crash between them would leave the fleet on a generation nothing recorded
@@ -133,8 +200,8 @@ func TestAReanchorMovesEveryCursorAndItsAuditRowTogether(t *testing.T) {
 	var reset, published, recorded atomic.Int64
 
 	gen, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-		DB:      db,
+		Domain: probeDomain{},
+		DB:     db,
 		ResetVersions: func(context.Context, uint32) error {
 			reset.Add(1)
 			return nil
@@ -184,7 +251,7 @@ func TestAReanchorWhoseAuditRowFailsMovesNoCursor(t *testing.T) {
 	db := reanchorStore(t)
 
 	_, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains:       map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+		Domain:        probeDomain{},
 		DB:            db,
 		ResetVersions: func(context.Context, uint32) error { return nil },
 		PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error {
@@ -224,8 +291,8 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	var order []string
 
 	if _, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-		DB:      db,
+		Domain: probeDomain{},
+		DB:     db,
 		ResetVersions: func(context.Context, uint32) error {
 			order = append(order, "reset")
 			return nil
@@ -358,8 +425,8 @@ func TestAReanchorIsResumable(t *testing.T) {
 		crash := errors.New("the process died between two bounded transactions")
 		var attempts, published, recorded atomic.Int64
 		deps := statelog.ReanchorDeps{
-			Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-			DB:      db,
+			Domain: probeDomain{},
+			DB:     db,
 			ResetVersions: func(ctx context.Context, gen uint32) error {
 				if attempts.Add(1) == 1 {
 					// One bounded transaction committed, then the

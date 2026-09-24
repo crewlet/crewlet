@@ -159,10 +159,11 @@ type retention struct {
 	// [AlarmInterval] pass, every operator request and every dashboard
 	// poll. The alarm it feeds compares a fraction of the corpus against a
 	// floor, so the figure it is judged on is at most one trim interval
-	// old. A FAILED scan is cached for the same interval: a corpus that
-	// cannot be read now is one the next pass cannot read either, and
-	// re-scanning it every pass would repeat the scan's cost and its WARN
-	// on every node four times a minute.
+	// old. A FAILED scan is cached for the same interval, so a corpus that
+	// stays unreadable costs one scan and one WARN per interval rather than
+	// both on every pass on every node. A scan whose CALLER's context ended
+	// is not a failed scan and caches nothing — see
+	// [retention.semanticCoverage].
 	coverAt       time.Time
 	coverFraction float64
 	coverKnown    bool
@@ -251,6 +252,184 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 		return statelog.Report{}, false
 	}
 	return e.retention.Report(ctx), true
+}
+
+// GateRequest is one eviction or readmission an operator asked for.
+type GateRequest struct {
+	// Node is the node being evicted or taken back.
+	Node string
+
+	// OpID is the operation every log's record is published under — one
+	// per gesture, so an audit reading two logs can tell one gesture from
+	// two.
+	OpID string
+
+	// By is the operator who ran it, recorded on every log's record as who
+	// evicted the node: the trim's tombstone and the status report both
+	// name it.
+	By string
+
+	// Force evicts a node that still holds a live presence lease. See
+	// [statelog.PermitEviction] for what that costs.
+	Force bool
+}
+
+// GateResult is what one log said to an eviction or a readmission.
+type GateResult struct {
+	Domain string
+	Stream string
+	statelog.Result
+}
+
+// RunsStateLog reports whether this node runs the state log at all — the
+// condition every gesture on a log's records needs.
+func (e *Engine) RunsStateLog() bool {
+	return e.native != nil && e.native.log != nil
+}
+
+// EvictNode removes a node from the fleet: one record on every log whose
+// applier installs the eviction gate, in the register's order.
+//
+// # Why every such log, and not the tracker's alone
+//
+// Each applier reads the gate from its OWN domain's table, so an eviction on
+// one log drops nothing on another: the evicted node's writes to the second go
+// on applying on every peer, and the trim — which counts nodes per log — goes
+// on counting it against the second log's floor, which is the floor the
+// eviction was run to release.
+//
+// # And why it refuses a node that is still talking
+//
+// [statelog.PermitEviction]: an eviction is safe only once the target has
+// missed enough coordination round trips to be out of contact. A presence
+// listing that cannot be read is a permission that cannot be established, so
+// it refuses too unless the operator forces it.
+//
+// THE RESULT CARRIES EVERY LOG IT REACHED, including on an error: a gesture
+// that landed on the first log and failed on the second has changed the fleet,
+// and an answer that said only "failed" would send the operator to re-run what
+// already landed without saying where.
+func (e *Engine) EvictNode(ctx context.Context, req GateRequest) ([]GateResult, error) {
+	if err := e.permitEviction(ctx, req); err != nil {
+		return nil, err
+	}
+	return e.gateNode(ctx, req, false)
+}
+
+// ReadmitNode takes a node back on every log whose applier installs the
+// eviction gate: the INVERSE COMMIT of [Engine.EvictNode], on the same subjects.
+func (e *Engine) ReadmitNode(ctx context.Context, req GateRequest) ([]GateResult, error) {
+	return e.gateNode(ctx, req, true)
+}
+
+// permitEviction is [statelog.PermitEviction] over the fleet's live presence
+// leases.
+func (e *Engine) permitEviction(ctx context.Context, req GateRequest) error {
+	var live []statelog.Presence
+	if e.backends != nil && e.backends.Coord != nil {
+		leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
+		if err != nil && !req.Force {
+			return &statelog.EvictionRefusal{NodeID: req.Node, Detail: fmt.Sprintf(
+				"the fleet's presence leases could not be listed (%v), so whether "+
+					"it is still reaching coordination is unknown — force the "+
+					"eviction if you know its process is gone", err)}
+		}
+		for _, lease := range leases {
+			if id, ok := coord.NodeID(lease.Resource); ok {
+				live = append(live, statelog.Presence{NodeID: id})
+			}
+		}
+	}
+	return statelog.PermitEviction(req.Node, live, req.Force)
+}
+
+// gateNode publishes one eviction or readmission record on every gated log.
+func (e *Engine) gateNode(ctx context.Context, req GateRequest, readmit bool) (
+	[]GateResult, error) {
+
+	verb := "evict"
+	if readmit {
+		verb = "readmit"
+	}
+	switch {
+	case !e.RunsStateLog():
+		return nil, errors.New("engine: this node runs no state log, so there is " +
+			"no log to record the gesture on")
+	case req.Node == "":
+		return nil, fmt.Errorf("engine: %s names no node", verb)
+	case req.OpID == "":
+		return nil, fmt.Errorf("engine: %s %s carries no op id", verb, req.Node)
+	case req.By == "":
+		return nil, fmt.Errorf("engine: %s %s names nobody who ran it — the "+
+			"record says who evicted the node, and the report names them", verb,
+			req.Node)
+	}
+	s := e.native.log
+	var out []GateResult
+	for _, name := range s.order {
+		running := s.domains[name]
+		if running.evicted == nil {
+			// NO EVICTION GATE ON THIS LOG, so nothing a record here could
+			// drop and nobody it could stop counting.
+			continue
+		}
+		if running.publisher == nil {
+			return out, fmt.Errorf("engine: %s's log has no write authority on "+
+				"this node, so the %s cannot be recorded there", name, verb)
+		}
+		res, err := e.gateOn(ctx, running, req, readmit)
+		out = append(out, GateResult{
+			Domain: name, Stream: running.domain.Stream().Name, Result: res,
+		})
+		if err != nil {
+			return out, fmt.Errorf("engine: %s %s on %s's log: %w", verb,
+				req.Node, name, err)
+		}
+	}
+	return out, nil
+}
+
+// gateOn publishes one gated log's record, as that domain writes it.
+//
+// A WRITER BUILT OVER THE DOMAIN'S OWN PUBLISHER rather than the company's
+// writer for it: the log runs whatever backend the company chose for its work
+// and its pages, and a node evicted from the fleet has to stop pinning every
+// log it counts on.
+func (e *Engine) gateOn(ctx context.Context, running *runningDomain, req GateRequest,
+	readmit bool) (statelog.Result, error) {
+
+	switch running.domain.Name() {
+	case tracker.Domain{}.Name():
+		w, err := tracker.NewWriter(tracker.WriterDeps{
+			Publisher: running.publisher, Actor: req.By,
+			ActorKind: tracker.AuthorOperator,
+		})
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		w = w.As(req.By, tracker.AuthorOperator, tracker.Provenance{OperatorID: req.By})
+		gate := w.EvictNode
+		if readmit {
+			gate = w.ReadmitNode
+		}
+		res, err := gate(ctx, req.OpID, req.Node)
+		return res.Result, err
+	case pages.Domain{}.Name():
+		pagesStore, err := pages.NewStore(pages.Options{
+			Publisher: running.publisher, DB: e.backends.Store,
+		})
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		actor := pages.Actor{Handle: req.By, Kind: pages.AuthorOperator, OperatorID: req.By}
+		gate := pagesStore.EvictNode
+		if readmit {
+			gate = pagesStore.ReadmitNode
+		}
+		return gate(ctx, actor, req.OpID, req.Node)
+	}
+	return statelog.Result{}, fmt.Errorf("engine: %s installs an eviction gate "+
+		"and has no writer for its record", running.domain.Name())
 }
 
 // run ticks every [AlarmInterval] until the context ends.
@@ -676,21 +855,21 @@ func feedGroupOf(d statelog.Domain) (string, bool) {
 // evicted node stays counted and pins the floor, rather than the trim
 // advancing past a node it could not establish was gone.
 //
-// ONLY THE TRACKER'S LOG CARRIES EVICTIONS READ HERE. Its applier writes every
-// eviction published on it into `tracker_evictions`, keyed by that log, and
-// nothing else writes the table — so asked under another domain's stream name
-// it answers with nothing. A domain that does not claim identity has no say in
-// who the fleet counts. The knowledge base's applier keeps its evictions in
-// `pages_evictions`, which nothing outside its package reads and no verb
-// publishes to, so an evicted node stays counted in that log's trim: the
-// conservative direction again.
+// EACH LOG'S OWN ROWS, from the domain whose applier wrote them: an eviction
+// is published on every log whose applier installs the gate ([Engine.EvictNode])
+// and each applier keeps its own table, so a node evicted from the fleet stops
+// pinning each log's floor once THAT log's record has applied. A domain whose
+// applier installs no eviction gate has no say in who the fleet counts.
 func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 	generation uint32) []statelog.Tombstone {
 
-	if r.db == nil || running.domain.Name() != (tracker.Domain{}).Name() {
+	if r.db == nil {
 		return nil
 	}
-	rows, err := tracker.Evictions(ctx, r.db.Replicated(), running.domain.Stream().Name)
+	rows, gated, err := evictionRows(ctx, r.db, running.domain)
+	if !gated {
+		return nil
+	}
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
@@ -702,6 +881,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 	case err != nil:
 		if r.evictionsWarnDue(time.Now()) {
 			r.logs().WarnContext(ctx, "retention_evictions_unreadable", "err", err,
+				"domain", running.domain.Name(),
 				"detail", "an evicted node stays counted and pins the trim's "+
 					"floor until the table can be read; while this lasts the "+
 					"line repeats once per trim interval")
@@ -711,17 +891,54 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 	r.evictionsReadable()
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
-		if row.IsBack {
+		if row.back {
 			// READMITTED, so there is no tombstone: the node is
 			// counted again and its position pins the floor as any
 			// other node's does.
 			continue
 		}
 		out = append(out, statelog.Tombstone{
-			NodeID: row.NodeID, At: row.At, By: row.By, Generation: generation,
+			NodeID: row.node, At: row.at, By: row.by, Generation: generation,
 		})
 	}
 	return out
+}
+
+// evictionRow is one eviction as the trim reads it, from whichever domain's
+// table holds it.
+type evictionRow struct {
+	node, by string
+	at       time.Time
+	back     bool
+}
+
+// evictionRows reads the evictions a domain's applier has applied from its own
+// log, and false for a domain whose applier installs no eviction gate.
+//
+// A SWITCH, for [feedGroupOf]'s reason: the table is the domain's own, and a
+// domain that grew an eviction gate without a case here would keep its
+// evicted nodes counted for ever with nothing to say so.
+func evictionRows(ctx context.Context, db *store.DB, d statelog.Domain) (
+	[]evictionRow, bool, error) {
+
+	var out []evictionRow
+	switch d.Name() {
+	case tracker.Domain{}.Name():
+		rows, err := tracker.Evictions(ctx, db.Replicated(), d.Stream().Name)
+		for _, row := range rows {
+			out = append(out, evictionRow{node: row.NodeID, by: row.By, at: row.At,
+				back: row.IsBack})
+		}
+		return out, true, err
+	case pages.Domain{}.Name():
+		rows, err := pages.Evictions(ctx, db.Replicated())
+		for _, row := range rows {
+			out = append(out, evictionRow{node: row.NodeID, by: row.By, at: row.At,
+				back: row.IsBack})
+		}
+		return out, true, err
+	}
+	return nil, false, nil
 }
 
 // evictionsWarnDue reports whether an unreadable eviction table is worth a WARN

@@ -202,6 +202,11 @@ type Writer struct {
 	// [Writer.After].
 	after statelog.Position
 
+	// opsMintedAt is the instant the surface says the op ids this
+	// writer's writes carry were minted, from [Provenance.MintedAt]; zero
+	// when each is minted by its own call. See [Writer.mintedAt].
+	opsMintedAt time.Time
+
 	// refusal is set by [Writer.As] when the identity it was handed
 	// cannot author a record. It is checked at the one funnel every write
 	// passes through — see the comment there for why it is carried rather
@@ -378,6 +383,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
+	clone.opsMintedAt = provenance.MintedAt
 	return &clone
 }
 
@@ -450,7 +456,8 @@ func (w *Writer) After(at statelog.Position) *Writer {
 	return &clone
 }
 
-// Provenance is what an audit walks from a record back to what produced it.
+// Provenance is what produced a write: what an audit walks from a record back
+// to, and when the operation it carries was minted.
 //
 // It BOUNDS NOTHING. A hand-off is charged to the task's own reassignment
 // counter and not to the delegation depth, so the chain here is a trail rather
@@ -464,6 +471,20 @@ type Provenance struct {
 	// delegation path that reached it.
 	TurnID string
 	Chain  []string
+
+	// MintedAt is the earliest instant the op ids this writer's writes
+	// carry could have been minted, and zero when each is minted by the
+	// call that writes it.
+	//
+	// It is what an ambiguous write is resolved against on a node that
+	// adopted a snapshot ([statelog.Request.MintedAt]): the adopted ledger
+	// is scrubbed, so an operation minted before the adoption is answered
+	// `unknown` rather than decided again. An id a surface DERIVES — one a
+	// retry re-derives — is minted by its first attempt, so the instant is
+	// that attempt's: a retry stamped with its own call time, after an
+	// adoption its first record predates, reads as newer than the adoption
+	// and is decided a second time.
+	MintedAt time.Time
 }
 
 // NewWriter builds the tracker's write authority.
@@ -607,6 +628,18 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
+			// THE PROJECT THE CALLER NAMED IS THE ONE THE TASK IS IN. The
+			// request's scope was built from it before this snapshot, and
+			// a task's path in the scope alphabet sits under its project —
+			// so a record addressed to a project the task has since left
+			// is filed, if a node defers it, where no later write to the
+			// task probes, and the probe that stands between a deferred
+			// record and an overwrite passes.
+			if current.Project != project {
+				return statelog.Decision{}, fmt.Errorf("%w: task %s is in %s and "+
+					"this edit was addressed to it in %s — re-read it and decide "+
+					"again", ErrStaleVersion, id, current.Project, project)
+			}
 			// BEFORE THE FREEZE, because a merge's move of a subtask in the
 			// trash is not a write to refuse but one the merge does not
 			// make — see [mergeStep.subtask].
@@ -680,6 +713,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, err
 			}
 			charged, err = settleDependents(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			charged, err = settlePromotion(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -1253,6 +1290,10 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 	// published. Zero — every write a surface makes on its own — waits for
 	// nothing.
 	req.Session = w.after
+	// AND THE OPERATION'S MINT INSTANT, here for the same reason: a call
+	// site knows only its own instant, and the surface that minted the op
+	// id is the one that knows when.
+	req.MintedAt = w.mintedAt(req.MintedAt)
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:
@@ -1262,6 +1303,25 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 			req.Subject.ID, err)
 	}
 	return result, err
+}
+
+// mintedAt is the instant a write's op id was minted: the one the surface
+// carried ([Provenance.MintedAt]), or call — the write's own — when it carried
+// none.
+//
+// THE EARLIER OF THE TWO. The carried instant can come from another node's
+// clock, and the costly direction is LATER: an op id stamped after an adoption
+// its first record predates is decided again on the one path the stamp exists
+// for, while one stamped too early costs at most an `unknown` a retry under
+// the same op id resolves.
+func (w *Writer) mintedAt(call time.Time) time.Time {
+	switch {
+	case w.opsMintedAt.IsZero():
+		return call
+	case call.IsZero() || w.opsMintedAt.Before(call):
+		return w.opsMintedAt
+	}
+	return call
 }
 
 // MoveTask drops one task between two neighbours, and it moves that task and

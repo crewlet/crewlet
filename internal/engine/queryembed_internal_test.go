@@ -360,3 +360,88 @@ func TestAQueryThatCannotBeEmbeddedIsAnsweredLexicallyAndMarked(t *testing.T) {
 		t.Errorf("a work ranking whose query was not embedded carries %+v", ranking.Partial)
 	}
 }
+
+// sandboxedVectorCompany is a company on the native backends with the fake
+// embeddings provider at model, and sandbox as its providers.sandbox block.
+func sandboxedVectorCompany(t *testing.T, provider, model, sandbox string) *config.Company {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+  embeddings:
+    type: openai-compatible
+    model: %s
+    base_url: %s
+    api_key: sk-test
+    dimensions: %d
+  sandbox:
+%s
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`, model, provider, conceptWidth, sandbox)))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	return cfg
+}
+
+// A REVISION AN APPLY REFUSED CHANGES NOTHING THE VECTORS ARE MADE OR READ BY.
+//
+// An apply builds a revision's embedding backend when it equips it, and only
+// later reaches steps that can still refuse it — here the sandbox, whose e2b
+// key resolves to nothing. The refused revision moves the model. Its backend
+// is part of an epoch that is never published, so the duty and a search go on
+// embedding with the model the node is serving: a backend held anywhere but
+// on the epoch would be the refused revision's, filing its model's vectors
+// under the served revision's model id and embedding every query with it.
+//
+// Mutation: read the backend from anywhere but the epoch [Engine.vectorSpace]
+// loads — the equip that built it, for one — and the provider is asked for the
+// refused revision's model.
+func TestARefusedRevisionMovesNoVector(t *testing.T) {
+	t.Parallel()
+	provider := newConceptServer(t)
+	e, duty := vectorEngine(t, sandboxedVectorCompany(t, provider.URL, "concepts-a",
+		"    fake: true"))
+	searcher := e.Knowledge()
+	org := e.Company().Org
+
+	refused := sandboxedVectorCompany(t, provider.URL, "concepts-b", `    e2b:
+      api_key: "${CREWLET_TEST_NO_SUCH_E2B_KEY}"`)
+	if _, _, err := e.Apply(t.Context(), refused); err == nil {
+		t.Fatal("a revision whose sandbox cannot be built was applied, so this " +
+			"case cannot say what a refused one leaves behind")
+	}
+	if got := e.Company().Config.Providers.Embeddings.Model; got != "concepts-a" {
+		t.Fatalf("the node serves model %q after a refused apply — the premise", got)
+	}
+
+	// A PAGE WRITTEN AFTER THE REFUSAL, so the duty has something to embed
+	// under whichever backend it reads now.
+	writePage(t, e, "Fleet handbook", "car maintenance schedule")
+	waitUntil(t, 20*time.Second, "the page to be searchable by its words", func() bool {
+		answer := searcher.Search(t.Context(), knowledge.Query{Text: "car maintenance", Org: org})
+		return len(answer.Hits) == 1
+	})
+	duty.tick(t.Context())
+	searcher.Search(t.Context(), knowledge.Query{Text: "automobile upkeep", Org: org})
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.models["concepts-b"] {
+		t.Errorf("the provider was asked for the refused revision's model: %v",
+			provider.models)
+	}
+	if !provider.models["concepts-a"] {
+		t.Errorf("nothing was embedded with the served model, so this case "+
+			"cannot tell a backend that moved from one that never ran: %v",
+			provider.models)
+	}
+}

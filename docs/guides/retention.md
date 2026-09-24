@@ -245,9 +245,12 @@ that is not.
 crewlet retention evict node-4 -confirm node-4
 ```
 
-It prints the watermark before and after, and the instant the eviction takes
-effect. **The evicted node stays counted for about a minute**, so a live node
-is certain to have read its own tombstone before the trim passes it.
+The eviction lands on **every log that gates on it** — the work tracker's and
+the knowledge base's — as one record per log, each naming the operator who ran
+it. The command prints one line per log with that record's outcome, then each
+log's trim floor before and after. **The evicted node stays counted for about a
+minute**, so a live node is certain to have read its own tombstone before the
+trim passes it.
 
 The honest worst case for that window is **zero**: a node three heartbeats late
 reads its tombstone exactly when the trim may pass it. So the window is a
@@ -256,6 +259,13 @@ applier's own **eviction gate**, which drops an evicted node's records wherever
 they land, depends on nothing but the log's own order, and holds when
 coordination cannot be reached at all.
 
+It is **refused while the node still holds its presence lease**: a node still
+reaching coordination is running, and an eviction is for one that has stopped —
+done to a running node, every record it publishes above the eviction applies
+nowhere and the trim stops counting it. The refusal is also what a fleet whose
+leases cannot be listed gets. `-force` evicts anyway, for a process you know is
+gone.
+
 Readmission is the inverse commit rather than a delete, so the whole history
 survives a replay:
 
@@ -263,10 +273,11 @@ survives a replay:
 crewlet retention readmit node-4 -confirm node-4
 ```
 
-It can be refused, and the refusal names the reason: a node whose own position
-is below the current trim floor cannot simply resume — it has to adopt a
-snapshot first, which is why the readmission prints its position beside the
-floor.
+It lands on the same logs and prints the same lines. It is not refused on the
+node's own position: a readmitted node whose position the log has trimmed past
+cannot replay its way back, so it adopts a peer's snapshot — at boot, or from
+its own heartbeat while running — exactly as any node below the floor does
+([the join runbook](#the-join-runbook)).
 
 ## A full log refuses; it does not shed
 
@@ -437,24 +448,68 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00Z
 ```
 
-The confirmation is the stream's own `created_at`, and the verb **prints it and
+The confirmation is the live stream's own `created_at`, as the broker reports
+it now rather than as the node booted against it, and the verb **prints it and
 refuses** rather than reading it and feeding it straight back — otherwise it
-would be confirming against its own output.
+would be confirming against its own output. It is compared to the second, so
+the form the verb prints, with the broker's fractional digits, and the same
+instant without them both confirm it.
 
 What a reanchor says is: *these rows are what they are; follow the new stream
 from its head.* The durable tables are the record of truth and the stream is a
 replay window, so the rows survive and the window is replaced. The generation
 is what makes an old position **comparable and safely stale** rather than
-indistinguishable from a current one — a stored version below it forms
-`expect = 0` on its next write, and a client cursor below it is refused by name.
+indistinguishable from a current one — an arbitration anchor below it counts as
+no anchor at all, so the object's next write asks the broker what the new
+stream holds rather than arbitrating against a dead number space, and a client
+cursor below it is refused by name.
 
 It does **not** recover records that were on the old stream and were never
 applied here.
 
-It refuses while any peer is hydrated on the live stream, naming the peer:
-adopting that peer's snapshot recovers the history a reanchor discards, so it
-is strictly the better recovery. `-force` is for the case where the peer cannot
-be reached.
+**One log moves.** A recreation is a fact about one stream, so the reanchor
+moves the named log's checkpoint into the next generation and no other log's —
+theirs name streams nobody touched. The rest of what it writes is that log's
+own:
+
+| Log | What a reanchor writes |
+|---|---|
+| `CREWLET_TRACKER_LOG` | every object row's version reset to the new generation, a generation record on the new stream, and an audit row naming both streams' creation instants and the record |
+| `CREWLET_PAGES_LOG` | a generation record on the new stream, whose apply writes the audit row on every node that applies it |
+| `CREWLET_TRACKER_VECTORS` | the checkpoint alone: the vectors claim no identity, so there is no record for another node to meet |
+
+The node that runs it **follows the new stream without a restart**: that log's
+applier stops, the checkpoint moves, the log's consumer is reset to it, and the
+applier starts again on the live stream, so its reads stop refusing
+`wrong_stream`. The other logs' appliers run throughout. It is refused while
+the node is adopting a peer's snapshot, or running another reanchor: each of
+those rewrites the same estate with appliers halted.
+
+The generation record is a **claim**. The first node to publish it holds the
+new generation; a second node re-anchoring the same log is refused, naming the
+operation that holds it, before any checkpoint of its own moves; and a
+reanchor interrupted after its record landed is simply run again — the re-run
+finds its own record there and finishes.
+
+It refuses while any peer reports a position at this node's generation with
+anything applied, naming the peer: adopting that peer's snapshot recovers what
+a reanchor would discard. No flag overrides that refusal. `-force` overrides
+the other two — a positions register that cannot be read, and a node that is
+not the most caught-up one — and what it accepts losing is every record the
+fleet applied above this node's own position.
+
+**Every other node follows by restarting.** Its checkpoint on the log still
+names the old stream, so it goes on refusing reads on that log. At boot it
+finds the fleet on the new generation — the re-anchored node publishes its
+position there — and adopts a snapshot of that generation: one taken after the
+reanchor by the re-anchored node, or by a node that has already followed it.
+`crewlet retention snapshots` shows each node's newest snapshot and its age. A
+boot that finds none comes up still refusing, so restart it again once one
+exists. It does not follow while running: the trim concludes nothing on the
+re-anchored log while any counted node reports a position at an older
+generation, which names a sequence space that no longer exists — so the log's
+first sequence never passes that node's old checkpoint, which is what sends a
+running node to adopt.
 
 ## Proving a restore
 

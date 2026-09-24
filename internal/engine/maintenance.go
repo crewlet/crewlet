@@ -48,7 +48,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// what makes a single list of them honest rather than a
 		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
-		jobs = append(jobs, maintenance.LearningJobs(e.diary(db))...)
+		jobs = append(jobs, maintenance.LearningJobs(e.diary(db, nil))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
 		jobs = append(jobs, maintenance.LedgerJobs(

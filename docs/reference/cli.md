@@ -18,11 +18,11 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
-| `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
+| `crewlet retention evict <node> -confirm <node> [-force]` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Lands on every log that gates on evictions and prints each one's outcome, then each log's trim floor before and after. Refused while the node still holds its presence lease unless `-force` |
+| `crewlet retention readmit <node> -confirm <node>` | The inverse commit, on the same logs. Not refused on the node's position: a node the log has trimmed past adopts a peer's snapshot |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
-| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
+| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Follow a recreated stream from its head: move that one log's checkpoint into the next generation, declaring every position below it comparable and safely stale. The node running it follows the live stream without a restart |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -503,10 +503,18 @@ Applying is done by **opening the store**, not by a second code path: a
 migrator the engine does not use is one that can disagree with it about what
 "applied" means. `-check` is the exception and has to be — it reads
 `schema_migrations` and applies nothing, because a command that migrated
-while answering "what would you migrate" could never answer it. A database
-with no `schema_migrations` table has applied nothing, which is what a fresh
-install looks like rather than an error; on one, `-check` leaves each database
-as an empty file, with an empty `-wal` and its `.lock` sidecar beside it.
+while answering "what would you migrate" could never answer it.
+
+A database that does not exist has applied nothing, and `-check` reports it so
+without creating a database, a `-wal` or a `.lock` at a path it was only
+pointed at. A database with no `schema_migrations` table has applied nothing
+too, which is what a fresh install looks like rather than an error; one whose
+`schema_migrations` table exists and cannot be read fails the check. Reading a
+database that exists leaves beside it what any open of it does: its `-wal`,
+and a `.lock` if it had none — so run the check as the user the engine runs as
+(see [Deployment § The store](../guides/deployment.md#the-store)). Like every
+command that opens the store, it takes the store's lock, so against a node
+whose engine is running it is refused, naming the process that holds the file.
 
 ---
 
@@ -559,11 +567,13 @@ The **caps** are not stored here — they come from the active company config
 derives the same numbers without coordinating. Only the usage is shared.
 
 `show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
-charge away, or `-` while it is not refusing. Read it rather than `USED`
-against `CAP`, because a refused charge increments nothing: a seat charged in
-3 000-token rounds against a 100 000 cap stops near 99 000 and its row would
-otherwise read as headroom. The next charge the scope admits clears it, and so
-does a reset.
+charge away, or `-` while it is not refusing. The next charge the scope admits
+clears it, and so does a reset. A scope is out of budget when that column is
+set or `USED` is at or past `CAP`: a refused round has already been billed and
+is counted all the same, so `USED` reads past `CAP` after a refusal, and a
+coding run's tokens, counted when the run is collected, can take it past `CAP`
+with no refusal at all. Either way the scope's next round is refused before it
+is sent.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
@@ -754,15 +764,22 @@ so nothing above it can be deleted. That is deliberate for a node that is
 coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
-use. The command prints the watermark before and after and the instant the
-eviction takes effect: **the node stays counted for about a minute**, so a live
-one is certain to have read its own tombstone before the trim passes it.
+use. The eviction lands on every log that gates on it — the work tracker's and
+the knowledge base's — as one record per log naming the operator, and the
+command prints one line per log with its outcome (`pending` says the record is
+durable and not yet applied on the node answering), then each log's trim floor
+before and after. **The node stays counted for about a minute**, so a live one
+is certain to have read its own tombstone before the trim passes it.
+
+It is refused while the node still holds its presence lease, or when the
+fleet's leases cannot be listed: a node reaching coordination is running, and
+an eviction is for one that has stopped. `-force` evicts anyway, for a process
+you know is gone.
 
 `readmit` is the inverse commit rather than a delete, so the eviction's whole
-history survives a replay. It can be refused when the node's own position is
-below the current trim floor — that node has to adopt a snapshot first — and
-the refusal prints its position beside the floor, because that inequality is
-the reason.
+history survives a replay. It is not refused on the node's own position: a
+readmitted node the log has trimmed past adopts a peer's snapshot, at boot or
+from its own heartbeat, as any node below the floor does.
 
 ### `crewlet retention set-capacity`
 
@@ -838,11 +855,20 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00
 The recovery for a stream that was genuinely recreated. Run without `-confirm`
 it **prints the live stream's own `created_at` and refuses**: the confirmation
 means *I looked at the thing I am re-anchoring*, and a verb that read the value
-and fed it straight back would be confirming against its own output.
+and fed it straight back would be confirming against its own output. The
+instant is the broker's, read when the verb runs, and the confirmation is
+compared to the second — the printed form with its fractional digits and the
+same instant without them both confirm it.
 
-It refuses while any peer is hydrated on the live stream, **naming the peer** —
-adopting that peer's snapshot recovers history a reanchor discards. `-force` is
-for the case where the peer cannot be reached.
+It moves the named log's checkpoint and no other log's, and the node running it
+follows the live stream without a restart. A second node re-anchoring the same
+log is refused, naming the operation that already holds the new generation.
+
+It refuses while any peer reports a position at this node's generation with
+anything applied, **naming the peer** — adopting that peer's snapshot recovers
+what a reanchor would discard — and no flag overrides that. `-force` overrides
+the other two refusals: a positions register that cannot be read, and a node
+that is not the most caught-up one.
 
 It does not recover records that were on the old stream and were never applied
 here, and the refusal says so. See

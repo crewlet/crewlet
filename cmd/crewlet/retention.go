@@ -504,9 +504,17 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	}
 	node, rest := splitSubject(args)
 	var confirm *string
+	var force *bool
 	client, err := nodeClientFor(rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id — this changes whether that machine's records apply")
+		if evict {
+			force = fs.Bool("force", false,
+				"evict although the node still holds a live presence lease, or "+
+					"although the fleet's leases cannot be listed. A node still "+
+					"reaching coordination may still be writing, so this is for a "+
+					"process you know is gone")
+		}
 	})
 	if err != nil {
 		return err
@@ -524,29 +532,43 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// to move — and a readmission can be refused by exactly that number.
 	before := retentionFloors(client)
 	var answer struct {
-		Node     string `json:"node"`
-		Evicted  bool   `json:"evicted"`
-		Outcome  string `json:"outcome"`
-		Position struct {
-			Stream     string `json:"stream"`
-			Generation uint32 `json:"generation"`
-			Seq        uint64 `json:"seq"`
-		} `json:"position"`
+		Node    string `json:"node"`
+		Evicted bool   `json:"evicted"`
+		OpID    string `json:"op_id"`
+		Domains []struct {
+			Domain   string `json:"domain"`
+			Stream   string `json:"stream"`
+			Outcome  string `json:"outcome"`
+			Position struct {
+				Stream     string `json:"stream"`
+				Generation uint32 `json:"generation"`
+				Seq        uint64 `json:"seq"`
+			} `json:"position"`
+		} `json:"domains"`
 	}
 	path := fmt.Sprintf("/work/retention/%s/%s?confirm=%s", verb,
 		url.PathEscape(node), url.QueryEscape(node))
+	if force != nil && *force {
+		path += "&force=true"
+	}
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s %s: %s at %s %d\n", verb, node, answer.Outcome,
-		answer.Position.Stream, answer.Position.Seq)
-	if answer.Outcome == "pending" {
-		// THE THREE-VALUED OUTCOME, said plainly. A gate the operator
-		// believes has landed and which is only durable is the
-		// difference between a node that has stopped writing and one
-		// that is about to.
-		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the gate takes effect as each node reaches it.")
+	// ONE LINE PER LOG, because a node is evicted from each log its
+	// applier gates on, and each record lands — or stays pending — on its
+	// own.
+	for _, d := range answer.Domains {
+		fmt.Fprintf(stdout, "%s %s on %s: %s at %s %d\n", verb, node, d.Domain,
+			d.Outcome, d.Position.Stream, d.Position.Seq)
+		if d.Outcome == "pending" {
+			// THE THREE-VALUED OUTCOME, said plainly. A gate the
+			// operator believes has landed and which is only durable is
+			// the difference between a node that has stopped writing and
+			// one that is about to.
+			fmt.Fprintf(stdout, "  The record is durable and this node has not "+
+				"applied it yet: the gate on %s takes effect as each node "+
+				"reaches it.\n", d.Domain)
+		}
 	}
 	if evict {
 		fmt.Fprintf(stdout, "  %s stays COUNTED for about %s, so a live node is "+

@@ -108,16 +108,35 @@ func callTool(name string, args map[string]any, in, out int) *llm.Completion {
 }
 
 // meter is a shared token counter that records every charge it actually saw.
+//
+// Its ROOM is scripted apart from its charges, because the parent a slice sits
+// on can be in either state independently: a parent with room left whose
+// charge the round's size did not fit, a parent whose store failed a write
+// that its read had answered, or one that ran out between two rounds.
 type meter struct {
 	mu      sync.Mutex
 	charges []int
 	total   int
 	refuse  bool
 	err     error
+
+	// fullAt is the spend at which the parent reports no room; 0 never.
+	fullAt int
+	// roomErrAt is the spend at which the parent's room read starts to
+	// fail; 0 never.
+	roomErrAt int
 }
 
-func (m *meter) Spend(context.Context, int) (toolloop.SpendOutcome, error) {
-	return toolloop.SpendOutcome{}, nil
+func (m *meter) room() (toolloop.SpendOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case m.roomErrAt > 0 && m.total >= m.roomErrAt:
+		return toolloop.SpendOutcome{}, errors.New("counter unreachable")
+	case m.fullAt > 0 && m.total >= m.fullAt:
+		return toolloop.SpendOutcome{Scope: "org", Used: m.total, Limit: m.fullAt}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
 }
 
 func (m *meter) spend(tokens int) (toolloop.SpendOutcome, error) {
@@ -148,6 +167,10 @@ type countingMeter struct{ m *meter }
 
 func (c countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	return c.m.spend(tokens)
+}
+
+func (c countingMeter) Room(context.Context) (toolloop.SpendOutcome, error) {
+	return c.m.room()
 }
 
 // publisher captures the batch summary event.
@@ -1022,6 +1045,9 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	cfg.Budget = countingMeter{m}
 	cfg.ParentRemaining = 1000 // total slice = 200, one 150-token child fits
 	cfg.Limits.MinTokensPerTask = 0
+	// ONE AT A TIME, so what each child finds is the slice its elders left:
+	// the concurrent case is the one below.
+	cfg.Limits.MaxParallel = 1
 
 	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
 		{Prompt: "a", SystemPrompt: "s"},
@@ -1034,8 +1060,7 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	// What one slice for the call decides is how many rounds are ADMITTED. A
 	// slice per child would have admitted all three, each going on to spend
 	// a fifth of its own, which is the fan-out cost being invisible until the
-	// org budget is gone. Each child's first round is billed before it is
-	// charged, so the parent's counter holds all three — as their records do.
+	// org budget is gone.
 	var ok, billed int
 	for _, r := range results {
 		billed += r.Tokens()
@@ -1046,9 +1071,16 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	if ok != 1 {
 		t.Errorf("%d children finished on a slice that fits one: %+v", ok, results)
 	}
-	if m.sum() != 450 || billed != m.sum() {
-		t.Errorf("the parent counter holds %d and the workers' records %d; want both at the 450 "+
+	// The second child's round was sent while the slice still had room and
+	// is billed although its charge was refused; the third found the slice
+	// spent and was never sent. The parent's counter holds exactly what the
+	// workers' records report.
+	if m.sum() != 300 || billed != m.sum() {
+		t.Errorf("the parent counter holds %d and the workers' records %d; want both at the 300 "+
 			"the provider billed", m.sum(), billed)
+	}
+	if p.count() != 2 {
+		t.Errorf("the model was called %d times; the third child had no room", p.count())
 	}
 	for _, r := range results {
 		if r.Failed() && r.Status != subagent.StatusBudget {
@@ -1143,19 +1175,34 @@ func TestConcurrentChildrenCannotAllBeAdmittedIntoTheSlice(t *testing.T) {
 	m := &meter{}
 	release := make(chan struct{})
 	slow := blockingMeter{inner: countingMeter{m}, gate: release}
-	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+	// EVERY CHILD'S ROUND IS SENT before any is charged: each read its room
+	// at a slice nobody had charged yet, which is the state the race needs.
+	// A child that started after another had charged would find the slice
+	// spent and never be sent at all.
+	const children = 8
+	var arrived atomic.Int32
+	allSent := make(chan struct{})
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		if arrived.Add(1) == children {
+			close(allSent)
+		}
+		select {
+		case <-allSent:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		return answer("answer", 60, 0), nil
 	}}
 	cfg := baseConfig(t, w, p)
 	cfg.Budget = slow
 	cfg.ParentRemaining = 500 // slice = 100, so exactly one 60-token child fits
 	cfg.Limits.MinTokensPerTask = 0
-	cfg.Limits.MaxParallel = 8
+	cfg.Limits.MaxParallel = children
 
 	done := make(chan []subagent.Result, 1)
 	go func() {
 		var tasks []subagent.Task
-		for i := range 8 {
+		for i := range children {
 			tasks = append(tasks, subagent.Task{
 				Prompt: fmt.Sprintf("t%d", i), SystemPrompt: "s",
 			})
@@ -1168,6 +1215,7 @@ func TestConcurrentChildrenCannotAllBeAdmittedIntoTheSlice(t *testing.T) {
 		done <- res
 	}()
 	// Let every child pile up inside the inner charge before any returns.
+	<-allSent
 	time.Sleep(30 * time.Millisecond)
 	close(release)
 	results := <-done
@@ -1179,12 +1227,13 @@ func TestConcurrentChildrenCannotAllBeAdmittedIntoTheSlice(t *testing.T) {
 		}
 	}
 	if ok != 1 {
-		t.Errorf("%d of 8 children were admitted into a one-child slice", ok)
+		t.Errorf("%d of %d children were admitted into a one-child slice", ok, children)
 	}
 	// Every child's round was billed before it was charged, so the parent's
 	// counter holds all eight, admitted or not.
-	if m.sum() != 8*60 {
-		t.Errorf("the parent counter holds %d, want the 480 the eight rounds billed", m.sum())
+	if m.sum() != children*60 {
+		t.Errorf("the parent counter holds %d, want the %d the eight rounds billed",
+			m.sum(), children*60)
 	}
 }
 
@@ -1208,6 +1257,104 @@ func TestAnOrgRefusalIsNotBlamedOnTheChildsSlice(t *testing.T) {
 	}
 	if !res.Failed() {
 		t.Errorf("a refused charge did not stop the child: %+v", res)
+	}
+}
+
+// THE PARENT'S REFUSAL IS REPORTED EVEN WHEN THE SLICE IS OVER TOO.
+//
+// One round can be refused by both: the company is out, and the round was
+// larger than the call's whole slice. The company is what an operator has to
+// act on, so it is the answer — a slice refusal beside it names a cap that was
+// never the one binding. The case above cannot tell the order apart, because
+// its round fits the slice.
+func TestAParentRefusalIsReportedWhenTheSliceIsOverToo(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 50, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{&meter{refuse: true}}
+	cfg.ParentRemaining = 100 // slice = 20, and the round costs 50
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusFailed {
+		t.Fatalf("status = %q, want the parent's refusal as a failure: %+v", res.Status, res)
+	}
+	if !strings.Contains(res.Error, "org budget") {
+		t.Errorf("error = %q, want the company's budget named", res.Error)
+	}
+}
+
+// AN UNREACHABLE PARENT IS REPORTED EVEN WHEN THE SLICE IS OVER TOO. The
+// charge did not say whether it landed, and reading it as the slice running
+// out would hide an outage behind a budget nobody needs to raise.
+func TestAnUnreachableParentIsReportedWhenTheSliceIsOverToo(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 50, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{&meter{err: errors.New("counter unreachable")}}
+	cfg.ParentRemaining = 100 // slice = 20, and the round costs 50
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusFailed || !strings.Contains(res.Error, "counter unreachable") {
+		t.Errorf("result = %q %q, want the unreachable counter as the failure", res.Status, res.Error)
+	}
+}
+
+// ROOM ASKS THE PARENT FIRST TOO. A worker whose slice is spent and whose
+// company is out is stopped for the company, before its next call is sent.
+func TestAParentWithNoRoomIsReportedBeforeASpentSlice(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			// Exactly the slice: admitted, and nothing left of it.
+			return callTool("read_file", map[string]any{"path": "/x"}, 20, 0), nil
+		}
+		return answer("never sent", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{&meter{fullAt: 20}}
+	cfg.ParentRemaining = 100 // slice = 20
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusFailed || !strings.Contains(res.Error, "org budget") {
+		t.Errorf("result = %q %q, want the company's lack of room", res.Status, res.Error)
+	}
+	if p.count() != 1 {
+		t.Errorf("the model was called %d times; the second round had no room", p.count())
+	}
+}
+
+// AN UNREADABLE PARENT IS REPORTED BEFORE A SPENT SLICE, for the reason a
+// charge's is.
+func TestAnUnreadableParentRoomIsReportedBeforeASpentSlice(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			return callTool("read_file", map[string]any{"path": "/x"}, 20, 0), nil
+		}
+		return answer("never sent", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{&meter{roomErrAt: 20}}
+	cfg.ParentRemaining = 100 // slice = 20
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusFailed || !strings.Contains(res.Error, "counter unreachable") {
+		t.Errorf("result = %q %q, want the unreadable counter as the failure", res.Status, res.Error)
+	}
+	if p.count() != 1 {
+		t.Errorf("the model was called %d times on a budget nobody could read", p.count())
 	}
 }
 
@@ -2458,6 +2605,11 @@ func (b blockingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOut
 	return b.inner.Spend(ctx, tokens)
 }
 
+// Room is not held: the gate is on the charge, where the window it opens is.
+func (b blockingMeter) Room(ctx context.Context) (toolloop.SpendOutcome, error) {
+	return b.inner.Room(ctx)
+}
+
 // errOnceMeter fails the FIRST charge and serves the rest, so a test can put a
 // store blip in the middle of a batch.
 type errOnceMeter struct {
@@ -2472,6 +2624,11 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 		return toolloop.SpendOutcome{}, errors.New("counter unreachable")
 	}
 	return e.inner.Spend(ctx, tokens)
+}
+
+// Room reads the counter the blip is a write to, which answers.
+func (e errOnceMeter) Room(ctx context.Context) (toolloop.SpendOutcome, error) {
+	return e.inner.Room(ctx)
 }
 
 // refuseOnceMeter refuses the FIRST charge — counting it at the inner meter,
@@ -2490,6 +2647,11 @@ func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendO
 		return outcome, err
 	}
 	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: 0, Limit: 0}, nil
+}
+
+// Room has room: the refusal is of one charge's size, not of a spent counter.
+func (r refuseOnceMeter) Room(ctx context.Context) (toolloop.SpendOutcome, error) {
+	return r.inner.Room(ctx)
 }
 
 // skillFor is a one-skill catalogue that fires only when its tool is in

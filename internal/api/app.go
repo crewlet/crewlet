@@ -191,9 +191,11 @@ type Options struct {
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base, served to
-	// an operator's AI assistant over MCP. Nil serves none and the route
-	// is ABSENT, which is the honest shape for a company on Jira and
-	// Confluence: there is nothing here it could manage.
+	// an operator's AI assistant over MCP. Nil mounts no route. `crewlet
+	// run` hands every node that serves this API one, and what it serves
+	// follows the revision current at each request — so the server answers
+	// 404 itself while that revision serves it nothing, and the next
+	// revision that serves something is answered with no restart.
 	//
 	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
 	// company, and the credential's own name is what lands on each record

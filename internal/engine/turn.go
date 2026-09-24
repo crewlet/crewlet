@@ -59,17 +59,28 @@ type Dispatcher struct {
 	// copies buffer on the queue rather than looping straight back.
 	Pause func(ctx context.Context, handle, reason string) error
 
-	// Answer offers a delivery to a parked coding run as the reply to the
-	// question it asked, and reports whether it was the answer.
+	// Answer offers a delivery to a coding run parked on a question, as the
+	// person's reply to it, and reports whether it was the answer. An error
+	// is a reply that could not be handed to its run.
 	//
-	// THE ONE WAY OUT OF THE SANDBOX PARK. A run that stops to ask a person
-	// something leaves its seat busy, so every inbound on that seat is
-	// requeued — including the person's reply. Without this seam the answer
-	// is parked behind the question for ever: the run sits in
-	// [sandbox.StatusAwaiting] until its box's pause TTL reclaims it, and
-	// the person who answered is never told anything happened.
+	// THE ONE WAY OUT OF THE CLARIFICATION PARK. A run that stops to ask a
+	// person something FREES its seat once the question is recorded — a
+	// person can take days, and the answer arrives on the seat's own inbox —
+	// so the reply reaches this dispatcher like any other message, and this
+	// seam is what tells it from a new ask. Without it the reply runs as a
+	// fresh turn, and the run waits in [sandbox.StatusAwaiting], its box
+	// reclaimed once the pause TTL passes, for an answer that has already
+	// arrived.
 	//
-	// Nil is a node with no coordinator, where a park is the whole answer.
+	// Offered every partition on a conversation that is about to become a
+	// turn, and every one about to be parked behind the seat's other running
+	// job, so a seat is answered whether or not it is busy — less, on both
+	// paths, what the completion ledger has recorded, which is how an answer
+	// already handed over is kept from the run's next question. Each offer
+	// reads the fleet's run records, which is the price of recognising an
+	// answer on a seat that holds no run in memory.
+	//
+	// Nil is a node with no coordinator, where no run can be parked.
 	Answer func(ctx context.Context, handle, conversation, answer string,
 		trigger *events.Event) (bool, error)
 
@@ -293,11 +304,28 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		return d.park(ctx, handle, screening, held)
 	case inbox.ActionPark:
-		if screening.AwaitingSandbox && d.answered(ctx, handle, screening.Events) {
-			// The delivery WAS the answer, and the resume it triggered has
-			// already run. Acking is what stops it being requeued behind
-			// the question it just answered.
-			return queue.Ack()
+		if screening.AwaitingSandbox {
+			// A seat busy with one job can still have ANOTHER parked on
+			// a question, and this delivery may be its answer. A reply
+			// that could not be handed over is parked like the rest: the
+			// requeued copy is offered again when it comes back.
+			//
+			// Only what the completion ledger has not recorded is
+			// offered, for the reason the proceed path reads it first: a
+			// copy of an answer already handed over would be taken as
+			// the reply to whatever the run asked next on the same
+			// thread. What it has recorded is parked with the rest, and
+			// dropped by that read when it comes back to a free seat.
+			if unworked := d.dropWorked(ctx, handle, screening.Events); len(unworked) > 0 {
+				if handled, err := d.answered(ctx, handle, unworked); err == nil && handled {
+					// The delivery WAS the answer, and the resume it
+					// triggered has already run. Acking is what stops it
+					// being requeued behind the question it just
+					// answered.
+					d.recordAnswered(ctx, handle, unworked)
+					return queue.Ack()
+				}
+			}
 		}
 		return d.park(ctx, handle, screening, held)
 	}
@@ -318,6 +346,26 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	held.events = surviving
 	d.noteSkipped(ctx, handle, screening.Events, surviving)
 	if len(surviving) == 0 {
+		return queue.Ack()
+	}
+
+	// A PERSON'S ANSWER TO A PARKED RUN arrives HERE, as an ordinary
+	// delivery: a run parked on a question frees its seat, so nothing above
+	// parked it. It is offered to that run before it can become a turn.
+	//
+	// AFTER THE COMPLETION LEDGER, because an answer that was handed over is
+	// recorded there: a copy of it redelivered after a lost ack is dropped
+	// by the read above rather than offered again, where it would be taken
+	// as the reply to whatever the run asked next on the same thread.
+	switch handled, err := d.answered(ctx, handle, surviving); {
+	case err != nil:
+		// The run asked, and its reply could not be handed over. NOT an
+		// ordinary turn: that would spend the answer on a turn that knows
+		// nothing of the question, and leave the run waiting for it. The
+		// redelivery offers it again.
+		return queue.Nak(fmt.Errorf("engine: answer for %s: %w", handle, err))
+	case handled:
+		d.recordAnswered(ctx, handle, surviving)
 		return queue.Ack()
 	}
 
@@ -652,31 +700,58 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 	}
 }
 
-// answered offers a parked seat's delivery to its waiting coding run.
+// answered offers a delivery to a coding run parked on a question.
 //
-// FAIL-OPEN, in both senses. A missing seam, a partition with no conversation
-// key and a failed lookup all report false, and the delivery is parked as it
-// would have been — which is recoverable, where acking a message nothing
-// handled is not.
+// THREE-VALUED: handled, not an answer, or an answer that could not be handed
+// to its run — which each caller settles its own way, because what it would
+// otherwise do with the delivery differs. A missing seam and a partition with
+// no conversation key are not answers, and neither is a lookup the coordinator
+// could not make: that one fails open inside the coordinator, so an unreadable
+// run store never swallows an ordinary message.
 //
 // The conversation key is the disambiguation: the coordinator matches on the
 // conversation the question was asked in, so a delivery on any other thread is
-// not this run's answer and parks like the rest.
-func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) bool {
+// not this run's answer.
+func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) (bool, error) {
 	if d.Answer == nil {
-		return false
+		return false, nil
 	}
 	conversation := conversationKeyOf(evs)
 	if conversation == "" {
-		return false
+		return false, nil
 	}
 	handled, err := d.Answer(ctx, handle, conversation, DescribeTrigger(evs), first(evs))
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
 			"agent_handle", handle, "conversation_key", conversation, "error", err)
-		return false
+		return false, err
 	}
-	return handled
+	return handled, nil
+}
+
+// recordAnswered records a partition that was handed to a parked run as its
+// answer, per constituent, as [Dispatcher.recordWorked] records a turn's.
+//
+// It has been worked: the run resumed on it. A copy of it that comes back —
+// its ack lost to a node that stopped, say — must be dropped by the
+// completion ledger rather than run as a new turn or handed to whatever the
+// run asks next on the same thread. Best effort, like every completion write.
+func (d *Dispatcher) recordAnswered(ctx context.Context, handle string, evs []*events.Event) {
+	if d.Completions == nil {
+		return
+	}
+	now := d.now()
+	for _, ev := range evs {
+		if ev == nil || !d.ledgered(ev.Type) {
+			continue
+		}
+		key := workkey.Derive([]string{ev.ID.String()})
+		if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
+			log.WarnContext(ctx, "answer_not_recorded", "seat", handle, "error", err,
+				"detail", "a redelivery of this answer may be run as a new turn")
+			return
+		}
+	}
 }
 
 // first is the partition's leading event, which is the one a resume is traced

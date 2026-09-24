@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -281,8 +283,9 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	// The calls the turn is judged on hold the suspending call too, answered
-	// with what the run reported: it started a billed box.
+	// The calls a FINISHED re-entry hands the turn hold the suspending call
+	// too, answered with what the run reported: the reviewer and both ledgers
+	// read the coding run's report from there.
 	var held bool
 	for _, c := range w.Calls {
 		held = held || (c.Name == "run_sandbox" && c.Result == "the run succeeded")
@@ -336,6 +339,112 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 		t.Errorf("total_tokens = %d, want 700 (500 before the suspend, 200 after)",
 			done.TotalTokens)
 	}
+}
+
+// A RESUME THAT BREAKS ON A TRANSIENT FAILURE IS RETRIED, NOT ABANDONED.
+//
+// A retry of a resume re-enters the conversation the pending-run row holds, in
+// which every call made before the suspend is already answered — the coding
+// run's launch among them — so none of them is made again. A broken re-entry
+// is judged on what IT did before it broke, and here that is nothing: its first
+// model call failed. Judged on the launch instead, a provider's 503 would read
+// as a turn that had written outside the engine, and the finished run would be
+// settled and its record deleted rather than handed back for the retry.
+func TestAResumeThatBreaksTransientlyIsRetriedNotAbandoned(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: unavailable{}}}, buildOpts{
+		pub:    pub,
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+	// As the engine registers it: a builtin whose own annotations say it
+	// reaches outside the process, which is what the proof of an outward
+	// write counts.
+	if err := reg.RegisterWith(stubTool{name: runner.RunSandboxTool, out: "launched"},
+		tools.OriginBuiltin, tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
+		}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	res, err := turn.Run(context.Background(), r, settings(), turn.Input{
+		RunID: "t-resume-503", Reply: turn.ToolReply(""), Resume: true,
+	})
+	if err == nil {
+		t.Fatal("a resume whose provider failed reported no error")
+	}
+	if reason, abandon := turn.Abandon(res, err); abandon {
+		t.Errorf("a transient failure on the first post-resume round was abandoned (%s), so the "+
+			"finished run would be settled instead of retried", reason)
+	}
+
+	// THE RECORD STILL SHOWS THE LAUNCH. What the retry decision reads and
+	// what the phase publishes are two different things.
+	done := completedPhase(t, pub, "execute")
+	if !done.Failed {
+		t.Error("the resumed phase's record is not marked failed")
+	}
+	var launch string
+	for _, ex := range done.ToolExecutions {
+		if name, _ := ex["name"].(string); name == runner.RunSandboxTool {
+			launch, _ = ex["result"].(string)
+		}
+	}
+	if launch != "the run succeeded" {
+		t.Errorf("the failed record's run_sandbox call is answered %q; want the launch, answered "+
+			"with what the run reported: %v", launch, done.ToolExecutions)
+	}
+}
+
+// A RESUME THAT WROTE BEFORE IT BROKE IS ABANDONED. The counterpart to the
+// case above: what the re-entry did itself is exactly what a retry would do
+// again, so a post it made before its provider failed is proof enough to stop.
+func TestAResumeThatWroteBeforeItBrokeIsAbandoned(t *testing.T) {
+	t.Parallel()
+	prov := &postsThenFails{post: llm.Completion{ToolCalls: []llm.ToolCall{
+		{ID: "post", Name: "slack_post", Arguments: map[string]any{"text": "the fix is up"}},
+	}}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+
+	res, err := turn.Run(context.Background(), r, settings(), turn.Input{
+		RunID: "t-resume-wrote", Reply: turn.ToolReply(""), Resume: true,
+	})
+	if err == nil {
+		t.Fatal("a resume whose provider failed reported no error")
+	}
+	if _, abandon := turn.Abandon(res, err); !abandon {
+		t.Error("a re-entry that posted before it broke would be retried, and post again")
+	}
+}
+
+// postsThenFails answers its first call with a post and fails every call after.
+type postsThenFails struct {
+	post  llm.Completion
+	calls int
+}
+
+func (p *postsThenFails) Model() string { return "posts-then-fails" }
+
+func (p *postsThenFails) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	p.calls++
+	if p.calls == 1 {
+		c := p.post
+		return &c, nil
+	}
+	return unavailable{}.Complete(ctx, req)
+}
+
+// unavailable is a provider every call of which fails with a server error, the
+// transient kind a fallback chain walks past and a redelivery may not meet.
+type unavailable struct{}
+
+func (unavailable) Model() string { return "unavailable" }
+
+func (unavailable) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return nil, &llm.Error{Kind: llm.KindServer, Provider: "test", Model: "unavailable",
+		Status: 503, Err: errors.New("service unavailable")}
 }
 
 // suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
@@ -452,6 +561,65 @@ func TestNoJudgePhaseIsPublishedWhenNoJudgeWasAsked(t *testing.T) {
 	}
 }
 
+// THE JUDGE IS NOT ASKED ON A BUDGET WITH NO ROOM. Its call is charged once it
+// has answered, like a round's, so asking it there pays for a verdict on rounds
+// the tool loop would refuse to send.
+func TestTheJudgeIsNotAskedOnABudgetWithNoRoom(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+	}}
+	pub := newCapture()
+	judge := &askedJudge{}
+	// Room for the phase's two rounds, and none after them.
+	meter := &roomFor{reads: 2}
+	r := extendableRunner(t, prov, pub, judge, meter)
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if judge.asked != 0 {
+		t.Errorf("the judge was asked %d times on a budget with no room", judge.asked)
+	}
+	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
+		t.Errorf("%d judge phases published for a judge that was never asked", len(got))
+	}
+	if done := completedPhase(t, pub, "execute"); done.RoundsUsed != 2 {
+		t.Errorf("the phase ran %d rounds, want its own 2 and no extension", done.RoundsUsed)
+	}
+}
+
+// askedJudge counts the calls it is asked, and would grant every one.
+type askedJudge struct{ asked int }
+
+func (j *askedJudge) Decide(context.Context, extension.Request) (extension.Decision, error) {
+	j.asked++
+	return extension.Decision{Extend: true, Reason: "go on", Asked: true, Model: "judge-model"}, nil
+}
+
+// roomFor has room for its first `reads` reads and none after, and admits
+// every charge.
+type roomFor struct {
+	mu    sync.Mutex
+	reads int
+	seen  int
+}
+
+func (m *roomFor) Spend(context.Context, int) (toolloop.SpendOutcome, error) {
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+func (m *roomFor) Room(context.Context) (toolloop.SpendOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seen++
+	if m.seen > m.reads {
+		return toolloop.SpendOutcome{Scope: "org", Used: 100, Limit: 100}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
 // spendingJudge grants every request and reports what the call cost, which is
 // the half nothing carried.
 type spendingJudge struct{}
@@ -473,6 +641,11 @@ func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutc
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.seen = append(m.seen, tokens)
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+// Room always has room: this meter counts, it never refuses.
+func (m *countingMeter) Room(context.Context) (toolloop.SpendOutcome, error) {
 	return toolloop.SpendOutcome{OK: true}, nil
 }
 

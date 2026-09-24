@@ -798,23 +798,27 @@ revisions and the sealed bootstrap secrets — and the company's tracker and
 knowledge base — readable by all of them.
 
 A database or `-wal` the store finds with a wider mode is **tightened** when
-it opens it: every permission beyond the owner's is taken away, and the node
-logs `store_file_mode_tightened` naming the file and the mode it had. It is
-tightened rather than warned about because nothing but the engine opens these
-files — the lock refuses any other crewlet process, and a copy is `crewlet
-backup`'s, taken from inside — so a wider mode serves nothing the engine does.
-A grant you made for something else fails loudly once it is gone (that reader
-is refused, naming the path), where a mode left open would fail silently for
-as long as nobody read the warning. A file the engine cannot tighten, because
-another user owns it, is logged as `store_file_mode_not_tightened` and opened
-as it is.
+it opens it: every permission beyond the owner's is taken away, and the process
+that opened it logs `store_file_mode_tightened` naming the file and the mode it
+had. It is tightened rather than warned about because nothing but crewlet needs
+to open these files — the engine, or while it is stopped one of its own
+commands run as the same user — and the lock admits one process at a time,
+while an online copy is `crewlet backup`'s, taken by the engine from inside. So
+a wider mode serves nothing crewlet does. A grant you made for something else
+fails loudly once it is gone (that reader is refused, naming the path), where a
+mode left open would fail silently for as long as nobody read the warning. A
+file crewlet cannot tighten, because another user owns it, is logged as
+`store_file_mode_not_tightened` and opened as it is.
 
-**Run every command that opens the store file itself as the user the engine
-runs as** — `crewlet migrate`, and the `crewlet config` and `crewlet secrets`
-commands that work on the file while the engine is stopped. A `-wal` or
-`.lock` such a command makes as another user (`root`, say) is owner-only and
-that user's, so the engine cannot open it afterwards. `crewlet migrate
--check` against a path with no database makes nothing there.
+**Run every crewlet command you point at this node's Tier A config as the user
+the engine runs as.** While the engine is stopped, these open the store files
+themselves: `crewlet migrate`, `crewlet config` and `crewlet search eval`, and,
+when the config declares `secrets.keys`, `crewlet secrets`, `crewlet llm` and
+the vendor commands (`crewlet gitlab`, `github`, `jira`, `slack`, `confluence`
+and `mattermost`), which read the secret store. A database, `-wal` or `.lock`
+such a command makes as another user (`root`, say) is owner-only and that
+user's, so the engine cannot open it afterwards. `crewlet migrate -check`
+against a path with no database makes nothing there.
 
 The load-bearing tables of the node estate:
 
@@ -1370,28 +1374,37 @@ Set budgets at two levels:
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-Every model round is charged against both before it runs. A charge that does
-not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused and its figures,
-beside the turn's own `agent_turn_completed`. The
+Every model round is charged against both as soon as its model call answers,
+because that is when its size is known, and before any tool it asked for runs.
+A charge that does not fit is refused: the round's tools do not run, the turn
+stops and the engine publishes a `budget_exhausted` event naming the scope that
+refused and its figures, beside the turn's own `agent_turn_completed`. The
 check is atomic: if the agent's budget refuses, the org-level consumption it
 had already charged is rolled back. In a fleet the counters live in the
 coordination slot, so an org cap of 500 k is 500 k across every node rather
 than per process.
 
+A refused round has been billed all the same, so its tokens are counted anyway:
+after a refusal the counter reads past the cap by that round, and the phase's
+own record and the counter agree on what it cost. Before every round's model
+call the counters are read, counting nothing, and no round is sent while either
+scope is at or past its cap. The same read stops the
+[reflection pass](../concepts/agent-learning.md) from starting, and every other
+auxiliary call a learning worker makes from being sent. A cap raised in a new
+revision, or a counter reset, is what lets the seat run again.
+
 A refusal is also recorded beside the counter, as when that scope last refused
 a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
-and the next charge the scope admits clears it. That, not a counter at its cap,
-is what exhausted means: a refused charge increments nothing, so the counter
-stops short of the cap by the size of the round that did not fit.
+and the next charge the scope admits clears it. Exhausted is either that stamp
+or a counter at or past its cap.
 
-A coding run is the one spend that cannot be checked first. Its box spends
-while the turn is suspended, so its tokens are known only when the run is
-collected, and they are **post-charged**: added to both counters without a
-check, because no answer can un-spend them. A run that takes a counter past its
-cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
-the company attempts is refused against the recorded figure.
+A coding run's tokens are known only when the run is collected, minutes or
+hours after its box started spending while the turn was suspended, so they are
+**post-charged**: added to both counters without a check, because no answer can
+un-spend them. A run that takes a counter past its cap is logged as
+`sandbox_spend_over_budget`, and the next round the seat or the company attempts
+is refused against the recorded figure before it is sent.
 
 ### Structured Logging
 

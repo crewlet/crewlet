@@ -17,11 +17,10 @@ import (
 //
 // lock_test.go covers the pieces from inside the package. This file covers
 // the only thing that matters in production: a SECOND OS PROCESS opening the
-// database an engine is running on — which is what `crewlet secrets`,
-// `crewlet llm export -secret-store` and every provisioner's secret-store
-// sink do as their documented gesture. Two handles inside one process are
-// safe and deliberately allowed, so an in-process case would test the wrong
-// thing.
+// database an engine is running on — which is what any `crewlet` command that
+// opens the store's files does when it is run beside a live engine. Two handles
+// inside one process are safe and deliberately allowed, so an in-process case
+// would test the wrong thing.
 
 // A SECOND PROCESS IS REFUSED, and told which file and by whom.
 //

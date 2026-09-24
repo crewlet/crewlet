@@ -775,6 +775,15 @@ type TaskPatch struct {
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
 
+	// Promote marks one checklist item as the subtask it became, resolved
+	// inside the writer's own decide into the whole Checklists tree below
+	// ([settlePromotion]). A gesture for Watch's reason: the tree is
+	// carried whole, and one formed from a read before the decide writes
+	// over every edit to the checklists that landed in between.
+	//
+	// NEVER ON THE WIRE, like the three above.
+	Promote *PromotionIntent `json:"-"`
+
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
@@ -834,6 +843,13 @@ type WatchIntent struct {
 	// because sixty-four other people are watching — a write refused for
 	// a reason that has nothing to do with what the writer asked for.
 	Auto bool
+}
+
+// PromotionIntent is the mark a promotion leaves on its parent: the checklist
+// item, and the subtask it became.
+type PromotionIntent struct {
+	Item    string
+	Subtask string
 }
 
 // RelationIntent is a gesture over a task's relation set, resolved inside the
