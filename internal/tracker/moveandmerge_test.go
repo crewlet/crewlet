@@ -154,3 +154,65 @@ func TestAMergeWalkNeverCarriesASubtaskAcrossProjects(t *testing.T) {
 			late.Parent)
 	}
 }
+
+// A MOVE WHOSE TAG CLASHES WITH THE TARGET'S IS REFUSED BEFORE ITS FIRST APPEND,
+// naming the clash — never half-made, and never a sentence nobody can act on.
+//
+// Two projects may each have a tag labelled "API" under different slugs, and a
+// subtree carrying ENG's cannot declare it in OPS without making two tags
+// nobody could tell apart. The refusal came from the declaration — the move's
+// first append — as a bare error the tool rendered as "the change was NOT
+// made". It is now a TagClash naming both tags, and the move itself is not
+// touched: no alias, no key, no mark. Declared in OPS under a label of its own,
+// the same move goes through.
+func TestAMoveWhoseTagClashesWithTheTargetsIsRefusedNamingIt(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t, "m-kid")
+	for project, tag := range map[string]tracker.Tag{
+		"ENG": {Slug: "api", Label: "API"},
+		"OPS": {Slug: "backend-api", Label: "API"},
+	} {
+		if _, err := r.writer.WriteTags(t.Context(), "op-tags-"+project, project,
+			tracker.TagEdit{Add: []tracker.Tag{tag}}, tracker.TagAuthority{}); err != nil {
+			t.Fatalf("declare %s's tag: %v", project, err)
+		}
+		r.drain()
+	}
+	tags := []string{"api"}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-tag-kid", "m-kid", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Tags: &tags}, tracker.ChangeTags, nil); err != nil {
+		t.Fatalf("tag the subtask: %v", err)
+	}
+	r.drain()
+
+	_, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil)
+	var clash *tracker.TagClash
+	if !errors.As(err, &clash) {
+		t.Fatalf("the move = %v, want a TagClash naming the two tags", err)
+	}
+	if clash.Project != "OPS" || clash.Slug != "api" || clash.Other.Slug != "backend-api" {
+		t.Errorf("the clash names %+v, want ENG's api against OPS's backend-api", clash)
+	}
+	r.drain()
+	if got := oneTask(t, r, "m-root"); got.Project != "ENG" || got.Moving {
+		t.Errorf("the refused move left the root in %q, mid-move %v", got.Project, got.Moving)
+	}
+
+	// DECLARED IN OPS UNDER A LABEL OF ITS OWN, the same move goes through
+	// — the add is then a tag OPS already has, which is no clash.
+	if _, err := r.writer.WriteTags(t.Context(), "op-tags-ops-api", "OPS",
+		tracker.TagEdit{Add: []tracker.Tag{{Slug: "api", Label: "API (from ENG)"}}},
+		tracker.TagAuthority{}); err != nil {
+		t.Fatalf("declare api in OPS: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil); err != nil {
+		t.Fatalf("the move after the remedy: %v", err)
+	}
+	r.drain()
+	if got := oneTask(t, r, "m-kid"); got.Project != "OPS" {
+		t.Errorf("the subtask is in %q after the move, want OPS", got.Project)
+	}
+}
