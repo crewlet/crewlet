@@ -264,8 +264,8 @@ type capacityRunner interface {
 	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
 	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
-	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
-	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
+	AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (coord.MaintenanceOperation, error)
+	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
 	CapacityStatus(ctx context.Context, stream string) (
 		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
 	Mode() statelog.MaintenanceMode
@@ -429,9 +429,9 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 
 // serveAbandon answers POST /work/retention/maintenance/abandon.
 func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
-	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string) (
-		coord.MaintenanceOperation, error) {
-		return a.capacity.AbandonCapacity(ctx, stream)
+	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string,
+		by iam.Actor) (coord.MaintenanceOperation, error) {
+		return a.capacity.AbandonCapacity(ctx, stream, by)
 	})
 }
 
@@ -446,15 +446,16 @@ func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string) (
-		coord.MaintenanceOperation, error) {
-		return a.capacity.ExcludeParticipant(ctx, stream, node)
+	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string,
+		by iam.Actor) (coord.MaintenanceOperation, error) {
+		return a.capacity.ExcludeParticipant(ctx, stream, node, by)
 	})
 }
 
-// capacityGesture is the shared shape of the two operator writes.
+// capacityGesture is the shared shape of the two operator writes, each handed
+// who is making it so the operation can record them.
 func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what string,
-	run func(context.Context, string) (coord.MaintenanceOperation, error)) {
+	run func(context.Context, string, iam.Actor) (coord.MaintenanceOperation, error)) {
 
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
@@ -471,7 +472,7 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 		return
 	}
 	by := iam.ActorFor(caller)
-	op, err := run(r.Context(), stream)
+	op, err := run(r.Context(), stream, by)
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
 			"stream", stream, "by", by.Name, "operator", by.OperatorID,

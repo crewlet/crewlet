@@ -459,6 +459,11 @@ Two gestures act on what it shows:
 | `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. |
 | `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. |
 
+Both are recorded on the window with who made them — the status prints each
+excluded participant as `excluded by` its author and the credential they used,
+and an abandoned window's `ABANDONED` line the same way — because an exclusion
+is the one fact the seal takes on somebody's word.
+
 ### Why the target cannot be changed mid-window
 
 A verify compares the ceiling the broker reports against the operation's

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -643,7 +645,11 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 // changes what the operation is trying to reach, never the barrier it must
 // cross, and a paused coordinator's request is outstanding whether or not a
 // person has read a status page.
-func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
+//
+// BY IS WHO ABANDONED IT, recorded on the operation while it lives
+// ([coord.MaintenanceOperation.AbandonedBy]) and on the log line when it does
+// not.
+func (e *Engine) AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (
 	coord.MaintenanceOperation, error) {
 
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
@@ -665,6 +671,7 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 		}
 		log.InfoContext(ctx, "capacity_operation_abandoned", "stream", stream,
 			"operation", op.OperationID, "phase", op.Phase,
+			"by", by.Name, "operator", by.OperatorID,
 			"detail", "no configuration request had been issued, so the "+
 				"exclusion is released outright")
 		out := op
@@ -674,11 +681,13 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 	out := op
 	out.Phase = phase
 	out.Blocked = "abandoned_by_operator"
+	out.AbandonedBy = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
 	}
 	log.WarnContext(ctx, "capacity_operation_abandoning", "stream", stream,
 		"operation", op.OperationID, "was", op.Phase,
+		"by", by.Name, "operator", by.OperatorID,
 		"detail", "a request may be outstanding, so the fleet still has to "+
 			"restart with `-mode seal`: the observed ceiling is then recorded "+
 			"as the outcome whatever it is")
@@ -690,8 +699,11 @@ func (e *Engine) AbandonCapacity(ctx context.Context, stream string) (
 //
 // THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT. An eviction does not: that is
 // about whose records apply, and this is about whose process is running.
-func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
-	coord.MaintenanceOperation, error) {
+//
+// BY IS WHO ASSERTED IT, recorded against the node it names
+// ([coord.MaintenanceOperation.ExcludedBy]).
+func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	op, found, err := e.backends.Fleet.Maintenance(ctx, stream)
 	if err != nil {
@@ -705,6 +717,14 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
 	if !contains(op.Excluded, node) {
 		out.Excluded = append(cloneStrings(op.Excluded), node)
 	}
+	// THE LATEST ASSERTION'S AUTHOR, because repeating one is making it
+	// again: whoever last said the process is stopped is who the seal is
+	// taking it from.
+	out.ExcludedBy = maps.Clone(op.ExcludedBy)
+	if out.ExcludedBy == nil {
+		out.ExcludedBy = map[string]coord.MaintenanceParty{}
+	}
+	out.ExcludedBy[node] = partyOf(by)
 	if err := e.backends.Fleet.UpdateMaintenance(ctx, out); err != nil {
 		return op, err
 	}
@@ -715,6 +735,7 @@ func (e *Engine) ExcludeParticipant(ctx context.Context, stream, node string) (
 	}
 	log.WarnContext(ctx, "capacity_participant_excluded", "stream", stream,
 		"operation", op.OperationID, "node", node,
+		"by", by.Name, "operator", by.OperatorID,
 		"detail", "an operator asserted this node's process is stopped and "+
 			"holds no outstanding request; it no longer has to acknowledge")
 	return e.reread(ctx, stream)
@@ -945,4 +966,9 @@ func sleep(ctx context.Context, d time.Duration) {
 func (e *Engine) dialsExternalBroker() bool {
 	return e.backends != nil && e.backends.Queue != nil &&
 		e.backends.Queue.Backend() != "jetstream-embedded"
+}
+
+// partyOf is a party as a capacity window records one.
+func partyOf(by iam.Actor) coord.MaintenanceParty {
+	return coord.MaintenanceParty{By: by.Name, OperatorID: by.OperatorID}
 }

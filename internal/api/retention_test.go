@@ -43,8 +43,11 @@ type fakeStateLog struct {
 	asked       string
 
 	// capacity is the last resize asked for, which is where a case about
-	// who pressed it looks.
-	capacity engine.CapacityRequest
+	// who pressed it looks — and abandoned and excluded are who the last
+	// abandon and exclusion were handed.
+	capacity  engine.CapacityRequest
+	abandoned iam.Actor
+	excluded  iam.Actor
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -87,15 +90,17 @@ func (g *fakeNodeGate) ReadmitNode(_ context.Context, _, _ string, by iam.Actor)
 	return tracker.WriteResult{}, nil
 }
 
-func (f *fakeStateLog) AbandonCapacity(context.Context, string) (
+func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor) (
 	coord.MaintenanceOperation, error) {
 
+	f.abandoned = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) ExcludeParticipant(context.Context, string, string) (
-	coord.MaintenanceOperation, error) {
+func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
+	f.excluded = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -128,12 +133,14 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 
 // THE FLEET'S CONTROLS RECORD WHO PRESSED THEM: the eviction gate is handed
 // the caller whole, and a resize and a re-anchor name the caller's author and
-// the credential beside it.
+// the credential beside it — as do an abandon and an exclusion, which the
+// capacity window records against the gesture.
 //
 // The gate was handed nothing about its caller, so an eviction recorded this
-// node's own writer; and a resize recorded one name, the credential's.
-// Mutation: hand the gate an empty party, or drop the credential from the
-// resize, and the matching half fails.
+// node's own writer; a resize recorded one name, the credential's; and an
+// abandon and an exclusion recorded nobody, their caller said only in the
+// serving node's log. Mutation: hand any of them an empty party, or drop the
+// credential from the resize, and the matching half fails.
 func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 	t.Parallel()
 	gate := &fakeNodeGate{}
@@ -159,6 +166,16 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 	if log.capacity.By != want.Name || log.capacity.OperatorID != want.OperatorID {
 		t.Errorf("the resize names %q through %q, want %q through %q",
 			log.capacity.By, log.capacity.OperatorID, want.Name, want.OperatorID)
+	}
+
+	postAck(t, a, "/work/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	if log.abandoned != want {
+		t.Errorf("the abandon was handed %+v, want %+v", log.abandoned, want)
+	}
+	postAck(t, a, "/work/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG"+
+		"&node=n1&confirm=n1")
+	if log.excluded != want {
+		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
 	}
 }
 

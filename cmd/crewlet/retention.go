@@ -128,6 +128,9 @@ type maintenanceRow struct {
 	OperatorID          string    `json:"operator_id"`
 	ParticipantsMissing []string  `json:"participants_missing"`
 	Blocked             string    `json:"blocked"`
+
+	// AbandonedBy is who abandoned it, once somebody has.
+	AbandonedBy capacityParty `json:"abandoned_by"`
 }
 
 // retentionDomain is one registered domain's row.
@@ -250,6 +253,9 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 		if m.Blocked != "" {
 			fmt.Fprintf(stdout, "  BLOCKED: %s — this needs a person, not time.\n",
 				m.Blocked)
+		}
+		if m.AbandonedBy.By != "" {
+			fmt.Fprintf(stdout, "  abandoned by %s.\n", m.AbandonedBy.describe())
 		}
 		if len(m.ParticipantsMissing) > 0 {
 			fmt.Fprintf(stdout, "  waiting on %s.\n",

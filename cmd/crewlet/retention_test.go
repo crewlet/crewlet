@@ -225,6 +225,32 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	}
 }
 
+// AN ABANDONED WINDOW SAYS WHOSE DECISION IT IS STILL CARRYING OUT.
+//
+// Abandoning from anywhere but `opened` keeps the window — and the fleet in it —
+// until the seal restart, and the banner said only that it was blocked, beside
+// the name of whoever OPENED it. Mutation: drop the line and the want goes red.
+func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report["maintenance"] = map[string]any{
+		"stream": "CREWLET_TRACKER_LOG", "operation_id": "op-9",
+		"phase": "sealing", "attempt": 1, "since": "2031-04-02T02:00:00Z",
+		"by": "sre@example.com", "blocked": "abandoned_by_operator",
+		"abandoned_by": map[string]any{"by": "ana.admin",
+			"operator_id": "pat:0192f00d-0000-7000-8000-00000000000a"},
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := "abandoned by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)"; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+}
+
 // AND A FLEET WITH NO OPERATION SAYS NOTHING ABOUT ONE, or the banner above
 // would be a line every operator learns to skip.
 func TestAHealthyFleetPrintsNoMaintenanceBanner(t *testing.T) {

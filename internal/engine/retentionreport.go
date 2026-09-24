@@ -160,6 +160,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 			Since: op.EnteredAt.UTC(), By: op.By, OperatorID: op.OperatorID,
 			ParticipantsMissing: outstanding(ctx, r.fleet, op),
 			Blocked:             op.Blocked,
+			AbandonedBy:         op.AbandonedBy,
 		}
 		if oldest == nil || row.Since.Before(oldest.Since) {
 			oldest = row

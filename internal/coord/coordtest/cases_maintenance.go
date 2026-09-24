@@ -99,6 +99,53 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
+	{name: "who excluded a node and who abandoned the window survive an update", fn: func(h *fleetHarness) {
+		// THE WINDOW IS WHERE A POST-MORTEM READS WHOSE WORD WAIVED AN
+		// ACKNOWLEDGEMENT, and whose decision the fleet is still carrying
+		// out after an abandon: a backend that dropped either reports
+		// both as nobody's.
+		opened, _, err := h.f.OpenMaintenance(h.ctx, window("op-1"))
+		if err != nil {
+			h.t.Fatalf("OpenMaintenance: %v", err)
+		}
+		excluder := coord.MaintenanceParty{By: "dana.sre",
+			OperatorID: "session:0192f00d-0000-7000-8000-0000000000dd"}
+		moved := opened
+		moved.Phase = coord.PhaseSealing
+		moved.Excluded = []string{"node-2"}
+		moved.ExcludedBy = map[string]coord.MaintenanceParty{"node-2": excluder}
+		moved.AbandonedBy = coord.MaintenanceParty{By: "jane.doe",
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := h.f.UpdateMaintenance(h.ctx, moved); err != nil {
+			h.t.Fatalf("UpdateMaintenance: %v", err)
+		}
+		held, found, err := h.f.Maintenance(h.ctx, opened.Stream)
+		if err != nil || !found {
+			h.t.Fatalf("Maintenance: found=%v err=%v", found, err)
+		}
+		if held.ExcludedBy["node-2"] != excluder ||
+			held.AbandonedBy != moved.AbandonedBy {
+			h.t.Fatalf("the window reads excluded by %+v and abandoned by %+v, "+
+				"want %+v and %+v", held.ExcludedBy, held.AbandonedBy,
+				excluder, moved.AbandonedBy)
+		}
+		// AND THE STORE HOLDS ITS OWN COPY, on the way in and on the way
+		// out: neither the writer's map nor a reader's is the one the next
+		// reader sees. Compared against a value rather than a map, which
+		// an aliased store would have rewritten along with it.
+		moved.ExcludedBy["node-2"] = coord.MaintenanceParty{By: "the writer, later"}
+		held.ExcludedBy["node-2"] = coord.MaintenanceParty{By: "mallory"}
+		again, _, err := h.f.Maintenance(h.ctx, opened.Stream)
+		if err != nil {
+			h.t.Fatalf("Maintenance: %v", err)
+		}
+		if again.ExcludedBy["node-2"] != excluder {
+			h.t.Fatalf("editing a map after writing or reading it rewrote the "+
+				"stored window: %+v", again.ExcludedBy)
+		}
+	}},
+
 	{name: "an interrupted activation is not mistaken for completed cleanup", fn: func(h *fleetHarness) {
 		// THE EXCLUSION IS THE RECORD. Held as two, a crash after the
 		// exclusion and before the operation is byte-identical to a

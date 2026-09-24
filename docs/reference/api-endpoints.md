@@ -3538,8 +3538,17 @@ takes `fleet:operate`.
 |---|---|
 | `POST /work/retention/capacity?stream=NAME&bytes=N&confirm=N` | Opens or resumes the operation and drives it as far as this node's mode allows. `confirm` repeats `bytes` and a mismatch is `400`: the target is chosen once for the life of an operation. `assert_excluded=true` is required only on an external broker. |
 | `GET /work/retention/maintenance?stream=NAME` | The operation, every acknowledgement, every admission, and — computed here rather than by each client — whether the seal holds, what is blocking it, and which admissions block activation. |
-| `POST /work/retention/maintenance/abandon?stream=NAME` | From `opened` clears the operation outright; from anywhere else enters the seal. |
-| `POST /work/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one participant's acknowledgement and withdraws its admission. |
+| `POST /work/retention/maintenance/abandon?stream=NAME` | From `opened` clears the operation outright; from anywhere else enters the seal, and the operation records who abandoned it as `abandoned_by`. |
+| `POST /work/retention/maintenance/exclude?stream=NAME&node=ID&confirm=ID` | Waives one participant's acknowledgement and withdraws its admission, and the operation records who asserted it under `excluded_by`, keyed by the node. |
+
+**Every gesture on the window names who made it**: `by` and `operator_id` for
+whoever opened it, and the same pair under `abandoned_by` and, per node, under
+`excluded_by` — the author and the credential they acted through, as every
+other trail records a write. An exclusion is the one fact the seal takes on
+somebody's word, and whose word it was used to be said only in the log of the
+node that served the request. An abandonment from `opened` clears the record
+it would have been written on, so only that log names who made it; an entry
+missing from a window an older build wrote is an operator nobody recorded.
 
 **A node in `normal` mode refuses the write routes**, naming the restart: the
 usage a resize is decided against has to be a quantity nothing can move. The

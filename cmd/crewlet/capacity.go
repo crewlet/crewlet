@@ -126,6 +126,26 @@ type capacityOperation struct {
 	EnteredAt  time.Time `json:"entered_at"`
 	By         string    `json:"by"`
 	OperatorID string    `json:"operator_id"`
+
+	// ExcludedBy and AbandonedBy are who made those two gestures, each
+	// an author and the credential they made it through.
+	ExcludedBy  map[string]capacityParty `json:"excluded_by"`
+	AbandonedBy capacityParty            `json:"abandoned_by"`
+}
+
+// capacityParty is who made one gesture on a window.
+type capacityParty struct {
+	By         string `json:"by"`
+	OperatorID string `json:"operator_id"`
+}
+
+// describe is the party in the words every trail this CLI prints uses, and
+// "an operator" for a gesture a node that did not record it made.
+func (p capacityParty) describe() string {
+	if p.By == "" {
+		return "an operator"
+	}
+	return describeAuthor(p.By, p.OperatorID)
 }
 
 // printOperation renders one operation, and what an operator does next.
@@ -143,6 +163,9 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation) {
 	fmt.Fprintf(w, "THIS NODE\tmode %s\t\n", mode)
 	if op.Blocked != "" {
 		fmt.Fprintf(w, "BLOCKED\t%s\t\n", op.Blocked)
+	}
+	if op.AbandonedBy.By != "" {
+		fmt.Fprintf(w, "ABANDONED\tby %s\t\n", op.AbandonedBy.describe())
 	}
 	_ = w.Flush()
 
@@ -250,7 +273,8 @@ func maintenanceStatus(args []string, stdout, stderr io.Writer) error {
 	for _, node := range answer.Operation.Participants {
 		baseline := dashIfEmpty(answer.Operation.WriteIncarnations[node])
 		if containsString(answer.Operation.Excluded, node) {
-			fmt.Fprintf(w, "%s\t%s\texcluded by an operator\t\t\n", node, baseline)
+			fmt.Fprintf(w, "%s\t%s\texcluded by %s\t\t\n", node, baseline,
+				answer.Operation.ExcludedBy[node].describe())
 			continue
 		}
 		i, ok := acked[node]

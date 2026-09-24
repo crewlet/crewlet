@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -303,6 +304,75 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 	}
 	if _, named := incarnations["node-2"]; named {
 		t.Error("the excluded node was given an incarnation it never wrote")
+	}
+}
+
+// WHO EXCLUDED A NODE AND WHO ABANDONED THE WINDOW ARE ON THE WINDOW.
+//
+// An exclusion is the one fact the seal takes on somebody's word, and an
+// abandonment the decision the fleet goes on carrying out until the seal
+// restart; both used to be said only in the serving node's log, while the
+// window named the person who OPENED it — so the one record every node reads
+// showed its opener as the author of whatever it had become. Mutation: record
+// either gesture without its party and its half goes red.
+func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1",
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32,
+		Phase: coord.PhaseApplied, Attempt: 1,
+		Participants: []string{"node-1", "node-2"}, EnteredAt: time.Now().UTC(),
+		By: "ops-3",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sre := iam.Actor{Name: "dana.sre", Kind: iam.ActorOperator,
+		OperatorID: "session:0192f00d-0000-7000-8000-0000000000dd"}
+	lead := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator,
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
+	op, err := e.ExcludeParticipant(ctx, "CREWLET_TRACKER_LOG", "node-2", sre)
+	if err != nil {
+		t.Fatalf("exclude: %v", err)
+	}
+	want := coord.MaintenanceParty{By: sre.Name, OperatorID: sre.OperatorID}
+	if got := op.ExcludedBy["node-2"]; got != want {
+		t.Errorf("node-2's exclusion is recorded as %+v, want %+v", got, want)
+	}
+
+	op, err = e.AbandonCapacity(ctx, "CREWLET_TRACKER_LOG", lead)
+	if err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	if op.Phase != coord.PhaseSealing {
+		t.Fatalf("an applied window abandoned into %s, want sealing — the "+
+			"record would not be there to carry who abandoned it", op.Phase)
+	}
+	if want := (coord.MaintenanceParty{By: lead.Name, OperatorID: lead.OperatorID}); op.AbandonedBy != want {
+		t.Errorf("the abandonment is recorded as %+v, want %+v", op.AbandonedBy, want)
+	}
+	// AND THE EXCLUSION SURVIVES IT: a later gesture on the window keeps
+	// whose word waived node-2's acknowledgement.
+	if got := op.ExcludedBy["node-2"]; got.By != sre.Name {
+		t.Errorf("the abandon lost the exclusion's author: %+v", op.ExcludedBy)
+	}
+
+	// AND THE RETENTION REPORT SAYS IT, which is the banner `crewlet
+	// retention status` leads with while the window holds the fleet.
+	r := &retention{fleet: fleet, state: &stateLog{
+		order: []string{"tracker"},
+		domains: map[string]*runningDomain{
+			"tracker": {domain: tracker.Domain{}},
+		},
+	}}
+	row := r.openMaintenance(ctx)
+	if row == nil {
+		t.Fatal("the report shows no window while one is open")
+	}
+	if row.AbandonedBy != op.AbandonedBy {
+		t.Errorf("the report names %+v as having abandoned the window, want %+v",
+			row.AbandonedBy, op.AbandonedBy)
 	}
 }
 

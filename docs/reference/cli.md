@@ -1109,7 +1109,10 @@ are different facts with different next steps.
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an
 acknowledgement; an eviction does not, because that is about whose records
-apply and this is about whose process is running.
+apply and this is about whose process is running. The window records it as
+yours — `status` prints the participant as `excluded by` you, with the
+credential you used — and an `abandon` that leaves the window open is recorded
+and printed (`ABANDONED`) the same way.
 
 `abandon` changes what the operation is trying to reach and never the barrier
 it must cross. From `opened` it clears outright — no request was issued. From

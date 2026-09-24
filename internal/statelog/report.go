@@ -149,6 +149,11 @@ type MaintenanceReport struct {
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.
 	Blocked string `json:"blocked,omitempty"`
+
+	// AbandonedBy is who abandoned the operation, once somebody has: a
+	// window blocked because it was abandoned is still carrying out that
+	// person's decision, and the block alone named nobody.
+	AbandonedBy coord.MaintenanceParty `json:"abandoned_by,omitzero"`
 }
 
 // DomainReport is one registered domain's row.
