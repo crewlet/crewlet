@@ -35,6 +35,15 @@ type tables struct {
 	ops      string
 	deferred string
 	scope    string
+
+	// derivation is the rule set the applier writing through these
+	// tables derives at — see [Deriver]. It is stamped on a checkpoint
+	// row the FIRST time one is written, because the rows that
+	// transaction commits are the first on this stream and this build
+	// derived every one of them. Zero wherever the writer is not an
+	// applier (a reanchor), which reads as "unknown" and costs at most
+	// one re-derivation at the next boot.
+	derivation int
 }
 
 // subjectOf is the WIRE subject an anchor is keyed on.
@@ -123,18 +132,48 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (Position, time.Time
 // log that gets trimmed: the replay it counts on is a replay of records the
 // trim has already removed.
 func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created time.Time, now time.Time) error {
+	// THE DERIVATION IS WRITTEN ON INSERT ONLY. An existing row's
+	// derivation moves in exactly one place — [tables.setDerivation], in
+	// the transaction that re-derived the rows it describes — so a
+	// checkpoint advancing over an old build's rows never claims they were
+	// derived by this one.
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, derivation)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
 			updated_at        = excluded.updated_at`,
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), store.EncodeTime(now))
+		store.EncodeTime(created), store.EncodeTime(now), t.derivation)
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
+	}
+	return nil
+}
+
+// readDerivation reads the rule set this stream's rows were derived by,
+// reporting false when there is no checkpoint — and so no rows — yet.
+func (t tables) readDerivation(ctx context.Context, tx *sql.Tx) (int, bool, error) {
+	var v int
+	err := tx.QueryRowContext(ctx,
+		`SELECT derivation FROM statelog_cursor WHERE stream = ?`, t.stream).Scan(&v)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("statelog: read the derivation: %w", err)
+	}
+	return v, true, nil
+}
+
+// setDerivation records that this stream's rows are now derived at v, in the
+// transaction that derived them.
+func (t tables) setDerivation(ctx context.Context, tx *sql.Tx, v int) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE statelog_cursor SET derivation = ? WHERE stream = ?`, v, t.stream); err != nil {
+		return fmt.Errorf("statelog: record derivation %d: %w", v, err)
 	}
 	return nil
 }

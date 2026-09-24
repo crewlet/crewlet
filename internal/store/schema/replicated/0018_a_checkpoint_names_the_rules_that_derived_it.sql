@@ -1,0 +1,39 @@
+-- A checkpoint says which DERIVATION RULES wrote the rows it covers.
+--
+-- # What a derived column is, and why it needs this
+--
+-- Most of what an applier writes is a record's own values. Some of it is not:
+-- a column the applier COMPUTES from the rows it already holds — a count of how
+-- often a task was reopened, a project's split of its open work, the hand-off
+-- count an assignee change carries. Such a column is a function of the history
+-- rather than of any one record, and it is only identical across a fleet while
+-- every node computes it by the same rule.
+--
+-- A rolling upgrade breaks that twice. A build that ADDS a derived column meets
+-- rows its predecessor wrote without it; a build that CHANGES the rule for one
+-- meets rows the old rule wrote. Either way the new rule has to be applied to
+-- the whole history once, on every node, before the applier moves on — and it
+-- has to be applied by THE SAME CODE that maintains the column afterwards,
+-- because a backfill written a second time in SQL is a second implementation of
+-- the rule, and two implementations of one rule are two answers the day either
+-- is edited.
+--
+-- # Why the version is on the CHECKPOINT row
+--
+-- The rows travel as a set: a snapshot is a copy of this file, adopted whole,
+-- and the checkpoint row is what a recipient reads the artefact's position
+-- from. Kept anywhere else — the node's own estate, a process variable — the
+-- version would describe the rows a node HAD before it adopted a peer's, and a
+-- node adopting an older donor's artefact would go on treating that donor's
+-- rows as derived by its own rules. Here it describes exactly the rows beside
+-- it, and moves only in the transaction that re-derives them.
+--
+-- # Zero is "no rules known", never "none needed"
+--
+-- The DEFAULT is what every existing row takes, and what a domain with no
+-- derived columns keeps for ever. A build whose applier derives at a version
+-- other than the one stored re-derives — in either direction, because a node
+-- that adopted a NEWER build's artefact holds rows whose rule it does not
+-- have, and must bring them to the one it is about to maintain rather than mix
+-- the two. See [statelog.Deriver].
+ALTER TABLE statelog_cursor ADD COLUMN derivation INTEGER NOT NULL DEFAULT 0;

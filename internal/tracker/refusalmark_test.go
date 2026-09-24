@@ -48,6 +48,8 @@ var unmarkedByDesign = map[string]string{
 	"tracker: %q is not a barrier envelope":                "decoding a record off the log",
 	"tracker: a barrier carries no op id":                  "decoding a record off the log",
 	"tracker: a thread read names no task":                 "the builtin always names the task it resolved",
+	"tracker: the %s record on %s installs an apply ":      "a record version is the encoder's, never the caller's",
+	"tracker: the %s record on %s is stamped version ":     "a record version is the encoder's, never the caller's",
 }
 
 // TestEveryWriteRefusalIsMarked walks [writeFiles] and refuses a fmt.Errorf that

@@ -120,6 +120,22 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
+	// THE VERSIONED-FIELD TABLE AND THE BUILD'S VERSION AGREE. A field at
+	// a version this build does not read is a record the build that wrote
+	// it retains; a version no field introduced is one this build would
+	// accept from a newer peer and apply without the field it was minted
+	// for. Both are silent until a rolling upgrade, which is the one time
+	// anybody would need them to have been caught.
+	if err := c.Fields.Check(c.Domain.RecordVersion()); err != nil {
+		add("%s: %w", name, err)
+	}
+	if len(c.Fields) != 0 && c.Carrying == nil {
+		add("%s declares %d versioned field(s) and no record carrying one — the "+
+			"stamp is certified by encoding a record that carries each field, so "+
+			"a table without Carrying is a table nothing checks the paths of",
+			name, len(c.Fields))
+	}
+
 	// A DOMAIN'S NAME IS DURABLE IN THREE PLACES that have no idea about
 	// each other — the positions register, a snapshot's manifest and the
 	// operator's own column — so it is a key rather than a label.

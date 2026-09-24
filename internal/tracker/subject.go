@@ -25,6 +25,27 @@
 // possible for a record that failed to decode at all, because such a record
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
+//
+// # Every new field is version-gated, and every new derived column re-derived
+//
+// The version a record carries is the LOWEST one that reads it — the highest
+// version among the fields in the versioned-field table it actually carries,
+// or 1 — and the encoder stamps it, so no writer states one. A field added to
+// a record, a payload or a document without a row in that table is decoded
+// AROUND by an older build: it finds the version readable, drops the field and
+// applies the rest, and its rows for that object differ from its peers' for
+// good. With the row, the older build retains the record instead, and only
+// that record and what its scope meets; everything carrying nothing new stays
+// readable by every build. [RecordVersion] moves with the table and only with
+// it (see its doc for the whole rule).
+//
+// A column the applier COMPUTES from the rows it holds, rather than copies out
+// of a record, is the other half: no record version can see it, because what
+// differs between builds is the rule. Such a column is maintained under
+// [statelog.Deriver] — the rule set is versioned on the checkpoint row, and
+// the first boot of a build whose rules differ re-derives the column from the
+// rows, in the applier's own Go, inside one transaction — never backfilled a
+// second time in a migration's SQL.
 package tracker
 
 import (

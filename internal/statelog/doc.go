@@ -96,6 +96,24 @@
 // decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
 //
+// # A record is stamped with the lowest version that reads it
+//
+// The retain rule decides by the record's version, so the version is a
+// promise to the builds that PRECEDE the writer: a record stamped below what
+// its fields need is applied by an older node with the field dropped, and one
+// stamped at the writer's own version is retained by every older node whether
+// it carries anything new or not. A domain therefore declares a
+// [RecordFields] table — each field its records gained since the base format,
+// with the version that introduced it — and its encoder stamps
+// [RecordFields.Minimum]. The build's own [Domain.RecordVersion] is exactly
+// the table's highest version: [RecordFields.Check] and the conformance suite
+// hold both halves.
+//
+// A column an applier computes from its rows is invisible to a record
+// version, since what differs between builds is the rule; a [Deriver]
+// versions its rules on the checkpoint row and re-derives once, at the first
+// boot whose rules differ.
+//
 // # THE FLOOR THEOREM
 //
 // The trim floor is load-bearing for the WRITE path, not only for recovery,

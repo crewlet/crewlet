@@ -91,9 +91,14 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		Actor:     "suite",
 		ActorKind: tracker.AuthorSystem,
 	}
-	// ENCODED DIRECTLY rather than through the writer's own Encode, which
-	// refuses a version it does not write — the suite needs exactly that
-	// record.
+	// VERSION ZERO IS THE WRITER'S PATH: the domain's own Encode stamps it,
+	// which is what the suite's stamping case reads back. Any other version
+	// is ENCODED DIRECTLY, because the suite needs exactly the record a peer
+	// at that version would publish — including one above this build's —
+	// and not the version this build would have chosen for it.
+	if version == 0 {
+		return record.Encode()
+	}
 	return json.Marshal(record)
 }
 

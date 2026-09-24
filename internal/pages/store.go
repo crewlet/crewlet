@@ -172,7 +172,9 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			// NO VERSION: the encoder stamps the lowest one that reads
+			// what this record carries — see [RecordVersion].
+			OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Mutation:   body,

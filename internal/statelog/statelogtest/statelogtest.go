@@ -71,7 +71,23 @@ type Candidate struct {
 	// suite varies the version to reach the deferral contract, so a
 	// version above the domain's own must still ENCODE — it is what a
 	// later build publishes and this one has to retain.
+	//
+	// A VERSION OF ZERO is the writer's own path: the record goes out with
+	// whatever version the domain's encoder stamps, which is what the
+	// stamping case reads back. It carries no versioned field.
 	Encode func(kind, id, opID string, version int) ([]byte, error)
+
+	// Fields is the domain's versioned-field table — every field its
+	// records gained since the base format — or nil when there is none.
+	Fields statelog.RecordFields
+
+	// Carrying builds a valid record carrying exactly the named field
+	// and no other versioned field, with its version left for the
+	// domain's encoder to stamp. Required whenever Fields is not empty:
+	// it is what proves each field's path is where the encoder actually
+	// writes it, since a path that misses stamps nothing and fails
+	// nowhere else.
+	Carrying func(field statelog.VersionedField) ([]byte, error)
 
 	// Kinds are the subject kinds the suite may publish. The first is
 	// used wherever one is needed.
@@ -88,6 +104,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
+	t.Run("versions", func(t *testing.T) { runVersions(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and the

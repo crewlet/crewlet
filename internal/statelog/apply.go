@@ -270,6 +270,13 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if deriver, ok := d.Applier.(Deriver); ok {
+		if t.derivation = deriver.DerivationVersion(); t.derivation < 1 {
+			return nil, fmt.Errorf("statelog: %s's applier derives at version %d — "+
+				"a Deriver's rules start at 1, because 0 is what a checkpoint "+
+				"written by no known rules holds", d.Domain.Name(), t.derivation)
+		}
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -616,6 +623,16 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 		}
 		return nil, err
 	}
+	// THE ROWS ARE BROUGHT TO THIS BUILD'S DERIVATION RULES before
+	// anything is applied on top of them — before the retained records
+	// too, since a reprocess maintains the derived columns incrementally
+	// and an increment on a column the old rules wrote is a mix of both.
+	// Here for the reason the reprocess is: a build changes only at a
+	// boot, and an adopted artefact arrives only through one.
+	if err := r.rederive(ctx, w); err != nil {
+		_ = w.Close()
+		return nil, err
+	}
 	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
 	// record is applied by the build that can decode it, and the only
 	// moment a build changes is a boot — so this is where the promise is
@@ -787,7 +804,7 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 		}
 		for _, row := range page {
 			after = row.position
-			if row.version > r.domain.RecordVersion() {
+			if !(Envelope{V: row.version}).ReadableBy(r.domain.RecordVersion()) {
 				kept++
 				continue
 			}
@@ -1087,7 +1104,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			}
 
 			switch {
-			case rec.V > r.domain.RecordVersion():
+			case !rec.ReadableBy(r.domain.RecordVersion()):
 				if r.domain.InstallsGate(rec.Envelope) {
 					// A GATE IS A STOP, and it is the one
 					// place the retain rule inverts. A

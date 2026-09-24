@@ -1009,7 +1009,9 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			// NO VERSION: the encoder stamps the lowest one that reads
+			// what this record carries — see [RecordVersion].
+			OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Kind:       kind,

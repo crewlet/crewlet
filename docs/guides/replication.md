@@ -237,6 +237,28 @@ a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
 
+### Which records an upgrade holds back
+
+Only the ones that need the newer build. A record is stamped with the
+**lowest** version that can read it: 1 when it carries nothing a later build
+added, and the version of the newest field it carries otherwise. So during a
+rolling upgrade an old node applies everything the new nodes write except the
+records that use something new, and it retains those whole rather than apply
+them with the new part dropped — which is what would leave its copy of that
+object different from its peers' for good. An upgrade that adds no record field
+holds nothing back at all.
+
+### Values the engine computes are recomputed once
+
+Some columns are not copied out of any record but computed from the history a
+node already holds — how often a task was reopened, for example. When a build
+adds such a column or changes how one is computed, its first boot recomputes it
+from the rows it holds, in the same transaction that records which rules the
+rows now follow, before it applies anything new. It happens once per change,
+on every node, including a node that just adopted a snapshot from a peer on a
+different build; the `statelog_rederived` log line names the domain, the rule
+versions it moved between and how many rows it wrote.
+
 ### The other direction: a kind that was removed
 
 The deferral above handles a **newer** peer's records, and it is keyed on the

@@ -4,15 +4,35 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode.
+// RecordVersion is the record shape THIS BUILD can decode — never the version
+// it stamps on what it writes.
 //
 // A record above it is RETAINED rather than skipped — see the deferral
 // contract in [statelog] — which is what makes a rolling upgrade a period of
-// reduced coverage rather than an outage.
+// reduced coverage rather than an outage. What a writer stamps is the LOWEST
+// version that reads the record, computed by [Encode] from
+// [versionedFields]; internal/tracker's RecordVersion states why, and
+// the rule is one rule across both strict domains.
 const RecordVersion = 1
+
+// versionedFields is every field a pages record has gained since the base
+// format, and the version a reader must be at to apply a record carrying it.
+//
+// Adding a field to a record, a payload or a document is adding a row here,
+// moving [RecordVersion] to its version, and giving the domain's statelogtest
+// candidate a record that carries it — on the tracker's terms, which are the
+// framework's ([statelog.VersionedField]). EMPTY while every field is in the
+// base format.
+var versionedFields = statelog.RecordFields{}
+
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.
@@ -314,7 +334,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 	return rec, nil
 }
 
-// Encode renders a record, carrying back whatever a newer build wrote.
+// Encode renders a record, carrying back whatever a newer build wrote, and
+// stamps it with the lowest version that reads it.
 //
 // LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
 // node that read a record it only half understood and republished it — the
@@ -324,11 +345,49 @@ func Decode(payload []byte) (MutationRecord, error) {
 // than a second merge of its own: a carried field LOSES to a known one, and
 // two implementations of that rule are one place where a stale carried copy
 // undoes the write that set it.
-func Encode(rec MutationRecord) ([]byte, error) {
+//
+// A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
+// unset and this stamps [versionedFields]' minimum over the bytes it is about
+// to publish. A set version is kept — a relay keeps its writer's, a gate its
+// pinned one — and refused when it is below what the record carries.
+func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
+
+// encodeWith is [Encode] under a named field table — the seam the stamping
+// rule is tested through, since the production table is empty until a field
+// needs a row.
+func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error) {
+	stamp := rec.V == 0
+	if stamp {
+		rec.V = 1
+	}
 	data, err := encode(rec, rec.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("pages: encode the record on %s: %w",
 			rec.Subject, err)
+	}
+	minimum, err := fields.Minimum(string(rec.Op), data)
+	if err != nil {
+		return nil, fmt.Errorf("pages: stamp the record on %s: %w", rec.Subject, err)
+	}
+	switch {
+	case rec.V >= minimum:
+	case rec.InstallsGate():
+		return nil, fmt.Errorf("pages: the %s record on %s installs an apply gate "+
+			"and carries %s — a gate is readable by every build for ever, so a "+
+			"field it needs belongs somewhere else", rec.Op, rec.Subject,
+			strings.Join(fields.Carried(string(rec.Op), data), ", "))
+	case stamp:
+		rec.V = minimum
+		if data, err = encode(rec, rec.Extra); err != nil {
+			return nil, fmt.Errorf("pages: encode the record on %s: %w",
+				rec.Subject, err)
+		}
+	default:
+		return nil, fmt.Errorf("pages: the %s record on %s is stamped version %d "+
+			"and carries %s — a build reading %d would decode it, drop what it has "+
+			"no field for and apply the rest; leave the version unset and the "+
+			"encoder stamps the lowest one that reads it", rec.Op, rec.Subject,
+			rec.V, strings.Join(fields.Carried(string(rec.Op), data), ", "), rec.V)
 	}
 	return data, nil
 }

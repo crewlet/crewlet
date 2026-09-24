@@ -307,7 +307,8 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// NO VERSION: a barrier carries nothing a later build
+			// added, so the encoder stamps it 1 and every build reads it.
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},
