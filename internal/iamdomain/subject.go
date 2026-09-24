@@ -47,6 +47,17 @@
 // as nobody — and never a person whose document failed to decode, which is the
 // unknown answer and a 503 wherever it reaches a request.
 //
+// # The FIRST person is the one enrolment arbitrated on one subject
+//
+// Person subjects never contend, which is right for every enrolment but one:
+// the person a one-time founder code creates carries the whole ceiling, so two
+// founders redeeming two codes at once must not both land. A founding
+// therefore TAKES the exemption on the company's one bootstrap subject before
+// it claims anything, and ends every earlier attempt — a removal on that
+// attempt's own person subject, contending with the record that would make it
+// the founder — before it claims the address an abandoned attempt may still
+// hold. founding.go is the whole state machine.
+//
 // # What a record states that it is not the subject of
 //
 // Every record declares a SCOPE — the set of identity BUCKETS its apply may
@@ -237,11 +248,14 @@ const (
 	// subject for the whole domain, with no id.
 	//
 	// ONE OBJECT, DELIBERATELY: a bootstrap code is what turns an engine
-	// that nobody can sign in to into one with an administrator, so two
-	// live bootstraps is two ways in. Sharing one subject means two nodes
-	// minting a code contend and exactly one wins, which is the whole
-	// property — and it costs nothing, because this is the rarest write
-	// the company ever makes and it happens once.
+	// that nobody can sign in to into one with an administrator, and the
+	// person it creates carries the whole ceiling, so exactly one may ever
+	// be created. Sharing one subject means two foundings TAKING codes
+	// contend and exactly one holds the first-person exemption at a time,
+	// which is the whole property — every mint, take and withdrawal reads
+	// in order beside it — and it costs nothing, because this is the
+	// rarest write the company ever makes. Minting is deliberately NOT
+	// exclusive: a fleet offers one code per node (see founding.go).
 	KindBootstrap ObjectKind = "bootstrap"
 
 	// KindSweep is the retention sweep for ONE bucket, by the bucket

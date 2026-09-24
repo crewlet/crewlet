@@ -28,18 +28,6 @@ type codeDirectory struct {
 	codes []iamdomain.BootstrapCode
 }
 
-func (d codeDirectory) OutstandingBootstrapCodes(_ context.Context, now time.Time) (
-	[]iamdomain.BootstrapCode, error) {
-
-	var out []iamdomain.BootstrapCode
-	for _, code := range d.codes {
-		if code.State(now) == iamdomain.CodeLive {
-			out = append(out, code)
-		}
-	}
-	return out, nil
-}
-
 func (d codeDirectory) BootstrapCode(_ context.Context, id string) (
 	iamdomain.BootstrapCode, error) {
 
@@ -109,8 +97,12 @@ func postBootstrap(t *testing.T, mux *http.ServeMux, code, login string) *httpte
 }
 
 // codeID is the digest the log carries for theCode.
-func codeID() string {
-	sum := sha256.Sum256([]byte(theCode))
+func codeID() string { return digestOf(theCode) }
+
+// digestOf is the digest the log carries for a code: what the surface mints it
+// under and looks it up by.
+func digestOf(code string) string {
+	sum := sha256.Sum256([]byte(code))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -143,14 +135,15 @@ func TestAFoundersRetryFinishesTheBootstrapItStarted(t *testing.T) {
 		t.Fatalf("enrolments %d, want 2", len(writer.enrolled))
 	}
 	for i, in := range writer.enrolled {
-		if in.PersonID != want {
-			t.Errorf("attempt %d enrolled %s, want the code's founder %s",
-				i+1, in.PersonID, want)
+		// ONE PERSON AND ONE AUTHORITY: the domain takes the code for the
+		// person the enrolment names, so a retry naming another would be a
+		// second founding the take refuses.
+		if in.PersonID != want || in.BootstrapCode != codeID() ||
+			in.OpID != "bootstrap:"+codeID() {
+			t.Errorf("attempt %d enrolled %s under %q with code %q, want the "+
+				"code's founder %s under its own op id", i+1, in.PersonID,
+				in.OpID, in.BootstrapCode, want)
 		}
-	}
-	if len(writer.bootstrap) != 1 || writer.bootstrap[0].Person != want {
-		t.Errorf("the code was spent as %+v, want once naming %s",
-			writer.bootstrap, want)
 	}
 }
 

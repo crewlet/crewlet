@@ -59,6 +59,11 @@ func TestAReissueAsksTheRedemptionsGateAndNamesTheNode(t *testing.T) {
 		// 500, and has its own case beside the outcome tests.
 		{"failed", fmt.Errorf("%w: the broker did not acknowledge",
 			statelog.ErrUnavailable), http.StatusServiceUnavailable, "unavailable"},
+		// CODES KEPT ARRIVING as fast as the re-issue ended them: a lost
+		// race, which the same request again wins — never `bad_params`,
+		// which says it cannot succeed however often it is sent.
+		{"raced", fmt.Errorf("%w: more codes kept landing",
+			statelog.ErrConflict), http.StatusConflict, "stale"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

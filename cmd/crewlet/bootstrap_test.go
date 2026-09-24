@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,12 +76,18 @@ func (r founderRig) code(t *testing.T) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// found posts one bootstrap with the given code.
+// found posts one bootstrap with the given code, as Jane.
 func (r founderRig) found(t *testing.T, code string) *httptest.ResponseRecorder {
 	t.Helper()
+	return r.foundAs(t, code, "jane.founder", "jane@example.com")
+}
+
+// foundAs posts one bootstrap with the given code, login and address.
+func (r founderRig) foundAs(t *testing.T, code, login, email string) *httptest.ResponseRecorder {
+	t.Helper()
 	body, _ := json.Marshal(map[string]string{
-		"code": code, "login": "jane.founder", "email": "jane@example.com",
-		"name": "Jane Founder", "password": "a-perfectly-fine-passphrase",
+		"code": code, "login": login, "email": email,
+		"name": "A Founder", "password": "a-perfectly-fine-passphrase",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/auth/bootstrap",
 		strings.NewReader(string(body)))
@@ -147,7 +154,7 @@ func TestAWeekendOldFounderCodeIsReplacedAndTheFounderWalksIn(t *testing.T) {
 		t.Fatal("the restart kept the aged-out code in the file")
 	}
 
-	// THE RE-ISSUE: exactly one live code, and it is in the file.
+	// THE RE-ISSUE: the one code that works, and it is in the file.
 	if _, err := r.auth.ReissueBootstrapCode(t.Context(), "node-a"); err != nil {
 		t.Fatalf("re-issue: %v", err)
 	}
@@ -173,5 +180,83 @@ func TestAWeekendOldFounderCodeIsReplacedAndTheFounderWalksIn(t *testing.T) {
 	if _, err := r.auth.ReissueBootstrapCode(t.Context(),
 		"node-a"); !errors.Is(err, iamdomain.ErrBootstrapClosed) {
 		t.Errorf("a re-issue on a started company answered %v", err)
+	}
+}
+
+// TWO FOUNDERS AT ONCE FOUND ONE COMPANY.
+//
+// A fleet offers one code per node, so two people can each hold a live one,
+// and an enrolment is a sequence whose person records never share a subject:
+// both used to land, and the company got two founders carrying the whole
+// ceiling. Through the real route, the real writer and the real log, the
+// founding takes the exemption on one subject now — exactly one lands, and the
+// other is told why without a failed attempt counted against it.
+//
+// THE INTERLEAVING IS A RACE HERE, so against the old founding (no take, a
+// live code honoured at the person record) this goes red on most runs rather
+// than every one — measured at eight of eleven, each with both founders
+// landed. The interleavings that make it certain are held in place by
+// internal/iamdomain's TestASecondCodeWaitsWhileAFoundingIsInProgress and
+// TestAFoundingThatLapsedMidRequestNeverLandsBesideTheNext, which stop one
+// founding at a chosen step; this is the same rule reached through every
+// layer a founder's request crosses.
+func TestTwoFoundersAtOnceFoundOneCompany(t *testing.T) {
+	t.Parallel()
+	r := newFounderRig(t)
+	openBootstrap(t.Context(), r.auth, "node-a")
+
+	// A SECOND NODE'S CODE on the same empty log — what a fleet's boot
+	// offers beside this node's own.
+	const second = "a-code-another-node-wrote-for-the-same-empty-company"
+	sum := sha256.Sum256([]byte(second))
+	id := hex.EncodeToString(sum[:])
+	if _, err := r.engine.IAMWriter().MintBootstrap(t.Context(), iamdomain.BootstrapMint{
+		ID: id, Verifier: id, MintedBy: "node-b",
+		ExpiresAt: time.Now().Add(time.Hour),
+		OpID:      "bootstrap-mint:" + id, Reason: "a fresh estate",
+	}); err != nil {
+		t.Fatalf("mint the second node's code: %v", err)
+	}
+
+	founders := []struct{ code, login, email string }{
+		{r.code(t), "jane.founder", "jane@example.com"},
+		{second, "john.founder", "john@example.com"},
+	}
+	answers := make([]*httptest.ResponseRecorder, len(founders))
+	var wg sync.WaitGroup
+	for i, f := range founders {
+		wg.Go(func() { answers[i] = r.foundAs(t, f.code, f.login, f.email) })
+	}
+	wg.Wait()
+
+	landed := 0
+	for i, rec := range answers {
+		switch {
+		case rec.Code == http.StatusOK:
+			landed++
+		case rec.Code == http.StatusConflict &&
+			(strings.Contains(rec.Body.String(), "bootstrap_in_progress") ||
+				strings.Contains(rec.Body.String(), "bootstrap_closed")):
+		default:
+			t.Errorf("founder %d answered %d %s, want 200 or 409 in progress "+
+				"or closed", i, rec.Code, rec.Body.String())
+		}
+	}
+	if landed != 1 {
+		t.Fatalf("%d founders landed, want exactly one", landed)
+	}
+	page, err := r.engine.IAM().People(t.Context(), iamdomain.PeopleQuery{})
+	if err != nil {
+		t.Fatalf("list the directory: %v", err)
+	}
+	enrolled := 0
+	for _, row := range page.People {
+		if row.Kind != "" {
+			enrolled++
+		}
+	}
+	if enrolled != 1 {
+		t.Errorf("the directory holds %d enrolled people, want the one founder",
+			enrolled)
 	}
 }

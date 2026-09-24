@@ -432,6 +432,17 @@ const (
 	// guessing gets [CodeSignInRefused] like every other failed attempt.
 	CodeBootstrapCodeStale Code = "bootstrap_code_stale"
 
+	// CodeBootstrapInProgress is a live founder code presented while
+	// ANOTHER code's founding is part-way through: the company's one
+	// bootstrap subject holds that code's take, so exactly one founder can
+	// land. The detail's `until` is when that founding lapses on its own.
+	//
+	// ITS OWN CODE, for the stale one's reason: neither remedy is the other
+	// one's — this code works the moment the other founding finishes or
+	// lapses, and `crewlet iam bootstrap-code` ends it at once. Reachable
+	// only by presenting a live code, so it tells a stranger nothing.
+	CodeBootstrapInProgress Code = "bootstrap_in_progress"
+
 	// CodeInviteSpent is an invitation that is redeemed, withdrawn or
 	// expired. SPECIFIC because the holder of the link needs to know to
 	// ask for another one, and because holding the link is already
@@ -634,6 +645,10 @@ var codes = map[Code]string{
 		"hours, and a newer one replaces an older. Run `crewlet iam " +
 		"bootstrap-code` for a fresh one, or restart the node that wrote the " +
 		"file, and use the code in the file it names.",
+	CodeBootstrapInProgress: "Somebody else is setting up the first account " +
+		"with another founder code right now, and only one founder can. Wait " +
+		"until the time in the detail and try again, or run `crewlet iam " +
+		"bootstrap-code` to end that setup and get a fresh code.",
 	CodeSeatUnavailable: "The seat you are bound to is no longer in this " +
 		"company's org chart, so there is nothing for you to act as. An " +
 		"administrator can bind you to another one.",

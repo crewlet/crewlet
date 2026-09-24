@@ -416,8 +416,9 @@ func providerIssuer(e *engine.Engine) string {
 //
 // THE SAME SERVICE THAT MINTS ONE AT BOOT, rather than a second
 // implementation: the file's path, its mode, the hash that is published and
-// the withdrawals that precede it are one sequence, and a copy of it here
-// would be a second answer to "how many codes are live".
+// the domain gesture that ends every other code before it lands are one
+// sequence, and a copy of it here would be a second answer to "how many codes
+// work".
 //
 // NIL WHERE `api.auth.bootstrap` IS CLOSED, which is the shape iamapi
 // documents for that deployment — 404, "this engine does not bootstrap that

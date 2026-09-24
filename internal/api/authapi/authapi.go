@@ -152,11 +152,6 @@ type Directory interface {
 	SessionStanding(ctx context.Context, lineage string, now time.Time) (
 		owner string, live bool, err error)
 
-	// OutstandingBootstrapCodes are the codes that are neither spent nor
-	// aged out, which re-issuing one has to withdraw.
-	OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
-		[]iamdomain.BootstrapCode, error)
-
 	// BootstrapCode resolves one code by its digest WHATEVER BECAME OF IT
 	// — the zero value for one the log holds no row for — which is what
 	// lets a founder holding a code that no longer works be told why, and
@@ -198,19 +193,18 @@ type Writer interface {
 	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
 
 	// MintBootstrap publishes the hash of the one-time code this node
-	// wrote, and SpendBootstrap records it being used.
+	// wrote at boot. Every node's lands: a fleet offers one code per node.
 	//
-	// TWO RECORDS ON ONE SUBJECT, which is what makes two nodes minting
-	// or redeeming contend — the enrolment beside a redemption arbitrates
-	// on a fresh person id nobody else would name, so two of those would
-	// both succeed and a company would have two founders.
+	// There is no spend here. A founding is [Writer.Enrol] naming the code,
+	// which TAKES it on the company's one bootstrap subject before it
+	// claims anything — that take, not a spend published after the
+	// person, is what makes exactly one founder land.
 	MintBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (statelog.Result, error)
-	SpendBootstrap(ctx context.Context, in iamdomain.BootstrapSpend) (statelog.Result, error)
 
-	// WithdrawBootstrap supersedes a code nobody redeemed, which is what
-	// re-issuing one has to do first: two live codes are two ways into an
-	// engine that has no other way in.
-	WithdrawBootstrap(ctx context.Context, id, opID, reason string) (
+	// ReissueBootstrap withdraws every outstanding code, releases an
+	// unfinished founding, and mints the given one — decided in the mint's
+	// own snapshot, so exactly one code is live where it lands.
+	ReissueBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (
 		statelog.Result, error)
 
 	// SetCredentials replaces a person's credential set, forming the new

@@ -231,8 +231,18 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 		}
 		rig.drain()
 	}
+	// THE FOUNDER IS THE CODE'S, derived and never chosen — the founding
+	// refuses any other person — so a code nobody minted names the one its
+	// digest would derive, and is refused as dead before that matters.
 	first := func(code, login string) error {
-		person := uuid.Must(uuid.NewV7()).String()
+		held, err := rig.reader(t).BootstrapCode(rig.t.Context(), code)
+		if err != nil {
+			t.Fatalf("read code %s: %v", code, err)
+		}
+		person := held.FounderID()
+		if held.ID == "" {
+			person = iamdomain.BootstrappedPersonID(code, time.Time{})
+		}
 		return rig.draining(func() error {
 			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -263,9 +273,9 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 			"%v — the node's writer could never confer it on its own grants, "+
 			"and the code is the one stated exemption", err)
 	}
-	// THE EXEMPTION IS CLOSED THE MOMENT SOMEBODY EXISTS, even though this
-	// code has not been spent yet — spending it is a second record, and the
-	// window between the two is exactly when a second caller would try.
+	// THE EXEMPTION IS CLOSED THE MOMENT SOMEBODY EXISTS: the same code
+	// presented again names the same founder, who is now enrolled, and is
+	// answered as a company that has started rather than enrolled twice.
 	if err := first("live-code", "second"); !errors.Is(err, iamdomain.ErrRefused) ||
 		!errors.Is(err, iamdomain.ErrBootstrapClosed) {
 		t.Errorf("a second person was created on the first-person exemption, "+

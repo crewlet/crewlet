@@ -219,15 +219,14 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 	}
 }
 
-// recordingWriter records every enrolment and spend, answering each enrolment
-// with the next error in refusals (nil once they run out).
+// recordingWriter records every enrolment and invitation spend, answering each
+// enrolment with the next error in refusals (nil once they run out).
 type recordingWriter struct {
 	stubWriter
-	mu        sync.Mutex
-	refusals  []error
-	enrolled  []iamdomain.Enrolment
-	spent     []iamdomain.InvitationSpend
-	bootstrap []iamdomain.BootstrapSpend
+	mu       sync.Mutex
+	refusals []error
+	enrolled []iamdomain.Enrolment
+	spent    []iamdomain.InvitationSpend
 
 	// unresolved makes every enrolment past the refusals answer `unknown`
 	// under its own op id: nothing can say whether it landed.
@@ -257,15 +256,6 @@ func (w *recordingWriter) SpendInvitation(_ context.Context,
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.spent = append(w.spent, in)
-	return applied(statelog.Position{}), nil
-}
-
-func (w *recordingWriter) SpendBootstrap(_ context.Context,
-	in iamdomain.BootstrapSpend) (statelog.Result, error) {
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.bootstrap = append(w.bootstrap, in)
 	return applied(statelog.Position{}), nil
 }
 

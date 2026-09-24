@@ -38,6 +38,15 @@ import (
 // redemption refused for as long as it lived. The way back in there is an
 // administrator, or a Tier A token holding people:manage — the path that
 // leaves a trail naming who did it.
+//
+// # What "exactly one" means
+//
+// The seam's re-issue is ONE gesture in the identity domain, decided where its
+// mint lands ([iamdomain.Writer.ReissueBootstrap]): every code outstanding in
+// that snapshot — live, or taken by a founding that has not finished — is
+// withdrawn or ended first, so where the mint lands it is the only code that
+// works. A node that boots onto an empty estate afterwards offers its own, as
+// every boot does; the re-issue is the gesture that ends them all again.
 func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 	if s.bootstrap == nil {
 		// ABSENT RATHER THAN REFUSING, which is what a route that this
@@ -68,8 +77,13 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 			auth.RetryIdentitySeconds, httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error()})
+		// OUTSTANDING CODES KEPT ARRIVING as fast as the re-issue ended
+		// them. No code was minted, and the same request again ends
+		// whatever arrived and mints one — so `stale`, the lost race,
+		// and never `bad_params`, which tells a client the request can
+		// never succeed however often it is sent.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
+			map[string]string{"detail": "no code was minted: " + err.Error()})
 		return
 	case err != nil:
 		// A FAULT WAITING DOES NOT CLEAR — the file beside the store
@@ -89,7 +103,8 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		"node": minted.Node,
 		"detail": "the code is in that file, mode 0600, on that node's host, " +
 			"and lasts 24 hours. It is never returned over HTTP and never " +
-			"logged. Every code outstanding before this one was withdrawn, " +
-			"so exactly one is live.",
+			"logged. Every code outstanding before this one was withdrawn " +
+			"and every unfinished founding ended, so this is the one code " +
+			"that works.",
 	})
 }

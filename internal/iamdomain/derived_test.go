@@ -2,6 +2,8 @@ package iamdomain_test
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +65,55 @@ func TestARedemptionsPersonIsOneUUID7PerCredential(t *testing.T) {
 	if ms := millisecondOf(uuid.MustParse(founder)); ms != minted.UnixMilli() {
 		t.Errorf("the founder's instant is %d, want the code's %d", ms,
 			minted.UnixMilli())
+	}
+}
+
+// A FOUNDING'S PERSON SAYS SO BY ITS SHAPE, AND NOTHING ELSE'S DOES.
+//
+// The next founding finds an earlier attempt's reservation by this shape once
+// the code it took has been swept off the log, and releases it — so every id a
+// founding derives must carry it, and no id anything else mints or derives may,
+// or a founding would end an administrator's half-finished colleague.
+//
+// Mutation: drop the mark from the derivation and the founder fails the shape;
+// answer the shape for any uuid7 and the minted and invited ids pass it.
+func TestAFoundingsPersonSaysSoByItsShape(t *testing.T) {
+	t.Parallel()
+	minted := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	for i := range 64 {
+		founder := iamdomain.BootstrappedPersonID(fmt.Sprintf("code-%d", i), minted)
+		if !iamdomain.FounderAttempt(founder) {
+			t.Fatalf("the founder %s a code derived does not carry the shape", founder)
+		}
+		if strings.ToUpper(founder) != founder &&
+			iamdomain.FounderAttempt(strings.ToUpper(founder)) {
+			t.Errorf("a non-canonical spelling of %s carries the shape", founder)
+		}
+	}
+	for i := range 256 {
+		minted := uuid.Must(uuid.NewV7()).String()
+		if iamdomain.FounderAttempt(minted) {
+			t.Errorf("a minted person id %s (try %d) carries the founder shape",
+				minted, i)
+		}
+		invited, err := iamdomain.InvitedPersonID(uuid.Must(uuid.NewV7()).String())
+		if err != nil {
+			t.Fatalf("derive: %v", err)
+		}
+		if iamdomain.FounderAttempt(invited) {
+			t.Errorf("an invited person %s carries the founder shape", invited)
+		}
+	}
+	for _, bad := range []string{"", "not-a-uuid", uuid.NewString()} {
+		if iamdomain.FounderAttempt(bad) {
+			t.Errorf("%q carries the founder shape", bad)
+		}
+	}
+	// AND IT IS STILL ONE PERSON PER CODE: two codes minted in the same
+	// millisecond derive two people.
+	if iamdomain.BootstrappedPersonID("one", minted) ==
+		iamdomain.BootstrappedPersonID("two", minted) {
+		t.Error("two codes minted in one millisecond derived one founder")
 	}
 }
 

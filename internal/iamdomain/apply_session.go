@@ -102,9 +102,11 @@ func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 
 // applyBootstrap writes the company's one way in before it has anybody.
 //
-// ONE SUBJECT FOR THE WHOLE DOMAIN, so two nodes minting a code contend and
-// exactly one wins: two live bootstraps is two ways into an engine that has no
-// other way in.
+// ONE SUBJECT FOR THE WHOLE DOMAIN, so every code's life reads in order and two
+// foundings taking codes contend: exactly one attempt at a time may hold the
+// exemption that creates a person carrying the whole ceiling. What the apply
+// writes is one code's row; everything that decides WHICH record may be
+// written is the writer's (founding.go).
 func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpBootstrap {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on the "+
@@ -121,9 +123,9 @@ func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, fmt.Errorf("iamdomain: re-encode the bootstrap at %s: %w",
 			at.position, err)
 	}
-	// A MINT, A REDEMPTION AND A WITHDRAWAL ARE ONE STATEMENT,
-	// distinguished by what the payload carries: a mint names a verifier
-	// and no person, a redemption names a person, a withdrawal says so.
+	// A MINT, A TAKE AND A WITHDRAWAL ARE ONE STATEMENT, distinguished by
+	// what the payload carries: a mint names a verifier and no person, a
+	// founding's take names the person it creates, a withdrawal says so.
 	// The whole life of the one bootstrap object sits consecutively on
 	// one subject, so an operator reads it in order whatever each record
 	// is called.
@@ -155,9 +157,10 @@ func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContex
 // redemption instant, or an instant with nobody behind it, are both states the
 // estate has no reading for.
 //
-// SPENT COVERS BOTH WAYS A CODE STOPS WORKING — somebody used it, or an
-// operator superseded it — and the row keeps WHICH: `person_id` is set on the
-// first and empty on the second, and the document says `withdrawn` either way.
+// SPENT COVERS BOTH WAYS A CODE STOPS BEING TAKEABLE — a founding took it, or
+// an operator superseded it — and the row keeps WHICH: `person_id` is set on
+// the first and empty on the second, and the document says `withdrawn` on the
+// second.
 func redeemedAt(at applyContext, bootstrap Bootstrap) int64 {
 	if bootstrap.Person == "" && !bootstrap.Withdrawn {
 		return 0

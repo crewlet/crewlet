@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE FIRST PERSON, and the problem it solves.
@@ -65,6 +66,16 @@ import (
 // company still waiting for them. It is specific without being an oracle: the
 // arm is reachable only by presenting a code whose digest is on the log or in
 // this node's own file, which a stranger cannot do.
+//
+// # One founding at a time, and the one that stopped is finished or ended
+//
+// A founding TAKES the first-person exemption on the company's one bootstrap
+// subject before it claims anything ([iamdomain.Writer.Enrol]), so a second
+// code presented while another founder's enrolment is in progress answers
+// `409 bootstrap_in_progress` naming when that one lapses — and a founder whose
+// own attempt stopped halfway finishes it with the same code, or, once that
+// code has died, with a fresh one: the fresh founding ends the stopped attempt
+// before it claims the address that attempt was holding.
 //
 // # It closes for good
 //
@@ -174,11 +185,11 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// THE FIRST OPERATOR IS THE CODE'S, DERIVED rather than minted — see
-	// [iamdomain.BootstrappedPersonID]. Minted per request, a bootstrap
+	// [iamdomain.BootstrapCode.FounderID]. Minted per request, a bootstrap
 	// that stopped after its address claim left that address held for an
 	// id no retry named, and the founder's corrected retry was refused as
 	// "that address belongs to somebody" by their own first attempt.
-	person := iamdomain.BootstrappedPersonID(code.ID, code.MintedAt)
+	person := code.FounderID()
 	opID := "bootstrap:" + code.ID
 	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -194,10 +205,12 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		// cannot grant themselves what they need to grant anybody
 		// anything.
 		//
-		// THE CODE IS THE AUTHORITY, named on the enrolment so the
-		// domain checks it in the snapshot the grants land from: live,
-		// and nobody else enrolled. The node's own writer could not
-		// confer the ceiling on its own grants, and must not be able to.
+		// THE CODE IS THE AUTHORITY, named on the enrolment: the domain
+		// TAKES it on the company's one bootstrap subject before the
+		// first claim, and checks the take again in the snapshot the
+		// grants land from — this attempt's, current, and nobody else
+		// enrolled. The node's own writer could not confer the ceiling on
+		// its own grants, and must not be able to.
 		Grants:        s.boot.API.Auth.MaxGrants,
 		Colleague:     iam.ColleagueWrite,
 		BootstrapCode: code.ID,
@@ -208,31 +221,20 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !landed(enrolled) {
-		// NOTHING IS BUILT ON AN ENROLMENT NOBODY CAN CONFIRM: no spend,
-		// no file removed, no session. The op id is the code's own, so
-		// presenting the same code again is the same enrolment.
+		// NOTHING IS BUILT ON AN ENROLMENT NOBODY CAN CONFIRM: no file
+		// removed, no session. The op id is the code's own, so presenting
+		// the same code again is the same enrolment — and the code is
+		// TAKEN by it, so it is the one code that may finish it.
 		unresolved(w, r, "api_bootstrap_enrol_unresolved", enrolled)
 		return
 	}
 
-	// THE CODE IS SPENT ON THE LOG BEFORE THE FILE IS REMOVED, and the
-	// order is the whole of it: the record is what every OTHER node reads
-	// to know the company has started, and a file deleted first leaves a
-	// company that has an operator and a node that cannot prove it.
-	spent, err := s.writer.SpendBootstrap(r.Context(), iamdomain.BootstrapSpend{
-		ID: code.ID, Person: person, OpID: opID + ":spend",
-		Reason: "redeemed",
-	})
-	if err != nil || !landed(spent) {
-		// LOGGED AND NOT REPORTED, an unknown spend included: the person
-		// exists, and the route is closed by the estate whatever the
-		// code's own row says.
-		log.WarnContext(r.Context(), "api_bootstrap_spend_failed",
-			"error", errText(err), "op_id", spent.OpID,
-			"outcome", string(spent.Outcome), "person", person)
-	}
-	// AND THIS NODE'S FILE GOES LAST, whichever code it holds: the company
-	// has started, so no code will ever be honoured again. A failure here is
+	// THIS NODE'S FILE GOES LAST, whichever code it holds, and only once
+	// the person is on the log: the enrolment is what every OTHER node
+	// reads to know the company has started, and a file deleted first
+	// would leave a company with nobody in it and a node with no code to
+	// offer. The company has started, so no code will ever be honoured
+	// again. A failure here is
 	// logged and never reported — the operator exists, the route is closed
 	// by the estate whatever the file says, and telling somebody their
 	// first sign-in failed over a file they cannot see would be false. A
@@ -252,14 +254,17 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}, signIn{method: types.SignInBootstrap})
 }
 
-// liveCode is the live code a caller presented, answering false once it has
-// written the refusal.
+// liveCode is the code a caller presented, when it is one a founding may go
+// on with, answering false once it has written the refusal.
 //
 // THE LOG DECIDES, by [iamdomain.BootstrapCode.State] — the predicate the
-// person record's own decide asks — so this route and the record cannot
-// disagree about a code. Each answer is a different remedy:
+// founding's own decides ask — so this route and the record cannot disagree
+// about a code. Each answer is a different remedy:
 //
 //   - LIVE is the way in.
+//   - TAKEN is a founding begun with this very code that has not finished —
+//     a request that stopped after its take — and presenting the code again
+//     is what finishes it, so it goes on exactly as a live one does.
 //   - REDEEMED is a company that has started on a node that has not applied
 //     its first person yet: the closed answer, which is permanent.
 //   - AGED OUT and WITHDRAWN are a real code that no longer works, and so is
@@ -277,7 +282,7 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 		return iamdomain.BootstrapCode{}, false
 	}
 	switch state := code.State(s.now()); state {
-	case iamdomain.CodeLive:
+	case iamdomain.CodeLive, iamdomain.CodeTaken:
 		return code, true
 	case iamdomain.CodeRedeemed:
 		httpjson.Fail(w, http.StatusConflict, httpjson.CodeBootstrapClosed)
@@ -340,15 +345,29 @@ func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
 
 // refuseFounder answers an enrolment the record refused.
 //
-// THE RECORD'S SENTINEL PICKS THE ANSWER, because the record read the code
-// and the directory in the snapshot the grants land from, which is later than
-// anything this route read: a code that died in between is the stale answer,
-// somebody else becoming the first person is the closed one, and any other
-// refusal of the node's own writer is a wiring fault no caller can clear.
+// THE RECORD'S SENTINEL PICKS THE ANSWER, because the founding read the code
+// and the directory in its own snapshots, which are later than anything this
+// route read: a code that died in between is the stale answer, somebody else
+// becoming the first person is the closed one, another founder's enrolment in
+// progress is its own, and any other refusal of the node's own writer is a
+// wiring fault no caller can clear.
 func (s *Service) refuseFounder(w http.ResponseWriter, r *http.Request,
 	arrived time.Time, source, presented string, err error) {
 
+	var inProgress *iamdomain.FoundingInProgress
 	switch {
+	case errors.As(err, &inProgress):
+		// NOT COUNTED as a failed attempt, for the closed answer's reason:
+		// it is a state of the company rather than a wrong credential, and
+		// it is reached only by presenting a live code. What it says is
+		// the one thing the holder can act on without a command — when
+		// their code may be taken.
+		log.InfoContext(r.Context(), "api_bootstrap_in_progress",
+			"until", inProgress.Until)
+		httpjson.FailWith(w, http.StatusConflict,
+			httpjson.CodeBootstrapInProgress, map[string]string{
+				"until": inProgress.Until.UTC().Format(time.RFC3339),
+			})
 	case errors.Is(err, iamdomain.ErrBootstrapCodeDead):
 		s.refuseStaleCode(w, r, arrived, source, presented, "dead at the record")
 	case errors.Is(err, iamdomain.ErrBootstrapClosed):
@@ -428,11 +447,13 @@ func (s *Service) readBootstrapCode() (string, error) {
 // carries is where to look, so a code never travels anywhere it could be read
 // by somebody who cannot already read the host.
 //
-// # A live code is kept; anything else is replaced
+// # A code that still works is kept; anything else is replaced
 //
 // A code the log holds as LIVE is not replaced — an operator may have it open
 // in a terminal, and minting another would silently invalidate a code somebody
-// is about to type. Everything else is replaced by a fresh one: a code that
+// is about to type — and nor is one a founding TOOK and has not finished:
+// that code is the only one that finishes the founder's own stopped attempt
+// before it lapses. Everything else is replaced by a fresh one: a code that
 // aged out, one a re-issue withdrew, one whose mint never reached the log, an
 // empty or unreadable file. The boot path used to keep ANY file, so a node
 // restarted a day after its first boot advertised a code the log had already
@@ -476,7 +497,7 @@ func (s *Service) OfferBootstrapCode(ctx context.Context, nodeID string) (string
 				"live: %w", path, err)
 		}
 		state := code.State(s.now())
-		if state == iamdomain.CodeLive {
+		if state == iamdomain.CodeLive || state == iamdomain.CodeTaken {
 			return path, nil
 		}
 		log.WarnContext(ctx, "api_bootstrap_code_replaced", "path", path,
@@ -488,31 +509,35 @@ func (s *Service) OfferBootstrapCode(ctx context.Context, nodeID string) (string
 		log.WarnContext(ctx, "api_bootstrap_code_replaced", "path", path,
 			"error", err)
 	}
-	return s.mintCodeFile(ctx, nodeID)
+	return s.mintCodeFile(ctx, nodeID, s.writer.MintBootstrap)
 }
 
-// ReissueBootstrapCode withdraws every outstanding code and mints one.
+// ReissueBootstrapCode withdraws every outstanding code, ends an unfinished
+// founding, and mints one — so that where its mint lands, exactly one code is
+// live and no founding is in progress.
 //
 // # Exactly one is live after it runs, which the boot path deliberately is not
 //
-// [Service.OfferBootstrapCode] keeps a live code, because an operator may have
-// it open in a terminal and replacing it silently would invalidate what they
-// are about to type. This is the opposite gesture: somebody asked for a new
-// one, so the old ones are the problem rather than the thing to protect — a
-// live code is a way to become the first administrator with no credential at
-// all, and an operator who re-issued because they lost the file has no idea
-// the original still works. The file lands on THIS node's host, and the
-// caller is told which node that is.
+// [Service.OfferBootstrapCode] keeps a code that still works, because an
+// operator may have it open in a terminal and replacing it silently would
+// invalidate what they are about to type. This is the opposite gesture:
+// somebody asked for a new one, so the old ones are the problem rather than
+// the thing to protect — a live code is a way to become the first
+// administrator with no credential at all, and an operator who re-issued
+// because they lost the file has no idea the original still works. The file
+// lands on THIS node's host, and the caller is told which node that is.
+//
+// ONE GESTURE IN THE DOMAIN, decided where the mint lands
+// ([iamdomain.Writer.ReissueBootstrap]). It used to read the outstanding codes
+// here, withdraw them one by one and then mint, so a code another node minted
+// between the read and the mint — a boot, or a second operator re-issuing — was
+// live beside the new one, and "exactly one" was two.
 //
 // REFUSED, wrapping [iamdomain.ErrBootstrapClosed], once the route is closed —
 // by the same gate the route asks, so a re-issue can never mint a code the
 // route would refuse. It used to ask whether an active, credentialled
 // administrator existed instead, and handed a company whose only person was
 // suspended a code the record then refused.
-//
-// THE WITHDRAWALS GO FIRST. A crash between them and the mint leaves a
-// company with NO way in, which an operator fixes by running this again; the
-// other order leaves two, which nothing reports and nobody notices.
 func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 	string, error) {
 
@@ -527,31 +552,11 @@ func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 	if closed != "" {
 		return "", fmt.Errorf("%w: %s", iamdomain.ErrBootstrapClosed, closed)
 	}
-	outstanding, err := s.directory.OutstandingBootstrapCodes(ctx, s.now())
-	if err != nil {
-		return "", fmt.Errorf("authapi: read the outstanding bootstrap "+
-			"codes: %w", err)
-	}
-	for _, code := range outstanding {
-		withdrawn, err := s.writer.WithdrawBootstrap(ctx, code.ID,
-			"bootstrap-withdraw:"+code.ID, "superseded by a re-issued code")
-		if err != nil {
-			return "", fmt.Errorf("authapi: withdraw the bootstrap code "+
-				"%s: %w", code.ID, err)
-		}
-		if !landed(withdrawn) {
-			// MINTING BESIDE A WITHDRAWAL NOBODY CAN CONFIRM could leave
-			// two live codes, which is what the withdrawal is for.
-			return "", fmt.Errorf("authapi: the withdrawal of bootstrap "+
-				"code %s (operation %s) has an unknown outcome; retry: %w",
-				code.ID, withdrawn.OpID, ErrUnresolved)
-		}
-	}
-	return s.mintCodeFile(ctx, nodeID)
+	return s.mintCodeFile(ctx, nodeID, s.writer.ReissueBootstrap)
 }
 
 // mintCodeFile writes a fresh code over this node's file and publishes its
-// hash. The caller holds codeMu.
+// hash with publish — a boot's mint, or a re-issue. The caller holds codeMu.
 //
 // # The file is REPLACED, never edited
 //
@@ -569,7 +574,10 @@ func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 // takes its file with it, and one whose outcome is UNKNOWN keeps it without
 // offering it, so a file on the host is only ever a code the log honours or
 // one a restart replaces.
-func (s *Service) mintCodeFile(ctx context.Context, nodeID string) (string, error) {
+func (s *Service) mintCodeFile(ctx context.Context, nodeID string,
+	publish func(context.Context, iamdomain.BootstrapMint) (statelog.Result, error)) (
+	string, error) {
+
 	path := s.bootstrapCodePath()
 	raw := make([]byte, bootstrapCodeBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -581,7 +589,7 @@ func (s *Service) mintCodeFile(ctx context.Context, nodeID string) (string, erro
 			path, err)
 	}
 	id := bootstrapCodeID(code)
-	minted, err := s.writer.MintBootstrap(ctx, iamdomain.BootstrapMint{
+	minted, err := publish(ctx, iamdomain.BootstrapMint{
 		ID: id, Verifier: id, MintedBy: nodeID,
 		ExpiresAt: s.now().Add(bootstrapLifetime),
 		OpID:      "bootstrap-mint:" + id, Reason: "a fresh estate",

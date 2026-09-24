@@ -156,12 +156,6 @@ func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string
 	return "", false, nil
 }
 
-func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
-	[]iamdomain.BootstrapCode, error) {
-
-	return nil, nil
-}
-
 func (stubDirectory) BootstrapCode(context.Context, string) (iamdomain.BootstrapCode, error) {
 	return iamdomain.BootstrapCode{}, nil
 }
@@ -193,17 +187,11 @@ func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, 
 	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) WithdrawBootstrap(context.Context, string, string, string) (
-	statelog.Result, error) {
-
-	return applied(statelog.Position{}), nil
-}
-
 func (stubWriter) MintBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Result, error) {
 	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) SpendBootstrap(context.Context, iamdomain.BootstrapSpend) (statelog.Result, error) {
+func (stubWriter) ReissueBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Result, error) {
 	return applied(statelog.Position{}), nil
 }
 

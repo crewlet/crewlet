@@ -79,9 +79,11 @@ func (e *ErrClaimed) Error() string {
 //   - THE FIRST PERSON ([Enrolment.BootstrapCode]) is the one stated
 //     exemption: nobody holds a credential yet, so there is nobody whose
 //     grants could bound it, and it is taken by whoever proved they can read
-//     a file on the host. The decide reads the code and the directory in its
-//     own snapshot and refuses unless the code is live and nobody else is
-//     enrolled, so the exemption closes the moment anybody exists.
+//     a file on the host. It is TAKEN before anything else, on the company's
+//     one bootstrap subject, which is what makes it exclusive — see
+//     founding.go — and the person record's decide refuses unless this
+//     attempt's take is the current one and nobody else is enrolled, so the
+//     exemption closes the moment anybody exists.
 //
 // The node's own writer holds fleet:operate and people:manage and nothing
 // else, so on its own authority it may confer those two; everything the
@@ -99,13 +101,15 @@ func (e *ErrClaimed) Error() string {
 // [OrphanKeyGrace], on rows that have applied everything the log held
 // ([CoversLog]).
 //
-// EVERY BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, read-only, exactly as the
-// writer's own grants are: the claims go first because they are what can be
-// refused, and a refusal the estate could already establish — a code a day
-// old, a link somebody spent — met only at the person record leaves a
-// reservation holding the caller's own address and login behind it. The
-// person record's snapshot stays the AUTHORITY; what survives the early read
-// is only a race lost between the two, which is the legal residue above.
+// EVERY BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, exactly as the writer's
+// own grants are: the claims go first because they are what can be refused,
+// and a refusal the estate could already establish — a link somebody spent, a
+// code a day old — met only at the person record leaves a reservation holding
+// the caller's own address and login behind it. An invitation's is a read; the
+// first person's is its TAKE, a write, because the take is also what makes it
+// the only founding in progress. The person record's snapshot stays the
+// AUTHORITY; what survives the early check is only a race lost between the
+// two, which is the legal residue above.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Result{}, err
@@ -144,28 +148,42 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 			return statelog.Result{}, err
 		}
 	}
-	// THE BASIS IS CHECKED BEFORE ANYTHING IS WRITTEN, and again, as the
-	// authority, in the person record's own snapshot below. The claims run
-	// first because they are what can be refused — but the basis can be
+	// ONE MARK FOR THE WHOLE GESTURE: each step decides from a state holding
+	// the one before it, whether this writer is shared or a sequence.
+	at := w.gesture()
+
+	// THE BASIS IS CHECKED BEFORE ANYTHING ELSE IS WRITTEN, and again, as
+	// the authority, in the person record's own snapshot below. The claims
+	// run first because they are what can be refused — but the basis can be
 	// refused too, and a refusal met only at the person record is met after
-	// the address and the login are already claimed: a founder holding a
-	// code a day old was told their company had started, and the
-	// reservation their attempt left behind held their own address against
-	// the fresh code that would have let them in. This read decides nothing
-	// the record does not decide again; it makes a refusal the snapshot can
-	// already establish cost nothing but the read. BEFORE THE KEY, too, for
-	// the blinder's reason: a refusal after the mint leaves a key behind for
-	// somebody who never existed.
+	// the address and the login are already claimed, leaving a reservation
+	// that holds them against the redeemer's own next attempt. BEFORE THE
+	// KEY, too, for the blinder's reason: a refusal after the mint leaves a
+	// key behind for somebody who never existed.
 	basis := w.basisOf(ctx, in, blind)
-	if basis != nil {
+	switch {
+	case in.BootstrapCode != "":
+		// THE FIRST PERSON TAKES THE EXEMPTION, which is a write rather
+		// than a read: it is what makes this founding the only one in
+		// progress, and what ends every earlier attempt before this one
+		// claims the address that attempt may still hold. See
+		// [Writer.takeExemption].
+		taken, err := w.takeExemption(ctx, at, in)
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		if taken.Outcome == statelog.OutcomeUnknown {
+			return unresolved(in.OpID), nil
+		}
+	case basis != nil:
+		// A REDEMPTION'S IS A READ: it decides nothing the record does
+		// not decide again, and makes a refusal the snapshot can already
+		// establish cost nothing but the read.
 		if err := w.db.Replicated().Read(ctx, basis); err != nil {
 			return statelog.Result{}, err
 		}
 	}
 
-	// ONE MARK FOR THE WHOLE GESTURE: each step decides from a state holding
-	// the one before it, whether this writer is shared or a sequence.
-	at := w.gesture()
 	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
 		return statelog.Result{}, err
 	}
@@ -305,9 +323,12 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 // basisOf is the check an enrolment's named authority is held to, or nil for
 // an enrolment on the writer's own grants.
 //
-// ONE FUNCTION FOR BOTH READS [Writer.Enrol] makes of it — the advisory one
-// before the first claim and the authoritative one in the person record's
-// snapshot — so the two cannot drift into asking different questions.
+// ONE FUNCTION FOR BOTH READS [Writer.Enrol] makes of an invitation — the
+// advisory one before the first claim and the authoritative one in the person
+// record's snapshot — so the two cannot drift into asking different questions.
+// The first person's early check is its take instead ([Writer.takeable]),
+// which moves the code from live to taken; this is what the person record
+// then asks of that take.
 func (w *Writer) basisOf(ctx context.Context, in Enrolment, blind string) func(*sql.Tx) error {
 	switch {
 	case in.Invitation != "":
@@ -470,6 +491,21 @@ func (e Enrolment) validate() error {
 			"segments joined by DOTS (jane.doe). It is the name every change "+
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
+	}
+	if e.BootstrapCode != "" {
+		// THE FOUNDER'S GRANTS ARE BOUNDED BY NO WRITER — that is the
+		// exemption — so the one bound they meet is that this build can
+		// name each of them. It was met only at the person record, after
+		// the take and both claims had landed, which left a reservation
+		// holding the founder's address and login behind a refusal
+		// knowable before anything was written.
+		for _, g := range e.Grants {
+			if !g.Valid() {
+				return fmt.Errorf("%w: %q is not a grant this build knows, "+
+					"and conferring a spelling nothing can check is not "+
+					"conferring the ceiling", ErrRefused, g)
+			}
+		}
 	}
 	return loginFits(e.Kind, e.Login)
 }
@@ -2455,11 +2491,10 @@ type PersonUpdate struct {
 // SpendInvitation records an invitation being used, naming the person it
 // created.
 //
-// A SECOND RECORD ON THE INVITATION'S OWN SUBJECT, for [SpendBootstrap]'s
-// reason: the enrolment beside it arbitrates on a fresh person id nobody else
-// would name, so two nodes redeeming one link would both succeed and the
-// company would have two people where somebody invited one. Contending here is
-// what makes exactly one win.
+// A SECOND RECORD ON THE INVITATION'S OWN SUBJECT, because the enrolment
+// beside it arbitrates on the person it creates rather than on the address the
+// link was issued to — so it is the spend that marks the link used, where the
+// next redemption's decide reads it.
 //
 // NO GRANT. The invitation IS the authority — what redeeming it confers was
 // decided by whoever issued it, once, rather than again by whoever happens to

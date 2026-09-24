@@ -232,18 +232,21 @@ snapshot the grants land from:
 |---|---|---|
 | Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
 | Redeeming an invitation | The invitation, as its issuer wrote it | A grant or a reach the invitation did not carry, an address it was not issued to, and a link already spent or aged out |
-| The first person | The one-time code | A code that is not on the log, is spent, withdrawn or aged out — and any enrolment once somebody else exists |
+| The first person | The one-time code, **taken** on the company's one bootstrap subject | A code that is not on the log, is withdrawn, aged out or ended — any founding while another code's is in progress — and any enrolment once somebody else exists |
 
 An enrolment is a sequence — the address, then the login, then the person — and
-the authority in that table is read **twice**: once before the first claim,
-read-only, and again in the person record's own snapshot, which is the one that
-counts. The early read is what keeps a refusal the estate could already
-establish from leaving anything behind: met only at the last step, a code a
-day old was refused *after* the founder's address and login were claimed, and
-the reservation that attempt left held the founder's own address against the
-fresh code that would have let them in. What can still land between the two
-reads is a race — somebody else enrolling, a code withdrawn a moment ago — and
-its residue is the ordinary orphaned reservation the claim report names.
+the authority in that table is checked **twice**: once before the first claim,
+and again in the person record's own snapshot, which is the one that counts.
+For an invitation the early check is a read. For the first person it is a
+**write** — the founding *takes* the exemption on one subject, below — because
+two founders who each pass a read both land. The early check is what keeps a
+refusal the estate could already establish from leaving anything behind: met
+only at the last step, a code a day old was refused *after* the founder's
+address and login were claimed, and the reservation that attempt left held the
+founder's own address against the fresh code that would have let them in. What
+can still land between the two checks of an invitation is a race — somebody
+else enrolling, a link withdrawn a moment ago — and its residue is the ordinary
+orphaned reservation the claim report names.
 
 "Somebody else exists" is **one predicate** everywhere it is asked — the
 record above, the route's open flag, the boot path's decision to mint a code,
@@ -393,8 +396,10 @@ sequenceDiagram
     Person->>Node: read the file on the host
     Person->>Any: POST /auth/bootstrap {code, login, email, password}
     Any->>Log: is this digest live?
+    Any->>Log: take the exemption (the one bootstrap subject)
+    Any->>Log: end every earlier, unfinished founding
+    Any->>Log: claim the address, then the login
     Any->>Log: enrol the person (whole ceiling)
-    Any->>Log: spend the code
     Any->>Any: remove its own code file
     Any-->>Person: session cookie
 ```
@@ -407,21 +412,32 @@ What about that sequence is load-bearing:
   load balancer puts the founder's request on whichever node it likes; the file
   is read only to recognise a code the *serving* node wrote whose hash never
   reached the log.
-- **Every code's life sits on one subject.** A mint, a withdrawal and a
-  redemption are records on the bootstrap's one subject, so an operator reads
-  them in order. Several codes can be live at once — every node that boots on
-  an empty estate offers its own, and a founder may be typing any of them — and
-  the re-issue below is what leaves exactly one.
-- **The code is spent on the log before the file is removed.** The record is
-  what every *other* node reads to know the company has started; a file deleted
-  first leaves a company that has an operator and a node that cannot prove it.
+- **Exactly one founder, arbitrated on one subject.** A mint, a take and a
+  withdrawal are records on the bootstrap's one subject, so an operator reads a
+  code's whole life in order. Several codes can be live at once — every node
+  that boots on an empty estate offers its own, and a founder may be typing any
+  of them — but only one can be **taken**: a founding's first write takes the
+  exemption on that subject, naming its code and the person it creates, and
+  every take contends there. Two founders redeeming two codes at once — which a
+  fleet makes easy — used to both land, because an enrolment is a sequence and
+  two people's records never share a subject; now the loser is refused before
+  it has claimed a thing.
+- **The file goes only after the person is on the log.** The enrolment is what
+  every *other* node reads to know the company has started; a file deleted
+  first would leave a company with nobody in it and a node with no code to
+  offer.
 - **The first person receives every grant the ceiling permits.** This is the
   one stated exemption in the authority model, and it is taken at the moment
   nobody holds a credential — the alternative is a first operator who cannot
   grant themselves what they need in order to grant anybody anything. The
-  enrolment **names the code** as its authority, and the record honours it
-  only while the code is live on the log and nobody else is enrolled; a second
-  caller arriving after the first is answered `409 bootstrap_closed`.
+  enrolment **names the code** as its authority, and the person record lands
+  only while that code's take is this founding's, current, and nobody else is
+  enrolled. A second caller arriving while a founding is part-way through is
+  answered `409 bootstrap_in_progress`, carrying `until` — when that founding
+  lapses — and naming `crewlet iam bootstrap-code`, which ends it at once; one
+  arriving after it finished is answered `409 bootstrap_closed`. Neither is
+  counted as a failed attempt: both are states of the company, reached only by
+  presenting a code that works.
 
 **A code lasts 24 hours**, and running out costs one command rather than a
 support ticket. A code that aged out, was withdrawn by a re-issue, or was
@@ -435,25 +451,41 @@ the serving node's own file, which a stranger guessing cannot do, and it is
 counted against the source like every failed attempt. The remedy is either of:
 
 - **A restart of the node that holds the file.** At boot a node checks its file
-  against the log. A code the log still honours is kept, because somebody may be
-  about to type it; anything else — aged out, withdrawn, never published, an
-  empty file — is replaced by a fresh one and the new path logged. Only the node
-  holding a file can see it, so each node replaces its own, and a boot never
-  withdraws a code another node wrote.
-- **`crewlet iam bootstrap-code`**, which withdraws every outstanding code and
-  mints one on whichever node serves the command — and names that **node** as
-  well as the path, because on a fleet that is not something the caller chose.
-  The withdrawals go first: a crash between them and the mint leaves no way in,
-  which running it again fixes, where the other order would leave two.
+  against the log. A code the log still honours is kept — live, because
+  somebody may be about to type it, or taken by a founding that has not
+  finished, because it is the code that finishes it; anything else — aged out,
+  withdrawn, never published, an empty file — is replaced by a fresh one and
+  the new path logged. Only the node holding a file can see it, so each node
+  replaces its own, and a boot never withdraws a code another node wrote.
+- **`crewlet iam bootstrap-code`**, which withdraws every live code, ends a
+  founding in progress, and mints one on whichever node serves the command —
+  and names that **node** as well as the path, because on a fleet that is not
+  something the caller chose. It is **one gesture decided where its new code
+  lands**: that record is published only from a snapshot in which no other
+  code is live or taken, and anything that arrived meanwhile — a node booting,
+  a second operator re-issuing — is ended and the mint tried again, so where it
+  lands it is the one code that works. (It gives up with `409 stale`, having
+  minted nothing, if codes keep arriving for sixteen rounds; running it again
+  is the remedy.) The withdrawals go first: a crash between them and the mint
+  leaves no way in, which running it again fixes, where the other order would
+  leave two.
 
-**A refused attempt claims nothing.** An enrolment is a sequence — address,
-login, person — and the code is read before the first claim as well as at the
-person record, so a code the log no longer honours is refused before the
-founder's own address is reserved against the fresh code that replaces it. And
-**the founder is derived from the code** (a uuid7 at the instant the log minted
-it), so a bootstrap refused halfway for any other reason — a login outside the
-grammar, a record that did not land — is finished by the corrected retry rather
-than blocked by the address its own first attempt claimed.
+**A stopped attempt never holds the founder's names.** A dead code is refused
+at the take, before anything is claimed. **The founder is derived from the
+code** (a uuid7 at the instant the log minted it), so an attempt that stopped
+halfway — a login outside the grammar, a record whose answer never came — is
+finished by presenting the same code again, rather than blocked by the address
+its own first attempt claimed. And once that code has died, the fresh one a
+restart or a re-issue hands out derives a *different* person, which the old
+attempt's reservation would refuse as "that address belongs to somebody" —
+so the founding that takes a code first **ends every earlier attempt**: a
+removal of that attempt's person, on the one subject its own person record
+would land on. Exactly one of the two lands. Either the earlier attempt
+finished first and the company has started, or it is removed, its address and
+login released, and anything it had still to publish dropped. Earlier attempts
+are found through the codes they took and — once a code's row has been swept,
+a week after it stopped working — by the shape of the person id itself, which
+carries a mark only a founding's derived id has.
 
 It **closes for good** the moment anybody is enrolled, whatever the
 configuration says, because what it creates is an operator carrying the whole
@@ -1696,7 +1728,7 @@ claim arbitrates on.**
 | An identity-provider subject (a **link**) | `crewlet.iam.log.link.<blind>` | create-only, expectation zero |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
-| The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company |
+| The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company: every code's mint, take and withdrawal, so exactly one founding can take the exemption |
 | Ending every session at once | `crewlet.iam.log.invalidation` | one object for the whole company |
 
 Two administrators enrolling one address publish to the same subject at the
@@ -1712,7 +1744,10 @@ named state rather than a person holding an address somebody else also holds.
 Nothing collects it on a clock, because its claims still hold their subjects on
 the log and a deleted row would leave an address arbitrated to nobody the
 directory can name. `crewlet iam check` reports one older than an hour as
-`claim_orphaned`, and removing its id releases what it holds.
+`claim_orphaned`, and removing its id releases what it holds. The one
+reservation something else does end is a **founding's**: it holds the founder's
+own address and login, so the next founding removes it before it claims them —
+see [How the first person exists](#how-the-first-person-exists).
 
 That half-finished row is a **reservation**: it holds the address, login, seat
 or provider subject its claims took, and it has no kind, no stage and no

@@ -752,6 +752,19 @@ func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 //
 // `besides` is the founder a retried bootstrap is creating, whose own row is
 // not "somebody else"; empty asks about everybody.
+//
+// # "Nobody" is an absence, and a retained record can hide somebody
+//
+// SETTLED IS NOT APPLIED: this node's checkpoint moves past a record it
+// RETAINS — a newer build's, one signed under a keyring key it was not
+// restarted with — without writing its rows, so an enrolment it retained reads
+// here exactly like nobody. Answered as nobody, a node holding the first
+// person's enrolment as a retained record would open the founder route and
+// admit a second founder carrying the whole ceiling. So "nobody" is said only
+// where no retained record could be the somebody — the whole deferral index,
+// because a retained enrolment may be in any bucket — and otherwise this is
+// the unknown arm, [statelog.ErrUnavailable], which clears once the node
+// applies what it holds. "Somebody" needs no such proof: a row is a fact.
 func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, error) {
 	var held bool
 	if err := tx.QueryRowContext(ctx, `
@@ -760,7 +773,21 @@ func anybodyEnrolled(ctx context.Context, tx *sql.Tx, besides string) (bool, err
 		Scan(&held); err != nil {
 		return false, fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
 	}
-	return held, nil
+	if held {
+		return true, nil
+	}
+	retained, err := deferredFor(ctx, tx, "")
+	if err != nil {
+		return false, err
+	}
+	if retained {
+		return false, fmt.Errorf("%w: iamdomain: this node holds a record it "+
+			"could not apply, so its empty directory may be a company whose "+
+			"first person it has not written — ask a node that is not "+
+			"retaining one, or retry once this one applies it",
+			statelog.ErrUnavailable)
+	}
+	return false, nil
 }
 
 // HoldsBlinds reports whether any row this node holds carries a value derived

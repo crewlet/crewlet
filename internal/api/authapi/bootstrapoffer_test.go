@@ -2,7 +2,9 @@ package authapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,7 +24,13 @@ import (
 // anybody is enrolled, read and written by the surface as its directory and its
 // writer — so a code the surface mints is on the "log" the next time it looks,
 // the way a real node's own rows are. What a code IS comes from the domain's
-// own predicate, [iamdomain.BootstrapCode.State].
+// own predicate, [iamdomain.BootstrapCode.State], and what the writer does
+// follows the domain's own rules ([iamdomain.Writer.Enrol],
+// [iamdomain.Writer.ReissueBootstrap]): a founding TAKES its code inside the
+// enrolment and ends every earlier attempt, another code's founding in progress
+// refuses it, and a re-issue withdraws every live code and ends every
+// unfinished founding before it mints. The domain's own suite certifies those
+// rules against a real log; this fake only lets the surface meet them.
 type codeEstate struct {
 	stubDirectory
 	stubWriter
@@ -33,7 +41,7 @@ type codeEstate struct {
 	now      func() time.Time
 	mintErr  error
 
-	mints, withdrawals int
+	mints, withdrawals, releases int
 }
 
 func newCodeEstate(now func() time.Time) *codeEstate {
@@ -54,9 +62,27 @@ func (e *codeEstate) BootstrapCode(_ context.Context, id string) (
 	return e.codes[id], nil
 }
 
-func (e *codeEstate) OutstandingBootstrapCodes(_ context.Context, now time.Time) (
-	[]iamdomain.BootstrapCode, error) {
+// take is what a founding's take leaves on the log for the code with this
+// id: taken for the person the code creates, by a request that stopped
+// before its enrolment landed.
+func (e *codeEstate) take(id string) iamdomain.BootstrapCode {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	code := e.codes[id]
+	code.SpentAt, code.Person = e.now(), code.FounderID()
+	e.codes[id] = code
+	return code
+}
 
+// state is what the log says the code with this id is at now.
+func (e *codeEstate) state(id string, now time.Time) iamdomain.CodeState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.codes[id].State(now)
+}
+
+// live is the codes the log holds as live at now.
+func (e *codeEstate) live(now time.Time) []iamdomain.BootstrapCode {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var out []iamdomain.BootstrapCode
@@ -65,7 +91,7 @@ func (e *codeEstate) OutstandingBootstrapCodes(_ context.Context, now time.Time)
 			out = append(out, code)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (e *codeEstate) MintBootstrap(_ context.Context, in iamdomain.BootstrapMint) (
@@ -73,8 +99,18 @@ func (e *codeEstate) MintBootstrap(_ context.Context, in iamdomain.BootstrapMint
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.mint(in)
+}
+
+// mint records one code, as the domain's mint decide does: refused once
+// anybody is enrolled. The caller holds mu.
+func (e *codeEstate) mint(in iamdomain.BootstrapMint) (statelog.Result, error) {
 	if e.mintErr != nil {
 		return statelog.Result{}, e.mintErr
+	}
+	if e.enrolled {
+		return statelog.Result{}, fmt.Errorf("%w: %w", iamdomain.ErrRefused,
+			iamdomain.ErrBootstrapClosed)
 	}
 	e.mints++
 	e.codes[in.ID] = iamdomain.BootstrapCode{ID: in.ID, MintedBy: in.MintedBy,
@@ -82,16 +118,28 @@ func (e *codeEstate) MintBootstrap(_ context.Context, in iamdomain.BootstrapMint
 	return applied(statelog.Position{}), nil
 }
 
-func (e *codeEstate) WithdrawBootstrap(_ context.Context, id, _, _ string) (
+func (e *codeEstate) ReissueBootstrap(_ context.Context, in iamdomain.BootstrapMint) (
 	statelog.Result, error) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.withdrawals++
-	code := e.codes[id]
-	code.SpentAt = e.now()
-	e.codes[id] = code
-	return applied(statelog.Position{}), nil
+	if e.enrolled {
+		return statelog.Result{}, fmt.Errorf("%w: %w", iamdomain.ErrRefused,
+			iamdomain.ErrBootstrapClosed)
+	}
+	now := e.now()
+	for id, code := range e.codes {
+		switch code.State(now) {
+		case iamdomain.CodeLive:
+			code.SpentAt = now
+			e.withdrawals++
+		case iamdomain.CodeTaken:
+			code.FounderReleased = true
+			e.releases++
+		}
+		e.codes[id] = code
+	}
+	return e.mint(in)
 }
 
 func (e *codeEstate) Enrol(_ context.Context, in iamdomain.Enrolment) (
@@ -99,26 +147,44 @@ func (e *codeEstate) Enrol(_ context.Context, in iamdomain.Enrolment) (
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// THE RECORD'S OWN RULE, by the domain's predicate: a live code and
-	// nobody enrolled.
-	if e.codes[in.BootstrapCode].State(e.now()) != iamdomain.CodeLive {
-		return statelog.Result{}, iamdomain.ErrBootstrapCodeDead
-	}
+	now := e.now()
 	if e.enrolled {
-		return statelog.Result{}, iamdomain.ErrBootstrapClosed
+		return statelog.Result{}, fmt.Errorf("%w: %w", iamdomain.ErrRefused,
+			iamdomain.ErrBootstrapClosed)
 	}
+	// THE TAKE'S OWN RULES, by the domain's predicate: another code's
+	// founding in progress refuses this one, this code is taken for the
+	// person the enrolment names or is finished by them, and a dead code
+	// is refused.
+	for id, other := range e.codes {
+		if id != in.BootstrapCode && other.State(now) == iamdomain.CodeTaken {
+			return statelog.Result{}, fmt.Errorf("%w: %w", iamdomain.ErrRefused,
+				&iamdomain.FoundingInProgress{Until: other.ExpiresAt})
+		}
+	}
+	code := e.codes[in.BootstrapCode]
+	switch code.State(now) {
+	case iamdomain.CodeLive:
+		code.SpentAt, code.Person = now, in.PersonID
+	case iamdomain.CodeTaken:
+		if code.Person != in.PersonID {
+			return statelog.Result{}, iamdomain.ErrRefused
+		}
+	default:
+		return statelog.Result{}, fmt.Errorf("%w: %w", iamdomain.ErrRefused,
+			iamdomain.ErrBootstrapCodeDead)
+	}
+	// EVERY EARLIER ATTEMPT IS ENDED by the founding that lands.
+	for id, other := range e.codes {
+		if id != in.BootstrapCode && other.Person != "" && !other.FounderReleased {
+			other.FounderReleased = true
+			e.codes[id] = other
+			e.releases++
+		}
+	}
+	code.FounderEnrolled = true
+	e.codes[in.BootstrapCode] = code
 	e.enrolled = true
-	return applied(statelog.Position{}), nil
-}
-
-func (e *codeEstate) SpendBootstrap(_ context.Context, in iamdomain.BootstrapSpend) (
-	statelog.Result, error) {
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	code := e.codes[in.ID]
-	code.SpentAt, code.Person = e.now(), in.Person
-	e.codes[in.ID] = code
 	return applied(statelog.Position{}), nil
 }
 
@@ -129,6 +195,7 @@ type founderNode struct {
 	mux    *http.ServeMux
 	path   string
 	estate *codeEstate
+	audit  *recordingAudit
 }
 
 func newFounderNode(t *testing.T, estate *codeEstate, now func() time.Time,
@@ -140,13 +207,24 @@ func newFounderNode(t *testing.T, estate *codeEstate, now func() time.Time,
 	if mutate != nil {
 		mutate(&b)
 	}
+	audit := &recordingAudit{}
 	svc := buildWith(t, b, nil, func(o *authapi.Options) {
-		o.Directory, o.Writer, o.Now = estate, estate, now
+		o.Directory, o.Writer, o.Now, o.Audit = estate, estate, now, audit
 	})
 	mux := http.NewServeMux()
 	svc.Routes(mux)
-	return founderNode{svc: svc, mux: mux, estate: estate,
+	return founderNode{svc: svc, mux: mux, estate: estate, audit: audit,
 		path: filepath.Join(filepath.Dir(b.Store.Path), authapi.BootstrapCodeFile)}
+}
+
+// boot is the node's boot offer, failing the case if it offers nothing.
+func (n founderNode) boot(t *testing.T, nodeID string) {
+	t.Helper()
+	if path, err := n.svc.OfferBootstrapCode(t.Context(), nodeID); err != nil ||
+		path != n.path {
+		t.Fatalf("the boot of %s offered %q (%v), want %s", nodeID, path, err,
+			n.path)
+	}
 }
 
 // code reads the node's file, failing the case if there is none.
@@ -301,14 +379,14 @@ func TestABootEndsNoOtherCodeAndAReissueEndsThemAll(t *testing.T) {
 		t.Errorf("a boot withdrew %d codes somebody may be typing",
 			estate.withdrawals)
 	}
-	live, _ := estate.OutstandingBootstrapCodes(t.Context(), clock)
+	live := estate.live(clock)
 	if len(live) != 2 {
 		t.Fatalf("live codes %d after two boots, want one per node", len(live))
 	}
 	if _, err := nodeA.svc.ReissueBootstrapCode(t.Context(), "node-a"); err != nil {
 		t.Fatalf("re-issue: %v", err)
 	}
-	live, _ = estate.OutstandingBootstrapCodes(t.Context(), clock)
+	live = estate.live(clock)
 	if len(live) != 1 || live[0].MintedBy != "node-a" {
 		t.Errorf("after a re-issue the live codes are %+v, want exactly the "+
 			"new one", live)
@@ -321,7 +399,9 @@ func TestABootEndsNoOtherCodeAndAReissueEndsThemAll(t *testing.T) {
 // company whose only person was suspended — or a deployment with the route
 // closed — was handed a code the route would never honour.
 //
-// Mutation: drop the gate from the re-issue and both cases mint a code.
+// Mutation: drop the gate from the re-issue and the deployment closed by
+// `api.auth.bootstrap` is minted a code — the configuration is a fact the
+// domain's own refusal cannot see.
 func TestAReissueIsRefusedWhereTheRouteIsClosed(t *testing.T) {
 	t.Parallel()
 	at := func() time.Time { return clock }
@@ -368,5 +448,133 @@ func TestAMintThatDidNotLandLeavesNoFile(t *testing.T) {
 	}
 	if _, err := os.Stat(node.path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a mint that did not land left its file (%v)", err)
+	}
+}
+
+// ONE FOUNDING AT A TIME, AND THE SECOND FOUNDER IS TOLD WHEN TO COME BACK.
+//
+// Two live codes on two nodes, redeemed together, each passed their own
+// person record, and the company got two founders carrying the whole
+// ceiling. A founding takes the exemption on the company's one bootstrap
+// subject now, so a second code presented while another founding is part-way
+// through is refused — and the refusal is its own: `409 bootstrap_in_progress`
+// naming when the other founding lapses and the command that ends it, never
+// the closed answer (nobody is in the company) nor the stale one (this code is
+// fine). It is not a failed attempt: it is reached only by presenting a live
+// code. The founding in progress is finished with its own code, on any node.
+//
+// Mutations: drop the in-progress arm from the refusal mapping and the second
+// founder is answered 500, a fault nobody can clear; let only a LIVE code past
+// the route and the first founder cannot finish with the code they took.
+func TestASecondFounderIsToldWhenTheFirstFoundingLapses(t *testing.T) {
+	t.Parallel()
+	at := func() time.Time { return clock }
+	estate := newCodeEstate(at)
+	nodeA := newFounderNode(t, estate, at, nil)
+	nodeB := newFounderNode(t, estate, at, nil)
+	nodeA.boot(t, "node-a")
+	nodeB.boot(t, "node-b")
+	codeA, codeB := nodeA.code(t), nodeB.code(t)
+
+	// FRIDAY: Jane's founding with node A's code stopped after its take.
+	first := estate.take(digestOf(codeA))
+
+	rec := postBootstrap(t, nodeB.mux, codeB, "second.founder")
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	if rec.Code != http.StatusConflict || body["error"] != "bootstrap_in_progress" ||
+		body["until"] != first.ExpiresAt.UTC().Format(time.RFC3339) {
+		t.Fatalf("a second code during a founding answered %d %v, want 409 "+
+			"bootstrap_in_progress until %s", rec.Code, body,
+			first.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if !strings.Contains(body["message"], "crewlet iam bootstrap-code") {
+		t.Errorf("the refusal does not name the command that ends the "+
+			"founding in progress: %q", body["message"])
+	}
+	if _, failures := nodeB.audit.snapshot(); len(failures) != 0 {
+		t.Errorf("a live code refused for a founding in progress was counted "+
+			"as %d failed sign-ins", len(failures))
+	}
+	if !nodeA.open(t) || !nodeB.open(t) {
+		t.Error("the route reads closed while nobody is in the company")
+	}
+
+	// THE FOUNDING IN PROGRESS FINISHES WITH ITS OWN CODE, on any node.
+	if rec := postBootstrap(t, nodeB.mux, codeA, "jane.founder"); rec.Code != http.StatusOK {
+		t.Fatalf("the founder could not finish with the code they took: %d %s",
+			rec.Code, rec.Body.String())
+	}
+	// AND THE SECOND CODE CAN CREATE NOBODY: the company has started.
+	if rec := postBootstrap(t, nodeA.mux, codeB, "second.founder"); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), "bootstrap_closed") {
+		t.Errorf("the second code after the founder landed answered %d %s, "+
+			"want 409 bootstrap_closed", rec.Code, rec.Body.String())
+	}
+}
+
+// A BOOT KEEPS THE CODE A FOUNDING TOOK.
+//
+// A taken code is the one code that finishes its founder's own stopped
+// attempt before it lapses, so a restart inside its lifetime replacing it
+// would leave the founder holding a file that no longer says what they took —
+// and their next code refused as a founding in progress, by their own attempt.
+//
+// Mutation: keep only a LIVE code at boot and the restart replaces it.
+func TestABootKeepsTheCodeAFoundingTook(t *testing.T) {
+	t.Parallel()
+	now := clock
+	at := func() time.Time { return now }
+	estate := newCodeEstate(at)
+	node := newFounderNode(t, estate, at, nil)
+	node.boot(t, "node-a")
+	taken := node.code(t)
+	estate.take(digestOf(taken))
+
+	now = clock.Add(time.Hour)
+	node.boot(t, "node-a")
+	if node.code(t) != taken || estate.mints != 1 {
+		t.Errorf("a restart replaced the code a founding took (mints %d)",
+			estate.mints)
+	}
+}
+
+// A RE-ISSUE ENDS A FOUNDING IN PROGRESS, AND ITS FOUNDER WALKS IN.
+//
+// The refusal a second founder meets names `crewlet iam bootstrap-code` as
+// the way to end the founding in progress, so the re-issue must do exactly
+// that: release the attempt, withdraw its code, and leave one code that
+// works. Before, a re-issue withdrew only LIVE codes, so a founding in
+// progress survived it and refused the fresh code as well.
+//
+// Mutation: mint on a re-issue without the domain's re-issue (a plain mint)
+// and the stopped founding still holds the exemption against the new code.
+func TestAReissueEndsAFoundingInProgressAndItsFounderWalksIn(t *testing.T) {
+	t.Parallel()
+	at := func() time.Time { return clock }
+	estate := newCodeEstate(at)
+	nodeA := newFounderNode(t, estate, at, nil)
+	nodeB := newFounderNode(t, estate, at, nil)
+	nodeA.boot(t, "node-a")
+	stopped := nodeA.code(t)
+	estate.take(digestOf(stopped))
+
+	if path, err := nodeB.svc.ReissueBootstrapCode(t.Context(), "node-b"); err != nil ||
+		path != nodeB.path {
+		t.Fatalf("re-issue answered %q (%v), want node-b's file", path, err)
+	}
+	if got := estate.state(digestOf(stopped), clock); got != iamdomain.CodeWithdrawn {
+		t.Errorf("the founding in progress reads %q after a re-issue, want "+
+			"withdrawn", got)
+	}
+	if rec := postBootstrap(t, nodeA.mux, stopped, "jane.founder"); rec.Code != http.StatusGone {
+		t.Errorf("the ended founding's code answered %d %s, want 410",
+			rec.Code, rec.Body.String())
+	}
+	if rec := postBootstrap(t, nodeA.mux, nodeB.code(t), "jane.founder"); rec.Code != http.StatusOK {
+		t.Fatalf("the founder was refused on the re-issued code: %d %s",
+			rec.Code, rec.Body.String())
 	}
 }

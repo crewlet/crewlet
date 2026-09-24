@@ -220,7 +220,8 @@ const (
 	OpInvalidate OpKind = "invalidate"
 
 	// OpBootstrap moves the company's ONE bootstrap through its own life:
-	// minted, redeemed, or expired. Its subject is [KindBootstrap].
+	// a code minted, taken by a founding, or withdrawn by a re-issue. Its
+	// subject is [KindBootstrap].
 	//
 	// ONE OP FOR THE WHOLE LIFE, unlike a session's pair, because there is
 	// exactly one bootstrap object and its records sit consecutively on one

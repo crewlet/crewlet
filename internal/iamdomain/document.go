@@ -504,20 +504,21 @@ type Bootstrap struct {
 
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
-	// Person is set by the REDEMPTION, naming the administrator it
-	// created.
+	// Person is set by a founding's TAKE, naming the person the founding
+	// creates — the first-person exemption is theirs from that record
+	// until the code ages out or the attempt is released.
 	Person string `json:"person,omitempty"`
 
-	// Withdrawn is set by a MINT THAT SUPERSEDES this code, which is the
-	// third statement on this subject beside a mint and a redemption.
+	// Withdrawn is set by a RE-ISSUE that supersedes this code, which is
+	// the third statement on this subject beside a mint and a take.
 	//
-	// IT IS NOT A REDEMPTION WITH NO PERSON. The two produce the same row
-	// state — spent, unusable — and they are opposite events: one is
-	// somebody becoming the founder and the other is an operator
-	// re-issuing because nobody did. An estate that could not tell them
-	// apart would answer "this code was used" about a code nobody ever
-	// typed, which is the sentence an investigation most needs to be
-	// right.
+	// IT IS NOT A TAKE WITH NO PERSON. The two produce the same row state
+	// — spent, no longer takeable — and they are opposite events: one is
+	// somebody setting out to become the founder and the other is an
+	// operator re-issuing because nobody did. An estate that could not
+	// tell them apart would answer "this code was used" about a code
+	// nobody ever typed, which is the sentence an investigation most needs
+	// to be right.
 	Withdrawn bool `json:"withdrawn,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
