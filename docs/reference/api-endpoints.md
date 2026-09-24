@@ -672,7 +672,7 @@ list and nothing ever will be.
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only. An id naming a provider **link** unlinks it, which the record layer admits only with `people:manage` |
 | `POST /iam/invalidate-all` | `fleet:operate`. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
-| `POST /iam/bootstrap-code` | `people:manage`; `409 bootstrap_closed` once anybody is enrolled or `api.auth.bootstrap` is closed |
+| `POST /iam/bootstrap-code` | `people:manage`; `409 bootstrap_closed` once anybody is enrolled, and **absent** (`404 not_found`) where `api.auth.bootstrap` is closed |
 | `GET /iam/audit` | `audit:read` |
 
 **Every write here but one asks for a proof inside `step_up_sensitive`** —
@@ -861,12 +861,14 @@ stale`, having minted nothing, which the same request again resolves; one that
 could not write the file on the host is `500`, because waiting does not fix a
 filesystem.
 
-It is refused — `409 bootstrap_closed` — by the same gate the redemption asks:
-once anybody is enrolled, or where `api.auth.bootstrap` is closed. It used to
-ask whether an active administrator existed instead, so a company whose only
-person was suspended was handed a code the redemption would never honour; the
-way back in there is an administrator, or a Tier A token holding
-`people:manage`.
+It is refused — `409 bootstrap_closed` — by the same gate the redemption asks,
+once anybody is enrolled. Where `api.auth.bootstrap` is closed the route is
+**absent** — `404 not_found`, with a detail saying so — because that
+deployment never bootstraps this way, which is a different fact from a company
+that has started. It used to ask whether an active administrator existed
+instead, so a company whose only person was suspended was handed a code the
+redemption would never honour; the way back in there is an administrator, or a
+Tier A token holding `people:manage`.
 
 `POST /iam/invitations` on a node with no `api.external_url` is `500
 no_external_url`: there is no address a link could point at, and only the

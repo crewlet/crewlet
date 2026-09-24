@@ -15,9 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
@@ -31,6 +34,7 @@ import (
 
 // founderRig is one node serving the first-person route.
 type founderRig struct {
+	boot   *config.Bootstrap
 	engine *engine.Engine
 	auth   *authapi.Service
 	mux    *http.ServeMux
@@ -39,7 +43,17 @@ type founderRig struct {
 
 func newFounderRig(t *testing.T) founderRig {
 	t.Helper()
+	return newFounderRigWith(t, nil)
+}
+
+// newFounderRigWith is [newFounderRig] over a Tier A configuration mutate
+// has changed first.
+func newFounderRigWith(t *testing.T, mutate func(*config.Bootstrap)) founderRig {
+	t.Helper()
 	boot := bootstrapFor(t, 0)
+	if mutate != nil {
+		mutate(boot)
+	}
 	company, err := config.ParseCompany([]byte(companyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -62,7 +76,7 @@ func newFounderRig(t *testing.T) founderRig {
 	}
 	mux := http.NewServeMux()
 	surface.Routes(mux)
-	return founderRig{engine: e, auth: surface, mux: mux,
+	return founderRig{boot: boot, engine: e, auth: surface, mux: mux,
 		file: filepath.Join(filepath.Dir(boot.Store.Path), authapi.BootstrapCodeFile)}
 }
 
@@ -258,5 +272,66 @@ func TestTwoFoundersAtOnceFoundOneCompany(t *testing.T) {
 	if enrolled != 1 {
 		t.Errorf("the directory holds %d enrolled people, want the one founder",
 			enrolled)
+	}
+}
+
+// A DEPLOYMENT THAT SHUT THE FOUNDER ROUTE SERVES NO RE-ISSUE, THROUGH THE
+// REAL WIRING.
+//
+// The reference promised `409 bootstrap_closed` for `api.auth.bootstrap:
+// closed`, and the wiring has always handed the directory no seam there, so
+// the route answered 404. They agree now — absent where the deployment shut
+// it, `409` once the company has started — and this holds the wiring half:
+// one directory surface, built by the function `crewlet run` builds it with,
+// on a deployment that shut the route and on one that did not.
+//
+// Mutation: hand the directory a seam on a closed deployment and the closed
+// case answers 409, the re-issue refusing itself, rather than 404.
+func TestTheReissueRouteIsAbsentWhereTheDeploymentShutIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		closed bool
+		status int
+	}{
+		{"api.auth.bootstrap closed", true, http.StatusNotFound},
+		{"open, nobody enrolled", false, http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newFounderRigWith(t, func(b *config.Bootstrap) {
+				if tc.closed {
+					b.API.Auth.Bootstrap = config.BootstrapAccessClosed
+				}
+			})
+			directory, err := directorySurface(r.boot, r.engine, "node-a", r.auth)
+			if err != nil || directory == nil {
+				t.Fatalf("the directory surface: %v", err)
+			}
+			mux := http.NewServeMux()
+			if err := directory.Routes(mux); err != nil {
+				t.Fatalf("mount the directory: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/iam/bootstrap-code", nil)
+			proved := time.Now().Add(-time.Minute)
+			req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+				ID: uuid.Must(uuid.NewV7()), Login: "token:ops",
+				Kind: iam.KindMachine, Stage: iam.StageActive,
+				Grants:            []iam.Grant{iam.GrantPeopleManage},
+				ReauthAt:          proved.Add(time.Hour),
+				SensitiveReauthAt: proved.Add(15 * time.Minute),
+			}))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("the re-issue answered %d %s, want %d", rec.Code,
+					rec.Body.String(), tc.status)
+			}
+			_, err = os.Stat(r.file)
+			if minted := err == nil; minted == tc.closed {
+				t.Errorf("a code file exists = %v on a deployment whose "+
+					"founder route closed = %v", minted, tc.closed)
+			}
+		})
 	}
 }

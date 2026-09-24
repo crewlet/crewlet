@@ -109,3 +109,27 @@ func TestAReissueAsksTheRedemptionsGateAndNamesTheNode(t *testing.T) {
 		})
 	}
 }
+
+// A DEPLOYMENT THAT SHUT THE FOUNDER ROUTE SERVES NO RE-ISSUE.
+//
+// Where `api.auth.bootstrap` is closed the wiring hands in no seam, and the
+// route is absent — `404 not_found`, the shape of a route this engine does not
+// serve — which is a different answer from a company that has started (`409
+// bootstrap_closed`, the table above). The docs promised the 409 for both.
+//
+// Mutation: answer a missing seam with the closed refusal and this case goes
+// red; answer it 503 and a client retries a route that will never exist.
+func TestAReissueIsAbsentWhereTheDeploymentShutTheFounderRoute(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *iamapi.Options) { o.Bootstrap = nil })
+	req := httptest.NewRequest(http.MethodPost, "/iam/bootstrap-code", nil)
+	req = req.WithContext(iam.WithPrincipal(req.Context(), administrator()))
+	rec := httptest.NewRecorder()
+	r.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound ||
+		!strings.Contains(rec.Body.String(), `"error":"not_found"`) ||
+		!strings.Contains(rec.Body.String(), "api.auth.bootstrap is closed") {
+		t.Errorf("a re-issue where the founder route is shut answered %d %s, "+
+			"want 404 not_found saying why", rec.Code, rec.Body.String())
+	}
+}

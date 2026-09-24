@@ -491,7 +491,9 @@ It **closes for good** the moment anybody is enrolled, whatever the
 configuration says, because what it creates is an operator carrying the whole
 ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
 for a deployment restored from a backup where the answer is "ask somebody who
-already has an account". Either way the route, its open flag on `GET
+already has an account" — and there the re-issue route is not served at all
+(`404`), because that deployment never bootstraps this way, where a company
+that has started answers `409 bootstrap_closed`. Either way the route, its open flag on `GET
 /auth/config`, the boot offer and the re-issue ask **one** gate, so none of them
 can offer a code the others would refuse — and a node whose company has started
 removes any code file it still holds at its next boot, so an established fleet

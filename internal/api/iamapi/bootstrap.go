@@ -27,17 +27,25 @@ import (
 // behind a load balancer that is not something the caller chose — so a path
 // with no host is a file nobody can find.
 //
-// # Refused wherever the redemption would be
+// # Absent where the deployment shut it, refused once the company started
 //
 // A live code is a way to become the first person, so it exists only while
-// there is no first person. The seam asks the redemption's OWN gate — nobody
-// enrolled, `api.auth.bootstrap` open — and this answers `409
-// bootstrap_closed` when it is shut. It used to ask its own question here,
-// whether an ACTIVE, CREDENTIALLED ADMINISTRATOR existed, which is a different
-// one: a company whose only person was suspended was handed a code the
-// redemption refused for as long as it lived. The way back in there is an
-// administrator, or a Tier A token holding people:manage — the path that
-// leaves a trail naming who did it.
+// there is no first person — and the two ways that stops being true answer
+// differently, because they are different facts:
+//
+//   - `api.auth.bootstrap: closed` is the DEPLOYMENT saying it never
+//     bootstraps this way. The wiring serves no seam there ([Options.Bootstrap]
+//     is nil) and the route is ABSENT: `404 not_found`, the shape of a route
+//     this engine does not serve.
+//   - Somebody enrolled is the COMPANY having started. The seam asks the
+//     redemption's OWN gate and refuses with [iamdomain.ErrBootstrapClosed],
+//     and this answers `409 bootstrap_closed`.
+//
+// It used to ask its own question here, whether an ACTIVE, CREDENTIALLED
+// ADMINISTRATOR existed, which is a different one: a company whose only person
+// was suspended was handed a code the redemption refused for as long as it
+// lived. The way back in there is an administrator, or a Tier A token holding
+// people:manage — the path that leaves a trail naming who did it.
 //
 // # What "exactly one" means
 //
@@ -52,19 +60,24 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		// ABSENT RATHER THAN REFUSING, which is what a route that this
 		// deployment does not serve should look like: 404 says this
 		// engine does not bootstrap that way, and 503 would say it does
-		// and is broken.
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		// and is broken. The detail says why, because `not_found` alone
+		// on a route the reference lists reads as a wrong URL.
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"detail": "this deployment serves no founder " +
+				"route — api.auth.bootstrap is closed, or this node signs " +
+				"nobody in — so it mints no code. An administrator, or a Tier " +
+				"A token holding people:manage, enrols the first person " +
+				"instead"})
 		return
 	}
 	minted, err := s.bootstrap.MintCode(r.Context())
 	switch {
 	case errors.Is(err, iamdomain.ErrBootstrapClosed):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBootstrapClosed,
-			map[string]string{"detail": "the first-person route is closed " +
-				"here — somebody is already enrolled, or api.auth.bootstrap " +
-				"is closed — so no code would ever be honoured. An " +
-				"administrator, or a Tier A token holding people:manage, " +
-				"invites or enrols the next person instead"})
+			map[string]string{"detail": "this company has started — " +
+				"somebody is already enrolled — so no code would ever be " +
+				"honoured. An administrator, or a Tier A token holding " +
+				"people:manage, invites or enrols the next person instead"})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE ESTATE COULD NOT BE READ, OR A RECORD COULD NOT BE LANDED
