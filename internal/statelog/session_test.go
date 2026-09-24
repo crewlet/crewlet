@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -102,15 +101,14 @@ func sessionWrite(subject statelog.Subject, opID string, session statelog.Positi
 	decided func()) statelog.Request {
 
 	return statelog.Request{
-		Subject:  subject,
-		Scope:    statelog.ScopeSet{Paths: []string{subject.String()}},
-		OpID:     opID,
-		MintedAt: time.Now(),
-		Pattern:  statelog.PatternArbitrated,
-		Session:  session,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Subject: subject,
+		Scope:   statelog.ScopeSet{Paths: []string{subject.String()}},
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Session: session,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			decided()
-			return statelog.Decision{Payload: []byte("body"), Version: 1}, nil
+			return statelog.Decision{Payload: probeRecord(stamp, opID, "body"), Version: 1}, nil
 		},
 	}
 }

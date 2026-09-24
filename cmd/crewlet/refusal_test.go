@@ -38,16 +38,6 @@ func TestANodeRefusalCarriesItsDetailAndHintToTheOperator(t *testing.T) {
 	}
 }
 
-// The guess survives for the answer that carries no code, which is the case it
-// was written for: a node built without the coordination store a route needs.
-func TestANodeRefusalWithNoCodeStillNamesTheLikelyCause(t *testing.T) {
-	t.Parallel()
-	err := nodeError(http.StatusServiceUnavailable, []byte("{}"), true)
-	if err == nil || !strings.Contains(err.Error(), "without the backend the route needs") {
-		t.Errorf("a 503 with no code = %v, want the fallback cause", err)
-	}
-}
-
 func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	if got := withRefusalDetail("draining", "", ""); got != "draining" {

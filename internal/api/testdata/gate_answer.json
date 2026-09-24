@@ -1,0 +1,233 @@
+{
+  "answers": {
+    "applied": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": true,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4410
+          }
+        }
+      ]
+    },
+    "log_full": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "error": "pages: statelog: unavailable (log_full): the broker refused to store it",
+          "reason": "log_full",
+          "actions": [
+            "set_capacity"
+          ],
+          "hint": "CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again"
+        }
+      ]
+    },
+    "pending": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": true,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "pending",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4410
+          }
+        }
+      ]
+    },
+    "superseded": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "error": "pages: statelog: unavailable (superseded): a later gate record on node-4 has undone it",
+          "reason": "superseded",
+          "actions": [
+            "new_gesture"
+          ],
+          "hint": "a later gate record has undone this operation's since: start a new gesture, under a fresh operation id, if the node should change again"
+        }
+      ]
+    },
+    "unknown": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "unknown",
+          "actions": [
+            "retry_same_op"
+          ],
+          "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"
+        }
+      ]
+    },
+    "unvouched": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "unknown",
+          "unvouched": true,
+          "actions": [
+            "other_node"
+          ],
+          "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
+        }
+      ]
+    }
+  },
+  "refusals": {
+    "eviction_refused": {
+      "status": 409,
+      "body": {
+        "actions": [
+          "wait",
+          "force"
+        ],
+        "detail": "statelog: node-4 may not be evicted: it holds a live presence lease, so it is still reaching coordination and almost certainly running — an eviction drops every record it writes on every node and moves its seats, which is the gesture for a node that is not coming back",
+        "error": "eviction_refused",
+        "hint": "stop node-4 and wait for its presence lease to lapse — the retention report stops showing it live — then run the eviction again; or, if it is wedged in a way that still renews its lease, force the eviction past the lease",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-749b-896e-5d411f840a8f.evict-node-4"
+      }
+    },
+    "eviction_unjudged": {
+      "status": 503,
+      "body": {
+        "actions": [
+          "retry_same_op",
+          "force"
+        ],
+        "detail": "engine: the eviction of node-4 cannot be judged: list the live nodes: coordination is unreachable — a lease listing nobody could read is not one that came back clear",
+        "error": "eviction_unjudged",
+        "hint": "this node could not read the presence leases, so it cannot tell whether node-4 is still running: ask again once coordination answers, or — if you know node-4 is gone — force the eviction, which does not need them",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-7ba8-8d4a-0db8da6b0076.evict-node-4"
+      }
+    },
+    "readmission_refused": {
+      "status": 409,
+      "body": {
+        "actions": [
+          "wait"
+        ],
+        "detail": "statelog: node-4 may not be readmitted: its last position in tracker (reported 2026-09-21T12:00:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again",
+        "domain": "tracker",
+        "error": "readmission_refused",
+        "first_seq": 8800,
+        "floor": 9000,
+        "floor_generation": 1,
+        "generation": 1,
+        "hint": "start node-4 if it is not running: it catches up on its own, replaying what the log still holds and adopting a peer's snapshot where it does not — the retention report's snapshots say whether any peer can donate one. Readmit it once it has applied every record up to the one just before the higher of the floor and the first surviving sequence this refusal names: its position on that log in the retention report at that bound minus one or above, at the log's current generation",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-7f2e-8314-ccf84cf44c32.readmit-node-4",
+        "position": 1200,
+        "published": true
+      }
+    }
+  }
+}

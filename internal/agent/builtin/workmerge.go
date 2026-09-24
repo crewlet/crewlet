@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -56,7 +57,7 @@ func (t *mergeWorkItem) Description() string {
 }
 
 func (t *mergeWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -78,7 +79,7 @@ func (t *mergeWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item", "into"},
-	}
+	})
 }
 
 func (t *mergeWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -95,6 +96,10 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.Merges == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.MergeWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.MergeWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	into := strings.TrimSpace(argString(args, "into"))
@@ -131,21 +136,42 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	cancelled := before.Task
 	cancelled.Status = tracker.StatusCancelled
 	cancelled.StatusGroup = tracker.StatusCancelled.Group()
-	got, err := t.deps.Merges(actor).MergeDuplicates(ctx,
-		opIDFor(actor, "merge", before.Task.ID), before.Task.ID, survivor,
+	opID := opIDFor(actor, t.Name(), "merge", before.Task.ID, args)
+	got, err := t.deps.Merges(actor).MergeDuplicates(ctx, opID, before.Task.ID, survivor,
 		moveSubtasks(args), tracker.Wake{
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
+	if errors.Is(err, tracker.ErrReparentAcrossProjects) {
+		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
+		// the tracker knows the gesture that clears it and not the tool
+		// or the argument a caller reaches it by.
+		return failed(fmt.Sprintf("merge_work_item was refused: %v. Move %s "+
+			"into the surviving item's project with move_work_item first — its "+
+			"subtasks go with it — or merge with `move_subtasks: false`, which "+
+			"leaves them under the duplicate.", err, before.Task.Key)), nil
+	}
 	if err != nil {
-		return failed(writeFailure(tracker.MergeWorkItemTool, err)), nil
+		return failed(writeFailure(actor, tracker.MergeWorkItemTool, err)), nil
+	}
+	if got.Outcome == statelog.OutcomeUnknown {
+		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see
+		// [unknownWrite]. The sequence stops at an unknown step with an
+		// error of its own, so this is the seam's contract held here
+		// rather than an implementation's habit trusted.
+		return failed(unknownWrite(actor, tracker.MergeWorkItemTool,
+			fmt.Sprintf("%s was merged", before.Task.Key), opID, got.Unvouched,
+			unknownNext(got.Unvouched, sameCall(actor, tracker.MergeWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — a merged item is "+
+					"cancelled and links the one it was folded into", before.Task.Key),
+				"it merges it a second time"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "merged_into": survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
 		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
 }
 
 // moveSubtasks reads the one knob this verb has, and ABSENT IS TRUE.

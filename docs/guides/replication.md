@@ -49,6 +49,146 @@ different with each.
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
 
+A gesture made of **several** records in order — a cross-project move, a merge
+of duplicates, a checklist item's promotion, a dependency with its mirror, a
+subtree's removal or restore — treats a step answered `unknown` as the end of
+the walk, not as a step that landed. Nothing after it is written: no descendant
+follows a root whose own move or removal is unknown, a mid-move or mid-merge
+mark is not taken down, and a dependency's mirror is not written over an
+authored edge nobody can vouch for (a mirror whose own outcome is unknown is
+reported one-sided, the state the tracker duty repairs). The gesture fails
+naming the operation id, and running it again under that id answers each step
+that landed from the ledger and finishes the rest. Every step is named by the
+task it writes rather than by its place in the walk, because a re-run reads
+its list afresh — a restore's is what is still in the trash — and a step named
+by position would carry another task's operation id.
+
+What "under that id" means depends on who is asking. A **seat** derives its
+ids from its turn, the call's arguments and how many different calls to the
+same tool it made first, so it runs a gesture again by repeating the call with
+exactly the same arguments — before calling that tool with anything else. The
+**operator's MCP** has no turn, so every write's answer carries its `op_id` and
+a call that brings it back is that operation again
+([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
+— and only that one: the id names the call's tool and a digest of its
+arguments, and brought back with any other it is refused before anything is
+written, rather than half-answered from the first call.
+The purge and node-gate routes take theirs as `?op_id=`. A caller that sends
+neither starts a new operation, which finishes nothing: a create repeated that
+way files a second item. A create whose item landed and whose dependencies did
+not says so — the item is named, and its dependencies are finished on it with
+`update_work_item` rather than by filing it again.
+
+### What a retry is judged by: the instant its operation was minted
+
+Every node keeps an **operation ledger** — which operations its own applier
+has applied, and where — and it is the ledger, not the broker, that makes a
+retry safe. The broker also collapses a repeated operation id, but only inside
+its two-minute duplicate window, and a turn re-run after a crash or a caller
+repeating an `unknown` routinely comes later than that.
+
+A retry of an operation the ledger records is **answered, not decided again**:
+it comes back `applied`, at the position the first copy landed, however long
+afterwards it arrives. Deciding it again would mean deciding against rows that
+already hold it — a retried purge would find its task gone and refuse, an
+update conditioned on a version would find that version moved by its own first
+copy and refuse as stale. A retried create comes back as the task the first
+copy filed, under the key it took — the new item's id is derived from the
+operation, so a turn re-run after a crash that makes the **same** call files
+one work item, not two. Only a create that took its key number and never filed
+its task is finished on a fresh number, which leaves a gap in the project's
+numbering (ENG-8 is skipped) rather than two items sharing a key.
+
+That holds for a re-run's calls only where they are the same calls. A turn's
+operation ids are derived from its unit of work, the verb, the object, the
+call's arguments and how many different calls to the same tool the run made
+before it (see
+[the turn engine](../concepts/turn-engine.md#a-turns-two-identities)), and the
+model behind a re-run is sampled again: a title or a comment it words
+differently is a different operation, so that re-run files a second item or
+posts a second comment. The engine cannot tell a reworded call from a new
+one, and a crashed run leaves no record of its calls to compare against.
+
+The same holds for a write whose acknowledgement was lost and which the ledger
+then answers: unless the broker acknowledged this very attempt at the position
+the ledger names, the record there may be an earlier copy's — decided on another
+node, against other rows — so the write is answered as that copy, and anything
+the attempt computed in its own decision is not used. A key is then read from
+the item's row, or minted again on a fresh number. A retried create on a node
+that was behind used to be answered as its own stale decision, and filed its
+item under the number another item already held.
+
+An operation id names **one** write, and a ledger row answers only for a write
+to the object it landed on. The same id sent with a write to a different object
+is refused **`op_reused`**, naming where it landed — whether the ledger finds
+it before anything is decided or the broker's duplicate window collapses the
+second append onto the first record — rather than answered `applied` at a
+position on an object the second write never touched. A different write takes
+a fresh id.
+
+The ledger **travels inside a snapshot**. A node that
+[adopted one](retention.md) holds a row for every operation its donor applied,
+so a retry of one is answered from it exactly as the donor would have answered
+it, and an operation neither holds never applied — so a turn woken by work that
+was queued before the join files its writes like any other, however old the
+work is.
+
+What the ledger can do is **lose rows**, and it keeps a watermark saying how far
+back it may have. Each node deletes its rows thirty days after applying them,
+and records how far back each pass deleted. An operation minted before the
+watermark whose row is gone is answered **`unknown`** — before anything is
+published — rather than decided a second time, so a retry a month on is never
+applied twice. It is answered `unknown` rather than **refused**, too: a retry's
+rows already hold what its first copy did, which is exactly what makes a
+re-run refuse (a move finds its task already in the target project, a create
+finds its object already there), so on such an operation "no" would be the
+ledger's silence read as an answer. Only a refusal about the node itself — it
+holds a record it cannot read, or the object is deleted for good — stands
+either way. A **create** can say more than `unknown`, because its item's id is
+derived from the operation: one the ledger cannot vouch for is answered from
+that item's own row — the item the first copy filed, under the key it took,
+where this node holds it, and `unknown` with no number minted where it does
+not, since the first copy may be on the log beyond what this node has applied.
+A gesture that writes several records in order and meets such a step stops
+there and says so: re-running it under the same id **on this node** stops at
+the same step every time, because the row that step needs is the one the loss
+took, and it is a node whose ledger lost nothing that far back that can finish
+it. The thirty days are sized for the slowest real retrier, a seat
+that only runs on a schedule carrying an operation id across a long weekend; a
+write that is retried later than that is told `unknown`, and the operation's
+own record, if it landed, is on the log. The watermark travels with the ledger,
+so a node that adopts inherits its donor's.
+
+During a rolling upgrade a node can adopt from a **peer on an older build**,
+whose snapshot arrives without its ledger — older builds scrubbed it. The
+joining node then records the join itself as the watermark, before it installs
+the file: on that node, an operation minted before the join is answered
+`unknown` until it is retried on a node that did not adopt from the older peer,
+and anything minted after it is unaffected. A node upgraded in place after
+adopting under an older build carries that adoption into its watermark once,
+when it first boots.
+
+What decides it is the instant the operation was **minted**, and that instant
+travels inside the operation id itself: every id the engine mints is a
+time-ordered one whose leading bits are its mint time, followed by a name
+saying what the operation is (`01a0…-7…-….update-<task>`). A retry reuses the
+id, so it reuses the instant — including a turn re-run on another node, whose
+writes derive their ids from the unit of work and the instant it began rather
+than from the run. An operation id the engine did not mint carries no instant
+and is read as older than everything the ledger ever lost: on a node whose
+ledger ever lost a row, a write under it answers `unknown` unless that node's
+ledger holds its row — which is why the routes that accept an operation id
+from outside, a purge's and a node gate's retry, refuse one the engine did not
+mint.
+
+The instant is compared with the watermark, which another node's clock may
+have set — the sweeping node's, or a joining node's after adopting from an older
+peer — so the fleet's clocks are assumed to agree to within the margin each
+leaves: the sweep's thirty days, and the few seconds between an older donor
+finishing the snapshot it offers and the joining node starting its join. It is
+the same kind of assumption the trim's age term rests on. Keep them
+synchronised.
+
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait
 for its own record expires. Five seconds is the applier's own stall grace
@@ -65,7 +205,10 @@ are deliberate:
 
 - **The eviction gate.** A record written by a node the fleet evicted before
   the record's own position is dropped everywhere. A node that applied it
-  before learning it was evicted will drop it on replay.
+  before learning it was evicted will drop it on replay. Every record names
+  the node that published it and the generation it was decided in; the write
+  path is handed both and refuses to append a record that does not carry
+  them, because a record naming nobody is one this gate can never drop.
 - **The deletion gate.** A record about a task a purge destroyed applies
   nowhere, for ever. This is what stops a redelivery months later resurrecting
   rows an operator deliberately removed.
@@ -125,14 +268,69 @@ This is the sentence the backup schedule hangs on.
 **Above the trim floor**, the log holds every record on R replicas and every
 node holds the applied rows. Losing a node loses nothing.
 
-**Below the trim floor the log holds nothing, and each node's own database file
-is the only copy of that history** — N of them, independent, none replicated.
-Losing history below the floor takes all N disks, and it is covered **only** by
-the backup gate.
+**Below the trim floor the log may already hold nothing — the trim has licensed
+deleting it — and each node's own database file is the only copy of that
+history** — N of them, independent, none replicated. Losing history below the
+floor takes all N disks, and it is covered **only** by the backup gate.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
 [Retention](retention.md).
+
+## A node resumes from its rows, never from its reader
+
+Each node reads each log through a durable consumer of its own on the broker,
+named after the node. That consumer's position is a second, weaker number than
+the checkpoint: it moves *after* the commit, and the broker keeps it when the
+node's database does not. The checkpoint is what the node resumes from — but
+resuming can only drop what arrives below it. Nothing on the node's side can
+make the broker hand over again a record it has already delivered and been told
+was applied.
+
+So at every boot the node compares the two, and a consumer that disagrees with
+the rows is deleted and created again at the checkpoint. Each rebuild is logged
+as `jetstream_domain_consumer_rebuilt`, naming the `drift`:
+
+| `drift` | What it means | What it would have cost |
+|---|---|---|
+| `acknowledged_past_checkpoint` (a `WARN`) | The broker was told records past the checkpoint were applied, so this node's replicated database is older than its reader. The database was deleted, or restored from a backup. | The node never hydrates, and every write on the missing objects refuses `behind`. On the vector log, where nothing checks for gaps, the skipped records' rows are just missing. |
+| `delivered_past_checkpoint` | Records past the checkpoint were handed to a process that has since stopped. | The node stays behind until the 30-second ack window returns them. |
+| `in_flight_for_a_gone_reader` | Deliveries at or below the checkpoint are held for a process that has since stopped. | Each one holds a slot of the in-flight ceiling for 30 seconds. When they fill it, nothing new arrives. |
+| `behind_checkpoint` | The rows moved without the reader, which is what adopting a snapshot at boot does. | Every record in between is delivered only to be dropped. |
+
+A clean restart logs none of these: a node that applied and acknowledged
+everything it was handed keeps its consumer as it is.
+
+A node below the trim floor is not ahead of its rows either, although its
+reader reports records past the checkpoint as read: the broker moves a reader
+over the records the trim removed, to the first one the log still holds. The
+node reads the log's first sequence to tell the two apart. If it cannot read
+it, it judges the raw positions and rebuilds, and the
+`acknowledged_past_checkpoint` warning then says the log's first sequence was
+unreadable, so it may be either case.
+
+A rebuild is a delete and a create on the broker, and on a fleet whose broker
+is not answering, either one can fail. What happens then depends on the drift:
+
+- **`behind_checkpoint` and `in_flight_for_a_gone_reader`**: the node asks the
+  broker which reader it now holds, keeps that one, and logs
+  `jetstream_domain_consumer_rebuild_failed` as a `WARN`. Neither drift has
+  handed over a record past the checkpoint, so keeping the reader costs what
+  the table says and loses nothing. The next boot rebuilds it.
+- **`acknowledged_past_checkpoint` and `delivered_past_checkpoint`**: the boot
+  fails and names the domain. A node left on that reader could wait for ever.
+- **Any drift where the broker holds no reader after the failure, or cannot say
+  which it holds**: the boot fails too. A reader the node guessed at could be
+  one that no longer exists, and every read through it would fail while the
+  node reported itself up.
+
+A rebuild touches only this node. No peer reads through its consumer, and no
+retention term reads it either: the trim works from the positions each node
+publishes from its own rows. What the rebuild makes safe is **losing the
+replicated database while the broker keeps its estate**. A node started on an
+empty `crewlet-replicated.db` replays each log from the broker, or adopts a
+peer's snapshot where the trim has already removed the start of one. It no
+longer waits on records its old reader already acknowledged.
 
 ## Replication lag is two positions
 
@@ -143,9 +341,25 @@ Not one number. Every node publishes both:
 - **`applied_through`** — the prefix it has actually *applied*, which is lower
   whenever a record was retained rather than applied.
 
+Beside them rides **`stream_created_at`**, the creation instant of the stream
+the node's rows are keyed to. A generation cannot say which stream a sequence
+is on — a stream deleted and remade keeps the generation and counts from 1
+again — so this is what lets a [reanchor](retention.md#re-anchoring-a-recreated-or-restored-log)
+tell a peer further along the lost stream from one that came up on the new one.
+And **`checkpoint_stored_at`** names the record the checkpoint stands on — the
+broker's instant for it — which a sequence alone cannot: after a broker
+restored from an older copy is written past a node's rows, the log holds
+another record at the same sequence. It is what lets a reanchor tell a peer
+whose history is the log's from one holding history the log lost.
+
 Folding them into one would make a node that is applying nothing while its
 position advances look identical to one that is fully caught up. `crewlet
-retention status` prints both, per node and per domain.
+retention status` prints `seq` and `applied_through` per node and per domain,
+beside the generation the position is in (`GEN`) — a position from a
+generation the log has left prints `left gen N` in place of a lag, since its
+sequence compares with nothing the log holds — and marks a node that reported
+`log_diverged`. The two instants are on the retention answer's JSON
+(`stream_created_at`, `checkpoint_stored_at`) rather than in the table.
 
 **Lag does not move a node's seats, at any size.** A node that is behind keeps
 every seat it holds and claims no new ones until it is level — see [a copy
@@ -225,6 +439,22 @@ half-done leaves the old nodes holding records they cannot apply and refusing
 reads about the objects those records touched — with `deferred` naming exactly
 what to do, which is finish the upgrade.
 
+**A record is written at the lowest version that can apply it whole**, never at
+the newest the build knows, so what an older node holds back is exactly the
+objects whose shape changed. Two records are written above version 1 today: a
+change to a knowledge container's settings, which carries the activation that
+wrote them, and a task write carrying a cross-project move's mid-move mark (both
+at version 2). So during an upgrade from a build before them, an older node
+holds back a container a newer node renamed or re-described, with the page
+writes in it, and the root of a subtree being moved, until it is upgraded — and
+nothing else. A container record that only re-stamps unchanged settings with a
+later activation stays at version 1, because an older node applies it whole;
+written at 2, the first upgraded node's stamping of every chart-named space
+would have stalled every page write in all of them on every older node. Every barrier and
+every generation record stays at version 1 for good: an older node retaining
+those would hold a deferral for every linearizable read, or never make the
+transition a reanchor announced.
+
 **The upgraded node applies what it retained at its next boot**, before its
 applier consumes anything new: every retained record it can now read, in log
 order, each released in the transaction that applied it. A record whose scope
@@ -269,7 +499,10 @@ from the work tracker, are the first retired kind.
    `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
-   [Retention](retention.md).
+   [Retention](retention.md). On the tracker and pages logs ordinary writes
+   are refused a sixteenth short of it, the rest being
+   [kept for gate records](retention.md#the-gate-reserve) so that an eviction
+   can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
 4. **The store's own size** — every node is a full replica, so the corpus is
@@ -288,19 +521,38 @@ number, and a node sizes them together, once, when it creates their streams:
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
-| **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
+| **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
 | **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
-| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
+| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
 a running stream's configuration, and the broker never re-checks a reservation
 it has already granted. A log created larger than today's sizing would make it
 boots as it is, and the node logs `jetstream_stream_capacity_differs` with both
-numbers. A knowledge-base log created before it joined the budget, at a fixed
-4 GiB, is the common case, and it is harmless: its reservation was granted
-when it was made. To reclaim it (or to raise any log), use
+numbers — its ceiling, and what this sizing would create it with if no log
+existed yet. A knowledge-base log created before it joined the budget, at a
+fixed 4 GiB, is the common case, and it is harmless: its reservation was
+granted when it was made. To reclaim it (or to raise any log), use
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling).
+
+**And it counts at that ceiling when another log is created beside it.** A log
+a new version adds, or one whose stream was deleted, is sized from what the
+existing logs leave of the half, not from what they would ask for today — so a
+log being created fits inside what the existing logs leave of their share,
+past it only by the 1 GiB floor and a ceiling you set for it. What the existing
+logs already hold is not reduced: when they hold more than the share (a ceiling
+set and later unset, a log created while the volume had more room, one raised
+with `crewlet retention set-capacity`), the logs reserve that much past it too,
+and a log created beside them gets the floor. When a log is created below what
+it would have had on an empty broker, the node says so with
+`statelog_ceiling_short_of_fit`, naming each log it created short, the ceiling
+it got (`created`) and the one it would have had (`fit`), and what each
+existing log holds (`held`); once the node is up, `crewlet retention
+set-capacity` gives an existing log's reservation back and raises the new one.
+It is never created above that `fit`, even where the existing logs leave more:
+every later boot reports its stream against that figure, and a log created
+past it would be reported as a capacity difference on every one of them.
 
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming
@@ -315,9 +567,10 @@ stream.store_max_bytes where you set one, and otherwise three quarters of the
 free space on the volume holding stream.store_dir (/var/lib/crewlet/stream),
 counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
-into the state logs' share of the broker, and it goes no lower than
-1073741824 bytes. Give the broker more room; the state logs that already exist
-keep the ceilings they were created with, and no Tier A setting changes them: …
+into what the state logs that already exist leave of their share of the
+broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
+the state logs that already exist keep the ceilings they were created with,
+and no Tier A setting changes them: …
 ```
 
 The remedies are the ones it lists. Give the broker more room: raise
@@ -332,6 +585,68 @@ A log that already exists cannot be shrunk to make room from here. Its ceiling
 changes only through `crewlet retention set-capacity`, which runs on a node
 whose state logs are up, and every mode starts them, `maintenance` and `seal`
 included: a node refused here cannot run it.
+
+## Reading a node's state-log lines
+
+Every line the state log writes about its own work carries
+`component=statelog`, so filtering on it narrows a node's log to its
+replication:
+
+| Line | Level | What it says |
+|---|---|---|
+| `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
+| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and its seats move until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
+| `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops claiming seats and the ones it holds move to a peer. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
+| `statelog_checkpoint_named` | `INFO` | A checkpoint that named no record — written before checkpoints named theirs, or placed by a reanchor where the log held none — was named from this node's own evidence, never from the log's record: `evidence` is `ledger_instant` (its operation ledger's row at the checkpoint keeps the record's instant), `ledger_operation` (an older row names the operation the log's record carries) or `retained` (its copy of a record it could not decode). From then on it is compared like any other. See [retention](retention.md#re-anchoring-a-recreated-or-restored-log). |
+| `statelog_checkpoint_other_operation` | `WARN` | The same naming found this node's ledger naming, at its checkpoint, another operation (`applied_op_id`) than the log's record there carries (`log_op_id`): the log holds another record at the checkpoint, and the domain is refused as diverged from then on. |
+| `statelog_checkpoint_unnamed` | `WARN` | Nothing this node kept names the record its checkpoint stands on — the ledger's sweep took the row, or the record there wrote none (a read barrier, a repeated operation, a gated record). The applier carries on and its next batch names a record, but until then a broker restored from an older copy and written past these rows goes unnoticed. Written once per checkpoint. |
+| `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
+| `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate — `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). |
+| `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
+| `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
+| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
+| `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |
+
+The snapshotter, the donor and the adopter write under the same component. The
+lines the engine writes *around* those loops — `statelog_stream_recreated` and
+`statelog_below_the_floor` among them — carry `component=engine`, because the
+component names the code that wrote a line rather than what it is about. Four
+of them are about a peer's reanchor: `statelog_generation_passed` (`WARN`) is
+the heartbeat finding a log re-anchored past this node's generation, naming
+both (`generation`, `fleet_generation`), from which point the domain refuses;
+`statelog_behind_a_reanchor` (`WARN`) is the join asking the fleet for a
+snapshot at the new generation, naming the domains and the generations it asks
+at; `statelog_generation_holder_unread` (`WARN`) is a beat that could not read
+whether the node that opened that generation is evicted, which decides whether
+the refusal names the adoption or a reanchor, and leaves it naming what it did;
+and `statelog_generations_unread` (`WARN`) is a beat that read the
+positions register but could not establish which generation the fleet is on —
+the trim floors unread, or an eviction record unreadable. Such a beat judges
+neither that nor the truncation below, and leaves both verdicts where they
+were: the peer whose rows hold what a log lost is usually the peer that then
+re-anchors past it, so judging the truncation alone would lift that fence on
+the very beat that could not yet say the passed verdict replaces it. See
+[a node a peer re-anchored past](retention.md#a-node-a-peer-re-anchored-past).
+Two are about a broker restored from an older copy:
+`statelog_log_diverged` (`ERROR`) is the log holding, at this node's
+checkpoint, another record than the one it consumed there — the restored log
+was written past this node's rows — written once, at boot or by the heartbeat,
+from which point the domain applies nothing past its checkpoint and refuses
+until it is [re-anchored](retention.md#re-anchoring-a-recreated-or-restored-log)
+or its rows are replaced; and `statelog_checkpoint_unverified` (`WARN`) is a
+heartbeat that could not read the record at the checkpoint to compare it, which
+the applier asks again before it applies past it. And three are the same
+restore seen from a node whose rows are the copy's age:
+`statelog_log_truncated` (`ERROR`) is the heartbeat finding a peer whose rows
+hold records the log lost — past its end, or reporting `log_diverged` — naming
+it (`peer`, `peer_seq`, `last_seq`, `peer_diverged`), from which point the
+node's writes of that domain refuse `log_truncated` while its reads go on;
+`statelog_log_truncated_cleared` (`WARN`) is that ending, once the peer has
+re-anchored, been rebuilt or been evicted; and `statelog_truncation_unread`
+(`WARN`) is a beat that could not establish it either way, which leaves the
+verdict where it was — as does a `statelog_generations_unread` beat, which does
+not ask.
 
 ## Three things CI cannot prove
 

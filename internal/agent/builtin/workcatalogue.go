@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -177,9 +179,22 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		result, err := writer.WriteTypes(ctx, "types-"+uuid.NewString(), types)
+		opID := statelog.NewOpID(time.Now(), "types")
+		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
-			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
+			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			// THE FIELDS WAIT FOR IT: a call answered with one half's
+			// receipt and the other's doubt is a call the reader has to
+			// take apart, and repeating the whole of it is harmless.
+			next := restateNext("Read the catalogue with get_work_catalogue")
+			if hasFields {
+				next = "The fields were NOT written: the call stopped here, " +
+					"before them. " + next
+			}
+			return failed(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+				"the types were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["types"] = map[string]any{
@@ -192,9 +207,18 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		result, err := writer.WriteFields(ctx, "fields-"+uuid.NewString(), fields)
+		opID := statelog.NewOpID(time.Now(), "fields")
+		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
-			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
+			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			next := restateNext("Read the catalogue with get_work_catalogue")
+			if hasTypes {
+				next = "The types WERE written. " + next
+			}
+			return failed(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+				"the fields were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["fields"] = map[string]any{

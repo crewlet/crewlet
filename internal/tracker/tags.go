@@ -69,6 +69,46 @@ func (e TagEdit) Empty() bool {
 	return len(e.Add) == 0 && len(e.Rename) == 0 && len(e.Archive) == 0
 }
 
+// TagClash is an add refused because its label is already another tag's label
+// or slug in the project — two groupings a person cannot tell apart, which the
+// work would then split between at random.
+//
+// # Why a type
+//
+// Because a caller several steps away has to say what to do about it. A
+// cross-project move declares its subtree's tags in the target as its first
+// append, and one label shared by two projects' different tags refused the
+// whole move with a sentence the tool rendered as "the change was NOT made" —
+// nothing a seat could act on. The fields are what an answer names: the tag
+// being declared, the one it clashes with, and the project.
+type TagClash struct {
+	Project string
+	// Slug and Label are the tag the add declared.
+	Slug, Label string
+	// Other is the project's own tag whose label or slug it collides with.
+	Other Tag
+}
+
+func (e *TagClash) Error() string {
+	return fmt.Sprintf("tracker: %s already has a tag %s labelled %q — two "+
+		"tags a person cannot tell apart split the work between them at random",
+		e.Project, e.Other.Slug, e.Other.Label)
+}
+
+// TagsFull is an add refused because the project already keeps
+// [MaxTagsPerProject] tags — a type for [TagClash]'s reason.
+type TagsFull struct {
+	Project string
+	// Slug is the first tag the add could not fit.
+	Slug string
+}
+
+func (e *TagsFull) Error() string {
+	return fmt.Sprintf("tracker: %s already has %d tags, which is the most a "+
+		"project keeps — archive what is no longer filed under before declaring "+
+		"more", e.Project, MaxTagsPerProject)
+}
+
 // TagAuthority is what a caller may do to a tag set.
 //
 // A VALUE RATHER THAN A BOOL ON THE WRITER, for the reason the other authority
@@ -121,12 +161,11 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	at := w.Now()
 	var warnings, declared []string
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTagSet(ctx, tx, project)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -156,7 +195,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 				// a legitimate outcome.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpPatch, ChangeTags, scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, ChangeTags, scope, opID,
 				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -242,16 +281,12 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 			continue
 		}
 		if other, clash := taken[strings.ToLower(label)]; clash {
-			return TagSet{}, nil, nil, false, fmt.Errorf("tracker: %s already has a "+
-				"tag %s labelled %q — two tags a person cannot tell apart split "+
-				"the work between them at random",
-				current.Project, next.Tags[other].Slug, next.Tags[other].Label)
+			return TagSet{}, nil, nil, false, &TagClash{Project: current.Project,
+				Slug: slug, Label: label, Other: next.Tags[other]}
 		}
 		if len(next.Tags) >= MaxTagsPerProject {
-			return TagSet{}, nil, nil, false, fmt.Errorf("tracker: %s already has "+
-				"%d tags, which is the most a project keeps — archive what is "+
-				"no longer filed under before declaring more",
-				current.Project, MaxTagsPerProject)
+			return TagSet{}, nil, nil, false, &TagsFull{Project: current.Project,
+				Slug: slug}
 		}
 		if near := nearTags(next.Tags, slug); len(near) > 0 {
 			warnings = append(warnings, fmt.Sprintf("%s is within a typo of %s "+
@@ -644,9 +679,16 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	}
 	// AUTHORITY IS THE ADD's, which every seat holds. An inline declare
 	// renames and archives nothing, so it can never reach the lead gate.
+	//
+	// AN UNKNOWN DECLARATION IS A STEP THAT DID NOT RESOLVE ([resolved]),
+	// never a declaration that created nothing. The write this one comes
+	// before is refused over a tag that is not declared, so reading
+	// `unknown` as "nothing new" sent the caller a refusal telling it to
+	// pass the flag it had passed — about a tag that may have landed.
 	result, err := w.WriteTags(ctx, opID, project, TagEdit{Add: add},
 		TagAuthority{})
-	if err != nil {
+	if err = resolved(fmt.Sprintf("the declaration of %v in %s", created,
+		project), result, err); err != nil {
 		return nil, nil, fmt.Errorf("tracker: declare %v in %s: %w",
 			created, project, err)
 	}

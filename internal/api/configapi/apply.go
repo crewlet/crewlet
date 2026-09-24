@@ -293,6 +293,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if invalid := d.rules(company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
+	// AND AGAINST THE DEPLOYMENT, with the rule the apply itself runs
+	// ([config.CheckTiers]): a document every node would refuse to apply is
+	// refused here, naming the Tier A field, rather than activated to be
+	// refused everywhere a moment later.
+	if invalid := config.CheckTiers(s.boot, company); invalid != nil {
+		return nil, &ValidationError{Err: invalid, Derived: derived}
+	}
 	p := &prepared{document: document, warnings: company.Warnings(), derived: derived}
 	if found {
 		p.base = active.ID
@@ -360,7 +367,11 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	// activation has landed and cannot be taken back, so a failure here is
 	// not the write's failure, and the reconciler makes the fleet's target
 	// this node's active revision when it applies the epoch.
-	if _, aerr := s.configs.Activate(ctx, id, at); aerr != nil {
+	//
+	// AT THE POINTER'S INSTANT, which may be later than the one asked for
+	// (see [coord.ActivationAt]): the local copy's `activated_at` is what
+	// this node boots its chart with next time.
+	if _, aerr := s.configs.Activate(ctx, id, published.At); aerr != nil {
 		log.WarnContext(ctx, "config_revision_not_marked_active",
 			"revision", id, "epoch", published.Epoch, "error", aerr,
 			"detail", "the fleet is running this revision; this node marks "+

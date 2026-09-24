@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // Rows is what the PUBLISHER reads from this node's own durable tables, and
@@ -42,18 +43,44 @@ type Rows interface {
 	// model. A read transaction held across a round trip is a reader
 	// holding a snapshot open while the world moves, which is what the
 	// store's own short-transaction rule exists to stop.
-	Snapshot(ctx context.Context, subj Subject, s ScopeSet,
-		decide func(*sql.Tx) (Decision, error)) (Snap, error)
+	//
+	// decide is handed the CHECKPOINT the transaction reads, before it
+	// decides anything: it is the one value the record's generation can be
+	// taken from, and it is [Snap.Checkpoint] — the same read, not a
+	// second one — so the generation a record is stamped with is the
+	// generation of the rows it was decided from. See [Stamp].
+	//
+	// THE WRITE'S OWN OPERATION IS LOOKED UP FIRST, in the same
+	// transaction, and when this node's ledger already records it the
+	// domain is NOT asked to decide: the snapshot answers [Snap.Held]
+	// and nothing else. See [Snap.Held] for why deciding is wrong there
+	// rather than merely wasted.
+	//
+	// held JUDGES THAT ROW, in the same transaction, before the snapshot
+	// answers with it: an error from it is the snapshot's error, and nil
+	// lets [Snap.Held] stand. It is how the publisher refuses a row that
+	// answers for some other write ([Publisher.heldHere]).
+	Snapshot(ctx context.Context, subj Subject, s ScopeSet, opID string,
+		held func(tx *sql.Tx, entry OpEntry) error,
+		decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error)
 
 	// Op answers where an operation was applied on this node.
 	//
 	// CONCLUSIVE ONLY at or below this node's applied position and only
-	// above its own adoption instant: the ops table is this node's
-	// applier's own record, so "absent" below the checkpoint means "not
-	// applied here YET" and "absent" below an adoption means "scrubbed
-	// out of the snapshot I arrived with". Either read as "somebody else
+	// for an operation minted at or after [Rows.LostBefore]: "absent"
+	// below the checkpoint means "not applied here YET", and "absent"
+	// before the watermark may mean "lost". Either read as "somebody else
 	// won" republishes a write that already landed.
-	Op(ctx context.Context, opID string) (Position, bool, error)
+	Op(ctx context.Context, opID string) (OpEntry, bool, error)
+
+	// LostBefore answers the instant before which the domain's ops table
+	// may have lost rows, reporting false when it has lost none: every row
+	// it no longer holds was applied before it, so "absent" is conclusive
+	// only for an operation minted at or after it. It travels with the
+	// ledger inside a snapshot; the sweep, an adoption from a donor that
+	// scrubbed its ledger and the boot's fold of such an adoption are what
+	// move it — see ledgerloss.go and [Publisher.vouches].
+	LostBefore(ctx context.Context) (time.Time, bool, error)
 }
 
 // Decision is what a domain decided, inside the snapshot, from rows it read
@@ -64,11 +91,17 @@ type Decision struct {
 	// there is nothing to publish, which is a legitimate outcome and not
 	// an error: an update that changes no field is a no-op the caller
 	// should be told succeeded.
+	//
+	// ITS ENVELOPE IS THE ONLY ONE THERE IS. The publisher decodes it with
+	// [Domain.Envelope] before anything is appended and refuses a record
+	// that does not carry the [Stamp] it was decided under — so there is
+	// no second envelope beside the payload for a domain to fill in
+	// differently. There was one, and nothing but a fallback generation
+	// ever read it: every domain left its writer and generation empty
+	// there and in the payload alike, and the eviction gate compared an
+	// empty writer against every eviction in the fleet for the life of
+	// the deployment.
 	Payload []byte
-
-	// Envelope is the record's own envelope, which the framework reads
-	// for the subject, the scope and the op id it publishes under.
-	Envelope Envelope
 
 	// Version is the object's version as the decision read it, which the
 	// caller's own if_match compared against and which travels back in
@@ -99,6 +132,21 @@ type Deferral struct {
 // same transaction as [Snap.Decision], which is the property the publisher
 // rests on and the reason this is one struct rather than five calls.
 type Snap struct {
+	// Held is where this node's ledger records the write's own operation
+	// as already applied, and HeldOK whether it does. When it does, no
+	// other field is read and no decision is taken.
+	//
+	// A RETRY OF AN OPERATION THAT LANDED IS ANSWERED, NOT DECIDED AGAIN.
+	// Its snapshot already holds the first application, so a second
+	// decision is taken on top of it: a comment posted twice, a counter
+	// moved twice, an update conditioned on the version its own first
+	// copy moved refused as stale. The broker does not stop that — the
+	// expectation is current, and its duplicate window is two minutes
+	// while a turn re-run or an operator's retry routinely comes later —
+	// so the ledger has to, before the domain is asked anything.
+	Held   Position
+	HeldOK bool
+
 	// Decision is what the domain decided, from rows inside the
 	// transaction.
 	Decision Decision
@@ -126,6 +174,21 @@ type Snap struct {
 	// object exists, which is what still holds below the trim floor
 	// where the broker's own claim does not.
 	Guard bool
+
+	// Checkpoint is this node's committed checkpoint as the decision's own
+	// transaction read it: the prefix the rows the decision was made from
+	// reflect. A domain that has never committed on this stream is at the
+	// zero position, which is what an applier that has read nothing holds.
+	//
+	// IT IS WHAT THE EXPECTATION-ZERO FENCE COMPARES, and nothing later can
+	// stand in for it. The floor theorem in this package's doc concludes that
+	// a trimmed record on this subject is already reflected in THIS
+	// decision's rows, which needs C to be the position those rows were at.
+	// The live checkpoint only moves forward, so it is the permissive
+	// direction: a record applied after this snapshot, then trimmed, passes a
+	// check against the live position while the decision about to be
+	// published at zero never saw it — a lost update of exactly that record.
+	Checkpoint Position
 }
 
 // ErrNoDecision reports a domain that returned neither a payload nor an

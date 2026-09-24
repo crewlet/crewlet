@@ -704,7 +704,7 @@ func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	e.sandboxPending, e.sandboxCoordinator = pending, coordinator
+	e.useSandbox(pending, coordinator)
 }
 
 // suspendingModel hands its first round to the detaching tool, which is all it
@@ -808,8 +808,8 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 // without [sandbox.CoordinatorOptions.Stopped] the indicator heartbeat outlives
 // the process.
 //
-// Driven through [Engine.buildSandboxRuntime] rather than a coordinator this
-// case assembled, because the whole defect class on this path is a complete
+// Driven through [Engine.startSandbox] rather than a coordinator this case
+// assembled, because the whole defect class on this path is a complete
 // subsystem with no caller: an option declared and never passed is exactly what
 // a test holding its own coordinator cannot see.
 //
@@ -822,10 +822,15 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The double, which is the whole catalogue this case needs: the run is
 	// settled before it ever has a box.
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
-	if err := e.buildSandboxRuntime(company); err != nil {
-		t.Fatalf("buildSandboxRuntime: %v", err)
+	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
+	if err != nil {
+		t.Fatalf("buildSandbox: %v", err)
 	}
-	if err := e.sandboxPending.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if started, err := e.startSandbox(t.Context(), manager); err != nil || !started {
+		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
+	}
+	rt := e.sandbox.Load()
+	if err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -849,7 +854,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 
 	// The run is settled rather than resumed: its record is deleted, its box
 	// reclaimed, and the turn suspended into it is over.
-	if err := e.sandboxCoordinator.FailRun(t.Context(), "wk-code",
+	if err := rt.coordinator.FailRun(t.Context(), "wk-code",
 		types.SandboxFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
@@ -989,78 +994,6 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	if live := e.notify.slack.Status().Live(); len(live) != 0 {
 		t.Errorf("the resumed turn left an indicator up: %v", live)
 	}
-}
-
-// A TEARDOWN IS BOUNDED, NOT JUST DETACHED.
-//
-// Detaching the context takes the caller's DEADLINE with its cancel, and what
-// is left is a synchronous chat request made by something holding a resource
-// while it waits: a turn still holding this node's turn slot, a drain working
-// through one seat at a time, a sandbox completion's handler. With no deadline
-// of its own the only bound is the vendor client's own timeout, on the one
-// surface whose every failure is swallowed as cosmetic.
-func TestTheIndicatorTeardownIsBounded(t *testing.T) {
-	t.Parallel()
-	poster := &deadlinePoster{}
-	set := notify.NewStatuses(notify.NewStatusDriver(notify.StatusOptions{
-		Poster: poster, Mode: notify.StatusAlways,
-	}))
-	session := set.Begin(t.Context(), "swe", "wk-bound", phase.Execute.String(),
-		map[string]string{
-			notify.TransportField: "chat", "channel": "D0ANA",
-			"ts": "1700000001.000100",
-		})
-	if session == nil {
-		t.Fatal("no indicator was raised")
-	}
-
-	endWorkingStatus(t.Context(), session, false)
-
-	left, ok := poster.clearBudget()
-	if !ok {
-		t.Fatal("the clear was made on a context with no deadline: nothing but the " +
-			"chat client's own timeout bounds it")
-	}
-	if left <= 0 || left > statusClearTimeout {
-		t.Errorf("the clear had %v to answer in, want at most %v", left, statusClearTimeout)
-	}
-}
-
-// deadlinePoster records the budget its clear was given.
-type deadlinePoster struct {
-	mu    sync.Mutex
-	left  time.Duration
-	bound bool
-	seen  bool
-}
-
-func (*deadlinePoster) StatusBackend() string        { return "chat" }
-func (*deadlinePoster) SupportsStatusText() bool     { return true }
-func (*deadlinePoster) StatusRefresh() time.Duration { return time.Hour }
-func (*deadlinePoster) DMChannelPrefix() string      { return "D" }
-
-func (*deadlinePoster) SetStatus(context.Context, string, string, string, string) bool {
-	return true
-}
-
-func (p *deadlinePoster) ClearStatus(ctx context.Context, _, _, _ string) bool {
-	deadline, ok := ctx.Deadline()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.seen, p.bound = true, ok
-	if ok {
-		p.left = time.Until(deadline)
-	}
-	return true
-}
-
-func (p *deadlinePoster) clearBudget() (time.Duration, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.seen {
-		return 0, false
-	}
-	return p.left, p.bound
 }
 
 // A RESUME THAT NEVER REACHED ITS TURN KEEPS THE INDICATOR IT TOOK BACK.

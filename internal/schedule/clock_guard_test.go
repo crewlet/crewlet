@@ -6,9 +6,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestOnlyOneClockReadsTheWallTime fails the build when any engine-side file
@@ -57,7 +58,7 @@ import (
 func TestOnlyOneClockReadsTheWallTime(t *testing.T) {
 	t.Parallel()
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	// The one function permitted to read it, and the file it must live in.
 	const clockFunc, clockFile = "now", "ledger.go"
 
@@ -171,20 +172,6 @@ func goFiles(t *testing.T, dir string) []string {
 		t.Fatalf("%s holds no non-test Go file — the guard's subject has moved", dir)
 	}
 	return out
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	// .../go/internal/schedule/clock_guard_test.go -> .../go
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortPos(root, pos string) string {

@@ -7,11 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
-
-var log = logging.Get("statelog")
 
 // alarmGauge is the instrument every firing alarm sets.
 const alarmGauge = metrics.AlarmActive

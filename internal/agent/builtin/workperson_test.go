@@ -373,8 +373,8 @@ func TestABoundOperatorsOwnStateIsWrittenUnderTheirSeat(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		"pins":  {tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}, "pins-jane-founder-"},
-		"inbox": {tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}, "inbox-jane-founder-"},
+		"pins":  {tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}, "pins-jane-founder"},
+		"inbox": {tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}, "inbox-jane-founder"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -395,7 +395,7 @@ func TestABoundOperatorsOwnStateIsWrittenUnderTheirSeat(t *testing.T) {
 			// what the ledger collapses a redelivery against: keyed on
 			// one name while the record is keyed on another, two people's
 			// writes share a scope.
-			if !strings.HasPrefix(person.opID, call.want) {
+			if opName(person.opID) != call.want {
 				t.Errorf("%s wrote under operation %q, want one scoped to %q",
 					call.tool, person.opID, call.want)
 			}

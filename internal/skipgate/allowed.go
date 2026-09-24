@@ -247,8 +247,9 @@ var allowed = []Allowance{
 		Test:    "TestARestartSizesTheLogsAsTheFirstBootDid",
 		When:    Environment,
 		Why: "Needs a broker that can reserve 12 GiB plus a gibibyte. It is the only " +
-			"case that proves a restart divides the pool the first boot divided, which " +
-			"is a property of what the running streams hold and has no unit form.",
+			"case that proves a restart divides the pool the first boot divided on a " +
+			"broker that states its limit, which is a property of what the running " +
+			"streams hold and has no unit form; the free-space fallback's has one.",
 	},
 	{
 		Package: "internal/engine",

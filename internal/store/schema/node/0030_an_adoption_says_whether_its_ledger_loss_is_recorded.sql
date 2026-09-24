@@ -1,0 +1,21 @@
+-- An adoption row says whether the ledger loss it stands for is recorded.
+--
+-- # What changed
+--
+-- A domain's operation ledger used to be scrubbed out of every donated
+-- snapshot, and this table was the bound on it: nothing minted before the
+-- latest adoption could be vouched for, because the ledger that would say
+-- whether it had applied arrived empty. The ledger travels now, and a
+-- watermark beside it in the replicated estate (`statelog_ops_lost`) says how
+-- far back it may have lost rows — which a join from a donor that still
+-- scrubs writes into the artefact itself, before installing it.
+--
+-- # Why a column rather than nothing
+--
+-- Every row written before this migration is an adoption whose ledger WAS
+-- scrubbed, on a node whose watermark does not say so. The engine folds those
+-- rows into the watermark once, at boot, and marks them here so it never
+-- folds them again; a row this build writes is marked from the start, because
+-- its join recorded the loss in the file. DEFAULT 0 is what makes every
+-- earlier row one to fold.
+ALTER TABLE statelog_adoption ADD COLUMN ledger_folded INTEGER NOT NULL DEFAULT 0;

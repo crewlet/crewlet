@@ -145,6 +145,11 @@ func TestRemovingASubtreeIsReversibleAndBringsBackOnlyWhatItTook(t *testing.T) {
 //
 // A subtree removal that half-finished has to be able to be re-run, so
 // "already in the state you asked for" is a success rather than a conflict.
+// A restore is the same for a root already back with tasks still in the trash
+// behind it — that is exactly what a stopped restore leaves — and for its own
+// operation answered again; a NEW restore of a live task with nothing behind
+// it is told there is nothing to restore rather than that it restored
+// something (see TestARestoreWithNothingToBringBackSaysSo).
 func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -163,10 +168,10 @@ func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	if !removed(t, r, "t-twice") {
 		t.Fatal("the task is not removed after two removals")
 	}
-	for _, op := range []string{"op-c", "op-d"} {
-		if _, err := r.writer.RestoreTask(t.Context(), op, "t-twice", "ENG",
+	for range 2 {
+		if _, err := r.writer.RestoreTask(t.Context(), "op-c", "t-twice", "ENG",
 			nil); err != nil {
-			t.Fatalf("RestoreTask %s: %v", op, err)
+			t.Fatalf("RestoreTask op-c: %v", err)
 		}
 		r.drain()
 	}
@@ -195,6 +200,10 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 	}
 	r.drain()
 
+	// THE APPLIER RUNS, because a move with a subtree writes the root's
+	// own subject twice — its move, and the mark coming down after the
+	// walk — and the second waits for the first. See applyWhileWriting.
+	r.applyWhileWriting()
 	if _, err := r.writer.CreateTask(t.Context(), "op-root",
 		newTask("m-root"), nil); err != nil {
 		t.Fatalf("CreateTask root: %v", err)

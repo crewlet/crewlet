@@ -3,9 +3,11 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -39,18 +41,42 @@ import (
 // every task filed under it out of reach — a data loss with a typo as its
 // trigger. What the chart stops naming simply stops being reconciled.
 //
+// # The epoch is the ACTIVATION's instant
+//
+// activatedAt is when the configuration this chart came from was activated —
+// the instant on the fleet's activation pointer, which every node reads and a
+// node keeps as its active revision's `activated_at` — and it is the project's
+// epoch ([configplane.ActivationStamp]). Never the apply's own clock: every node applies one
+// activation separately, at its reconcile tick and again at every boot, so an
+// instant read there differs on every one of them and both things the epoch is
+// for stop working. A node that boots on a stale revision stamps NOW and walks
+// the fleet's newer names back to its own old ones, and no second apply ever
+// carries the epoch the first stamped, so every apply on every node is a
+// record per project for a value nobody changed. The zero instant is refused
+// ([ErrNoChartActivation]): there is no honest default, and a caller holding
+// no activation has no chart to apply.
+//
 // # Idempotence, and why it is per project
 //
 // Each project is its own append on its own subject, so N nodes running this
-// at once contend per project and exactly one wins each; the losers see the
-// value they wanted already there and write nothing. `epoch` is the config
-// revision this chart came from: a project already stamped at or above it is
-// left alone, which is what makes a reconcile on every apply cost nothing
-// after the first node has done it.
+// at once contend per project and exactly one wins each; the losers re-decide
+// on the rows the winner wrote, see the value they wanted already there and
+// write nothing. A project already stamped ABOVE the epoch is left alone, and
+// one stamped AT it with the same three values is too — which is what makes a
+// reconcile on every apply and every boot cost nothing after the first node
+// has done it.
 //
 // It returns the projects it actually wrote, so a caller can log the change
-// rather than the attempt.
-func (w *Writer) ApplyChart(ctx context.Context, epoch int64, chart []ChartProject) ([]string, error) {
+// rather than the attempt; a write whose outcome is `unknown` is an error,
+// because the next apply is what retries it and the caller is the one that
+// says so.
+func (w *Writer) ApplyChart(ctx context.Context, activatedAt time.Time,
+	chart []ChartProject) ([]string, error) {
+
+	if activatedAt.IsZero() {
+		return nil, ErrNoChartActivation
+	}
+	epoch := configplane.ActivationStamp(activatedAt)
 	var wrote []string
 	for _, p := range chart {
 		if p.Key == "" {
@@ -80,6 +106,11 @@ type ChartProject struct {
 	Unit    string
 }
 
+// ErrNoChartActivation refuses a chart apply that does not name the activation
+// it came from. See [Writer.ApplyChart].
+var ErrNoChartActivation = errors.New("tracker: a chart apply must name the " +
+	"instant its configuration was activated")
+
 // applyChartProject writes one, or decides there is nothing to write.
 func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	p ChartProject) (bool, error) {
@@ -87,15 +118,24 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	subject := ProjectSubject(p.Key)
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
+	// THE WALL CLOCK for the mint and not the writer's own, which is the
+	// clock AUTHORED instants are stamped from and a test pins: the mint
+	// is compared with the ledger's watermark, which a sweep and a join
+	// set off the wall.
+	op := chartOpID(time.Now(), p.Key)
 	var changed bool
 
-	_, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     chartOpID(epoch, p.Key),
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+	result, err := w.published(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    op,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// RESET ON EVERY ROUND. A round that decided to write and
+			// lost the broker's arbitration is followed by one that
+			// finds the winner's value already there, and only the
+			// last round says what this call did.
+			changed = false
 			current, held, err := readProject(ctx, tx, p.Key)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -128,12 +168,12 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 			next.UpdatedAt = at
 			changed = true
 
-			op, kind := OpPatch, ChangeProjectUpdated
+			verb, kind := OpPatch, ChangeProjectUpdated
 			if !held {
-				op, kind = OpCreate, ChangeProjectCreated
+				verb, kind = OpCreate, ChangeProjectCreated
 			}
-			decision, err := w.decide(subject, op, kind, scope,
-				chartOpID(epoch, p.Key), next, nil, at)
+			decision, err := w.decide(stamp, subject, verb, kind, scope,
+				op, next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -144,26 +184,32 @@ func (w *Writer) applyChartProject(ctx context.Context, epoch int64,
 	if err != nil {
 		return false, err
 	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return false, fmt.Errorf("tracker: whether project %s's chart landed "+
+			"is unknown (operation %s); the next apply decides it again", p.Key, op)
+	}
 	return changed, nil
 }
 
 // chartOpID is the operation id one project's chart apply writes under.
 //
-// DERIVED FROM THE EPOCH AND THE KEY, so every node applying one revision
-// mints the same id for one project: the ledger then collapses the N-1 that
-// lost the broker's arbitration into a no-op rather than leaving each node to
-// discover it separately. It is deliberately NOT time-based — a reconcile runs
-// on every apply and on every boot, and a fresh id per run would make each of
-// those a new operation to be deduped by nothing.
-func chartOpID(epoch int64, key string) string {
-	return fmt.Sprintf("chart:%d:%s", epoch, key)
-}
-
-// ChartEpochOf is the epoch a config revision's chart apply stamps.
+// FRESH PER APPLY, minted at the apply's own instant, because a chart apply
+// is a RECONCILE rather than an operation a retry has to be matched to: it
+// decides from the project's rows what, if anything, is left to write, so a
+// second apply of one activation — on another node, at the next boot, after a
+// lost acknowledgement — finds its value there and writes nothing, and N nodes
+// racing one activation are settled by the broker's arbitration with the
+// losers re-deciding on the winner's rows. None of that needs the ledger.
 //
-// THE REVISION'S OWN TIMESTAMP in Unix seconds rather than a counter, because
-// the value has to be comparable across nodes that learned about the revision
-// separately and monotone in the order revisions were activated. A counter
-// would need a home, and the one home it could have — the coordination
-// pointer's revision — is not a number every reader of a project row has.
-func ChartEpochOf(activatedAt time.Time) int64 { return activatedAt.UTC().Unix() }
+// An id DERIVED FROM THE ACTIVATION would put the ledger in charge instead,
+// and its instant would be the activation's. Once that is older than the
+// ledger's retention — a company whose configuration has not changed for a
+// month, which is most of them — the ledger can no longer vouch for it, and
+// every boot of every node would have every project's apply answered
+// `unknown` without being decided. And the ledger would answer a SECOND apply
+// of one activation from the first's row rather than re-reading the project,
+// so a project an older chart walked back at an equal epoch could never be
+// set right by the activation that is actually current.
+func chartOpID(at time.Time, key string) string {
+	return statelog.NewOpID(at, "chart-"+key)
+}

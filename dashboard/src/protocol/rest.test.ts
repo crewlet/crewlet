@@ -65,6 +65,44 @@ test("a request that never answers is abandoned rather than awaited", async () =
   vi.useRealTimers();
 });
 
+// A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
+//
+// The node gate is allowed a minute from its first record to its last answer,
+// and the fixed thirty seconds gave up on a gesture the node went on to finish.
+// A per-call deadline replaces the default for that call only — it is not
+// abandoned at the default, it IS abandoned at its own, and the sentence says
+// which deadline ran out rather than the default's.
+test("a per-call deadline replaces the default for that call", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+
+  let done = false;
+  const settled = rest
+    .request("POST", "/work/retention/evict/node-4", { body: {}, timeoutMs: 75_000 })
+    .catch((err: unknown) => err)
+    .finally(() => {
+      done = true;
+    });
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+  expect(done).toBe(false);
+
+  await vi.advanceTimersByTimeAsync(75_000 - REQUEST_TIMEOUT_MS);
+  const err = await settled;
+  expect(err).toBeInstanceOf(RestError);
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).detail).toContain("within 75 seconds");
+});
+
 describe("the whole answer", () => {
   // THE TAG IS THE WRITE'S PRECONDITION. The config surface stamps a document
   // with its revision as an entity-tag, and a transport that returned only
@@ -274,5 +312,64 @@ describe("a body that never arrives whole", () => {
     expect(err).toBeInstanceOf(RestError);
     expect((err as RestError).status).toBe(0);
     expect((err as RestError).detail).toContain("did not answer");
+  });
+});
+
+// ONLY AN ANSWER WITH AN ENGINE ERROR CODE IS THE ENGINE'S REFUSAL. Every
+// refusal it writes is JSON with an `error` code, so a gateway's page, a JSON
+// body of a proxy's own, or a 200 cut off part way through is something else —
+// and a write's caller reading one as a refusal dropped the operation id of a
+// gesture the engine went on to finish.
+describe("whether an answer is the engine's own", () => {
+  const cases: [string, () => Response, boolean][] = [
+    ["an engine refusal", () => json({ error: "eviction_refused", detail: "live" }, 409), false],
+    ["the guard's own 401", () => json({ error: "invalid_token" }, 401), false],
+    [
+      "the router's own 404 for a route this node does not serve",
+      () => json({ error: "no_route", detail: "this node serves nothing at POST /x" }, 404),
+      false,
+    ],
+    ["the router's own 405", () => json({ error: "method_not_allowed" }, 405), false],
+    [
+      "a gateway timeout's page",
+      () =>
+        new Response("<html><h1>504 Gateway Time-out</h1></html>", {
+          status: 504,
+          headers: { "Content-Type": "text/html" },
+        }),
+      true,
+    ],
+    ["a proxy's own JSON", () => json({ message: "upstream closed" }, 502), true],
+    [
+      "a 200 cut off part way through",
+      () =>
+        new Response('{"node":"node-4","op_id":"01a0', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      true,
+    ],
+  ];
+  for (const [name, respond, unanswered] of cases) {
+    test(`${name} is ${unanswered ? "not " : ""}the engine's answer`, async () => {
+      stub(respond);
+      const err = await rest
+        .request("POST", "/work/retention/evict/node-4")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RestError);
+      expect((err as RestError).unanswered).toBe(unanswered);
+    });
+  }
+
+  test("a request nothing answered is not the engine's answer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const err = await rest.request("POST", "/work/retention/evict/node-4").catch((e: unknown) => e);
+    expect((err as RestError).status).toBe(0);
+    expect((err as RestError).unanswered).toBe(true);
   });
 });

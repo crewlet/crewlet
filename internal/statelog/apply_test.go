@@ -90,12 +90,22 @@ func (a *probeApplier) seen() []statelog.Position {
 }
 
 // probeFetch hands the loop whatever the test queued, and records what was
-// acknowledged.
+// acknowledged. It is the log read by POSITION as well ([statelog.CheckpointLog]):
+// every record ever offered stays readable at its sequence, the way a stream
+// keeps what a consumer has delivered.
 type probeFetch struct {
 	mu      sync.Mutex
 	queue   []statelog.Message
 	acked   map[uint64]int
 	fetches int
+
+	// log is every record offered, by sequence — a later offer at a
+	// sequence REPLACES the earlier one, which is what a broker restored
+	// from an older copy and written past a node's rows looks like from
+	// that node — and end, when set, the last sequence Bounds reports in
+	// place of the highest offered one.
+	log map[uint64]statelog.Message
+	end *uint64
 
 	// withhold is how many queued records the broker keeps back from
 	// every fetch while still counting them as pending — which is what a
@@ -125,19 +135,34 @@ func (f *probeFetch) afterFetch(n int, hook func()) {
 	f.after[n] = hook
 }
 
-func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
+func newProbeFetch() *probeFetch {
+	return &probeFetch{acked: map[uint64]int{}, log: map[uint64]statelog.Message{}}
+}
+
+// probeStoredAt is the broker instant the probe log stamps the record at seq
+// with.
+func probeStoredAt(seq uint64) time.Time {
+	return time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second)
+}
 
 // offer queues one record at seq, encoded as the probe domain's envelope.
 func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
+	f.offerStored(seq, probeStoredAt(seq), env)
+}
+
+// offerStored is [probeFetch.offer] with the broker instant named: a record at
+// seq the broker stored at another moment than the one first offered there is
+// ANOTHER record at that sequence.
+func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.Envelope) {
 	body, err := json.Marshal(env)
 	if err != nil {
 		panic(err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.queue = append(f.queue, statelog.Message{
+	m := statelog.Message{
 		Seq:      seq,
-		StoredAt: time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second),
+		StoredAt: storedAt,
 		Payload:  body,
 		Ack: func() error {
 			f.mu.Lock()
@@ -145,7 +170,55 @@ func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 			f.acked[seq]++
 			return nil
 		},
-	})
+	}
+	f.queue = append(f.queue, m)
+	f.log[seq] = m
+}
+
+// rewrite replaces what the log holds at seq with another record, WITHOUT
+// delivering it — the log as a node finds it after a broker was restored from
+// an older copy and written past that node's rows.
+func (f *probeFetch) rewrite(seq uint64, storedAt time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.log[seq]
+	m.Seq, m.StoredAt = seq, storedAt
+	f.log[seq] = m
+}
+
+// endAt makes Bounds report last as the log's end, whatever was offered.
+func (f *probeFetch) endAt(last uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.end = &last
+}
+
+// Bounds is the lowest and highest sequence ever offered, or the end endAt set.
+func (f *probeFetch) Bounds(context.Context) (uint64, uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var first, last uint64
+	for seq := range f.log {
+		if first == 0 || seq < first {
+			first = seq
+		}
+		last = max(last, seq)
+	}
+	if f.end != nil {
+		last = *f.end
+	}
+	return first, last, nil
+}
+
+// At is the record the log holds at seq.
+func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, held := f.log[seq]
+	if !held {
+		return "", nil, time.Time{}, false, nil
+	}
+	return "probe", m.Payload, m.StoredAt, true, nil
 }
 
 // Fetch waits for the queue the way a real pull consumer waits for its
@@ -262,8 +335,10 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		Domain:     domain,
 		Applier:    applier,
 		Fetch:      fetch,
+		Log:        fetch,
+		Node:       db,
 		DB:         db.Replicated(),
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    recorder,
 	})
 	if err != nil {
@@ -294,19 +369,42 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		h.t.Fatalf("recorder: %v", err)
 	}
 	h.metrics = recorder
+	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a restarting
+	// node's runner — generation 1 on a node that never committed.
+	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(),
+		domain.Stream().Name)
+	if err != nil {
+		h.t.Fatalf("read the checkpoint: %v", err)
+	}
+	if !found {
+		checkpoint.At.Generation = 1
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:          domain,
-		Applier:         h.applier,
-		Fetch:           h.fetch,
-		DB:              h.db.Replicated(),
-		Generation:      1,
-		StreamCreatedAt: created,
-		Metrics:         recorder,
+		Domain:             domain,
+		Applier:            h.applier,
+		Fetch:              h.fetch,
+		Log:                h.fetch,
+		Node:               h.db,
+		DB:                 h.db.Replicated(),
+		Checkpoint:         checkpoint.At,
+		CheckpointStoredAt: checkpoint.StoredAt,
+		StreamCreatedAt:    created,
+		Metrics:            recorder,
 	})
 	if err != nil {
 		h.t.Fatalf("NewRunner: %v", err)
 	}
 	h.runner = runner
+}
+
+// ledgerHolds reports whether this node's operation ledger holds opID.
+func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
+	var count int64
+	err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM probe_ops WHERE op_id = ?`, opID).Scan(&count)
+	})
+	return count > 0, err
 }
 
 // retainedCount is how many records this node still holds that it could not
@@ -375,7 +473,8 @@ CREATE TABLE probe_ops (
     op_id      TEXT    NOT NULL PRIMARY KEY,
     subject    TEXT    NOT NULL,
     position   INTEGER NOT NULL,
-    applied_at INTEGER NOT NULL
+    applied_at INTEGER NOT NULL,
+    stored_at  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX probe_ops_swept_idx ON probe_ops (applied_at);
 CREATE TABLE probe_log_deferred (
@@ -737,6 +836,11 @@ func TestARecordThatInstallsAGateStopsRatherThanDefers(t *testing.T) {
 type gatingDomain struct{ probeDomain }
 
 func (gatingDomain) InstallsGate(env statelog.Envelope) bool {
+	return env.Kind == "eviction"
+}
+
+// NodeGate answers that same eviction record is a node's.
+func (gatingDomain) NodeGate(env statelog.Envelope) bool {
 	return env.Kind == "eviction"
 }
 
@@ -1229,7 +1333,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 	if err := h.run(6); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || !held {
+	if held, err := h.ledgerHolds("op-3"); err != nil || !held {
 		t.Fatalf("op-3 is not in the ledger after applying it (held=%v, %v)",
 			held, err)
 	}
@@ -1244,7 +1348,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 	if swept != 6 {
 		t.Errorf("the sweep deleted %d of 6 operation rows", swept)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || held {
+	if held, err := h.ledgerHolds("op-3"); err != nil || held {
 		t.Errorf("op-3 survived a sweep past its own instant (held=%v, %v)",
 			held, err)
 	}
@@ -1264,7 +1368,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 		t.Errorf("a sweep at the real horizon deleted %d row(s) written "+
 			"moments ago", swept)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-7"); err != nil || !held {
+	if held, err := h.ledgerHolds("op-7"); err != nil || !held {
 		t.Errorf("op-7 was swept inside its own retention (held=%v, %v)",
 			held, err)
 	}
@@ -1645,6 +1749,9 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 	if err := h.runner.Stopped(); err != nil {
 		t.Fatalf("the same stream stopped the applier: %v", err)
 	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("the same stream reads as a foreign one: %v", err)
+	}
 
 	// A DIFFERENT STREAM WEARING THE SAME NAME.
 	h.rebuild(probeDomain{}, born.Add(time.Hour))
@@ -1659,11 +1766,251 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 		t.Fatal("the applier does not report itself stopped, so its health would " +
 			"not refuse and its seats would not move")
 	}
+	// AND THE PUBLISHER BESIDE IT KNOWS: a stop ends this loop, and the
+	// write path never reads a loop's error — it asks the identity, which
+	// has to carry this same finding or every write goes on landing on a
+	// log this node's rows are not keyed to.
+	if identity := h.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity after the boot found a recreated stream = %v, "+
+			"want %v — the writes would not refuse", identity, statelog.ErrStreamRecreated)
+	}
 	if !strings.Contains(err.Error(), "reanchor") {
 		t.Fatalf("the stop does not name the verb that repairs it: %v", err)
 	}
 	if got := h.runner.Committed().Seq; got != 2 {
 		t.Fatalf("the checkpoint moved to %d on a stopped applier", got)
+	}
+}
+
+// A LIVE READING OF A REBUILT LOG IS THE RUNNER'S VERDICT, and it outlives the
+// loop that was running when it was taken.
+//
+// The boot compares the checkpoint once; a stream deleted and rebuilt under a
+// running node is seen only by a later read of the stream's state, and every
+// such read hands its instant here. Three properties make that the one answer
+// the reads and the writes can share: a reading of the SAME stream at the
+// broker's finer resolution establishes nothing, a reading that could not be
+// taken establishes nothing, and a rebuild, once established, is not cleared by
+// a run that starts again — a stop is a verdict about rows an adoption may
+// replace, and this is a verdict about the positions the runner was built on.
+func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for name, live := range map[string]time.Time{
+		"the same stream at a finer resolution": born.Add(100 * time.Nanosecond),
+		"a reading that could not be taken":     {},
+	} {
+		if h.runner.ObserveStream(live) {
+			t.Fatalf("%s established a rebuild", name)
+		}
+		if err := h.runner.StreamIdentity(); err != nil {
+			t.Fatalf("after %s the identity is %v, want the live stream — a "+
+				"node that read its own stream as foreign would refuse every "+
+				"write it makes", name, err)
+		}
+	}
+
+	rebuiltAt := born.Add(time.Hour)
+	if !h.runner.ObserveStream(rebuiltAt) {
+		t.Fatal("a reading of a stream created an hour later did not establish " +
+			"a rebuild")
+	}
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity = %v, want %v", identity, statelog.ErrStreamRecreated)
+	}
+	for _, want := range []string{
+		born.Format(time.RFC3339Nano), rebuiltAt.Format(time.RFC3339Nano), "reanchor",
+	} {
+		if !strings.Contains(identity.Error(), want) {
+			t.Errorf("the refusal %q does not name %q — an operator needs both "+
+				"instants and the verb that follows the new stream", identity, want)
+		}
+	}
+
+	// ESTABLISHED ONCE: a second reading reports nothing new, so the
+	// line that names the rebuild is written once rather than per beat.
+	if h.runner.ObserveStream(rebuiltAt) {
+		t.Fatal("a second reading of the same rebuild reported it again")
+	}
+	// AND A RUN THAT STARTS AGAIN DOES NOT FORGET IT. The loop restarts
+	// after an adoption; the positions it was built on do not change.
+	if err := h.boot(0); err != nil {
+		t.Fatalf("run again: %v", err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
+		t.Fatal("a re-run cleared the rebuild, so the writes would start " +
+			"landing on it again")
+	}
+	// NOR DOES IT APPLY FROM THE REBUILT STREAM. The checkpoint row still
+	// names the instant the runner was built with, so the boot comparison
+	// passes — and a loop that resumed would apply the rebuilt stream's
+	// records into rows keyed to the one before it. It stops instead, on
+	// the verdict it already holds, exactly as a boot on that stream does.
+	if stopped := h.runner.Stopped(); !errors.Is(stopped, statelog.ErrStreamRecreated) {
+		t.Fatalf("a re-run over an established rebuild reports %v, want the "+
+			"recreation stop", stopped)
+	}
+}
+
+// A CHECKPOINT PAST THE LOG'S END IS THE RUNNER'S VERDICT FOR AS LONG AS THE
+// END STAYS BELOW IT — and no longer, and not on a reading that says nothing
+// about it.
+//
+// A broker restored from an older copy keeps its creation instant, so the
+// rebuild check above never fires, and the only thing that shows it is the log
+// ending below this node's checkpoint. Fence 0 refuses every write on this
+// verdict, so each of its rules is a way a node either goes on publishing
+// records its own applier has already passed, or stops writing for good:
+//
+//   - a reading AT the end is a caught-up node, and one past it a busy one;
+//     neither establishes anything;
+//   - a reading paired with a LOWER checkpoint — the zero a runner reports
+//     before its loop has loaded the row, which is what the first heartbeat of
+//     a boot reads — does not clear it;
+//   - a run that starts again over the same checkpoint keeps it;
+//   - an end that has reached the checkpoint clears it, because an end below
+//     it may be one member's stale answer, and a verdict nothing could clear
+//     would stop a healthy node's writes over one election;
+//   - a checkpoint the runner no longer stands at — a re-run over an adopted
+//     snapshot — drops it.
+func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 3; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	at := h.runner.Committed()
+	unloaded := statelog.Position{Stream: at.Stream, Generation: at.Generation}
+
+	for name, last := range map[string]uint64{
+		"a reading at the end": 3,
+		"a reading past it":    10,
+	} {
+		if established, reached := h.runner.ObserveEnd(at, last); established || reached {
+			t.Fatalf("%s changed the verdict (established %v, reached %v)",
+				name, established, reached)
+		}
+		if err := h.runner.StreamIdentity(); err != nil {
+			t.Fatalf("after %s the identity is %v — a caught-up node would "+
+				"refuse every write it makes", name, err)
+		}
+	}
+
+	if established, _ := h.runner.ObserveEnd(at, 2); !established {
+		t.Fatal("a log ending at 2 under a checkpoint of 3 did not establish " +
+			"anything, so fence 0 would let every ordinary write through")
+	}
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrAheadOfLog) {
+		t.Fatalf("StreamIdentity = %v, want %v", identity, statelog.ErrAheadOfLog)
+	}
+	if errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity = %v names a rebuild — a broker restored from "+
+			"an older copy kept its stream, and naming a rebuild sends an "+
+			"operator looking for a delete that never happened", identity)
+	}
+	for _, want := range []string{"at sequence 3", "ends at 2", "reanchor"} {
+		if !strings.Contains(identity.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", identity, want)
+		}
+	}
+	if established, _ := h.runner.ObserveEnd(at, 2); established {
+		t.Fatal("a second reading of the same state reported it again, so the " +
+			"line naming it would be written on every beat")
+	}
+
+	if established, reached := h.runner.ObserveEnd(unloaded, 2); established || reached {
+		t.Fatalf("a reading paired with an unloaded checkpoint changed the verdict "+
+			"(established %v, reached %v)", established, reached)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrAheadOfLog) {
+		t.Fatal("a reading paired with the zero a runner reports before it loads " +
+			"its row cleared the verdict — the first heartbeat of every boot " +
+			"would reopen the writes a restored broker must refuse")
+	}
+
+	// A RUN THAT STARTS AGAIN OVER THE SAME CHECKPOINT keeps it: the
+	// record it applies is only there to prove the loop loaded the row.
+	h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
+	if err := h.run(4); err != nil {
+		t.Fatalf("run again: %v", err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrAheadOfLog) {
+		t.Fatal("a re-run over the same checkpoint cleared the verdict")
+	}
+
+	// THE END REACHING THE CHECKPOINT the verdict names clears it, once.
+	if _, reached := h.runner.ObserveEnd(unloaded, 3); !reached {
+		t.Fatal("an end that reached the checkpoint did not clear the verdict — " +
+			"one stale member's answer would stop this node's writes for good")
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after the end reached the checkpoint the identity is %v", err)
+	}
+	if _, reached := h.runner.ObserveEnd(unloaded, 3); reached {
+		t.Fatal("the end reaching the checkpoint was reported twice")
+	}
+
+	// A CHECKPOINT THIS RUNNER NO LONGER STANDS AT drops the verdict: the
+	// row is rewritten to a donor's position below the log's end, naming the
+	// log's own record there, as an adoption leaves it, and the loop loads it.
+	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
+		t.Fatal("the verdict was not re-established for the adoption case")
+	}
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE statelog_cursor SET seq = 1, stored_at = ? WHERE stream = ?`,
+			store.EncodeTime(probeStoredAt(1)), probeStream)
+		return err
+	}); err != nil {
+		t.Fatalf("rewrite the checkpoint: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	for h.runner.Committed().Seq != 1 && ctx.Err() == nil {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-errs
+	if got := h.runner.Committed().Seq; got != 1 {
+		t.Fatalf("the loop loaded checkpoint %d, want the adopted 1", got)
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after adopting a checkpoint below the log's end the identity is "+
+			"%v — a verdict about a position the runner left would refuse every "+
+			"write until the log happened to reach it", err)
+	}
+}
+
+// A REBUILD OUTRANKS A CHECKPOINT PAST THE END: it is permanent where the other
+// clears, and it is the finding an operator has to act on first.
+func TestARebuildOutranksACheckpointPastTheEnd(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h.runner.ObserveEnd(h.runner.Committed(), 0)
+	h.runner.ObserveStream(born.Add(time.Hour))
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrStreamRecreated) || errors.Is(identity, statelog.ErrAheadOfLog) {
+		t.Fatalf("StreamIdentity = %v, want the rebuild alone", identity)
 	}
 }
 
@@ -1856,8 +2203,10 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 		Domain:     probeDomain{},
 		Applier:    h.applier,
 		Fetch:      h.fetch,
+		Log:        h.fetch,
+		Node:       h.db,
 		DB:         flaky,
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 	})
 	if err != nil {
@@ -1978,4 +2327,73 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("waited 15s for %s: Drained() = %v", what, h.runner.Drained())
+}
+
+// THE SWEEP RECORDS HOW FAR BACK IT FORGOT, and only when it forgot anything.
+//
+// The ledger's silence about an operation means "it never applied here" only
+// where the sweep has not deleted the row that would have said otherwise, so
+// the publisher reads this record before it trusts that silence. A watermark
+// that trailed the rows actually deleted would re-decide an operation that
+// already landed; one written by a pass that deleted nothing would refuse
+// operations whose rows are all still here.
+func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	rows, err := statelog.NewRows(h.db, probeDomain{}, nil)
+	if err != nil {
+		t.Fatalf("build the read seam: %v", err)
+	}
+	swept := func() (time.Time, bool) {
+		t.Helper()
+		before, ok, err := rows.LostBefore(t.Context())
+		if err != nil {
+			t.Fatalf("read the sweep record: %v", err)
+		}
+		return before, ok
+	}
+	seed := func(appliedAt time.Time) {
+		t.Helper()
+		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `
+				INSERT INTO probe_ops (op_id, subject, position, applied_at)
+				VALUES (?, 'probe.o1', 1, ?)`,
+				fmt.Sprintf("op-%d", appliedAt.UnixNano()),
+				store.EncodeTime(appliedAt))
+			return err
+		}); err != nil {
+			t.Fatalf("seed the ledger: %v", err)
+		}
+	}
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	// A PASS THAT DELETED NOTHING FORGOT NOTHING.
+	seed(day)
+	if _, err := h.runner.PurgeOps(t.Context(), day); err != nil {
+		t.Fatalf("PurgeOps: %v", err)
+	}
+	if before, ok := swept(); ok {
+		t.Fatalf("a sweep that deleted nothing recorded %s — every operation "+
+			"minted before it is then refused although its row is here", before)
+	}
+
+	// A PASS THAT DELETED A ROW records its cutoff.
+	cutoff := day.Add(time.Hour)
+	if n, err := h.runner.PurgeOps(t.Context(), cutoff); err != nil || n != 1 {
+		t.Fatalf("PurgeOps = (%d, %v), want the one row", n, err)
+	}
+	if before, ok := swept(); !ok || !before.Equal(cutoff) {
+		t.Fatalf("the sweep record = (%s, %v), want %s — an operation minted "+
+			"before it whose row it deleted is decided again", before, ok, cutoff)
+	}
+
+	// AND IT NEVER MOVES BACK: a later pass with an earlier cutoff — a
+	// clock stepped back — does not un-forget what the first deleted.
+	seed(day.Add(-time.Hour))
+	if n, err := h.runner.PurgeOps(t.Context(), day); err != nil || n != 1 {
+		t.Fatalf("PurgeOps = (%d, %v), want the one row", n, err)
+	}
+	if before, _ := swept(); !before.Equal(cutoff) {
+		t.Fatalf("the sweep record moved back to %s from %s", before, cutoff)
+	}
 }

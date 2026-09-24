@@ -15,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -476,6 +478,95 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	}
 }
 
+// A TARGET ONLY THE GATE RESERVE IS ABOVE THE USAGE IS A FULL LOG TOO.
+//
+// Ordinary writes on a log that claims identity are refused at the target less
+// its gate reserve, so a target that clears the usage by less than the reserve
+// was carried through three restarts to a log that refused every ordinary
+// append the moment it applied — which is what refusing a target at the usage
+// exists to prevent, measured against the wrong line. A log that keeps no
+// reserve is still measured against its whole ceiling, and the target the
+// refusal names is exact: it opens, and a byte less does not.
+func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
+	ctx := context.Background()
+	current := jetstream.LogStats{Bytes: 15 << 30, MaxBytes: 32 << 30}
+	const target = 16 << 30 // a sixteenth of it is the reserve: 15 GiB left
+
+	open := func(stream string, target uint64) error {
+		e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		_, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: target, By: "ops-3",
+		}, current, unstatedRoom)
+		return err
+	}
+	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
+		stream := domain.Stream().Name
+		err := open(stream, target)
+		if err == nil {
+			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
+				"its ordinary writes are held to %d and would all be refused",
+				uint64(target), stream, current.Bytes,
+				statelog.OrdinaryCeiling(target, true))
+		}
+		least := smallestTargetAbove(current.Bytes, true)
+		for _, want := range []string{
+			"holds 16106127360 bytes", "ordinary writes are held to 16106127360",
+			fmt.Sprintf("at least %d bytes", least),
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal on %s does not say %q: %v", stream, want, err)
+			}
+		}
+		if err := open(stream, least); err != nil {
+			t.Errorf("the target the refusal named, %d, was refused on %s: %v",
+				least, stream, err)
+		}
+		if err := open(stream, least-1); err == nil {
+			t.Errorf("a byte under the target the refusal named was accepted on "+
+				"%s, so the number it tells an operator to type is not the "+
+				"least that works", stream)
+		}
+	}
+	if err := open(search.Domain{}.Stream().Name, target); err != nil {
+		t.Errorf("the vector changelog keeps no reserve, and a target above what "+
+			"it holds was refused: %v", err)
+	}
+}
+
+// A TARGET UNDER THE FLOOR IS REFUSED ON EVERY LOG, whatever it holds.
+//
+// Tier A refuses an explicit ceiling below a gibibyte and the division of the
+// broker's budget never scales one below it; the capacity verb was the one way
+// round both. And on a log that claims identity the floor is what the gate
+// reserve is sized against, so a smaller ceiling keeps too small a reserve for
+// the appends in flight it has to absorb.
+func TestATargetUnderTheFloorIsRefused(t *testing.T) {
+	ctx := context.Background()
+	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
+	for _, domain := range registeredDomains() {
+		stream := domain.Stream().Name
+		e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		_, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling) - 1, By: "ops-3",
+		}, current, unstatedRoom)
+		if err == nil {
+			t.Fatalf("a target a byte under the floor was accepted on %s", stream)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("at least %d bytes", MinDomainCeiling)) {
+			t.Errorf("the refusal on %s does not name the floor: %v", stream, err)
+		}
+		if op, found, _ := fleet.Maintenance(ctx, stream); found {
+			t.Fatalf("a window was opened anyway on %s: %+v", stream, op)
+		}
+		e, _ = capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		if _, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling), By: "ops-3",
+		}, current, unstatedRoom); err != nil {
+			t.Errorf("a target at the floor was refused on %s: %v", stream, err)
+		}
+	}
+}
+
 // unstatedRoom is a broker that states no limit this node can read, which
 // holds no target back.
 var unstatedRoom = jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated}
@@ -623,35 +714,46 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 	}
 }
 
-// TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard.
+// TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream.
 //
 // ONE DEFINITION, because the permission check counts these and the refusal
 // names them: if the two disagreed, a reanchor would refuse naming nobody, or
 // permit while naming someone.
-func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T) {
+func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
 	rows := []coord.NodePositions{
 		{NodeID: "self", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 900},
+		}},
+		// A PEER STILL AT THIS NODE'S GENERATION is on the stream this
+		// node's rows came from — however much it applied there — and is
+		// the most-caught-up rule's to weigh, never a refusal of its own:
+		// counted here, every peer on a lost stream refused every reanchor.
+		{NodeID: "on-the-lost-stream", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 3, AppliedThrough: 900},
 		}},
-		{NodeID: "hydrated", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 900},
-		}},
-		{NodeID: "on-the-old-stream", Domains: map[string]coord.DomainPosition{
+		{NodeID: "behind-a-reanchor", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 2, AppliedThrough: 900},
 		}},
-		{NodeID: "applied-nothing", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 0},
+		// A PEER THAT HAS ALREADY RE-ANCHORED this stream holds the fleet's
+		// history in that generation, whatever it has applied since.
+		{NodeID: "already-reanchored", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 12},
+		}},
+		{NodeID: "reanchored-onto-an-empty-log", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 0},
 		}},
 		{NodeID: "runs-another-domain", Domains: map[string]coord.DomainPosition{
-			"vectors": {Generation: 3, AppliedThrough: 900},
+			"vectors": {Generation: 9, AppliedThrough: 900},
 		}},
 	}
-	got := hydratedPeers(rows, "tracker", 3, "self")
-	if len(got) != 1 || got[0] != "hydrated" {
-		t.Fatalf("hydrated peers = %v, want exactly [hydrated]: this node is "+
-			"not its own peer, a peer at another generation is on the stream "+
-			"being replaced, and one that has applied nothing holds no history",
-			got)
+	got := reanchoredPeers(rows, "tracker", 3, "self", nil)
+	want := []string{"already-reanchored", "reanchored-onto-an-empty-log"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("re-anchored peers = %v, want exactly %v: this node is not its own "+
+			"peer, a peer at this node's generation or an earlier one has not "+
+			"re-anchored the stream, and one at a LATER generation has — a second "+
+			"independent reanchor would keep a different prefix under the same "+
+			"number", got, want)
 	}
 }
 
@@ -754,11 +856,11 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	domain := tracker.Domain{}
 	e.backends.Queue = host
-	e.native = &native{log: &stateLog{
+	e.native.Store(&native{log: &stateLog{
 		order:   []string{domain.Name()},
 		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
 		volume:  t.TempDir(),
-	}}
+	}})
 	return e, fleet, domain.Stream().Name
 }
 

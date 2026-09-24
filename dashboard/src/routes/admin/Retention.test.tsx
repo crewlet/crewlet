@@ -6,17 +6,23 @@
  * a log does not: an operator acts on what the tile says, and a zero where the
  * answer is "nobody has said" is a lie they will believe.
  *
- * The write-outcome cases are step 16's: `pending` is durable-but-unapplied,
- * and rendering it as success is the browser half of the lie the
- * durable-versus-applied split exists to prevent.
+ * The gate dialog's own cases — the write outcome, the operation id it mints
+ * and finishes under, force — are in GateDialog.test.tsx.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { GateDialog, GateOutcome } from "./GateDialog.tsx";
-import { MaintenanceBanner, NodePositions, ServedLevelBanner, Terms } from "./Retention.tsx";
-import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import {
+  DomainBlock,
+  DomainSize,
+  gateAction,
+  MaintenanceBanner,
+  NodePositions,
+  ServedLevelBanner,
+  Terms,
+} from "./Retention.tsx";
+import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -47,7 +53,15 @@ test("a deferral renders as its own state rather than as lag", () => {
   render(
     <NodePositions
       node={node({
-        domains: { tracker: { generation: 1, seq: 90, applied_through: 41, deferred: 2 } },
+        domains: {
+          tracker: {
+            generation: 1,
+            seq: 90,
+            applied_through: 41,
+            deferred: 2,
+            generation_state: "current",
+          },
+        },
       })}
     />,
   );
@@ -59,7 +73,11 @@ test("a deferral renders as its own state rather than as lag", () => {
   cleanup();
   render(
     <NodePositions
-      node={node({ domains: { tracker: { generation: 1, seq: 90, applied_through: 90 } } })}
+      node={node({
+        domains: {
+          tracker: { generation: 1, seq: 90, applied_through: 90, generation_state: "current" },
+        },
+      })}
     />,
   );
   expect(screen.queryByText(/applied/)).toBeNull();
@@ -72,7 +90,11 @@ test("a deferral renders as its own state rather than as lag", () => {
 test("an unreadable lag renders as unknown rather than as caught up", () => {
   render(
     <NodePositions
-      node={node({ domains: { tracker: { generation: 1, seq: 90, applied_through: 90 } } })}
+      node={node({
+        domains: {
+          tracker: { generation: 1, seq: 90, applied_through: 90, generation_state: "current" },
+        },
+      })}
     />,
   );
   expect(screen.getByText("lag —")).toBeTruthy();
@@ -112,52 +134,35 @@ test("a blocked snapshot loop says so separately from the trim", () => {
   expect(screen.getByText(/insufficient_space/)).toBeTruthy();
 });
 
-// --- the write outcome, which is step 16's clause -------------------------
-
-// `applied` IS THE ONLY ONE THAT MEANS IT LANDED HERE.
-test("an applied gate renders as the confirmation", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "applied", position: { seq: 41 } }}
-      evict
-    />,
-  );
-  // THE TONE CLASS IS UILET'S NOW — `crewlet-callout--success` where our own
-  // banner spelled it `positive`. The invariant is unchanged: this outcome and
-  // the pending one must not draw the same colour.
-  expect(screen.getByRole("status").className).toContain("success");
+const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
+  domain: "tracker",
+  stream: "CREWLET_TRACKER_LOG",
+  generation: 0,
+  replay: "strict",
+  first_seq: 1,
+  last_seq: 90,
+  bytes: 1024 * 1024 * 1024,
+  max_bytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024,
+  trim_floor: 1,
+  trim_to: 1,
+  trim_floor_state: "published",
+  terms: [],
+  ...over,
 });
 
-// `pending` IS DURABLE AND UNRESOLVED, and it must be visually distinct from
-// the confirmed state: a chip that reads as a tick is precisely the lie.
-test("a pending gate is not rendered as success and not as a failure", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "pending", position: { seq: 41 } }}
-      evict
-    />,
-  );
-  const banner = screen.getByRole("status");
-  expect(banner.className).not.toContain("success");
-  expect(banner.className).toContain("warning");
-  // AND IT SAYS NOT TO RETRY, because the record is already on the log and a
-  // second gesture appends a second one.
-  expect(screen.getByText(/Retrying would append a second record/)).toBeTruthy();
-  expect(screen.getByText(/at sequence 41/)).toBeTruthy();
-});
+// 0% FREE ON A LOG THAT KEEPS A GATE RESERVE IS NOT A LOG NOTHING CAN TAKE.
+// Its ordinary writes are refused, and an eviction — the gesture that unpins
+// it — still lands in the reserve, so the reserve is drawn beside the
+// headroom. A log that keeps none draws no reserve rather than a zero one.
+test("a log's gate reserve is drawn beside its headroom, and only where it keeps one", () => {
+  render(<DomainSize domain={domain({ headroom_fraction: 0, reserve_bytes: 64 * 1024 * 1024 })} />);
+  expect(screen.getByText(/0% free/)).toBeTruthy();
+  expect(screen.getByText(/kept for evictions/)).toBeTruthy();
 
-// `unknown` IS THE ONE WHERE RETRYING IS CORRECT, so it is the one that
-// renders as a failure — and it carries the op id, because retrying with the
-// same one is what makes the retry idempotent.
-test("an unknown gate renders as the failure and names the op id", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "unknown", op_id: "op-7" }}
-      evict
-    />,
-  );
-  expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText("op-7")).toBeTruthy();
+  cleanup();
+  render(<DomainSize domain={domain({ domain: "vectors", headroom_fraction: 0.5 })} />);
+  expect(screen.getByText(/50% free/)).toBeTruthy();
+  expect(screen.queryByText(/kept for evictions/)).toBeNull();
 });
 
 // --- maintenance, which was visible on no screen at all -------------------
@@ -208,38 +213,6 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   expect(screen.queryByText(/Waiting on/)).toBeNull();
 });
 
-// THE TYPED CONFIRMATION HAS TO REACH THE SERVER.
-//
-// The server refuses an eviction unless `?confirm=` repeats the node id — the
-// same shape the destructive CLI gestures use. Checking it only in the browser
-// made the gesture unreachable from this dashboard for every node: the request
-// it sent carried no query at all, so every press was a 400 and the dialog
-// rendered the error banner.
-test("the evict gesture repeats the node id in the query the server checks", async () => {
-  const sent: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input), "http://engine.test");
-      sent.push(url.pathname + url.search);
-      return new Response(JSON.stringify({ node_id: "node-2", outcome: "applied" }), {
-        status: 200,
-      });
-    }),
-  );
-  localStorage.setItem("crewlet_api_token", "t");
-
-  render(<GateDialog node="node-2" evict={true} onClose={() => {}} />);
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
-  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(sent.length).toBe(1));
-
-  expect(sent[0]).toBe("/work/retention/evict/node-2?confirm=node-2");
-
-  vi.unstubAllGlobals();
-  localStorage.clear();
-});
-
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
 //
 // The retention answer is the one a person opens DURING the outage it
@@ -266,4 +239,127 @@ test("an answer served at stale renders no banner at all", () => {
   // field must not paint this screen red.
   const missing = render(<ServedLevelBanner />);
   expect(missing.container.textContent).toBe("");
+});
+
+// A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.
+//
+// The report marks a node evicted only once EVERY log holds its tombstone, so
+// after a partial eviction the row offered "Evict…" again — and that press was
+// a fresh gesture, writing every log the first one reached a second time and
+// re-dating its eviction. A held gesture is what says which sign is in flight.
+test("a node with an unfinished gesture offers to finish it rather than start afresh", () => {
+  const held = {
+    opId: "01a0c450-6c00-7011-a233-445566778899.evict-node-a",
+    force: false,
+    unanswered: "the engine did not answer within 75 seconds",
+  };
+  expect(gateAction(node(), { "node-a:evict": held })).toEqual({
+    evict: true,
+    label: "Finish eviction…",
+  });
+  // A PARTIAL READMISSION LEAVES THE NODE NOT EVICTED EVERYWHERE, and the
+  // row would otherwise offer the eviction.
+  expect(gateAction(node(), { "node-a:readmit": held })).toEqual({
+    evict: false,
+    label: "Finish readmission…",
+  });
+  // THE CONTROL: nothing held is the ordinary gesture for the node's state.
+  expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
+  expect(
+    gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
+  ).toEqual({ evict: false, label: "Readmit…" });
+});
+
+// A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT SAYS SO — AND DRAWS AT ALL.
+//
+// After every reanchor, until the trim's first tick on the adopted stream, the
+// row had no floor, no blocking term and `terms: null`: `terms.map` threw
+// during render, and with no error boundary the whole dashboard went blank on
+// the Fleet screen and the domain page — the two things an operator opens to
+// watch a reanchor recover. Guarded, both drew "floor 0 · advancing".
+test("a reanchored domain with no conclusion renders its state, never advancing", () => {
+  render(
+    <DomainBlock
+      domain={domain({
+        generation: 1,
+        trim_floor: 0,
+        trim_to: 0,
+        trim_floor_state: "none_at_generation",
+        terms: [],
+      })}
+    />,
+  );
+  expect(screen.getByText(/concluded nothing about generation 1 yet/)).toBeTruthy();
+  expect(screen.getByText("no conclusion yet")).toBeTruthy();
+  expect(screen.getByText("no floor yet")).toBeTruthy();
+  expect(screen.queryByText("advancing")).toBeNull();
+  expect(screen.queryByText(/floor 0/)).toBeNull();
+
+  // AN UNREADABLE REGISTER IS NOT A TRIM THAT HAS CONCLUDED NOTHING.
+  cleanup();
+  render(<DomainBlock domain={domain({ trim_floor_state: "unreadable", terms: [] })} />);
+  expect(screen.getAllByText(/floor unreadable/).length).toBeGreaterThan(0);
+  expect(screen.queryByText("advancing")).toBeNull();
+
+  // THE CONTROL: a published, unblocked floor is the one that advances.
+  cleanup();
+  render(<DomainBlock domain={domain()} />);
+  expect(screen.getByText("advancing")).toBeTruthy();
+});
+
+// A BLOCKED DOMAIN'S CONCLUSION IS "BLOCKED", not "concluded 0": the wire value
+// is zero while blocked, and printed as a number it reads as a position.
+test("a blocked domain reads blocked rather than a conclusion of zero", () => {
+  render(
+    <DomainBlock domain={domain({ trim_floor: 700, trim_to: 0, blocked_by: "backup_floor" })} />,
+  );
+  expect(screen.getByText(/blocked/)).toBeTruthy();
+  expect(screen.queryByText(/concluded/)).toBeNull();
+  expect(screen.getByText("backup_floor")).toBeTruthy();
+});
+
+// A DOMAIN THIS NODE REFUSES SAYS SO ABOVE EVERYTHING ELSE ABOUT IT, NAMING THE
+// FINDING — the guides send an operator here after a restore to find it.
+test("a refused domain names its refusal, the finding and the sentence", () => {
+  render(
+    <DomainBlock
+      domain={domain({
+        not_ready: {
+          code: "wrong_stream",
+          causes: ["recreated"],
+          detail: "tracker's rows are keyed to the stream created at 2031-04-01",
+        },
+        writes_refused: { code: "log_truncated", detail: "peer node-4 stands past the end" },
+      })}
+    />,
+  );
+  expect(screen.getByText("wrong_stream")).toBeTruthy();
+  expect(screen.getByText(/\(recreated\)/)).toBeTruthy();
+  expect(screen.getByText(/keyed to the stream created at/)).toBeTruthy();
+  expect(screen.getByText("log_truncated")).toBeTruthy();
+});
+
+// A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT SUBTRACTED, and a
+// diverged node is marked — nothing else on its line shows it.
+test("a node on a generation the log left is labelled rather than caught up", () => {
+  render(
+    <NodePositions
+      node={node({
+        domains: {
+          tracker: {
+            generation: 0,
+            seq: 918000000,
+            applied_through: 918000000,
+            generation_state: "left",
+            log_diverged: true,
+          },
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText("left gen 0")).toBeTruthy();
+  expect(screen.getByText("gen 0")).toBeTruthy();
+  expect(screen.getByText("log diverged")).toBeTruthy();
+  expect(screen.queryByText("lag —")).toBeNull();
+  expect(screen.queryByText(/behind/)).toBeNull();
 });

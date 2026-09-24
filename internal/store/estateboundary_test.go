@@ -8,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -90,7 +90,7 @@ func TestNoStatementNamesBothEstates(t *testing.T) {
 		}
 	}
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	var crossings []string
 	for _, dir := range []string{"internal", "cmd"} {
 		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
@@ -159,7 +159,7 @@ var (
 // after a drop is a table that came back.
 func tablesIn(t *testing.T, estate store.Estate) map[string]bool {
 	t.Helper()
-	dir := filepath.Join(moduleRoot(t), "internal", "store", "schema", string(estate))
+	dir := filepath.Join(sourcetree.Root(t), "internal", "store", "schema", string(estate))
 	out := map[string]bool{}
 	for _, name := range store.SchemaVersions(estate) {
 		body, err := os.ReadFile(filepath.Join(dir, name))
@@ -219,13 +219,15 @@ func ddlStatements(body string) []ddlStatement {
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	files := 0
+	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 			return nil
 		}
+		files++
 		parsed, perr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if perr != nil {
 			return perr
@@ -236,19 +238,11 @@ func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	if err != nil {
 		t.Fatalf("walk %s: %v", dir, err)
 	}
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
+	// Every caller asserts an absence over what this parsed, and a walk
+	// that parsed nothing asserts it just as confidently.
+	if files == 0 {
+		t.Fatalf("parsed no Go files under %s — this guard was certifying nothing", dir)
 	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortPos(root, pos string) string {

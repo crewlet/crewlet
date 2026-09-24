@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +85,15 @@ func runRetention(args []string, stdout, stderr io.Writer) error {
 // [statelog.Report], for `crewlet backup`'s reason: the CLI reads a node's
 // answer over HTTP, and a struct shared with the writer would make an older
 // binary refuse a newer node's report over a field it does not print.
+//
+// WHICH IS WHY ITS TESTS SERVE THE WRITER'S OWN TYPE rather than JSON typed
+// by hand. A shape of its own is a shape that can drift, and this one had: the
+// node block's per-domain progress and each snapshot's positions are MAPS keyed
+// by domain, the tombstone is `evicted`, and a readable term is `ok` — while
+// this file declared lists, `eviction` and `known`, and its fixture spelled the
+// same invention. So `status` and `snapshots` failed to decode the answer of
+// every real node, whose own heartbeat puts a row in the node block at boot,
+// and `evict`/`readmit` swallowed that failure and printed no watermark.
 type retentionReport struct {
 	NodeID           string    `json:"node_id"`
 	At               time.Time `json:"at"`
@@ -139,6 +150,7 @@ type retentionDomain struct {
 	LastSeq           uint64          `json:"last_seq"`
 	Bytes             uint64          `json:"bytes"`
 	MaxBytes          uint64          `json:"max_bytes"`
+	ReserveBytes      uint64          `json:"reserve_bytes"`
 	HeadroomFraction  *float64        `json:"headroom_fraction"`
 	TrimFloor         uint64          `json:"trim_floor"`
 	TrimTo            uint64          `json:"trim_to"`
@@ -147,9 +159,46 @@ type retentionDomain struct {
 	Prose             string          `json:"prose"`
 	SnapshotBlockedBy string          `json:"snapshot_blocked_by"`
 	Terms             []retentionTerm `json:"terms"`
+
+	// TrimFloorState says whether TrimFloor and Terms are a conclusion at
+	// all — in the writer's vocabulary, [statelog.TrimFloorState]. Only
+	// `published` prints a floor; the others print a dash, because a zero
+	// there is the trim having concluded nothing about this generation of
+	// the log yet, or a register nobody could read, and never a floor.
+	TrimFloorState string `json:"trim_floor_state"`
+
+	// NotReady and WritesRefused are the answering node's own refusals of
+	// the domain, printed above every table.
+	NotReady      *retentionRefusal `json:"not_ready"`
+	WritesRefused *retentionRefusal `json:"writes_refused"`
+
+	// EvictionsUnreadable says the answering node could not read this
+	// log's evictions, so the node block's EVICTED column is not an answer
+	// for it — see [statelog.DomainReport.EvictionsUnreadable].
+	EvictionsUnreadable bool `json:"evictions_unreadable"`
 }
 
-// retentionTerm is one of the six, with the third value it can take.
+// retentionRefusal is why the answering node refuses a domain.
+type retentionRefusal struct {
+	Code   string   `json:"code"`
+	Causes []string `json:"causes"`
+	Detail string   `json:"detail"`
+}
+
+// floorOrDash is the TRIM FLOOR cell: the floor where one is published, and
+// what stands in its place where none is.
+func (d retentionDomain) floorOrDash() string {
+	switch d.TrimFloorState {
+	case string(statelog.TrimFloorPublished):
+		return strconv.FormatUint(d.TrimFloor, 10)
+	case string(statelog.TrimFloorUnreadable):
+		return "unreadable"
+	}
+	return "-"
+}
+
+// retentionTerm is one of the six, with the third value it can take — in the
+// writer's vocabulary, [statelog.TermState].
 type retentionTerm struct {
 	Name   string `json:"name"`
 	State  string `json:"state"`
@@ -160,41 +209,72 @@ type retentionTerm struct {
 
 // retentionNode is one row of the fleet.
 type retentionNode struct {
-	NodeID   string              `json:"node_id"`
-	Counted  bool                `json:"counted"`
-	Live     bool                `json:"live"`
-	At       time.Time           `json:"at"`
-	Note     string              `json:"note"`
-	Eviction *retentionEviction  `json:"eviction"`
-	Domains  []retentionNodeSeat `json:"domains"`
+	NodeID  string    `json:"node_id"`
+	Counted bool      `json:"counted"`
+	Live    bool      `json:"live"`
+	At      time.Time `json:"at"`
+
+	// Evicted is the node's tombstone, absent when it has none.
+	Evicted *retentionEviction `json:"evicted"`
+
+	// Domains is its progress KEYED BY DOMAIN, as the writer keys it; a
+	// domain absent from the map is one the node has not reported on.
+	Domains map[string]retentionNodeSeat `json:"domains"`
 }
 
 type retentionEviction struct {
 	By          string    `json:"by"`
 	At          time.Time `json:"at"`
 	EffectiveAt time.Time `json:"effective_at"`
+	Effective   bool      `json:"effective"`
 }
 
 type retentionNodeSeat struct {
-	Domain         string `json:"domain"`
+	Generation     uint32 `json:"generation"`
 	Seq            uint64 `json:"seq"`
 	AppliedThrough uint64 `json:"applied_through"`
-	Lag            uint64 `json:"lag"`
-	Deferred       int    `json:"deferred"`
+
+	// GenerationState is the position's generation against the domain's —
+	// [statelog.GenerationState]. A position from another generation is a
+	// sequence in another number space, so its LAG cell names the
+	// generation instead of a distance.
+	GenerationState string `json:"generation_state"`
+
+	// Lag is NIL when the stream could not be read, and printed as `-`:
+	// an unknown lag rendered as zero is a node reported as caught up.
+	Lag      *uint64 `json:"lag"`
+	Deferred int     `json:"deferred"`
+
+	// LogDiverged is the node's own report that the log holds another
+	// record at its checkpoint than the one it consumed there.
+	LogDiverged bool `json:"log_diverged"`
+}
+
+// lagCell is a node row's LAG: a distance within one generation, the
+// generation where the position is from another, and a dash where the
+// stream could not be read.
+func (d retentionNodeSeat) lagCell() string {
+	switch d.GenerationState {
+	case string(statelog.GenerationLeft):
+		return fmt.Sprintf("left gen %d", d.Generation)
+	case string(statelog.GenerationAhead):
+		return fmt.Sprintf("ahead gen %d", d.Generation)
+	}
+	if d.Lag == nil {
+		return "-"
+	}
+	return strconv.FormatUint(*d.Lag, 10)
 }
 
 // retentionSnapshot is one node's artefact, or its absence with the reason.
 type retentionSnapshot struct {
-	NodeID  string                `json:"node_id"`
-	At      time.Time             `json:"at"`
-	Bytes   int64                 `json:"bytes"`
-	Skip    string                `json:"skip"`
-	Domains []retentionSnapshotAt `json:"domains"`
-}
+	NodeID string    `json:"node_id"`
+	At     time.Time `json:"at"`
+	Bytes  int64     `json:"bytes"`
+	Skip   string    `json:"skip"`
 
-type retentionSnapshotAt struct {
-	Domain string `json:"domain"`
-	Seq    uint64 `json:"seq"`
+	// Domains is the artefact's position KEYED BY DOMAIN.
+	Domains map[string]uint64 `json:"domains"`
 }
 
 type retentionReplicaRow struct {
@@ -262,6 +342,24 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 
+	// A DOMAIN THIS NODE REFUSES, BEFORE ANYTHING ELSE ABOUT IT: every
+	// figure below describes rows no read or write of it is served from,
+	// and the guides send an operator here to find a recreated, restored
+	// or diverged log by exactly this line.
+	for _, d := range report.Domains {
+		if *domain != "" && d.Domain != *domain {
+			continue
+		}
+		if r := d.NotReady; r != nil {
+			fmt.Fprintf(stdout, "NOT READY %s: %s — %s\n", d.Domain,
+				refusalCode(*r), r.Detail)
+		}
+		if r := d.WritesRefused; r != nil {
+			fmt.Fprintf(stdout, "WRITES REFUSED %s: %s — %s\n", d.Domain,
+				refusalCode(*r), r.Detail)
+		}
+	}
+
 	// THE BLOCKING TERM FIRST AND IN PROSE, because it is the answer to
 	// the only question anybody runs this for. A table an operator has to
 	// read a `blocked_by` column out of is a table they read second.
@@ -284,6 +382,15 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 	if !report.RegisterReadable {
 		fmt.Fprintln(stdout, "The fleet register could not be listed, so the node "+
 			"block below is what could be read rather than the fleet.")
+	}
+	// AN EVICTION THIS NODE COULD NOT READ IS NOT A NODE THAT WAS NEVER
+	// EVICTED, and the node block alone prints the two identically.
+	for _, d := range report.Domains {
+		if d.EvictionsUnreadable && (*domain == "" || d.Domain == *domain) {
+			fmt.Fprintf(stdout, "This node could not read %s's evictions, so no "+
+				"node below shows as evicted there — an eviction may be hidden "+
+				"rather than absent. Ask again once it can.\n", d.Domain)
+		}
 	}
 	// AND WHAT THIS DOCUMENT MAY CLAIM ABOUT ITS OWN AGE, on the one
 	// answer that has to keep answering during the outage it describes.
@@ -317,16 +424,21 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 // third domain grows a line rather than an argument. A term that does not
 // apply to a domain prints `n/a` rather than `0`, because an absent term and a
 // term that permits nothing are different facts.
+//
+// RESERVE is the top of CEILING kept for gate records on a log that claims
+// identity, and HEADROOM is what is left of the rest — the ceiling ordinary
+// writes are refused `log_full` at — so a log at 0% still takes an eviction.
 func retentionDomains(w io.Writer, report retentionReport, only string) {
-	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tHEADROOM\tTRIM FLOOR")
+	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tRESERVE\tHEADROOM\tTRIM FLOOR")
 	for _, d := range report.Domains {
 		if only != "" && d.Domain != only {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
 			d.Domain, d.Stream, d.Generation, d.Replay, d.FirstSeq, d.LastSeq,
 			humanBytes(int64(d.Bytes)), ceilingOrDash(d.MaxBytes),
-			headroomOrDash(d.HeadroomFraction), d.TrimFloor)
+			reserveOrDash(d.ReserveBytes), headroomOrDash(d.HeadroomFraction),
+			d.floorOrDash())
 	}
 }
 
@@ -337,9 +449,28 @@ func retentionWatermarks(w io.Writer, report retentionReport, only string) {
 			continue
 		}
 		fmt.Fprintf(w, "\nWATERMARKS %s\tTERM\tSTATE\tAT\tDETAIL\n", d.Domain)
+		// NOTHING CONCLUDED IS SAID, never printed as an empty block: an
+		// empty block beside no blocking term reads as a trim with
+		// nothing holding it — advancing — about one that has not yet
+		// looked at the stream it now runs.
+		switch d.TrimFloorState {
+		case string(statelog.TrimFloorUnreadable):
+			fmt.Fprintf(w, "\tthe trim floor register could not be read, so "+
+				"nothing is known here about the trim of generation %d\t\t\t\n",
+				d.Generation)
+			continue
+		case string(statelog.TrimFloorPublished):
+		default:
+			fmt.Fprintf(w, "\tthe trim has concluded nothing about generation %d "+
+				"yet — its first tick on this stream is pending\t\t\t\n", d.Generation)
+			continue
+		}
 		for _, t := range d.Terms {
+			// A SEQUENCE ONLY WHERE THE TERM WAS READ AND BINDS: an
+			// unreadable, absent or unbounded term carries a number
+			// that describes no position.
 			at := strconv.FormatUint(t.Seq, 10)
-			if t.State != "known" {
+			if t.State != string(statelog.TermKnown) {
 				at = "-"
 			}
 			fmt.Fprintf(w, "\t%s\t%s\t%s\t%s\n", t.Name, t.State, at, t.Detail)
@@ -356,7 +487,7 @@ func retentionNodes(w io.Writer, report retentionReport) {
 	if len(report.Nodes) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nNODE\tDOMAIN\tSEQ\tAPPLIED\tLAG\tDEFERRED\tCOUNTED\tLIVE\tAT")
+	fmt.Fprintln(w, "\nNODE\tDOMAIN\tGEN\tSEQ\tAPPLIED\tLAG\tDEFERRED\tCOUNTED\tLIVE\tAT")
 	for _, n := range report.Nodes {
 		if len(n.Domains) == 0 {
 			// A COUNTED NODE WITH NO POSITION STILL GETS A ROW.
@@ -364,20 +495,44 @@ func retentionNodes(w io.Writer, report retentionReport) {
 			// heartbeat — a node adopting a snapshot — and it
 			// blocks every term derived from the counted set, so
 			// dropping the row would hide the block's cause.
-			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
 				n.NodeID, yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
 			continue
 		}
-		for i, d := range n.Domains {
+		// SORTED, because the writer keys the block by domain and a map's
+		// order would move a node's lines between two runs of the command.
+		names := make([]string, 0, len(n.Domains))
+		for name := range n.Domains {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for i, domain := range names {
+			d := n.Domains[domain]
 			name := n.NodeID
 			if i > 0 {
 				name = ""
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n",
-				name, d.Domain, d.Seq, d.AppliedThrough, d.Lag, d.Deferred,
-				yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
+			// A DIVERGED NODE IS MARKED, because nothing else on its
+			// line shows it: its position is at or below the log's end,
+			// where a lagging node's is, while every other node refuses
+			// its own writes of that log on its account.
+			note := noteOrStamp(n)
+			if d.LogDiverged {
+				note = "LOG DIVERGED at its checkpoint; " + note
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%s\t%d\t%s\t%s\t%s\n",
+				name, domain, d.Generation, d.Seq, d.AppliedThrough, d.lagCell(),
+				d.Deferred, yesNo(n.Counted), yesNo(n.Live), note)
 		}
 	}
+}
+
+// refusalCode is a refusal's word, with the findings behind a `wrong_stream`.
+func refusalCode(r retentionRefusal) string {
+	if len(r.Causes) == 0 {
+		return r.Code
+	}
+	return r.Code + " (" + strings.Join(r.Causes, ", ") + ")"
 }
 
 // retentionReplica prints what THIS node costs to replace.
@@ -434,8 +589,8 @@ func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintln(w, "NODE\tPOSITIONS\tAGE\tBYTES\tSTATE")
 	for _, s := range report.Snapshots {
 		positions := make([]string, 0, len(s.Domains))
-		for _, d := range s.Domains {
-			positions = append(positions, fmt.Sprintf("%s %d", d.Domain, d.Seq))
+		for domain, seq := range s.Domains {
+			positions = append(positions, fmt.Sprintf("%s %d", domain, seq))
 		}
 		sort.Strings(positions)
 		state, age := "holding", ageOrDash(s.At, report.At)
@@ -497,16 +652,36 @@ func retentionAck(args []string, stdout, stderr io.Writer) error {
 // ONE FUNCTION FOR BOTH, because they are one gesture with a sign — and
 // because the confirmation, the printing and the outcome vocabulary would
 // otherwise be written twice and drift.
+//
+// # One gesture, every identity-claiming log, one line per log
+//
+// The node judges the gesture once and writes its record to every log the
+// trim counts nodes on, so the answer is PER LOG: each with its own
+// three-valued outcome, or the refusal that stopped that log. A gesture that
+// did not reach every log exits non-zero and says how to finish it — the same
+// command with the operation id it answered with, which every log that already
+// holds the record answers from its own ledger rather than writing twice.
 func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	verb := "readmit"
 	if evict {
 		verb = "evict"
 	}
 	node, rest := splitSubject(args)
-	var confirm *string
+	var confirm, opID *string
+	var force *bool
 	client, err := nodeClientFor(rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id — this changes whether that machine's records apply")
+		opID = fs.String("op-id", "",
+			"the operation id an earlier run of this gesture answered with, to "+
+				"finish it on the logs it did not reach; empty starts a new one")
+		if evict {
+			force = fs.Bool("force", false,
+				"evict past the live-lease judgement: a node that still holds a "+
+					"presence lease (one wedged in a way that still renews it), or "+
+					"one whose lease this node cannot read (503 eviction_unjudged) "+
+					"— only when you know it is gone")
+		}
 	})
 	if err != nil {
 		return err
@@ -518,47 +693,299 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 			"node id in -confirm to run %s", verb)
 	}
 
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
+	// brought none. A gesture writes one log after another and the node
+	// finishes it whatever happens to this connection, so a request that
+	// times out or drops has very likely done its work — and the id the
+	// node would have answered with is the only handle on it. Minted by the
+	// node, it was lost with the answer, and the only way on was a second
+	// gesture under a fresh id.
+	//
+	// THROUGH THE STATE LOG'S OWN MINT ([statelog.NewOpID]), under the name
+	// the route itself mints with, so the id carries its instant — the node
+	// refuses one that does not, since no ledger could vouch for it — and
+	// reads in the ledger exactly as a node-minted one would.
+	gesture := *opID
+	if gesture == "" {
+		gesture = statelog.NewOpID(time.Now(), verb+"-"+node)
+	}
+	forced := force != nil && *force
+	// THE COMMAND THAT FINISHES THIS GESTURE, with the flags that decide it:
+	// -force carried, because a retry without it is judged again against
+	// the very lease the operator overrode, and refused.
+	again := "-op-id " + gesture
+	if forced {
+		again += " -force"
+	}
+
 	// THE WATERMARK BEFORE AND AFTER, so an operator sees what the gesture
 	// did rather than being told it succeeded. The trim floor is what an
 	// eviction is FOR — it is how a floor an absent node is pinning gets
 	// to move — and a readmission can be refused by exactly that number.
-	before := retentionFloors(client)
-	var answer struct {
-		Node     string `json:"node"`
-		Evicted  bool   `json:"evicted"`
-		Outcome  string `json:"outcome"`
-		Position struct {
-			Stream     string `json:"stream"`
-			Generation uint32 `json:"generation"`
-			Seq        uint64 `json:"seq"`
-		} `json:"position"`
+	before, beforeErr := retentionFloors(client)
+	var answer gateAnswer
+	query := url.Values{"confirm": {node}, "op_id": {gesture}}
+	if forced {
+		query.Set("force", "true")
 	}
-	path := fmt.Sprintf("/work/retention/%s/%s?confirm=%s", verb,
-		url.PathEscape(node), url.QueryEscape(node))
-	if err := client.post(context.Background(), path, &answer); err != nil {
+	path := fmt.Sprintf("/work/retention/%s/%s?%s", verb, url.PathEscape(node),
+		query.Encode())
+	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
+	// gesture takes is a property of what it waits on — a write per log,
+	// each resolved against this node's applier — and not of the network.
+	if err := client.patiently(gateRequestTimeout).post(context.Background(), path,
+		&answer); err != nil {
+		var lost noAnswer
+		if errors.As(err, &lost) {
+			fmt.Fprintf(stderr, "The node did not answer, so what the %s did is "+
+				"unknown: it may have reached every log. Run the same command "+
+				"again with %s — every log that already holds the record answers "+
+				"from its own rows, and only a missing one is written.\n", verb, again)
+		}
+		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
+		// as the flags it has: the node's own sentence names no surface's
+		// controls, because the dashboard renders the same refusal.
+		var refused *nodeRefusal
+		if errors.As(err, &refused) {
+			advice := gateAdvice(refused.Actions, gateAdviceContext{
+				again: again, forced: forced, readmit: !evict, node: node})
+			if len(advice) > 0 {
+				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+			}
+		}
 		return err
 	}
-	fmt.Fprintf(stdout, "%s %s: %s at %s %d\n", verb, node, answer.Outcome,
-		answer.Position.Stream, answer.Position.Seq)
-	if answer.Outcome == "pending" {
+	fmt.Fprintf(stdout, "%s %s (operation %s)\n", verb, node, answer.OpID)
+	// retry is a log the same command finishes NOW, and keep one it finishes
+	// once what its own line names is done — both under this gesture's own
+	// operation id, never a fresh one.
+	pending, retry, keep := false, false, false
+	for _, d := range answer.Domains {
+		switch {
+		case d.Outcome == string(statelog.OutcomeUnknown) && d.Unvouched:
+			// NOT FOR THIS NODE TO SETTLE: its line below sends the
+			// gesture elsewhere, because asking this node again answers
+			// the same way every time.
+			fmt.Fprintf(stdout, "  %s: unknown — this node cannot tell whether "+
+				"the record is on the log\n", d.Domain)
+		case d.Outcome == string(statelog.OutcomeUnknown):
+			// NO POSITION, which is the whole content of unknown: printed
+			// as "at 0" it read as a record landed at the log's origin.
+			fmt.Fprintf(stdout, "  %s: unknown — the record may or may not be "+
+				"on the log\n", d.Domain)
+		case d.Outcome != "" && d.Position != nil:
+			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
+				d.Position.Stream, d.Position.Seq)
+			pending = pending || d.Outcome == string(statelog.OutcomePending)
+		case d.Outcome != "":
+			fmt.Fprintf(stdout, "  %s: %s\n", d.Domain, d.Outcome)
+			pending = pending || d.Outcome == string(statelog.OutcomePending)
+		case d.Reason != "":
+			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
+		default:
+			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
+		}
+		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH: the node's
+		// sentence, then its actions as this command's own flags — and
+		// only where it has some: running the command again is the
+		// remedy for some refusals and a loop for others. The same
+		// gesture again is said once, below, for every log it finishes.
+		if d.Hint != "" {
+			fmt.Fprintf(stdout, "    %s\n", d.Hint)
+		}
+		retry = retry || slices.Contains(d.Actions, string(statelog.GateRetrySameOp))
+		keep = keep || slices.ContainsFunc(d.Actions, func(a string) bool {
+			return statelog.GateAction(a).KeepsOperation()
+		})
+		for _, line := range gateAdvice(d.Actions, gateAdviceContext{
+			again: again, forced: forced, readmit: !evict, node: node,
+			stream: d.Stream, perLog: true}) {
+			fmt.Fprintf(stdout, "    %s\n", line)
+		}
+	}
+	if pending {
 		// THE THREE-VALUED OUTCOME, said plainly. A gate the operator
 		// believes has landed and which is only durable is the
 		// difference between a node that has stopped writing and one
 		// that is about to.
-		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the gate takes effect as each node reaches it.")
+		fmt.Fprintln(stdout, "  A pending log holds the record durably and this node "+
+			"has not applied it yet: the gate takes effect as each node reaches it.")
+	}
+	if !answer.Complete {
+		// NOT A FAILURE TO RETRY BLINDLY: the logs that answered hold
+		// their record, a fresh operation id would be a second gesture
+		// rather than this one finished, and a log whose refusal no
+		// retry clears is not offered one — its own line above says
+		// what does.
+		if !retry && keep {
+			// NOT NOW, AND NOT AFRESH. A log waiting on a larger ceiling
+			// or a reanchor is finished by THIS gesture once that is done:
+			// a fresh operation id would write every log that already
+			// holds the record again, re-dating each eviction.
+			return fmt.Errorf("the %s of %s did not reach every log: do what each "+
+				"log's line names, then run it again with %s — a fresh operation id "+
+				"would write the logs that already hold the record again",
+				verb, node, again)
+		}
+		if !retry {
+			return fmt.Errorf("the %s of %s did not reach every log, and running "+
+				"it again cannot finish it: each log's line says what does", verb, node)
+		}
+		fmt.Fprintf(stdout, "  The gesture has not reached every log. Run it again "+
+			"with %s to finish it: a log that already holds the record answers "+
+			"from its own rows and is not written twice.\n", again)
+		return fmt.Errorf("the %s of %s did not reach every log — run it again "+
+			"with %s", verb, node, again)
 	}
 	if evict {
 		fmt.Fprintf(stdout, "  %s stays COUNTED for about %s, so a live node is "+
 			"certain to have read its own tombstone before the trim passes it.\n",
 			node, evictionFenceWindow)
 	}
-	after := retentionFloors(client)
-	for domain, was := range before {
-		fmt.Fprintf(stdout, "  %s trim floor %d → %d\n", domain, was, after[domain])
+	after, afterErr := retentionFloors(client)
+	if err := errors.Join(beforeErr, afterErr); err != nil {
+		fmt.Fprintf(stdout, "  The trim floors could not be read, so no watermark "+
+			"is printed: %v\n", err)
+		return nil
+	}
+	now := make(map[string]string, len(after))
+	for _, d := range after {
+		now[d.domain] = d.floor
+	}
+	for _, d := range before {
+		after, ok := now[d.domain]
+		if !ok {
+			after = "-"
+		}
+		fmt.Fprintf(stdout, "  %s trim floor %s → %s\n", d.domain, d.floor, after)
 	}
 	return nil
 }
+
+// gateAnswer is the gate routes' answer as this command reads it — a shape of
+// its own, for [retentionReport]'s reason.
+type gateAnswer struct {
+	Node     string       `json:"node"`
+	Evicted  bool         `json:"evicted"`
+	OpID     string       `json:"op_id"`
+	Complete bool         `json:"complete"`
+	Domains  []gateDomain `json:"domains"`
+}
+
+// gateDomain is one log's answer: an outcome and its position, or the reason
+// and the error that stopped it.
+type gateDomain struct {
+	Domain  string `json:"domain"`
+	Stream  string `json:"stream"`
+	OpID    string `json:"op_id"`
+	Outcome string `json:"outcome"`
+
+	// Unvouched marks an `unknown` this node cannot settle: its operation
+	// ledger may have lost the row the operation needs, so the same
+	// gesture through it answers the same way every time.
+	Unvouched bool `json:"unvouched"`
+
+	// Position is ABSENT for an unknown outcome, and a pointer so that
+	// absence is observable rather than a zero position that reads as a
+	// record at the log's origin.
+	Position *gatePosition `json:"position"`
+
+	Reason string `json:"reason"`
+	Error  string `json:"error"`
+
+	// Actions and Hint are the node's own judgement of a log the gesture
+	// did not finish: what to do, as values this command renders as its
+	// own flags ([gateAdvice]), and the sentence saying why in no
+	// surface's vocabulary. Absent on a finished log.
+	Actions []string `json:"actions"`
+	Hint    string   `json:"hint"`
+}
+
+// gatePosition is where a log's record is durable.
+type gatePosition struct {
+	Stream     string `json:"stream"`
+	Generation uint32 `json:"generation"`
+	Seq        uint64 `json:"seq"`
+}
+
+// gateAdviceContext is what [gateAdvice] needs to spell an action as a
+// command: the flags that finish this gesture, whether it was forced or is a
+// readmission, and — for one log's line — which log.
+type gateAdviceContext struct {
+	again   string
+	forced  bool
+	readmit bool
+	node    string
+	stream  string
+
+	// perLog is a line under one log of a 200, where the same gesture
+	// again is said once below for every log it finishes rather than on
+	// each.
+	perLog bool
+}
+
+// gateAdvice renders the node's remedy actions as what to type.
+//
+// # Why the command line renders them, and not the node
+//
+// The node used to send one sentence in this command's vocabulary — "evict it
+// with -force", "run it again without -op-id", "(-url)" — and the dashboard
+// rendered that sentence word for word beside a dialog with none of those
+// flags. So the node now says WHAT to do as a closed set of actions and a
+// sentence naming no surface's controls, and each surface says HOW: here, as
+// flags. An action this build does not know renders nothing, and the node's
+// sentence above it still says what it is.
+func gateAdvice(actions []string, c gateAdviceContext) []string {
+	var out []string
+	for _, a := range actions {
+		switch statelog.GateAction(a) {
+		case statelog.GateRetrySameOp:
+			if !c.perLog {
+				out = append(out, "run it again with "+c.again)
+			}
+		case statelog.GateNewGesture:
+			out = append(out, "run it again without -op-id, so it takes a fresh one")
+		case statelog.GateForce:
+			if !c.forced && !c.readmit {
+				out = append(out, "or, if you know "+c.node+" is gone, evict it with "+
+					"-force")
+			}
+		case statelog.GateOtherNode:
+			out = append(out, "run it through another node the fleet still counts: "+
+				"-url <that node> "+c.again)
+		case statelog.GateReanchor:
+			out = append(out, "crewlet retention reanchor -stream "+c.stream+
+				", then run this again with "+c.again)
+		case statelog.GateSetCapacity:
+			out = append(out, "crewlet retention set-capacity "+c.stream+
+				" <bytes> -confirm <bytes>, then run this again with "+c.again)
+		case statelog.GateWait:
+			if c.readmit {
+				out = append(out, "its SEQ in `crewlet retention status`, at the "+
+					"domain's own GEN, says when it has caught up, and `crewlet "+
+					"retention snapshots` whether a peer can donate one; then run this "+
+					"again")
+			} else {
+				out = append(out, "its LIVE column in `crewlet retention status` reads "+
+					"no once the lease has lapsed; then run this again")
+			}
+		}
+	}
+	return out
+}
+
+// gateRequestTimeout is how long `retention evict` and `readmit` wait for the
+// node's answer.
+//
+// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
+// record to its last answer (engine.GateBudget), and the judgement before it
+// and the round trip around it are a coordination read and a request. Waiting
+// past the node's own bound is what makes its answer — every log's outcome and
+// what to do about the ones it could not finish — reach the operator rather
+// than a client timeout that knows none of it. The ten seconds every other
+// verb waits was two of the five-second resolutions a gesture legitimately
+// makes, back to back.
+const gateRequestTimeout = 75 * time.Second
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.
@@ -570,18 +997,31 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 const evictionFenceWindow = "a minute"
 
 // retentionFloors reads each domain's published floor, for the before-and-after
-// print. A failure yields nothing rather than an error: the gesture has already
-// run, and failing here would report a failure that did not happen.
-func retentionFloors(client *nodeClient) map[string]uint64 {
+// print, in the report's own domain order.
+//
+// A FAILURE NEVER FAILS THE GESTURE — it has already run, and failing here
+// would report a failure that did not happen — but it is SAID rather than
+// swallowed. Swallowed, it hid for as long as this file existed that these
+// reads decoded nothing from any real node: the gesture promised a watermark
+// and printed none, and nothing looked wrong.
+func retentionFloors(client *nodeClient) ([]domainFloor, error) {
 	var report retentionReport
 	if err := client.get(context.Background(), "/query/retention", &report); err != nil {
-		return nil
+		return nil, err
 	}
-	out := map[string]uint64{}
+	out := make([]domainFloor, 0, len(report.Domains))
 	for _, d := range report.Domains {
-		out[d.Domain] = d.TrimFloor
+		out = append(out, domainFloor{domain: d.Domain, floor: d.floorOrDash()})
 	}
-	return out
+	return out, nil
+}
+
+// domainFloor is one domain's published floor, as the watermark print reads
+// it: the number where one is published, and a dash or `unreadable` where
+// none is — never a zero standing in for no conclusion.
+type domainFloor struct {
+	domain string
+	floor  string
 }
 
 func ceilingOrDash(maxBytes uint64) string {
@@ -591,6 +1031,16 @@ func ceilingOrDash(maxBytes uint64) string {
 		return "none"
 	}
 	return humanBytes(int64(maxBytes))
+}
+
+func reserveOrDash(reserve uint64) string {
+	if reserve == 0 {
+		// A LOG THAT KEEPS NO RESERVE — one claiming no identity, or
+		// one with no ceiling to keep it under — rather than one whose
+		// reserve is empty: nothing is ever written into it.
+		return "-"
+	}
+	return humanBytes(int64(reserve))
 }
 
 func headroomOrDash(fraction *float64) string {
@@ -610,13 +1060,26 @@ func yesNo(v bool) string {
 	return "no"
 }
 
+// noteOrStamp is a node row's last column: its tombstone, the absence of any
+// report, or when it last reported.
+//
+// A NODE THAT HAS NEVER REPORTED is said so rather than printed as `-`: it is
+// counted at position zero and blocks every term derived from the counted
+// set, and the row is how an operator finds the block's cause.
 func noteOrStamp(n retentionNode) string {
-	if n.Eviction != nil {
-		return fmt.Sprintf("evicted by %s, effective %s", n.Eviction.By,
-			stampOrDash(n.Eviction.EffectiveAt))
+	if n.Evicted != nil {
+		if !n.Evicted.Effective {
+			// INSIDE THE FENCE WINDOW the node is still counted, and
+			// an operator reading an unchanged floor beside a bare
+			// "evicted" runs the gesture again.
+			return fmt.Sprintf("evicted by %s, still counted until %s",
+				n.Evicted.By, stampOrDash(n.Evicted.EffectiveAt))
+		}
+		return fmt.Sprintf("evicted by %s, effective %s", n.Evicted.By,
+			stampOrDash(n.Evicted.EffectiveAt))
 	}
-	if n.Note != "" {
-		return n.Note
+	if n.At.IsZero() {
+		return "no position yet"
 	}
 	return stampOrDash(n.At)
 }

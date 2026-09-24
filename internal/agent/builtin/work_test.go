@@ -46,6 +46,12 @@ type fakeTracker struct {
 
 	created []tracker.Task
 	merged  []mergeCall
+	moved   []moveCall
+
+	// createAnswer overrides what CreateTask answers, for the cases about
+	// what the TOOL makes of an outcome rather than about the task it
+	// composed.
+	createAnswer *tracker.WriteResult
 
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
@@ -71,8 +77,9 @@ type fakeTracker struct {
 
 	// depended is every dependency change the tool composed, and
 	// dependErr what the sequence answers.
-	depended  []tracker.DependencyChange
-	dependErr error
+	depended     []tracker.DependencyChange
+	dependErr    error
+	dependAnswer *tracker.DependencyResult
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
@@ -89,6 +96,10 @@ type fakeTracker struct {
 	tagWarnings    []string
 	ensured        [][]string
 	ensuredIn      []string
+	// ensureErr is what the INLINE declaration alone answers, so a case can
+	// stop a create or an update at its labels while every write after it
+	// would succeed — and so catch a tool that carried on to one.
+	ensureErr error
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
@@ -332,6 +343,35 @@ func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
 	}}, nil
 }
 
+// moves is its sixth, for the cross-project move.
+func (f *fakeTracker) moves(actor builtin.Actor) builtin.WorkMover {
+	f.actors = append(f.actors, actor)
+	return f
+}
+
+// moveCall is one move as the tool composed it.
+type moveCall struct {
+	task, target string
+	notify       *tracker.Notify
+}
+
+// MoveTaskToProject records the move — the sequence itself is certified
+// against a real store in the tracker's own suite.
+func (f *fakeTracker) MoveTaskToProject(_ context.Context, opID, taskID, target string,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	f.moved = append(f.moved, moveCall{task: taskID, target: target, notify: notify})
+	f.opIDs = append(f.opIDs, opID)
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+		Version:  71,
+	}}, nil
+}
+
 func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Task,
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 
@@ -341,6 +381,9 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	f.created = append(f.created, task)
 	f.notified = append(f.notified, notify)
 	f.opIDs = append(f.opIDs, opID)
+	if f.createAnswer != nil {
+		return *f.createAnswer, nil
+	}
 	return tracker.WriteResult{
 		Key: "ENG-9", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
@@ -441,6 +484,10 @@ func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
 	if f.writeErr != nil {
 		return nil, nil, f.writeErr
 	}
+	if f.ensureErr != nil {
+		f.opIDs = append(f.opIDs, opID)
+		return nil, nil, f.ensureErr
+	}
 	f.ensured = append(f.ensured, tags)
 	f.ensuredIn = append(f.ensuredIn, project)
 	f.opIDs = append(f.opIDs, opID)
@@ -451,7 +498,7 @@ type fakeMentions []string
 
 func (f fakeMentions) Mentions(string) []string { return f }
 
-// workRegistry registers the five tools over a fake tracker.
+// workRegistry registers a seat's tracker tools over a fake tracker.
 func workRegistry(t *testing.T, deps builtin.WorkDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -501,7 +548,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	deliveries := reg.Deliveries()
 	for _, name := range builtin.WorkWrites() {
@@ -596,7 +643,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range builtin.WorkTools() {
@@ -745,6 +792,125 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 	if !strings.Contains(got.Output, "Do not reassign it again") {
 		t.Errorf("the budget refusal invites another attempt: %q", got.Output)
 	}
+
+	// AND A WALK THAT STOPPED AT AN UNKNOWN STEP IS NEITHER: some of it may
+	// have landed, so "NOT made" would be false, and the same call again is
+	// what finishes it.
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		!strings.Contains(got.Output, "exactly the same arguments") {
+		t.Errorf("a walk that stopped at an unresolved step gave %q", got.Output)
+	}
+}
+
+// A CREATE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS FILED, NOR AS NOT
+// MADE, and what it tells the caller to do is what a repeat would actually be.
+//
+// The answer used to be the create's receipt with `outcome: unknown` in it: a
+// key the seat read as its item's — a gap in the numbering if the task step
+// never landed — or, where the ledger could not vouch for the operation, the
+// default failure's "The change was NOT made" about an item the first run
+// filed, after which the seat reworded the call and filed a duplicate.
+func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
+	t.Parallel()
+	lostAck := tracker.WriteResult{
+		Key:    "ENG-9",
+		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
+	}
+	unvouched := tracker.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeUnknown, OpID: "op.counter", Unvouched: true,
+	}}
+	cases := []struct {
+		name     string
+		operator bool
+		answer   tracker.WriteResult
+		want     []string
+		refuse   []string
+	}{
+		{
+			name: "a seat under a lost acknowledgement repeats the same call", answer: lostAck,
+			want: []string{"exactly the same arguments", "Do not reword it",
+				"If this attempt filed it, it is ENG-9"},
+			refuse: []string{"cannot tell", "list_work_items"},
+		},
+		{
+			name: "a seat the ledger cannot vouch for looks before it refiles", answer: unvouched,
+			want: []string{"this node cannot tell", "list_work_items",
+				"Never make it again under different arguments"},
+			refuse: []string{"If this attempt filed it", "acknowledgement was lost"},
+		},
+		{
+			name: "an operator's repeat is a new operation", operator: true, answer: lostAck,
+			want:   []string{"list_work_items", "files a second item"},
+			refuse: []string{"exactly the same arguments", "cannot tell"},
+		},
+		{
+			name: "an operator the ledger cannot vouch for looks first", operator: true,
+			answer: unvouched,
+			want:   []string{"this node cannot tell", "list_work_items"},
+			refuse: []string{"exactly the same arguments"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.createAnswer = &tc.answer
+			deps := builtin.WorkDeps{Reader: trk, Writer: trk.as}
+			call := callWork
+			if tc.operator {
+				deps.Actor, call = operatorActor, callNoTurn
+			}
+			got := call(t, workRegistry(t, deps), builtin.CreateWorkItemTool,
+				map[string]any{"title": "the follow-up", "project": "ENG"})
+			if !got.Failed {
+				t.Fatalf("an unknown create answered as a receipt: %s", got.Output)
+			}
+			for _, bad := range []string{"NOT made", `"key"`} {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer carries %q, which is a claim about an "+
+						"item nobody can say was filed: %s", bad, got.Output)
+				}
+			}
+			if !strings.Contains(got.Output, trk.opIDs[0]) {
+				t.Errorf("the answer does not name operation %s: %s",
+					trk.opIDs[0], got.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the answer lacks %q: %s", want, got.Output)
+				}
+			}
+			for _, bad := range tc.refuse {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer says %q, which is not what a repeat "+
+						"here would be: %s", bad, got.Output)
+				}
+			}
+		})
+	}
+}
+
+// A WALK THIS NODE CANNOT VOUCH FOR IS NOT ANSWERED "CALL AGAIN". The same
+// call re-runs under the same operation, and the step it stopped at needs the
+// ledger row the loss took — so on this node it stops there every time, and a
+// model told to repeat it loops until its rounds run out.
+func TestAWalkThisNodeCannotVouchForIsNotAnsweredWithARetry(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		strings.Contains(got.Output, "exactly the same arguments") ||
+		!strings.Contains(got.Output, "stops at the same step") {
+		t.Errorf("a walk this node cannot vouch for gave %q", got.Output)
+	}
 }
 
 // A REFERENCE IS RESOLVED TO AN ID BEFORE IT IS STORED. A model types the key
@@ -882,7 +1048,7 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	for _, name := range builtin.WorkWrites() {
 		entry, ok := reg.Lookup(name)
@@ -989,7 +1155,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	// is missing because the registry does not offer it rather than
 	// because its dependency was nil.
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
@@ -1008,7 +1174,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	operator := map[string]bool{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+			Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
@@ -1168,6 +1334,9 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
 		return tracker.DependencyResult{}, f.dependErr
+	}
+	if f.dependAnswer != nil {
+		return *f.dependAnswer, nil
 	}
 	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
 		Result: statelog.Result{

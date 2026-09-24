@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -43,6 +45,18 @@ type fakeKB struct {
 	// stopped naming one — or named the wrong one — is visible. A seat
 	// reads at `session` because it must see its own writes.
 	levels []statelog.ReadLevel
+
+	// outcome, when set, is every write's outcome — which is how a case
+	// makes a write answer `unknown` without a broker.
+	outcome *statelog.Result
+}
+
+// written is a write's answer, carrying the pinned outcome where there is one.
+func (f *fakeKB) written(w pages.Written) pages.Written {
+	if f.outcome != nil {
+		w.Outcome = *f.outcome
+	}
+	return w
 }
 
 func newFakeKB() *fakeKB {
@@ -85,8 +99,8 @@ func (f *fakeKB) Create(_ context.Context, actor pages.Actor, in pages.NewPage) 
 	}
 	f.created = append(f.created, in)
 	f.actors = append(f.actors, actor)
-	return pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
-		Title: in.Title, Version: 1}, Revision: 10}, nil
+	return f.written(pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
+		Title: in.Title, Version: 1}, Revision: 10}), nil
 }
 
 func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save pages.Save) (pages.Written, error) {
@@ -95,10 +109,10 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
-	return pages.Written{
+	return f.written(pages.Written{
 		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
 		Outcome: landedAt(11),
-	}, nil
+	}), nil
 }
 
 // renamed is one Rename call the fake took, with everything the fake had
@@ -130,7 +144,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 	f.comments = append(f.comments, in)
 	f.actors = append(f.actors, actor)
 	return pages.Comment{ID: "m1", Mentions: in.Mentions},
-		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}, nil
+		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}), nil
 }
 
 // commentEdit is one EditComment call the fake took.
@@ -143,7 +157,7 @@ func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID,
 	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
 	f.actors = append(f.actors, actor)
 	return pages.Comment{ID: commentID, Body: body},
-		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}, nil
+		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}), nil
 }
 
 // landedAt is a write that appended a record at one position on the pages log.
@@ -611,5 +625,171 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 		t.Errorf("the turn waited for %v — the rename is the second write, so "+
 			"a re-read in this turn has to be past ITS position, not the "+
 			"save's", kb.awaited)
+	}
+}
+
+// A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
+// the store derives a second comment rather than the first one's retry; a
+// remark repeated with nothing between carries the same count and stays one.
+func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	turn := workTurn(t)
+	turn.Calls = turnctx.NewCallLog()
+	surface := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
+	for _, body := range []string{"blocked", "blocked", "unblocked", "blocked"} {
+		res, err := surface.Execute(t.Context(), llm.ToolCall{
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": "p1", "body": body},
+		})
+		if err != nil || res.Failed {
+			t.Fatalf("comment %q = (%+v, %v)", body, res, err)
+		}
+	}
+	var repeats []int
+	for _, c := range kb.comments {
+		repeats = append(repeats, c.Repeat)
+	}
+	if len(repeats) != 4 {
+		t.Fatalf("four remarks reached the store as %d", len(repeats))
+	}
+	if repeats[1] != repeats[0] {
+		t.Errorf("a remark repeated with nothing between carried %d after %d — "+
+			"a retry would post it twice", repeats[1], repeats[0])
+	}
+	if repeats[3] == repeats[0] {
+		t.Errorf("the remark made again after \"unblocked\" carried the first "+
+			"one's count %d, so its id is the first one's and it is that one's "+
+			"retry (counts %v)", repeats[0], repeats)
+	}
+}
+
+// A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
+//
+// Every page tool answered with an id and a revision whatever the write's
+// outcome was. A comment the engine answered `unknown` WITHOUT publishing —
+// its operation minted before this node's ledger lost rows, which a seat woken
+// by a backlog trigger after a node adopted a snapshot is — came back as a
+// comment_id and revision 0, the seat said it had commented, and nobody ever
+// saw the remark.
+func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
+	t.Parallel()
+	calls := map[string]map[string]any{
+		builtin.WritePageTool: {"title": "New Page", "body": "text", "container": "ENG"},
+		builtin.SavePageTool:  {"page": "p1", "body": "text", "base_version": 4},
+		"comment":             {"page": "p1", "body": "a remark"},
+		"edit":                {"page": "p1", "body": "a remark", "edit": "m1"},
+	}
+	for _, unvouched := range []bool{false, true} {
+		for name, args := range calls {
+			kb := newFakeKB()
+			kb.outcome = &statelog.Result{Outcome: statelog.OutcomeUnknown,
+				OpID: "01a0c450-6c00-7011-a233-445566778899", Unvouched: unvouched}
+			reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+			tool := name
+			if name == "comment" || name == "edit" {
+				tool = builtin.CommentOnPageTool
+			}
+			out := callWork(t, reg, tool, args)
+			if !out.Failed {
+				t.Errorf("%s (unvouched %v) with an unknown outcome reported success: %s",
+					name, unvouched, out.Output)
+				continue
+			}
+			for _, leak := range []string{`"comment_id"`, `"revision"`, `"id"`} {
+				if strings.Contains(out.Output, leak) {
+					t.Errorf("%s answered %s beside an unknown outcome: %s", name, leak,
+						out.Output)
+				}
+			}
+			if !strings.Contains(out.Output, "unknown") ||
+				!strings.Contains(out.Output, "do not report it as done") {
+				t.Errorf("%s never says the outcome is unknown: %s", name, out.Output)
+			}
+			if unvouched && !strings.Contains(out.Output, "cannot tell") {
+				t.Errorf("%s's unvouched unknown never says this node cannot tell: %s",
+					name, out.Output)
+			}
+		}
+	}
+
+	// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is derived
+	// from its turn, so its repeat is the same comment: under a lost
+	// acknowledgement it posts once, and unvouched it publishes nothing and
+	// answers the same way — so it is SAFE, never "a second comment", which
+	// is what a seat was told. An operator's comment has no turn to derive
+	// from, so its repeat is a new one.
+	operator := func(context.Context, *turnctx.Turn) (pages.Actor, error) {
+		return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+			OperatorID: "founder"}, nil
+	}
+	for _, tc := range []struct {
+		name      string
+		operator  bool
+		unvouched bool
+		want      []string
+		refuse    []string
+	}{
+		{name: "a seat under a lost acknowledgement",
+			want: []string{"Call comment_on_page again with exactly the same arguments",
+				"lands once"}},
+		{name: "a seat the ledger cannot vouch for", unvouched: true,
+			want: []string{"get_page before doing anything else",
+				"call comment_on_page again with exactly the same arguments",
+				"that is safe"},
+			refuse: []string{"a second call is a new operation"}},
+		{name: "an operator", operator: true,
+			want:   []string{"get_page before making it again", "a second comment"},
+			refuse: []string{"exactly the same arguments", "that is safe"}},
+		{name: "an operator the ledger cannot vouch for", operator: true, unvouched: true,
+			want:   []string{"get_page before making it again", "a second comment"},
+			refuse: []string{"exactly the same arguments", "that is safe"}},
+	} {
+		kb := newFakeKB()
+		kb.outcome = &statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op",
+			Unvouched: tc.unvouched}
+		deps := builtin.PageDeps{Reader: kb, Writer: kb}
+		call := callWork
+		if tc.operator {
+			deps.Actor, call = operator, callNoTurn
+		}
+		out := call(t, kbRegistry(t, deps), builtin.CommentOnPageTool, calls["comment"])
+		for _, want := range tc.want {
+			if !strings.Contains(out.Output, want) {
+				t.Errorf("%s: the unknown comment never says %q: %s", tc.name,
+					want, out.Output)
+			}
+		}
+		for _, bad := range tc.refuse {
+			if strings.Contains(out.Output, bad) {
+				t.Errorf("%s: the unknown comment says %q, which is not what "+
+					"its repeat is: %s", tc.name, bad, out.Output)
+			}
+		}
+	}
+}
+
+// AND ONE THAT LANDED SAYS HOW: its outcome and where it is durable, as every
+// tracker write already does.
+func TestAPageWriteReportsItsOutcomeAndPosition(t *testing.T) {
+	t.Parallel()
+	for name, args := range map[string]map[string]any{
+		builtin.WritePageTool:     {"title": "New Page", "body": "text", "container": "ENG"},
+		builtin.SavePageTool:      {"page": "p1", "body": "text", "base_version": 4},
+		builtin.CommentOnPageTool: {"page": "p1", "body": "a remark"},
+	} {
+		kb := newFakeKB()
+		pending := landedAt(21)
+		pending.Outcome = statelog.OutcomePending
+		kb.outcome = &pending
+		out := callWork(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}), name, args)
+		if out.Failed {
+			t.Fatalf("%s failed: %s", name, out.Output)
+		}
+		if !strings.Contains(out.Output, `"outcome": "pending"`) ||
+			!strings.Contains(out.Output, `"position": "CREWLET_PAGES_LOG`) {
+			t.Errorf("%s does not report its outcome and position: %s", name, out.Output)
+		}
 	}
 }

@@ -533,10 +533,12 @@ stream:
                                     #   creates the stream, so the derived
                                     #   ceilings of this field and the two below
                                     #   are scaled down together to fit half of
-                                    #   what the broker can grant them (never
-                                    #   below 1 GiB each). A value you set is
-                                    #   never scaled, and a boot that cannot
-                                    #   reserve it fails naming the field, the
+                                    #   what the broker can grant them, less the
+                                    #   ceiling any of the three that already
+                                    #   exists holds (never below 1 GiB each).
+                                    #   A value you set is never scaled, and a
+                                    #   boot that cannot reserve it fails
+                                    #   naming the field, the
                                     #   bytes it needed and the bytes the broker
                                     #   had. Every one of the three is the value
                                     #   a stream is CREATED with: editing it

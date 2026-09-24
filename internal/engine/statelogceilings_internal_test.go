@@ -11,9 +11,44 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 const gib = int64(1) << 30
+
+// THE GATE RESERVE AT THE SMALLEST CEILING ABSORBS A FLEET'S APPENDS IN FLIGHT.
+//
+// The reserve is a fraction of the ceiling and the overshoot it absorbs is not:
+// every peer of the admitting node may hold up to [statelog.MaxAppendBytes] in
+// flight that its reading cannot see. So the fraction is only sound down to
+// some ceiling, and every floor a log's ceiling can reach — the one the
+// division of the broker holds a log at, and Tier A's floor for each
+// identity-claiming log — must be at or above it, with room left for the gate
+// records themselves. A divisor raised, a fleet size raised or a floor lowered
+// without the others moving fails here, rather than as an eviction refused on
+// a full log.
+func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
+	// A thousand gate records, each under a kibibyte: an eviction and a
+	// readmission per node per identity log, many times over.
+	const gateRoom = 1 << 20
+	peers := uint64(statelog.GateReserveFleet-1) * statelog.MaxAppendBytes
+	for name, floor := range map[string]int64{
+		"the division's MinDomainCeiling":             MinDomainCeiling,
+		"Tier A's stream.tracker_log_max_bytes floor": config.TrackerLogMaxBytesFloor,
+		"Tier A's stream.pages_log_max_bytes floor":   config.PagesLogMaxBytesFloor,
+	} {
+		reserve := statelog.GateReserve(uint64(floor))
+		if reserve < peers+gateRoom {
+			t.Errorf("at %s (%d bytes) the gate reserve is %d bytes: %d peers' "+
+				"appends in flight at %d bytes each, plus %d for the gate records, "+
+				"need %d — an eviction on a log full to its ordinary ceiling can "+
+				"find the reserve spent", name, floor, reserve,
+				statelog.GateReserveFleet-1, int64(statelog.MaxAppendBytes),
+				gateRoom, peers+gateRoom)
+		}
+	}
+}
 
 // EVERY REGISTERED DOMAIN IS SIZED FROM TIER A, and the field a refusal names
 // is the field that actually sets the value.
@@ -74,21 +109,44 @@ func streamKeys(t *testing.T) map[string][]int {
 	return out
 }
 
-// THE ARITHMETIC FITS THE POOL, and the two ways the obvious version overshot
-// it are rows here.
+// THE ARITHMETIC FITS THE POOL, and every way an earlier version overshot it
+// is a row here.
 //
-// The version this replaced scaled every derived ceiling by pool over a total
-// that COUNTED the explicit ones (so the derived logs were handed bytes an
-// explicit ceiling had already spent) and raised a floored log to the floor
-// AFTER dividing (so the floor was bytes the others were also given).
+// The first version scaled every derived ceiling by pool over a total that
+// COUNTED the explicit ones (so the derived logs were handed bytes an explicit
+// ceiling had already spent) and raised a floored log to the floor AFTER
+// dividing (so the floor was bytes the others were also given). The next
+// divided the pool by what every log ASKED, the ones that already exist
+// included, so a log being created was sized as though an existing one held
+// its ask — and one holding more than that was bytes the missing logs were
+// also given. Measured at twice the share: the "a log holding twice the
+// share" row is that boot's arithmetic.
+//
+// So every row is held to the INVARIANTS as well as to its numbers, and there
+// are three, because "inside the pool" is not one of them: logs that already
+// hold more than the pool hold it whatever this arithmetic says.
+//
+//   - What the logs reserve between them — what the existing ones hold plus
+//     what the missing ones are created with — exceeds the larger of the pool
+//     and what the existing ones hold only by the missing logs created at
+//     their floor or at a ceiling somebody set.
+//   - A derived log created above its floor is proof there was room to spare,
+//     so it is never found beside a total past the pool.
+//   - A missing log is never created above its fit on an empty broker, which
+//     is the value every later boot reports its stream against: above it, the
+//     log is a capacity difference nobody made on every boot that follows.
 func TestTheCeilingsFitThePool(t *testing.T) {
 	t.Parallel()
 	derived := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes} }
 	explicit := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes, Explicit: true} }
 	for name, tc := range map[string]struct {
 		asked map[string]domainCeiling
+		held  map[string]int64
 		pool  int64
 		want  map[string]int64
+		// short is what [shortOfFit] reports: every log created below
+		// its fit on an empty broker, with that fit.
+		short map[string]int64
 	}{
 		"everything fits as asked": {
 			asked: map[string]domainCeiling{"a": derived(4 * gib), "b": derived(2 * gib)},
@@ -134,10 +192,88 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 			pool:  1064 * gib,
 			want:  map[string]int64{"a": 1024 * gib, "b": 32 * gib, "c": 8 * gib},
 		},
+		// An existing log is reported at its fit on an empty broker (a's
+		// 4), and the missing ones divide the 6 its 10 leave rather than
+		// the 12 its fit would: sized from its ask they took 12 and the
+		// logs reserved 22 of a 16 pool.
+		"a log that exists counts at what it holds, not at what it asks": {
+			asked: map[string]domainCeiling{
+				"a": derived(8 * gib), "b": derived(16 * gib), "c": derived(8 * gib),
+			},
+			held:  map[string]int64{"a": 10 * gib},
+			pool:  16 * gib,
+			want:  map[string]int64{"a": 4 * gib, "b": 4 * gib, "c": 2 * gib},
+			short: map[string]int64{"b": 8 * gib, "c": 4 * gib},
+		},
+		// The measured boot: a tracker log created at an explicit 16 GiB
+		// that was later unset, the broker with 398676992 bytes left, and
+		// so a pool of 8789273088, here on a 16 GiB volume. The vector
+		// changelog was sized at 3857765632 in bytes the tracker already
+		// held; it is the floor, and a broker that cannot grant even that
+		// refuses it by name.
+		"a log holding twice the share leaves the missing ones their floors": {
+			asked: map[string]domainCeiling{
+				"tracker": derived(4 * gib), "vectors": derived(4 * gib), "pages": derived(gib),
+			},
+			held: map[string]int64{"tracker": 16 * gib},
+			pool: (398676992 + 16*gib) / 2,
+			want: map[string]int64{
+				"tracker": 3857765632, "vectors": gib, "pages": gib,
+			},
+			short: map[string]int64{"vectors": 3857765632},
+		},
+		// An explicit ceiling is what the operator wrote for a stream this
+		// boot creates, and nothing about a stream that exists: 10 GiB is
+		// what a's reservation is, whatever its field says now.
+		"an explicit log that exists counts at what it holds, not at its field": {
+			asked: map[string]domainCeiling{"a": explicit(2 * gib), "b": derived(16 * gib)},
+			held:  map[string]int64{"a": 10 * gib},
+			pool:  12 * gib,
+			want:  map[string]int64{"a": 2 * gib, "b": 2 * gib},
+			short: map[string]int64{"b": 10 * gib},
+		},
+		// And the other direction: a log holding less than its fit (a
+		// capacity operation gave some back) leaves room the missing log
+		// is NOT given. The 6 a's 2 leave would create b above its fit of
+		// 4, which is what every later boot reports b's stream against —
+		// a capacity difference on every boot for the life of the stream.
+		"a log holding less than its fit leaves a missing one at its fit": {
+			asked: map[string]domainCeiling{"a": derived(8 * gib), "b": derived(8 * gib)},
+			held:  map[string]int64{"a": 2 * gib},
+			pool:  8 * gib,
+			want:  map[string]int64{"a": 4 * gib, "b": 4 * gib},
+		},
+		// A first boot that stopped after creating the tracker's stream at
+		// its fit, measured: the logs the restart creates divide the
+		// 8947848534 the tracker leaves, and the vector changelog's share
+		// of that floors to 7158278827 — one byte over the 7158278826 the
+		// empty-broker division gives it. Created there, it was reported
+		// as a capacity difference on every boot after.
+		"a boot that stopped between two creates sizes the rest at their fit": {
+			asked: map[string]domainCeiling{
+				"tracker": derived(16 * gib), "vectors": derived(16 * gib), "pages": derived(4 * gib),
+			},
+			held: map[string]int64{"tracker": 7158278826},
+			pool: 16106127360,
+			want: map[string]int64{
+				"tracker": 7158278826, "vectors": 7158278826, "pages": 1789569706,
+			},
+		},
+		// A restart: nothing is missing, so what the logs hold changes no
+		// value, and each is the number the broker's capacity line holds
+		// its stream against.
+		"when every log exists each is reported at its fit": {
+			asked: map[string]domainCeiling{
+				"a": derived(8 * gib), "b": derived(16 * gib), "c": derived(8 * gib),
+			},
+			held: map[string]int64{"a": 16 * gib, "b": gib, "c": gib},
+			pool: 16 * gib,
+			want: map[string]int64{"a": 4 * gib, "b": 8 * gib, "c": 4 * gib},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := fitCeilings(tc.asked, tc.pool)
+			got := fitCeilings(tc.asked, tc.held, tc.pool)
 			for name, want := range tc.want {
 				if got[name].Bytes != want {
 					t.Errorf("%s = %d, want %d (all: %+v)", name, got[name].Bytes, want, got)
@@ -146,7 +282,240 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 					t.Errorf("%s's explicit flag changed", name)
 				}
 			}
+			fit := divide(tc.asked, tc.pool)
+			var reserved, holding, allowed int64
+			var roomToSpare []string
+			for name, ceiling := range got {
+				if holds, exists := tc.held[name]; exists {
+					reserved += holds
+					holding += holds
+					continue
+				}
+				reserved += ceiling.Bytes
+				if ceiling.Bytes > fit[name].Bytes {
+					t.Errorf("%s is created at %d, above its fit of %d on an "+
+						"empty broker — every later boot reports its stream as "+
+						"a capacity difference", name, ceiling.Bytes, fit[name].Bytes)
+				}
+				if ceiling.Explicit || ceiling.Bytes <= MinDomainCeiling {
+					allowed += ceiling.Bytes
+					continue
+				}
+				roomToSpare = append(roomToSpare, name)
+			}
+			if bound := max(tc.pool, holding) + allowed; reserved > bound {
+				t.Errorf("the logs reserve %d bytes between them, past the %d "+
+					"that the larger of the pool (%d) and what the existing logs "+
+					"hold (%d) allows with the floors and set ceilings of the "+
+					"missing ones: %+v", reserved, bound, tc.pool, holding, got)
+			}
+			if reserved > tc.pool && len(roomToSpare) > 0 {
+				t.Errorf("the logs reserve %d bytes of a %d-byte pool between "+
+					"them, and %v were created above the floor: %+v",
+					reserved, tc.pool, roomToSpare, got)
+			}
+			short := shortOfFit(tc.asked, tc.held, tc.pool, got)
+			if len(short) != len(tc.short) {
+				t.Errorf("short of their fit = %v, want %v", short, tc.short)
+			}
+			for name, fit := range tc.short {
+				if short[name] != fit {
+					t.Errorf("short of their fit = %v, want %v", short, tc.short)
+				}
+			}
 		})
+	}
+}
+
+// sizingHost is a broker that answers the two questions sizing asks — what it
+// can grant, and what each log's stream holds — and nothing else.
+//
+// The rest of [domainHost] is the NIL interface it embeds, so a sizing that
+// began provisioning, or opened a log or a consumer, panics rather than
+// succeeding against a broker nobody modelled.
+type sizingHost struct {
+	domainHost
+	budget jetstream.StorageBudget
+	unread error
+	// held is each existing stream's ceiling, by stream name.
+	held map[string]int64
+}
+
+func (h sizingHost) StreamBudget(context.Context) (jetstream.StorageBudget, error) {
+	return h.budget, h.unread
+}
+
+func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64, bool, error) {
+	holds, exists := h.held[stream]
+	return holds, exists, nil
+}
+
+// A LOG CREATED BESIDE ONES THAT EXIST FITS THE SHARE, on every reading of the
+// broker's budget.
+//
+// Two ways past it, one per reading. Where the broker states its limit, the
+// missing logs were sized as though the existing one held its ask. Where the
+// pool falls back to the volume's free space, the existing ceilings were ADDED
+// to it as well, although free space never paid for a reservation — so even
+// sized from what the others hold, the missing logs were given half of what
+// they hold again.
+func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
+	t.Parallel()
+	// 64 GiB free: the tracker and the vector changelog each ask for
+	// 16 GiB and the knowledge base's log for 4. The tracker's stream
+	// already holds 16.
+	const free = 64 * gib
+	const trackerHolds = 16 * gib
+	for name, tc := range map[string]struct {
+		budget jetstream.StorageBudget
+		unread error
+		// grantable is what the broker could grant the logs if they held
+		// nothing, worked out here rather than read back from the code.
+		grantable int64
+	}{
+		// 44 GiB, of which 4 GiB is reserved by other streams and 16 GiB
+		// by the tracker's.
+		"a broker that states its limit": {
+			budget: jetstream.StorageBudget{Limit: 44 * gib, Committed: 20 * gib,
+				Source: jetstream.BudgetServerStore},
+			grantable: 40 * gib,
+		},
+		"a broker that states no limit": {
+			budget:    jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated},
+			grantable: free,
+		},
+		"a budget that could not be read": {
+			unread:    errors.New("no responders"),
+			grantable: free,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
+				tracker.Domain{}.Stream().Name: trackerHolds,
+			}}
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			if err != nil {
+				t.Fatalf("sizeCeilings: %v", err)
+			}
+			reserved := trackerHolds
+			for _, domain := range registeredDomains() {
+				if domain.Name() != (tracker.Domain{}).Name() {
+					reserved += sized[domain.Name()].Bytes
+				}
+			}
+			if share := int64(float64(tc.grantable) * StreamBudgetShare); reserved > share {
+				t.Errorf("the state logs reserve %d bytes between them, of a "+
+					"%d-byte share: %+v", reserved, share, sized)
+			}
+		})
+	}
+}
+
+// A RESTART SIZING FROM FREE SPACE SIZES THE LOGS AS THE FIRST BOOT DID.
+//
+// [TestARestartSizesTheLogsAsTheFirstBootDid] holds this against a broker that
+// states its limit, where the logs' reservations spend the figure and have to
+// be added back. Free space is the figure a node falls back to where the
+// broker states none or cannot be read, and no reservation spends it, so
+// adding them back grew the pool on every restart by half of what the logs
+// hold: at 16 GiB free the first boot scaled 9 GiB of asks into an 8 GiB share,
+// and a restart divided 12 and reported every stream as a difference nobody
+// had made.
+func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) {
+	t.Parallel()
+	const free = 16 * gib
+	for name, tc := range map[string]struct {
+		budget jetstream.StorageBudget
+		unread error
+	}{
+		"a broker that states no limit": {
+			budget: jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated},
+		},
+		"a budget that could not be read": {unread: errors.New("no responders")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host := sizingHost{budget: tc.budget, unread: tc.unread}
+			first, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			if err != nil {
+				t.Fatalf("sizeCeilings: %v", err)
+			}
+			host.held = map[string]int64{}
+			for _, domain := range registeredDomains() {
+				host.held[domain.Stream().Name] = first[domain.Name()].Bytes
+			}
+			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			if err != nil {
+				t.Fatalf("sizeCeilings: %v", err)
+			}
+			if !reflect.DeepEqual(first, again) {
+				t.Errorf("the first boot sized %+v and a restart %+v", first, again)
+			}
+		})
+	}
+}
+
+// A FIRST BOOT THAT STOPPED BETWEEN TWO CREATES LEAVES LOGS A RESTART REPORTS
+// AS THEY WERE MADE.
+//
+// A boot provisions the logs one after another, and a kill, a timeout or a
+// refused create between two of them leaves some streams existing and the rest
+// missing. The restart sizes the missing ones from what the existing ones
+// leave of the share — and on this budget the vector changelog's part of that
+// remainder floors to one byte past the fit every later boot holds its stream
+// against, so from then on every boot of every node logged a capacity
+// difference nobody had made. So the three sizings are run as the broker sees
+// them: the first boot, a restart where only the tracker's stream was created
+// (its reservation spent from the broker's figure), and a restart with all
+// three, where every stream must be reported at exactly what it holds.
+func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
+	t.Parallel()
+	// 64 GiB free under a 30 GiB limit: the tracker and the vector
+	// changelog each ask for 16 GiB and the knowledge base's log for 4,
+	// into a 15 GiB share.
+	const free = 64 * gib
+	host := sizingHost{budget: jetstream.StorageBudget{
+		Limit: 30 * gib, Source: jetstream.BudgetServerStore,
+	}}
+	boot := func() map[string]domainCeiling {
+		t.Helper()
+		sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+		if err != nil {
+			t.Fatalf("sizeCeilings: %v", err)
+		}
+		return sized
+	}
+	create := func(name string, bytes int64) {
+		for _, domain := range registeredDomains() {
+			if domain.Name() == name {
+				host.held[domain.Stream().Name] = bytes
+				host.budget.Committed += bytes
+				return
+			}
+		}
+		t.Fatalf("no registered domain is named %q", name)
+	}
+
+	first := boot()
+	host.held = map[string]int64{}
+	trackerName := tracker.Domain{}.Name()
+	create(trackerName, first[trackerName].Bytes)
+
+	restart := boot()
+	for _, domain := range registeredDomains() {
+		if domain.Name() != trackerName {
+			create(domain.Name(), restart[domain.Name()].Bytes)
+		}
+	}
+
+	again := boot()
+	for _, domain := range registeredDomains() {
+		holds := host.held[domain.Stream().Name]
+		if reported := again[domain.Name()].Bytes; reported != holds {
+			t.Errorf("%s's stream holds %d and every boot now reports it against "+
+				"%d — a capacity difference nobody made", domain.Name(), holds, reported)
+		}
 	}
 }
 

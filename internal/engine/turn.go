@@ -161,6 +161,11 @@ type Request struct {
 	// WorkKey identifies this unit of work for the whole dispatch.
 	WorkKey string
 
+	// WorkSince is when that unit of work began — [inbox.WorkSinceFor],
+	// over the same constituents as the key — and the instant every
+	// operation id the turn derives from the key carries.
+	WorkSince time.Time
+
 	// RunID identifies THIS EXECUTION of it — minted per dispatch, so a
 	// redelivered trigger (which re-derives the same WorkKey by design)
 	// runs under an identity of its own. See ADR-0017.
@@ -483,7 +488,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			if err := d.Park(ctx, handle, tail); err != nil {
 				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
-			routing = inbox.Routing{WorkKey: headKey, Events: head}
+			routing = inbox.Routing{
+				WorkKey: headKey, Events: head,
+				// THE HEAD'S OWN, for the reason its key is the head's
+				// alone: only the head runs.
+				WorkSince: inbox.WorkSinceFor(head, d.ledgered),
+			}
 			trigger = head
 		} else {
 			trigger = []*events.Event{merged}
@@ -517,7 +527,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	req := Request{
 		RunID:  newRunID(),
 		Handle: handle, Events: routing.Events, Trigger: trigger,
-		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
+		WorkKey: routing.WorkKey, WorkSince: routing.WorkSince,
+		Coalesce:        routing.Coalesce,
 		TimeoutSeconds:  wallClockOf(routing.Events),
 		ConversationKey: conversationIdentityOf(routing.Events),
 		// READ OFF THE TRIGGER, and it was read off nothing: this field

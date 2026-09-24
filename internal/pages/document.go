@@ -25,6 +25,11 @@ type Container struct {
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
 
+	// ChartEpoch is the configuration activation Name and Purpose were last
+	// written from ([configplane.ActivationStamp]), zero for a container
+	// written before containers carried one. See [Store.EnsureContainer].
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -216,7 +221,7 @@ func (e ErrUnknownVersion) Error() string {
 // carried as unknown, so the next encode writes the stale carried copy back
 // over what the caller set. A test asserts every declared name is covered.
 var (
-	containerFields = fieldSet(Container{}, "name", "purpose")
+	containerFields = fieldSet(Container{}, "name", "purpose", "chart_epoch")
 	pageFields      = fieldSet(Page{}, "parent_id", "body", "labels", "watchers",
 		"muted", "author", "trashed_at", "last_change")
 	revisionFields = fieldSet(Revision{}, "message", "author")

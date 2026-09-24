@@ -153,10 +153,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	stamped, persisted, known := turnScopedTypes(t)
 
 	for _, band := range turnBands {
-		// `internal/events/types` is one level deeper than the package
-		// directory [clientsource.Tree] is written against, so it joins
-		// the extra step itself — the same as internal/api/configapi.
-		body, err := clientsource.Declaration("../"+clientsource.Tree,
+		body, err := clientsource.Declaration(clientsource.Tree(t),
 			fmt.Sprintf(`(?s)const %s = new Set\(\[(.*?)\]\)`, band))
 		if err != nil {
 			t.Errorf("%s: %v", band, err)
@@ -203,7 +200,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	// declaration has a different shape, checked identically because it makes
 	// the identical promise: the screen draws these rows, so a type here that
 	// the turn query cannot return is an inventory line that never appears.
-	absorbed, err := clientsource.Declaration("../"+clientsource.Tree,
+	absorbed, err := clientsource.Declaration(clientsource.Tree(t),
 		fmt.Sprintf(`(?s)const %s: Record<string, string> = \{(.*?)\n\}`, absorbedBand))
 	if err != nil {
 		t.Errorf("%s: %v", absorbedBand, err)

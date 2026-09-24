@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"time"
-
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -103,12 +101,22 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Cursor is this node's committed position, and Floor the published
-	// trim floor. Both are set by the engine after the runner exists,
-	// because a fence built before its applier would compare against a
-	// position that does not move.
-	Cursor func() statelog.Position
-	Floor  func(ctx context.Context) (uint64, error)
+	// Floor is the fleet's published trim floor at a generation and Ends
+	// the log's two ends, read live — the first surviving sequence is the
+	// other bound [Fence.ClearForZero] takes the higher of, for the reason
+	// the tracker's fence gives, and the last is what says this node is on
+	// this log at all. The cursor the floor is compared against is passed
+	// per call, and the floor is read at that cursor's generation, because
+	// the cursor has to be the checkpoint the write's own snapshot read
+	// ([statelog.Snap.Checkpoint]) — see the tracker's fence for why
+	// neither may be the applier's live position.
+	Floor func(ctx context.Context, generation uint32) (uint64, error)
+	Ends  func(ctx context.Context) (statelog.LogEnds, error)
+
+	// Committed is this node's applier's live checkpoint, which the end is
+	// compared against instead of the cursor, for the reason
+	// [statelog.ZeroFence] gives.
+	Committed func() statelog.Position
 }
 
 // NewFence builds it.
@@ -160,38 +168,16 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // the fail-open rule a delivery claim uses: failing open there is a duplicate
 // delivery, which is recoverable; failing open here is a lost update, which is
 // not.
+//
+// THE CHECK IS [statelog.ZeroFence], the one the tracker's fence runs too:
+// this supplies the four reads. Written out here it refused an evicted node
+// with [statelog.ErrConflict], which the page tools translate into "somebody
+// else is editing this page", and a node below the floor with prose rather
+// than a reason; every refusal is now an [*statelog.Unavailable] naming it.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("pages: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil {
-		return fmt.Errorf("pages: no published trim floor is readable, so this " +
-			"node cannot establish that an absent anchor means an unclaimed " +
-			"address rather than a claim trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx)
-	if err != nil {
-		return fmt.Errorf("pages: read the published trim floor: %w — a floor "+
-			"that cannot be read is not a floor that is low, and publishing at "+
-			"zero on the guess is a lost update nothing recovers", err)
-	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone — see the tracker's fence, which makes
-	// the same comparison for the same reason.
-	if floor > cursor.Seq+1 {
-		return fmt.Errorf("pages: the trim may have removed everything below %d "+
-			"and this node has consumed through %d, so an absent anchor may be a "+
-			"claim trimmed beneath it rather than an address that was never "+
-			"taken: %w", floor, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.ZeroFence{
+		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
+	}.ClearForZero(ctx, cursor)
 }
 
 // Gates answers whether a durable record produced rows on NO node.
@@ -204,75 +190,97 @@ type Gates struct{ db *store.DB }
 // NewGates builds it.
 func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 
-// GatedAt reports the gate that dropped a record at p.
+// GatedAt reports whether a record at p applies nowhere, and the gate that
+// answers for it, by the rule [statelog.Gates] states — which the tracker's
+// reader keeps too, and statelogtest.RunGates certifies for both.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db == nil {
 		return "", false, nil
 	}
-	// ONE TRANSACTION FOR BOTH GATES, and through the HANDLE rather than
-	// its pool — see [Fence.Evicted] for why a nil pool is reachable here.
-	// One transaction rather than two statements is the same rule every
-	// multi-statement answer in this package follows: the two gates would
-	// otherwise be read at two instants, and a record could be reported
-	// ungated by an eviction that had landed between them.
-	if writer != "" {
-		var from, readmitted sql.NullInt64
-		err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-			return tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position
-			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted)
-		})
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return "", false, fmt.Errorf("pages: read the eviction gate for "+
-				"node %s: %w", writer, err)
-		default:
-			at := p.Packed()
-			evicted := from.Valid && at > from.Int64
-			back := readmitted.Valid && at >= readmitted.Int64
-			if evicted && !back {
-				return statelog.ReasonEvicted, true, nil
+	var reason statelog.Reason
+	var gated bool
+	// ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer,
+	// and through the HANDLE rather than its pool — see [Fence.Evicted] for
+	// why a nil pool is reachable here. The tracker's reader has the same
+	// shape, for the same reason.
+	//
+	// This used to say so and then make two calls, each its own
+	// `Replicated().Read` — so the two halves of one answer were read at
+	// two instants, and possibly from two FILES: every `Replicated()`
+	// reloads the peer pointer, and an adoption swaps that pointer (close,
+	// rename the donated file into place, reopen) while readers run. The
+	// applier also commits between any two reads, and the deletion gate is
+	// position-independent, so a purge of this page committing between
+	// the two calls made the first half describe the estate before it and
+	// the second half the estate after it. Whether such a pair still named
+	// the gate the rule names then rested on an argument
+	// about how each table can move between two instants — a marker only
+	// ever appears; an eviction window over an applied position is only
+	// ever rewritten by a re-eviction — that nothing here made and nothing
+	// enforced. One snapshot is one state the applier committed, so the
+	// answer is right whenever the rule is right for a single state, which
+	// is the only thing [Applier.Gated]'s own reasoning establishes.
+	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
+		// marker holds the page for every writer for ever, where an
+		// eviction is one writer's and a readmission ends it, so `deleted`
+		// is the answer that stays true. A record both gates drop is
+		// dropped either way, so the order decides only which one is
+		// REPORTED — and [Applier.Gated]'s opposite order decides only
+		// which one a drop is COUNTED under.
+		if ObjectKind(subj.Kind) == KindPage {
+			var author sql.NullString
+			err := tx.QueryRowContext(ctx,
+				`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
+				subj.ID).Scan(&author)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return fmt.Errorf("pages: read the deletion gate for page "+
+					"%s: %w", subj.ID, err)
+			case author.Valid && author.String == opID:
+				// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT,
+				// by its own id. Without the exception a purge whose
+				// acknowledgement was lost resolves as "applied
+				// nowhere", and its caller is told the destruction it
+				// asked for did not happen — when it did. It falls
+				// through to the eviction gate rather than out of the
+				// read: the exception says THIS gate did not drop the
+				// record, which is no answer about the other one.
+			default:
+				reason, gated = statelog.ReasonDeleted, true
+				return nil
 			}
 		}
-	}
-	if ObjectKind(subj.Kind) != KindPage {
-		return "", false, nil
-	}
-	var author sql.NullString
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
-			subj.ID).Scan(&author)
+		if writer == "" {
+			return nil
+		}
+		var from, readmitted sql.NullInt64
+		err := tx.QueryRowContext(ctx, `
+			SELECT from_position, readmitted_position
+			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return fmt.Errorf("pages: read the eviction gate for node %s: %w",
+				writer, err)
+		}
+		// THE APPLIER'S WINDOW, spelled as [Applier.Gated] spells it: the
+		// two must agree, and the same two comparisons are what makes that
+		// readable rather than derived.
+		at := p.Packed()
+		evicted := from.Valid && at > from.Int64
+		back := readmitted.Valid && at >= readmitted.Int64
+		if evicted && !back {
+			reason, gated = statelog.ReasonEvicted, true
+		}
+		return nil
 	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("pages: read the deletion gate for page "+
-			"%s: %w", subj.ID, err)
+	if err != nil {
+		return "", false, err
 	}
-	// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT. A purge whose
-	// acknowledgement was lost would otherwise resolve as "applied
-	// nowhere", and its caller would be told the destruction it asked for
-	// did not happen — when it did.
-	if author.Valid && author.String == opID {
-		return "", false, nil
-	}
-	return statelog.ReasonDeleted, true, nil
-}
-
-// AdoptedAt is when this node's adoption of a donated snapshot completed.
-//
-// It qualifies a read of the OPERATION LEDGER, which travels SCRUBBED inside a
-// snapshot: an op id minted before this instant cannot be answered for here at
-// all, and reading its absence as "somebody else won" would re-decide against a
-// row that moved because of this very write.
-func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	if g == nil || g.db == nil {
-		return time.Time{}, false, nil
-	}
-	return statelog.AdoptedAt(ctx, g.db)
+	return reason, gated, nil
 }

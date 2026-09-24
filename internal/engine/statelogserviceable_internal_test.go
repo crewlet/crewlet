@@ -63,7 +63,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.log
+	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")

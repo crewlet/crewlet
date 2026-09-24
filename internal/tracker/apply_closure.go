@@ -54,7 +54,9 @@ func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (i
 	return written, nil
 }
 
-// rebuildAncestry writes one task's closure rows and its derived columns.
+// rebuildAncestry writes one task's closure rows and its derived columns: the
+// root, the depth, and the three flags the walk decides — a cycle, a subtree
+// deeper than [MaxDepth], and a task in another project than its root's.
 func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 	parent *string) (int, error) {
 
@@ -99,13 +101,57 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 		at = next
 	}
 
+	inconsistent, err := outsideRootsProject(ctx, tx, id, root)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?
+		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?,
+			inconsistent_project = ?
 		WHERE id = ?`,
-		root, depth, boolInt(cycle), boolInt(depth > MaxDepth), id); err != nil {
+		root, depth, boolInt(cycle), boolInt(depth > MaxDepth),
+		boolInt(inconsistent), id); err != nil {
 		return 0, fmt.Errorf("tracker: stamp the ancestry of %s: %w", id, err)
 	}
 	return written + 1, nil
+}
+
+// outsideRootsProject reports a task filed in another project than its root —
+// the `inconsistent_project` attention flag.
+//
+// A subtree lives in one project: a cross-project move carries every task
+// beneath the root, and a board keeps a subtree's rows to the project it is
+// drawing on the assumption that it does. So a subtask elsewhere is not drawn
+// under its root — which is what a move that stopped part-way leaves until it
+// is finished, and what a merge re-parenting a subtask onto a task in another
+// project leaves until somebody moves it. The column, its filter and the
+// attention index all shipped with the schema and nothing ever set it, so the
+// attention queue answered `flag=inconsistent_project` with nothing on every
+// company.
+//
+// DERIVED HERE, where the root is already known, and so on every apply that
+// can move either end: a task's own apply rebuilds its ancestry, and a root's
+// apply rebuilds every descendant's ([Applier.maintainClosure]) — so a root
+// moved to another project flags each descendant until its own move clears it.
+// A root this node does not have answers false, for the reason [parentOf]
+// treats it as absent.
+func outsideRootsProject(ctx context.Context, tx *sql.Tx, id, root string) (bool, error) {
+	if root == id {
+		return false, nil
+	}
+	var differ int
+	err := tx.QueryRowContext(ctx, `
+		SELECT t.project_key <> r.project_key
+		FROM tracker_tasks t JOIN tracker_tasks r ON r.id = ?
+		WHERE t.id = ?`, root, id).Scan(&differ)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("tracker: compare the project of %s with its "+
+			"root %s's: %w", id, root, err)
+	}
+	return differ == 1, nil
 }
 
 // descendantsOf reads a task's existing subtree, deepest last.

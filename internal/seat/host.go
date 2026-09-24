@@ -167,9 +167,10 @@ type Config struct {
 	// and dropping work in hand would be pure loss. This one is about work
 	// already in hand, and it fires only where that work would be WRONG —
 	// an applier halted at a record it cannot decode, an eviction whose
-	// peers are dropping everything this node writes, rows below a trim
-	// floor with a hole nothing will fill. A seat left running on any of
-	// those answers its own tools out of a copy the fleet has abandoned.
+	// peers are dropping everything this node writes, rows below the log's
+	// first surviving record with a hole nothing will fill. A seat left
+	// running on any of those answers its own tools out of a copy the fleet
+	// has abandoned.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.
@@ -367,6 +368,36 @@ func (h *Host) lockSeat(handle string) func() {
 		l.waiters--
 		h.mu.Unlock()
 	}
+}
+
+// WithHeldSeat runs fn with the lease this node holds a seat under, under that
+// seat's own lock, and reports whether the seat was held.
+//
+// UNDER THE LOCK every acquisition and release of the seat runs under, which
+// is the whole of it: a caller that must prepare the seats this node ALREADY
+// holds — for something that arrived after they were taken — cannot race the
+// seat's own acquisition hook preparing it, or a release tearing down what it
+// just attached. A seat claimed while the caller waits is prepared by its hook
+// and seen as held once that hook has returned; a seat released meanwhile is
+// not held, and fn does not run.
+//
+// fn must not call back into the host for the same seat — [Host.Release]
+// takes this same lock — so a caller that wants to give a seat back on fn's
+// failure does it after WithHeldSeat returns.
+func (h *Host) WithHeldSeat(handle string, fn func(lease coord.Lease) error) (bool, error) {
+	unlock := h.lockSeat(handle)
+	defer unlock()
+	h.mu.Lock()
+	held := h.held[handle]
+	var lease coord.Lease
+	if held != nil {
+		lease = held.lease
+	}
+	h.mu.Unlock()
+	if held == nil {
+		return false, nil
+	}
+	return true, fn(lease)
 }
 
 // --- introspection --------------------------------------------------------

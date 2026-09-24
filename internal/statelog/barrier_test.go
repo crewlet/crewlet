@@ -26,7 +26,7 @@ func probeEncode(env statelog.Envelope) ([]byte, error) { return json.Marshal(en
 func TestBarrierNeverAcceptsADuplicateAck(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	idx, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode, h.gen.Load, nil)
+	idx, err := statelog.NewReadIndex(probeDomain{}, h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestBarrierNeverAcceptsADuplicateAck(t *testing.T) {
 func TestABarrierServedFromTheDedupeWindowIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	idx, err := statelog.NewReadIndex(probeDomain{}, duplicating{h.log}, probeEncode,
+	idx, err := statelog.NewReadIndex(probeDomain{}, duplicating{h.log}, noCeiling(t), probeEncode,
 		h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -112,7 +112,7 @@ func TestAReaderNeverJoinsABarrierThatWasAlreadyInFlight(t *testing.T) {
 	h := newHarness(t)
 
 	gate := &gatedBarrier{inner: h.log, started: make(chan struct{}), release: make(chan struct{})}
-	idx, err := statelog.NewReadIndex(probeDomain{}, gate, probeEncode, h.gen.Load, nil)
+	idx, err := statelog.NewReadIndex(probeDomain{}, gate, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestAReaderNeverJoinsABarrierThatWasAlreadyInFlight(t *testing.T) {
 func TestConcurrentReadersAreAllServedAboveTheirOwnArrival(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	idx, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode, h.gen.Load, nil)
+	idx, err := statelog.NewReadIndex(probeDomain{}, h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

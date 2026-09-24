@@ -604,6 +604,7 @@ func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSur
 	configSurface, err := configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
 		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
+		Bootstrap: boot,
 	})
 	if err != nil {
 		t.Fatalf("config surface: %v", err)

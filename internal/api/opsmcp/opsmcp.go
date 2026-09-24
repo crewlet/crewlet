@@ -46,6 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -239,7 +240,7 @@ func (s *Server) Handler() http.Handler {
 			log.WarnContext(r.Context(), "operator_mcp_unguarded",
 				"detail", "a request reached the operator MCP surface with no "+
 					"operator on its context; the auth guard is not in front of it")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 		streamable.ServeHTTP(w, r)

@@ -49,7 +49,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.log
+	s := e.native.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
@@ -92,7 +92,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		logs[domain.Name()] = running.log
 	}
 
-	behind, want, err := s.replayable(t.Context(), logs)
+	behind, _, want, err := s.replayable(t.Context(), logs)
 	if err != nil {
 		t.Fatalf("replayable: %v — a node with no checkpoint compared its "+
 			"absent generation against the fleet's and failed its own boot on "+

@@ -93,7 +93,7 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 		plane: coordmemory.NewFleet(),
 	}
 	opts := configapi.Options{
-		Store: db, Plane: s.plane,
+		Store: db, Plane: s.plane, Bootstrap: durableBoot(t),
 		Now: func() time.Time { return pinned },
 	}
 	if mutate != nil {
@@ -409,6 +409,45 @@ func TestADiffNeverCarriesEitherSecret(t *testing.T) {
 }
 
 // --- writes ----------------------------------------------------------------
+
+// durableBoot is a deployment the fixture company can run on: an embedded
+// stream that persists, so the cross-tier rule has nothing to refuse.
+func durableBoot(t *testing.T) *config.Bootstrap {
+	t.Helper()
+	return &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}}
+}
+
+// A DOCUMENT THE DEPLOYMENT CANNOT RUN IS REFUSED AT THE WRITE, naming the Tier
+// A field, rather than activated and then refused by every node's apply.
+//
+// The write judged the company alone. The apply judges it against the node's
+// own Tier A too ([config.CheckTiers]) — the engine's own tracker on a stream
+// kept in memory is a log a restart recreates empty — so a PUT turning on a
+// native backend was answered 201, activated, and refused everywhere a moment
+// later, leaving the fleet on its old epoch with nothing in the answer saying
+// why.
+func TestAWriteTheDeploymentCannotRunIsRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		o.Bootstrap = &config.Bootstrap{} // an embedded stream, in memory
+	})
+	res := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "turn on the native tracker"})
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400 — a document every node refuses to apply "+
+			"was accepted: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["error"] != "validation_error" {
+		t.Fatalf("error = %v (%s)", body["error"], res.Body)
+	}
+	if !strings.Contains(res.Body.String(), "stream.store_dir") {
+		t.Errorf("the refusal does not name the Tier A field to change: %s", res.Body)
+	}
+	if got := s.do(t, http.MethodGet, "/config", "", nil).Code; got == http.StatusOK {
+		t.Error("the refused document was activated anyway")
+	}
+}
 
 func TestAWriteNeedsASummary(t *testing.T) {
 	t.Parallel()
@@ -1035,7 +1074,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // The engine beside every API holds both, so a nil is a wiring mistake, and a
 // narrower surface built around it (an unregistered /config, every write
 // answering 503) would hide the mistake behind an answer that looks deliberate.
-func TestNewRefusesAMissingStoreOrPlane(t *testing.T) {
+func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
@@ -1044,8 +1083,9 @@ func TestNewRefusesAMissingStoreOrPlane(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	for field, opts := range map[string]configapi.Options{
-		"Store": {Plane: coordmemory.NewFleet()},
-		"Plane": {Store: db},
+		"Store":     {Plane: coordmemory.NewFleet(), Bootstrap: durableBoot(t)},
+		"Plane":     {Store: db, Bootstrap: durableBoot(t)},
+		"Bootstrap": {Store: db, Plane: coordmemory.NewFleet()},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {

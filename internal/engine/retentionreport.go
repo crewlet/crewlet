@@ -53,23 +53,29 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		in.Register, in.RegisterReadable = positions, true
 	}
 	if r.leases != nil {
-		if leases, err := r.leases.ListLive(ctx, coord.ClassNode); err == nil {
-			for _, lease := range leases {
-				if id, ok := coord.NodeID(lease.Resource); ok {
-					in.Live = append(in.Live, statelog.Presence{NodeID: id})
-				}
-			}
+		if live, err := livePresences(ctx, r.leases); err == nil {
+			in.Live = live
 		}
 	}
+	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
+	// reports its trim as unreadable rather than as a trim that has
+	// concluded nothing, which is a different thing to go and look at.
 	floors := map[string]coord.TrimFloor{}
-	if rows, err := r.fleet.Floors(ctx); err == nil {
-		for _, row := range rows {
-			floors[row.Domain] = row
-		}
+	rows, floorsErr := r.fleet.Floors(ctx)
+	for _, row := range rows {
+		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
 	newest, haveBackup := coord.NewestBackup(backups)
 
+	// perLog is each identity-claiming log's own tombstones, which the node
+	// block folds into one answer per node below.
+	var perLog [][]statelog.Tombstone
+	// healths is each domain's readiness, read ONCE here and handed to the
+	// alarm reading below rather than read again there: both are one
+	// node's answer about the same instant, and two reads a broker round
+	// trip apart could disagree about it.
+	healths := make(map[string]domainHealth, len(r.state.order))
 	for _, name := range r.state.order {
 		running := r.state.domains[name]
 		if running == nil {
@@ -80,16 +86,60 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			Stream:     running.domain.Stream().Name,
 			Generation: running.runner.Committed().Generation,
 			Replay:     running.domain.Stream().Replay,
+			Reserved:   statelog.KeepsGateReserve(running.domain),
 		}
 		if stats, err := running.log.Stats(ctx); err == nil {
 			d.FirstSeq, d.LastSeq = stats.FirstSeq, stats.LastSeq
 			d.Bytes, d.MaxBytes = stats.Bytes, stats.MaxBytes
 			d.StreamReadable = true
 		}
-		if floor, published := floors[name]; published {
-			d.TrimFloor = floor.TrimTo
+		d.FloorState = statelog.TrimFloorNoneAtGeneration
+		if floorsErr != nil {
+			d.FloorState = statelog.TrimFloorUnreadable
+		}
+		if floor, published := floors[name]; published && floor.Generation == d.Generation {
+			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
+			// and the report carries both: filled from one, the two
+			// figures were always equal and a blocked domain reported
+			// a floor of zero over a log a purge had already emptied.
+			//
+			// ONLY A ROW AT THIS DOMAIN'S OWN GENERATION, which is the
+			// rule every reader of the floor follows ([floorFor], the
+			// trim's own [nextFloor]): a row from another generation
+			// is a conclusion about another number space. Just after a
+			// reanchor the published row is the OLD stream's, so its
+			// floor, its terms and its blocking term were printed
+			// beside the adopted stream's first and last sequences as
+			// though they bounded them — where the trim has concluded
+			// nothing yet about the adopted one, which is what the
+			// empty row says until its first tick at this generation.
+			// A row ABOVE this node's generation is the fleet's on a
+			// stream this node has not adopted; its numbers compare
+			// with nothing this node holds, and a node on the new
+			// generation reports them.
+			d.TrimFloor = floor.Floor
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)
+			d.FloorState = statelog.TrimFloorPublished
+		}
+		// THIS NODE'S OWN REFUSAL OF THE DOMAIN, from the readiness its
+		// probe reads — so the not-ready state the guides send an operator
+		// here to find is a line this report prints, naming the finding.
+		health, healthErr := r.state.health(ctx, running)
+		healths[name] = domainHealth{health: health, err: healthErr}
+		if healthErr != nil {
+			// THE PROBE'S OWN ANSWER to a health nobody could read.
+			d.NotReady = &statelog.DomainRefusal{
+				Code:   string(statelog.RefuseBrokerUnreachable),
+				Detail: healthErr.Error(),
+			}
+		} else {
+			d.NotReady = health.NotReady(now, d.Stream, running.runner.StreamIdentity())
+		}
+		if truncated := running.runner.Truncated(); truncated != nil {
+			d.WritesRefused = &statelog.DomainRefusal{
+				Code: string(statelog.ReasonLogTruncated), Detail: truncated.Error(),
+			}
 		}
 		// THE EVICTIONS ARE NOT GATED ON A PUBLISHED FLOOR. They are
 		// applied rows, present whether or not the trim has ever run,
@@ -98,15 +148,74 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// evictions invisible for the first fifteen minutes of its life
 		// and for the whole life of a fleet whose duty is not running,
 		// which is exactly when somebody is reading this.
-		in.Tombstones = append(in.Tombstones,
-			r.tombstones(ctx, running, d.Generation)...)
+		//
+		// AN UNREAD LOG IS NAMED ON ITS OWN ROW, because the node block
+		// cannot say it: the log contributes no tombstone, so every node
+		// reads as not evicted there — the right side for the COUNTED
+		// column and a guess for the EVICTED one.
+		if running.domain.ClaimsIdentity() {
+			tombs, read := r.tombstones(ctx, running, d.Generation)
+			perLog = append(perLog, tombs)
+			d.EvictionsUnreadable = !read
+		}
 		d.SnapshotSkip = r.skipFor(in.Register, name)
 		in.Domains = append(in.Domains, d)
 	}
+	in.Tombstones = fleetTombstones(perLog)
 
-	in.Reading = r.reading(ctx, now, newest, haveBackup)
+	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
+}
+
+// fleetTombstones folds each identity-claiming log's own tombstones into the
+// one answer per node the report's node block renders: a node is shown evicted
+// only where EVERY such log holds its tombstone, as of the LATEST of them.
+//
+// # Why the intersection, and why the latest
+//
+// The trim counts nodes per log, so "evicted" on the node block is a claim
+// about all of them at once: a node evicted on the tracker's log and not yet on
+// the pages log is still counted on the pages log and still pins it. Rendered
+// from either log alone — which is what appending every log's rows did, the
+// last one read winning — that node read as evicted, and the COUNTED column
+// said no while one log's applied term waited on it. Until the gesture has
+// reached every log the node is shown as it is on the log still counting it,
+// which is also what the gesture's own answer tells the operator to finish.
+//
+// The window is measured from the latest tombstone because the node stops
+// being counted on every log only once the last of them has aged past it; the
+// earliest would call the eviction effective while one log still counts it.
+//
+// No log at all — a report assembled with no identity-claiming domain — is no
+// tombstone.
+func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
+	if len(perLog) == 0 {
+		return nil
+	}
+	latest := make(map[string]statelog.Tombstone, len(perLog[0]))
+	held := make(map[string]int, len(perLog[0]))
+	for _, tombs := range perLog {
+		seen := make(map[string]bool, len(tombs))
+		for _, t := range tombs {
+			if seen[t.NodeID] {
+				continue
+			}
+			seen[t.NodeID] = true
+			held[t.NodeID]++
+			if prev, ok := latest[t.NodeID]; !ok || t.At.After(prev.At) {
+				latest[t.NodeID] = t
+			}
+		}
+	}
+	out := make([]statelog.Tombstone, 0, len(latest))
+	for id, t := range latest {
+		if held[id] == len(perLog) {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
 }
 
 // openMaintenance is the capacity operation currently holding the fleet, or
@@ -242,7 +351,8 @@ func (r *retention) replica() statelog.ReplicaReport {
 // backend and no maintenance in flight evaluate the same table as one with all
 // three.
 func (r *retention) reading(ctx context.Context, now time.Time,
-	newest coord.BackupPoint, haveBackup bool) statelog.Reading {
+	newest coord.BackupPoint, haveBackup bool,
+	healths map[string]domainHealth) statelog.Reading {
 
 	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
 	if haveBackup {
@@ -262,10 +372,14 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
-		health, err := r.state.health(ctx, running)
-		if err != nil {
+		read, ok := healths[name]
+		if !ok {
+			read.health, read.err = r.state.health(ctx, running)
+		}
+		if read.err != nil {
 			continue
 		}
+		health := read.health
 		// THE WORST OF THE DOMAINS, because the reading describes one
 		// NODE: a two-domain node whose second applier is wedged is a
 		// node that is behind, and averaging would hide it.
@@ -282,6 +396,13 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
 	return out
+}
+
+// domainHealth is one domain's readiness as the report read it, or why it
+// could not be read.
+type domainHealth struct {
+	health statelog.Health
+	err    error
 }
 
 // maintenance is the oldest open capacity operation on any of this node's

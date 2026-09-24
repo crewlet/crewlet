@@ -143,12 +143,16 @@ func viewRegistry(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *too
 }
 
 // viewSpy captures the view a save wrote.
-type viewSpy struct{ saved []tracker.View }
+type viewSpy struct {
+	saved []tracker.View
+	ops   []string
+}
 
-func (s *viewSpy) WriteView(_ context.Context, _ string, view tracker.View) (
+func (s *viewSpy) WriteView(_ context.Context, opID string, view tracker.View) (
 	tracker.WriteResult, error) {
 
 	s.saved = append(s.saved, view)
+	s.ops = append(s.ops, opID)
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 

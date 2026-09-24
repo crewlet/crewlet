@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -809,6 +810,100 @@ var planeCases = []fleetCase{{
 		}
 		if len(seen) == 0 {
 			h.t.Fatal("no activation succeeded at all")
+		}
+	},
+}, {
+	// A LATER ACTIVATION CARRIES A LATER INSTANT, whatever the activating
+	// node's clock said. The instant is what every row a configuration
+	// derives is stamped with, and a row refuses a stamp no newer than its
+	// own — so an activation from a node whose clock runs behind, or a
+	// republish of an older `activated_at`, was applied to no project and no
+	// knowledge container, silently. See [coord.ActivationAt].
+	name: "an activation no later than the one it replaces is published after it",
+	fn: func(h *fleetHarness) {
+		first := h.now()
+		activate := func(req coord.ActivationRequest) coord.Activation {
+			h.t.Helper()
+			req.Payload = []byte("{}")
+			got, err := h.f.Activate(h.ctx, req)
+			if err != nil {
+				h.t.Fatalf("Activate(%s): %v", req.RevisionID, err)
+			}
+			target, found, err := h.f.Target(h.ctx)
+			if err != nil || !found || !target.At.Equal(got.At) {
+				h.t.Fatalf("the pointer carries %+v (found=%v err=%v), and the "+
+					"activation reported %s", target, found, err, got.At)
+			}
+			return got
+		}
+		if got := activate(coord.ActivationRequest{RevisionID: "rev-1", At: first}); !got.At.Equal(first) {
+			h.t.Fatalf("the first activation is at %s, want the %s it asked for", got.At, first)
+		}
+		for _, c := range []struct {
+			name string
+			req  coord.ActivationRequest
+		}{
+			{"an unconditional one from a clock behind",
+				coord.ActivationRequest{RevisionID: "rev-2", At: first.Add(-time.Hour)}},
+			{"an expecting one at the same instant",
+				coord.ActivationRequest{RevisionID: "rev-3", At: first, Expect: "rev-2"}},
+			{"one later by less than the stamp's resolution",
+				coord.ActivationRequest{RevisionID: "rev-4", At: first.Add(2*time.Millisecond + 400*time.Microsecond)}},
+		} {
+			before, _, err := h.f.Target(h.ctx)
+			if err != nil {
+				h.t.Fatalf("Target: %v", err)
+			}
+			got := activate(c.req)
+			if got.At.UnixMilli() <= before.At.UnixMilli() {
+				h.t.Fatalf("%s is published at %s, no later in milliseconds than "+
+					"the %s it replaced", c.name, got.At, before.At)
+			}
+		}
+		// AND A GENUINELY LATER ONE IS PUBLISHED AS IT ASKED.
+		later := first.Add(time.Minute)
+		if got := activate(coord.ActivationRequest{RevisionID: "rev-5", At: later}); !got.At.Equal(later) {
+			h.t.Fatalf("a later activation is at %s, want the %s it asked for", got.At, later)
+		}
+	},
+}, {
+	// THE INSTANT IS DECIDED INSIDE THE COMPARE-AND-SET, so two activations
+	// racing each other are never both told one instant: whichever lands
+	// second is compared with the first.
+	name: "concurrent activations are handed increasing instants",
+	fn: func(h *fleetHarness) {
+		type landed struct {
+			epoch int64
+			at    time.Time
+		}
+		var wg sync.WaitGroup
+		results := make(chan landed, 8)
+		for i := range 8 {
+			wg.Go(func() {
+				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+					RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
+				if err != nil {
+					h.t.Errorf("Activate: %v", err)
+					return
+				}
+				results <- landed{got.Epoch, got.At}
+			})
+		}
+		wg.Wait()
+		close(results)
+		var all []landed
+		for r := range results {
+			all = append(all, r)
+		}
+		if len(all) != 8 {
+			h.t.Fatalf("%d of 8 unconditional activations landed", len(all))
+		}
+		slices.SortFunc(all, func(a, b landed) int { return cmp.Compare(a.epoch, b.epoch) })
+		for i := 1; i < len(all); i++ {
+			if all[i].at.UnixMilli() <= all[i-1].at.UnixMilli() {
+				h.t.Fatalf("epoch %d is at %s, no later than epoch %d's %s",
+					all[i].epoch, all[i].at, all[i-1].epoch, all[i-1].at)
+			}
 		}
 	},
 }, {

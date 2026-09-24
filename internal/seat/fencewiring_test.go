@@ -5,12 +5,12 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // carriers are the configuration types the seat fence travels through, from
@@ -53,7 +53,7 @@ type literal struct {
 
 func TestEveryConfigThatCanCarryTheSeatFenceDoes(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 
 	seen := map[string]int{}
 	var missing []literal
@@ -148,7 +148,7 @@ func hasKey(lit *ast.CompositeLit, key string) bool {
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -165,19 +165,6 @@ func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	if err != nil {
 		t.Fatalf("walk %s: %v", dir, err)
 	}
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortPos(root, pos string) string {

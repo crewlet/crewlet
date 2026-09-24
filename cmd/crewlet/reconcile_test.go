@@ -75,6 +75,14 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 		t.Errorf("the pointer names %s, want the seeded revision %s",
 			target.RevisionID, active.ID)
 	}
+	// AT ONE INSTANT. The local row's is what this node boots its chart
+	// with next time, and the pointer's is what every node applied it
+	// with: two readings of the clock would put a restart's projects at
+	// an epoch no apply ever stamped.
+	if store.EncodeTime(active.ActivatedAt) != store.EncodeTime(target.At) {
+		t.Errorf("the seeded revision was activated at %s here and %s on the "+
+			"pointer, want one instant", active.ActivatedAt, target.At)
+	}
 }
 
 func TestAnUnchangedFileSeedsNothing(t *testing.T) {

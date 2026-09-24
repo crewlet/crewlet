@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -12,8 +13,8 @@ import (
 // The framework's own implementation of [Rows], and why it is here rather than
 // in each domain.
 //
-// Three of the four things a snapshot returns are the FRAMEWORK's: the
-// arbitration anchor lives in its table, and the deferred record and its scope
+// Most of what a snapshot returns is the FRAMEWORK's: the arbitration anchor
+// and the checkpoint live in its tables, and the deferred record and its scope
 // index live in tables whose shape the framework writes. A domain implementing
 // this seam for itself would be a second copy of the two-clause containment
 // probe — the one piece of SQL in this design where getting a clause wrong is
@@ -64,21 +65,48 @@ func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
 // broker matches the expectation, accepts the append, and both callers are
 // told they won.
 func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSet,
-	decide func(*sql.Tx) (Decision, error)) (Snap, error) {
+	opID string, held func(tx *sql.Tx, entry OpEntry) error,
+	decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
 
 	var snap Snap
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		decision, err := decide(tx)
+		// THE OPERATION FIRST — see [Snap.Held]. A domain with no ledger
+		// answers false here, which is every write on it.
+		entry, ok, err := r.tables.op(ctx, tx, opID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err = held(tx, entry); err != nil {
+				return err
+			}
+			snap.Held, snap.HeldOK = entry.Position, true
+			return nil
+		}
+		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
+		// it commits with the rows, so this is exactly the prefix the
+		// decision sees. The expectation-zero fence compares it rather
+		// than the applier's live position, for the reason
+		// [Snap.Checkpoint] gives — and it is read BEFORE the decision
+		// because the decision is stamped with its generation.
+		row, _, err := r.tables.readCursor(ctx, tx)
+		if err != nil {
+			return err
+		}
+		checkpoint := row.at
+		snap.Checkpoint = checkpoint
+
+		decision, err := decide(tx, checkpoint)
 		if err != nil {
 			return err
 		}
 		snap.Decision = decision
 
-		// The generation the anchor is read AT is the decision's own,
-		// because that is the generation the write will publish in: an
-		// anchor from a previous one is comparable and safely stale
-		// rather than an expectation.
-		anchor, err := r.tables.anchor(ctx, tx, r.tables.subjectOf(subj), decision.Envelope.Gen)
+		// The generation an absent anchor is reported AT is the
+		// checkpoint's, which is the generation the decision was stamped
+		// with: an anchor from a previous one is comparable and safely
+		// stale rather than an expectation.
+		anchor, err := r.tables.anchor(ctx, tx, r.tables.subjectOf(subj), checkpoint.Generation)
 		if err != nil {
 			return err
 		}
@@ -132,29 +160,43 @@ const everythingPath = ""
 // "absent" below the checkpoint means "not applied here YET" and "absent"
 // below an adoption means "scrubbed out of the snapshot I arrived with".
 // Either read as "somebody else won" republishes a write that already landed.
-func (r *SnapshotRows) Op(ctx context.Context, opID string) (Position, bool, error) {
+func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, error) {
 	if r.tables.ops == "" {
 		// A DOMAIN WITH NO LEDGER CANNOT ANSWER, and saying so is not the
 		// same as saying no: the caller's own arm for a ledgerless domain
 		// is what decides, and answering false here would make an
 		// ambiguous publish look resolved.
-		return Position{}, false, nil
+		return OpEntry{}, false, nil
 	}
-	var at Position
+	var entry OpEntry
+	var held bool
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		got, _, err := r.tables.op(ctx, tx, opID)
-		at = got
+		var err error
+		entry, held, err = r.tables.op(ctx, tx, opID)
 		return err
 	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return Position{}, false, nil
-	case err != nil:
-		return Position{}, false, err
-	case at.Seq == 0 && at.Generation == 0:
-		return Position{}, false, nil
+	if err != nil {
+		return OpEntry{}, false, err
 	}
-	return at, true, nil
+	// THE ROW'S OWN FOUND FLAG, not its position: a zero position is a
+	// value a row can hold, and reading it as absence answered a present
+	// row "never applied".
+	return entry, held, nil
+}
+
+// LostBefore answers how far back the domain's ledger may have lost rows — see
+// [Rows.LostBefore].
+func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) {
+	var (
+		before time.Time
+		ok     bool
+	)
+	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		before, ok, err = r.tables.lostBefore(ctx, tx)
+		return err
+	})
+	return before, ok, err
 }
 
 // CheckTables reports whether a domain's declared tables accept the
@@ -203,12 +245,20 @@ func CheckTables(ctx context.Context, db *store.DB, d Domain) error {
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.writeOp(ctx, tx, rec.OpID, t.subjectOf(rec.Subject), at,
-			store.DecodeTime(0)); err != nil {
+			rec.StoredAt, store.DecodeTime(0)); err != nil {
 			return fmt.Errorf("the operation ledger: %w", err)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, _, err := t.op(ctx, tx, rec.OpID); err != nil {
 			return fmt.Errorf("the operation ledger's own read: %w", err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if _, err := t.appliedRecord(ctx, tx, rec.OpID, at, rec.StoredAt); err != nil {
+			return fmt.Errorf("the operation ledger's record read: %w", err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if _, err := t.retainedRecord(ctx, tx, at, rec.StoredAt); err != nil {
+			return fmt.Errorf("the deferred record's own read by position: %w", err)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.advanceAnchor(ctx, tx, t.subjectOf(rec.Subject), at); err != nil {

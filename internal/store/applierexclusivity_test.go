@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -33,9 +34,12 @@ import (
 // only appears as two nodes answering one question differently — at which
 // point the write that caused it is months behind in the log.
 //
-// The tree already carried three such writes when this was added — a version
-// reset after a reanchor, a probe-flag clear and an inbox sweep. All three are
-// allowed below, and each had to state its case in terms of the rule.
+// The tree carried three such writes when this was added — a version reset
+// after a reanchor, a probe-flag clear and an inbox sweep — and each had to
+// state its case in terms of the rule. The version reset is gone: its case did
+// not survive the arbitration anchor moving off `version` (see
+// internal/tracker/reanchor.go), and a reanchor now writes nothing but the
+// framework's own checkpoint. The two that remain are allowed below.
 //
 // # What it walks, and what it cannot see
 //
@@ -87,7 +91,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	for _, positive := range []string{
 		`db.Replicated().Writer(ctx)`,
 		`d.deps.DB.Replicated().Tx(ctx, fn)`,
-		`tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)`,
+		`tracker.Rewrite(ctx, e.backends.Store.Replicated(), gen)`,
 		`peer := r.node.Replicated()`,
 		`statelog.Deps{DB: e.backends.Store.Replicated()}`,
 	} {
@@ -103,6 +107,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		`db.Writer(ctx)`,
 		`db.Tx(ctx, fn)`,
 		`statelog.CursorFor(ctx, s.db.Replicated(), name)`,
+		`statelog.CheckpointOf(ctx, s.db.Replicated(), name)`,
 	} {
 		if reachesReplicatedWrite(t, negative) {
 			t.Errorf("control: %q does not reach a write on the replicated "+
@@ -167,7 +172,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		t.Errorf("control: a constant did not fold: got %q, %v", got, ok)
 	}
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	var found []site
 	files := 0
 	for _, dir := range []string{"internal", "cmd"} {
@@ -283,8 +288,8 @@ const (
 	mechanism allowanceKind = "mechanism"
 
 	// exception: a genuine write to the replicated estate that is not a
-	// record, because no record could own what it touches. Read all three
-	// before adding a fourth.
+	// record, because no record could own what it touches. Read both
+	// before adding a third.
 	exception allowanceKind = "exception"
 
 	// notReplicated: the walk flagged a statement whose table it could not
@@ -335,21 +340,16 @@ var allowedReplicatedWriter = []allowance{
 	{
 		Prefix: "internal/statelog/", Kind: mechanism,
 		Why: "THE FRAMEWORK: the apply transaction itself, the snapshot " +
-			"install and the reanchor. A write here is the mechanism.",
+			"install and the reanchor. A write here is the mechanism — " +
+			"including the operation ledger's per-node sweep and the " +
+			"watermark it moves, because the ledger is statelog.Divergent " +
+			"(it travels, and its applied_at is each node's own clock), so " +
+			"two nodes legitimately hold different rows of it.",
 	},
 	{
 		Prefix: "internal/store/", Kind: mechanism,
 		Why: "The estate's OWNER — it opens the file, runs the migrations " +
 			"and serves the handle. A write here is the schema, not a row.",
-	},
-	{
-		Prefix: "internal/engine/reanchor.go", Kind: mechanism,
-		Why: "The wiring that hands the replicated handle to the framework " +
-			"for a log reanchor: the deps it builds and the version reset it " +
-			"drives. Every write it reaches is internal/statelog's or " +
-			"internal/tracker/reanchor.go's, each allowed on its own terms. " +
-			"Named by FILE rather than by package, so a new direct write " +
-			"elsewhere in internal/engine still fails.",
 	},
 	{
 		Prefix: "internal/engine/statelog.go", Kind: mechanism,
@@ -408,17 +408,9 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Three writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a fourth.
+	// THE EXCEPTIONS. Two writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a third.
 	// -----------------------------------------------------------------
-	{
-		Prefix: "internal/tracker/reanchor.go", Kind: exception,
-		Why: "ResetVersions puts every object row's version at a new " +
-			"generation's floor after a reanchor. It cannot be a record: the " +
-			"stream it would be published to is the one being replaced. " +
-			"Every node runs it against its own copy and computes the same " +
-			"floor, so it converges rather than diverges.",
-	},
 	{
 		Prefix: "internal/tracker/duty.go", Kind: exception,
 		Why: "clearProbe clears `rank_duplicate_pending`, a column written " +
@@ -454,14 +446,22 @@ func allowanceFor(file string) (string, bool) {
 // readOnlyOfReplicated names the calls that take the replicated estate's
 // handle and only read through it.
 //
-// Two of them, and both are worth naming rather than inferring: a handoff is
-// the point past which this walk cannot follow the handle, so the difference
+// One of them, and it is worth naming rather than inferring: a handoff is the
+// point past which this walk cannot follow the handle, so the difference
 // between "hands it to a reader" and "hands it to a writer" has to be
 // declared. The list is exercised by the controls above, so an entry that
 // stopped being a reader shows up as a control failure rather than as silence.
+//
+// `Evictions` was the second, and it left when each identity-claiming domain
+// began answering for its own log: it takes the node handle and reads the
+// replicated peer itself, so nothing hands it the estate any more — and an
+// exemption naming a call nobody makes is one that would silently cover the
+// next function of that name, whatever it wrote.
 var readOnlyOfReplicated = map[string]bool{
 	"CursorFor": true, // statelog.CursorFor reads a domain's checkpoint.
-	"Evictions": true, // tracker.Evictions reads the eviction rows.
+	// statelog.CheckpointOf reads the same row whole, with the record the
+	// checkpoint names beside it.
+	"CheckpointOf": true,
 }
 
 // replicatedWriteAt reports whether one node reaches a write on the

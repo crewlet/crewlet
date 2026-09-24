@@ -26,15 +26,15 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 ### The native tracker and knowledge base
 
-Eighteen more, registered **only where the company runs the engine's own backends**
+Nineteen more, registered **only where the company runs the engine's own backends**
 (`tracker.backend: native` / `knowledge.backend: native`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
-learns to distrust the whole catalogue. The twelve below are the item and page
+learns to distrust the whole catalogue. The thirteen below are the item and page
 tools; the other six read the catalogue, the projects and the activity feed,
 and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists the tracker's
-thirteen in full.
+fourteen in full.
 
 | Tool | Description |
 |------|-------------|
@@ -44,6 +44,7 @@ thirteen in full.
 | `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
+| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
@@ -56,11 +57,69 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
+Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
+[three values every write has](replication.md#a-write-has-three-outcomes) — and
+the `position` it is durable at. A write whose outcome is **unknown** is never
+answered with the id, key, version or revision of something that may not
+exist, on any write tool on either surface: the call fails, saying that the
+write may have landed and may not, under which operation, and what to do. That
+includes `create_work_item`, whose unknown answer names the key this attempt
+minted, if it minted one, as the key the item has *if* it was filed — never as
+a receipt — and a comment, whose id, mentions and ask are not reported beside
+a remark nobody can say was posted. An `update_work_item` whose change is
+unknown writes none of the dependency changes it was also asked for: it stops
+there, and the same call made again answers the change first and writes them
+after. And the `version` an update answers with is always the item's own and
+its newest — the one to send back as `if_match` — never another item's that
+the same call wrote, and never one its own dependency change has already moved
+the item past, when a call changes both; its `position` is likewise the call's
+last write, so waiting for it waits for all of them.
+
+Where this node's operation ledger cannot vouch for the operation — it was
+minted before the ledger may have lost rows, a seat woken by a backlog trigger
+just after its node adopted a snapshot — the answer says this node cannot
+tell, because the same operation asked here answers the same way until the
+write reaches this node, and tells the caller to look before writing it again;
+a gesture that stopped part of the way through at such a step is not told to
+repeat itself either. A seat's own write under a plain lost acknowledgement is
+told to repeat the call with exactly the same arguments, before any different
+call to the same tool — that is the same operation, and it lands once.
+Reworded, it is a new one. Where the ledger cannot vouch for it, that same
+repeat is still safe — it publishes nothing this node cannot vouch for — but it
+answers the same way until the write reaches this node, so looking says sooner.
+The two writes that state a whole value rather than change one —
+`write_project` and `write_work_catalogue` — say instead that repeating them is
+harmless: each call is a new operation stating the same thing.
+
+A create or an update that declares its labels first (`labels_create_missing`)
+and cannot tell whether that declaration landed stops there too, and is
+answered under its own name as the write it did *not* make — the item not
+filed, the change not made — because the declaration comes before the item's
+own write. The same call made again answers the declaration and then makes the
+write, once; where this node's ledger cannot vouch for the declaration, the
+answer says to declare the tags with `write_project` first, which is harmless
+if they already landed, and then to make the same call — and says what that
+call will do. Its own write dates from the same instant as the declaration, so
+this node cannot vouch for it either: it answers with the item an earlier
+attempt filed, or the change this node still holds a record of, and otherwise
+answers `unknown` again, which then means looking for the write
+(`list_work_items`, `get_work_item`) rather than making it another way — or,
+from the operator's surface, making the same call with its `op_id` through
+another node whose ledger reaches back that far.
+
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat, and ten more
 beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, and the trash.
+person's own queue and inbox, and the trash. There, each tracker write's answer
+also carries the **`op_id`** of the operation the call was, and the write tools
+take it back as an argument: an assistant has no turn to repeat, so sending the
+same call with that `op_id` is how it finishes a write that came back
+`unknown` or stopped part of the way through, instead of filing it twice. An
+`op_id` is that one call and no other: it carries a digest of the call's
+arguments, and brought back with any other argument, or to another tool, it is
+refused before anything is written. A seat is never offered the argument — its
+turn is its identity — and a seat's call that sends one is refused.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 

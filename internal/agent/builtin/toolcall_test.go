@@ -12,14 +12,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
-
-// dashboardTree is the client source this gate reads. Relative, because a test
-// runs in its own package's directory and the repository root is not a thing a
-// Go test is handed.
-const dashboardTree = "../../../dashboard/src"
 
 // EVERY CALL THE SCREEN OFFERS IS ONE AN OPERATOR ACTUALLY HAS.
 //
@@ -138,7 +134,7 @@ func schemaFields(schema map[string]any) []string {
 // end".
 func offeredCalls(t *testing.T) map[string][]string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(dashboardTree, "lib", "toolcall.ts"))
+	raw, err := os.ReadFile(filepath.Join(clientsource.Tree(t), "lib", "toolcall.ts"))
 	if err != nil {
 		t.Fatalf("the screen's call table could not be read, so this gate "+
 			"certifies nothing: %v", err)
@@ -239,7 +235,7 @@ func braced(in string) (string, bool) {
 // does not write at all is that every change in this company carries a name.
 func TestTheToolCallBlockNamesWhoWouldBeAttributed(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile(filepath.Join(dashboardTree, "components", "ToolCall.tsx"))
+	raw, err := os.ReadFile(filepath.Join(clientsource.Tree(t), "components", "ToolCall.tsx"))
 	if err != nil {
 		t.Fatalf("the block could not be read: %v", err)
 	}

@@ -35,7 +35,7 @@
  *     first is silent until a node tries to join.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -65,10 +65,13 @@ import type {
   RetentionDomain,
   RetentionMaintenance,
   RetentionNode,
+  RetentionNodeDomain,
+  RetentionReport,
   RetentionSnapshot,
   RetentionTerm,
 } from "~/protocol/index.ts";
-import { GateDialog } from "./GateDialog.tsx";
+import { finishable, GateDialog } from "./GateDialog.tsx";
+import type { GateGesture } from "./GateDialog.tsx";
 
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
@@ -85,11 +88,50 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // without one would refuse on every poll and paint the screen red for a
   // reader who simply is not an operator.
   const operator = apiToken() !== "";
-  const { data, loading, error } = useQuery("retention", undefined, {
+  const { data, loading, error, refetch } = useQuery("retention", undefined, {
     pollMs: POLL_MS,
     enabled: operator,
   });
   const [gate, setGate] = useState<{ node: string; evict: boolean } | null>(null);
+  // THE GESTURES STILL TO BE FINISHED, keyed by node and sign, held HERE
+  // rather than in the dialog: the dialog is unmounted when it closes, and a
+  // partial eviction reopened as a fresh one is a second gesture — every log
+  // the first one reached is written again and its eviction re-dated.
+  //
+  // A COMPLETE ONE IS HELD TOO, until the report shows it. The report is
+  // polled, and until its next answer the row still read "Evict…" for a node
+  // just evicted — reopened, that minted a fresh id and wrote a second record
+  // on every log, re-dating the eviction straight after the dialog said not
+  // to retry. So an answer asks the report again at once, and the gesture
+  // stays on the row until the report agrees with it — or until a report
+  // that already includes it disagrees, because something later moved the
+  // node ([heldGestures]).
+  const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
+  const holdGesture = (node: string, evict: boolean, g: GateGesture | null) => {
+    setGestures((all) => {
+      const next = { ...all };
+      if (g) next[gestureKey(node, evict)] = g;
+      else delete next[gestureKey(node, evict)];
+      return next;
+    });
+    if (g?.answer) refetch();
+  };
+  // WHAT THE REPORT NOW SHOWS IS LET GO OF, so a later gesture on the same
+  // node and sign is a new one rather than this one reopened.
+  const nodesSeen = data?.nodes;
+  const domainsSeen = data?.domains;
+  const servedBy = data?.node_id;
+  useEffect(() => {
+    if (!nodesSeen) return;
+    setGestures((all) => {
+      const kept = heldGestures(all, {
+        nodes: nodesSeen,
+        domains: domainsSeen ?? [],
+        node_id: servedBy ?? "",
+      });
+      return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+    });
+  }, [nodesSeen, domainsSeen, servedBy]);
 
   if (!operator) return null;
 
@@ -137,6 +179,16 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           fleet rather than the fleet. An empty list here is not an empty company.
         </Callout>
       )}
+
+      {domains
+        .filter((d) => d.evictions_unreadable)
+        .map((d) => (
+          <Callout key={`evictions:${d.domain}`} variant="warning">
+            This node could not read <InlineCode>{d.domain}</InlineCode>'s evictions, so no node
+            below shows as evicted there — an eviction may be hidden rather than absent. The next
+            report reads them again.
+          </Callout>
+        ))}
 
       <ServedLevelBanner level={data?.read_level} />
 
@@ -260,15 +312,31 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               header: "",
               label: "Eviction",
               shrink: true,
-              cell: (n) => (
-                <Button
-                  variant="tertiary"
-                  size="small"
-                  onClick={() => setGate({ node: n.node_id, evict: !n.evicted })}
-                >
-                  {n.evicted ? "Readmit…" : "Evict…"}
-                </Button>
-              ),
+              cell: (n) => {
+                const action = gateAction(n, gestures);
+                return (
+                  <span className="row gap-1">
+                    {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and
+                        the button alone read as though it would simply
+                        work. */}
+                    {action.evict && n.live && (
+                      <Tag
+                        variant="neutral"
+                        title="it holds a presence lease, so an eviction is refused unless you force it"
+                      >
+                        live
+                      </Tag>
+                    )}
+                    <Button
+                      variant="tertiary"
+                      size="small"
+                      onClick={() => setGate({ node: n.node_id, evict: action.evict })}
+                    >
+                      {action.label}
+                    </Button>
+                  </span>
+                );
+              },
             },
           ]}
         />
@@ -385,7 +453,15 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         </Card>
       )}
 
-      {gate && <GateDialog node={gate.node} evict={gate.evict} onClose={() => setGate(null)} />}
+      {gate && (
+        <GateDialog
+          node={gate.node}
+          evict={gate.evict}
+          held={gestures[gestureKey(gate.node, gate.evict)]}
+          onHeld={(g) => holdGesture(gate.node, gate.evict, g)}
+          onClose={() => setGate(null)}
+        />
+      )}
     </>
   );
 }
@@ -466,6 +542,134 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
   );
 }
 
+/** The key a held gesture is filed under: one node, one sign. */
+function gestureKey(node: string, evict: boolean): string {
+  return `${node}:${evict ? "evict" : "readmit"}`;
+}
+
+/**
+ * Whether the report already shows what a complete gesture did: an eviction
+ * once the node reads evicted, a readmission once it no longer does. A node
+ * the report no longer lists has no row to mislabel, so its gesture is shown
+ * too.
+ *
+ * A READMISSION IS SHOWN ONLY BY A REPORT THAT READ EVERY LOG'S EVICTIONS the
+ * gesture wrote. The report marks a node evicted only where every log holds
+ * its tombstone, so one log it could not read hides the eviction whatever
+ * happened, and "not evicted" from that report is no evidence the readmission
+ * applied: releasing on it offered "Evict…" for a node still evicted, and the
+ * next report that did read the logs offered "Readmit…" again — a second
+ * record on every log. An eviction needs no such check, because an unread log
+ * can only ever hide a tombstone, never show one.
+ */
+function reflected(
+  g: GateGesture,
+  key: string,
+  nodes: RetentionNode[],
+  domains: RetentionDomain[],
+): boolean {
+  const answer = g.answer;
+  if (!answer?.complete) return false;
+  const [node, sign] = key.split(":") as [string, string];
+  const row = nodes.find((n) => n.node_id === node);
+  if (!row) return true;
+  if (sign === "evict") return Boolean(row.evicted);
+  const read = answer.domains.every((d) => {
+    const log = domains.find((r) => r.domain === d.domain);
+    return log !== undefined && !log.evictions_unreadable;
+  });
+  return read && !row.evicted;
+}
+
+/**
+ * Whether the node that served this report has applied every record a complete
+ * gesture wrote, so whatever the report says about the gesture's node already
+ * includes it — and a report that still disagrees means something LATER moved
+ * the node: a readmission from the command line straight after an eviction
+ * here, say. The gesture is spent then. Held, it left the row reading
+ * "Eviction sent…" for the rest of the page's life, reopening an answer with
+ * nothing to press, so the node could not be evicted again from this screen.
+ *
+ * STRICT, never a guess: a log whose position the answer lacks, a serving node
+ * the report does not list or whose own row carries no position there, and a
+ * generation that differs all keep the gesture held. A report that has not
+ * caught up with a `pending` record disagrees for exactly that reason, and
+ * letting go of it then offered the fresh gesture the hold exists to prevent.
+ *
+ * AND ONLY WHERE THE SERVING NODE READ ITS EVICTIONS on every log the gesture
+ * wrote. One it could not read contributes no tombstone, so the node reads as
+ * not evicted there whatever happened — during an adoption's rename, say — and
+ * that absence released an eviction the operator had just made, offering it
+ * again: a second record on every log, re-dating the first.
+ */
+function overtaken(
+  g: GateGesture,
+  nodes: RetentionNode[],
+  domains: RetentionDomain[],
+  servedBy?: string,
+): boolean {
+  const answer = g.answer;
+  if (!answer?.complete || !servedBy) return false;
+  const here = nodes.find((n) => n.node_id === servedBy)?.domains;
+  if (!here) return false;
+  return answer.domains.every((d) => {
+    const at = here[d.domain];
+    const row = domains.find((r) => r.domain === d.domain);
+    return (
+      d.position !== undefined &&
+      at !== undefined &&
+      at.generation === d.position.generation &&
+      at.applied_through >= d.position.seq &&
+      row !== undefined &&
+      !row.evictions_unreadable
+    );
+  });
+}
+
+/**
+ * The gestures still worth holding against this report: every one a request
+ * can still finish, and every complete one the report does not show yet —
+ * unless the node that served it has applied every record the gesture wrote
+ * ([overtaken]), when its disagreement is a later change rather than a lag.
+ */
+export function heldGestures(
+  gestures: Record<string, GateGesture>,
+  report: Pick<RetentionReport, "nodes" | "domains" | "node_id">,
+): Record<string, GateGesture> {
+  return Object.fromEntries(
+    Object.entries(gestures).filter(
+      ([key, g]) =>
+        !reflected(g, key, report.nodes, report.domains) &&
+        !overtaken(g, report.nodes, report.domains, report.node_id),
+    ),
+  );
+}
+
+/**
+ * What a node row's gate button does.
+ *
+ * A GESTURE STILL TO BE FINISHED COMES FIRST. The report marks a node evicted
+ * only once EVERY log holds its tombstone, so after a partial eviction the row
+ * would offer "Evict…" again — a fresh gesture over the logs the first one
+ * reached — and after a partial readmission it would offer the eviction. The
+ * held gesture is what says which sign is in flight.
+ */
+export function gateAction(
+  n: RetentionNode,
+  gestures: Record<string, GateGesture>,
+): { evict: boolean; label: string } {
+  const readmit = gestures[gestureKey(n.node_id, false)];
+  if (readmit && finishable(readmit)) return { evict: false, label: "Finish readmission…" };
+  const evict = gestures[gestureKey(n.node_id, true)];
+  if (evict && finishable(evict)) return { evict: true, label: "Finish eviction…" };
+  // A COMPLETE GESTURE THE REPORT DOES NOT SHOW YET reopens as itself — its
+  // answer, and nothing to press — rather than as a fresh gesture with a new
+  // id over the logs it already holds.
+  if (evict?.answer?.complete && !n.evicted) return { evict: true, label: "Eviction sent…" };
+  if (readmit?.answer?.complete && n.evicted) return { evict: false, label: "Readmission sent…" };
+  return n.evicted ? { evict: false, label: "Readmit…" } : { evict: true, label: "Evict…" };
+}
+
 /** firstDomain is any one of a node's domains, for a sort key. */
 function firstDomain(n: RetentionNode) {
   const domains = Object.values(n.domains ?? {});
@@ -498,18 +702,25 @@ export function NodePositions({ node }: { node: RetentionNode }) {
       {domains.map(([name, d]) => (
         <span key={name} className="row gap-1 t-caption">
           <InlineCode>{name}</InlineCode>
+          {/* THE GENERATION BESIDE THE SEQUENCE, because a sequence is a
+              number in ONE generation's space: the readmission refusal tells
+              an operator to compare a node's position "at the log's current
+              generation", and this screen showed no generation at all. */}
+          <span className="muted">gen {d.generation}</span>
           <span className="t-num">
             {d.seq}
             {d.applied_through !== d.seq && (
               <span className="muted"> · applied {d.applied_through}</span>
             )}
           </span>
-          {d.lag != null ? (
-            d.lag > 0 && <span className="muted">{d.lag} behind</span>
-          ) : (
-            <span className="muted" title="the stream could not be read, so the lag is unknown">
-              lag —
-            </span>
+          <PositionStanding d={d} />
+          {d.log_diverged && (
+            <Tag
+              variant="danger"
+              title="the log holds another record at this node's checkpoint than the one it consumed there; every other node refuses its writes of this log until an operator decides which history the fleet keeps"
+            >
+              log diverged
+            </Tag>
           )}
           {(d.deferred ?? 0) > 0 && (
             <Tag
@@ -525,7 +736,35 @@ export function NodePositions({ node }: { node: RetentionNode }) {
   );
 }
 
-/** DomainBlock is one registered domain: its window, its floor, and its six terms. */
+/**
+ * How a node's position stands against the log: how far behind within one
+ * generation, or which generation it is on where that is not the log's.
+ *
+ * A POSITION FROM ANOTHER GENERATION IS NOT A DISTANCE. Its sequence is in a
+ * space the log has left, and the difference read 0 whenever the old number
+ * was the larger — a node on a dead number space reported caught up.
+ */
+function PositionStanding({ d }: { d: RetentionNodeDomain }) {
+  if (d.generation_state === "left" || d.generation_state === "ahead") {
+    return (
+      <Tag
+        variant="warning"
+        title="this position is from another generation of the log, so its sequence compares with nothing the log holds now"
+      >
+        {d.generation_state} gen {d.generation}
+      </Tag>
+    );
+  }
+  if (d.lag == null) {
+    return (
+      <span className="muted" title="the stream could not be read, so the lag is unknown">
+        lag —
+      </span>
+    );
+  }
+  return d.lag > 0 ? <span className="muted">{d.lag} behind</span> : null;
+}
+
 /**
  * One domain's whole state, drawn once.
  *
@@ -537,6 +776,7 @@ export function NodePositions({ node }: { node: RetentionNode }) {
 export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
   return (
     <div className="col gap-2">
+      <DomainRefusals domain={d} />
       <div className="row wrap gap-2 baseline">
         <InlineCode>{d.domain}</InlineCode>
         <Tag appearance="outline">{d.replay}</Tag>
@@ -545,26 +785,145 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
           {d.first_seq}…{d.last_seq}
         </span>
         <span className="t-caption">
-          floor {d.trim_floor}
-          {d.trim_to !== d.trim_floor && <> · this tick concluded {d.trim_to}</>}
+          <FloorFact domain={d} />
         </span>
         <span className="t-caption t-num">
-          {fmtBytes(d.bytes)}
-          {/* A FRACTION OF AN UNKNOWN CEILING IS NOT ZERO HEADROOM, which is
-              why the server sends it absent. Rendering it as 0% would fire
-              the one alarm nobody may ignore. */}
-          {d.headroom_fraction != null && (
-            <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
-          )}
+          <DomainSize domain={d} />
         </span>
-        {d.blocked_by ? (
-          <Tag variant="warning">{d.blocked_by}</Tag>
-        ) : (
-          <Tag variant="success">advancing</Tag>
-        )}
+        <TrimStatus domain={d} />
       </div>
-      <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} />
+      <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} empty={noConclusion(d)} />
     </div>
+  );
+}
+
+/**
+ * The trim's status as one tag — ONE rendering, for the card and the page.
+ *
+ * "ADVANCING" ONLY WHERE THE TRIM HAS CONCLUDED SOMETHING. A domain with no
+ * published floor at its own generation has no blocking term because it has
+ * no terms at all, and both screens drew that as a trim nothing is holding —
+ * right after every reanchor, which is when they are read.
+ */
+export function TrimStatus({ domain: d }: { domain: RetentionDomain }) {
+  switch (d.trim_floor_state) {
+    case "published":
+      return d.blocked_by ? (
+        <Tag variant="warning">{d.blocked_by}</Tag>
+      ) : (
+        <Tag variant="success">advancing</Tag>
+      );
+    case "unreadable":
+      return <Tag variant="warning">floor unreadable</Tag>;
+    default:
+      return <Tag variant="neutral">no conclusion yet</Tag>;
+  }
+}
+
+/**
+ * The floor and what this tick concluded, as one phrase.
+ *
+ * THE FLOOR IS THE FLEET'S PUBLISHED BOUND — everything below it may already be
+ * gone, and it never moves down within a generation — and THE CONCLUSION IS
+ * WHAT THIS TICK'S SIX TERMS PERMITTED, which is zero while the trim is blocked.
+ * They are equal on a healthy domain; a blocked one reads "blocked" rather than
+ * "concluded 0", which is the wire value and not a position. Neither is a
+ * number at all where nothing is published.
+ */
+export function FloorFact({ domain: d }: { domain: RetentionDomain }) {
+  switch (d.trim_floor_state) {
+    case "published":
+      return (
+        <>
+          floor <span className="t-num">{d.trim_floor}</span>
+          {d.blocked_by ? (
+            <span className="muted"> · blocked</span>
+          ) : (
+            d.trim_to !== d.trim_floor && (
+              <span className="muted">
+                {" "}
+                · this tick concluded <span className="t-num">{d.trim_to}</span>
+              </span>
+            )
+          )}
+        </>
+      );
+    case "unreadable":
+      return <>floor unreadable</>;
+    default:
+      return <>no floor yet</>;
+  }
+}
+
+/** The sentence a domain with no conclusion shows in place of its terms. */
+function noConclusion(d: RetentionDomain): string | undefined {
+  switch (d.trim_floor_state) {
+    case "published":
+      return undefined;
+    case "unreadable":
+      return `The trim floor register could not be read, so nothing is known here about the trim of generation ${d.generation}.`;
+    default:
+      return `The trim has concluded nothing about generation ${d.generation} yet — its first tick on this stream is pending.`;
+  }
+}
+
+/**
+ * The answering node's own refusals of a domain, above everything else about
+ * it: every figure beside them describes rows no read — or no write — of this
+ * domain is served from, and the guides send an operator here after a restore
+ * to find exactly this.
+ */
+export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
+  return (
+    <>
+      {d.not_ready && (
+        <Callout variant="danger" role="alert">
+          <span>
+            <strong>Not ready on this node:</strong> <InlineCode>{d.not_ready.code}</InlineCode>
+            {(d.not_ready.causes?.length ?? 0) > 0 && (
+              <> ({d.not_ready.causes!.join(", ")})</>
+            )} — {d.not_ready.detail}
+          </span>
+        </Callout>
+      )}
+      {d.writes_refused && (
+        <Callout variant="warning" role="alert">
+          <span>
+            <strong>Writes refused on this node:</strong>{" "}
+            <InlineCode>{d.writes_refused.code}</InlineCode> — {d.writes_refused.detail}
+          </span>
+        </Callout>
+      )}
+    </>
+  );
+}
+
+/**
+ * A domain's size: what the log holds, how much of the ceiling its ordinary
+ * writes are held to is left, and the gate reserve kept above that ceiling.
+ *
+ * ONE RENDERING for the fleet card and the domain's page, for [DomainBlock]'s
+ * reason — the page drew its own copy, which is how two screens come to
+ * disagree about one number.
+ *
+ * THE RESERVE IS NAMED BESIDE THE HEADROOM, because on a log that keeps one
+ * "0% free" is not a log nothing can be written to: an eviction still lands
+ * there, and it is the gesture that unpins a log a gone node has filled.
+ */
+export function DomainSize({ domain: d }: { domain: RetentionDomain }) {
+  return (
+    <>
+      {fmtBytes(d.bytes)}
+      {/* A FRACTION OF AN UNKNOWN CEILING IS NOT ZERO HEADROOM, which is
+          why the server sends it absent. Rendering it as 0% would fire
+          the one alarm nobody may ignore. */}
+      {d.headroom_fraction != null && (
+        <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
+      )}
+      {d.reserve_bytes != null && (
+        <span className="muted"> · {fmtBytes(d.reserve_bytes)} kept for evictions</span>
+      )}
+    </>
   );
 }
 
@@ -572,9 +931,12 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
 export function Terms({
   terms,
   snapshotBlocked,
+  empty,
 }: {
   terms: RetentionTerm[];
   snapshotBlocked?: string;
+  /** What stands in the table's place where there are no terms to draw. */
+  empty?: string;
 }) {
   return (
     <div className="col gap-2">
@@ -587,6 +949,7 @@ export function Terms({
           </span>
         </Callout>
       )}
+      {terms.length === 0 && empty && <p className="t-caption muted">{empty}</p>}
       <table className="table">
         <tbody>
           {terms.map((t) => (

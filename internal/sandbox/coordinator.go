@@ -351,10 +351,24 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 }
 
 // SetManager swaps the sandbox manager, for a live reload of providers.sandbox.
+//
+// THE RUNS ALREADY IN FLIGHT KEEP THEIR BOXES REACHABLE. A cell the new
+// catalogue no longer configures is carried as a retired backend (see
+// [Manager.carrying]), so a job still running there is polled, collected and
+// reclaimed, and a paused one reaped, through the backend that made it — while
+// every new run provisions from the new catalogue alone.
+//
+// A NIL MANAGER CHANGES NOTHING, and that is the removal of providers.sandbox:
+// a revision with no catalogue can validate no seat that launches a run, so
+// the last manager stays for the runs already in flight, which still have to
+// be finished through it.
 func (c *Coordinator) SetManager(m *Manager) {
+	if m == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.manager = m
+	c.manager = m.carrying(c.manager)
 }
 
 // Manager is the coordinator's current manager, for a caller that needs to

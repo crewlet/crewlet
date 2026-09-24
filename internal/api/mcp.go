@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -72,7 +73,7 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	}
 	mux := http.NewServeMux()
 	mountBridge(mux, bridge)
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux))
+	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)))
 }
 
 // mountOperator registers the operator MCP surface, or says why it did not.

@@ -7,9 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -134,7 +133,7 @@ func (t *setPriorities) Description() string {
 }
 
 func (t *setPriorities) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"handle": map[string]any{
@@ -147,7 +146,7 @@ func (t *setPriorities) Parameters() map[string]any {
 			},
 		},
 		"required": []string{"items"},
-	}
+	})
 }
 
 func (t *setPriorities) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -157,7 +156,7 @@ func (t *setPriorities) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.person(ctx, turn, tracker.SetPrioritiesTool)
+	actor, writer, refusal := t.person(ctx, turn, tracker.SetPrioritiesTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -222,16 +221,24 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		resolved = append(resolved, id)
 	}
-	result, err := writer.WritePriorities(ctx,
-		"prio-"+handle+"-"+callKey(turn), handle, resolved, authority)
+	opID := opIDFor(actor, t.Name(), "prio", handle, args)
+	result, err := writer.WritePriorities(ctx, opID, handle, resolved, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
+		return failed(writeFailure(actor, tracker.SetPrioritiesTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.SetPrioritiesTool,
+			fmt.Sprintf("%s's priorities were set", handle), opID,
+			result.Unvouched, unknownNext(result.Unvouched,
+				sameCall(actor, tracker.SetPrioritiesTool),
+				"Read the list with get_person",
+				"it sets the same list again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"handle": handle, "outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
-	})
+	}, actor))
 }
 
 type setPins struct{ deps WorkDeps }
@@ -247,7 +254,7 @@ func (t *setPins) Description() string {
 }
 
 func (t *setPins) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"views": map[string]any{
@@ -267,7 +274,7 @@ func (t *setPins) Parameters() map[string]any {
 				},
 			},
 		},
-	}
+	})
 }
 
 func (t *setPins) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -277,7 +284,7 @@ func (t *setPins) Call(ctx context.Context, args map[string]any) (tools.Result, 
 func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.SetPinsTool)
+	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.SetPinsTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -289,16 +296,23 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// — see the file head. A pin is an arrangement somebody made, so it
 	// belongs to them and not to whichever credential they were holding.
 	whose := actor.Record()
-	result, err := writer.WritePins(ctx,
-		"pins-"+whose+"-"+callKey(turn), whose,
+	opID := opIDFor(actor, t.Name(), "pins", whose, args)
+	result, err := writer.WritePins(ctx, opID, whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPinsTool, err)), nil
+		return failed(writeFailure(actor, tracker.SetPinsTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.SetPinsTool,
+			"your pins were set", opID, result.Unvouched,
+			unknownNext(result.Unvouched, sameCall(actor, tracker.SetPinsTool),
+				"Read them with get_person",
+				"it sets the same lists again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, actor))
 }
 
 type markInbox struct{ deps WorkDeps }
@@ -326,7 +340,7 @@ func (t *markInbox) Parameters() map[string]any {
 		},
 		"required": []string{"record_id", "position"},
 	}
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"unread":  map[string]any{"type": "array", "items": entry},
@@ -352,7 +366,7 @@ func (t *markInbox) Parameters() map[string]any {
 					"making nothing primary.",
 			},
 		},
-	}
+	})
 }
 
 // defaultPrimaryList is the shipped split as one sentence, derived for the
@@ -372,7 +386,7 @@ func (t *markInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.MarkInboxTool)
+	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.MarkInboxTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -402,31 +416,40 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// written on somebody else's behalf, and a founder's inbox is the
 	// founder's whichever credential their assistant holds.
 	whose := actor.Record()
-	result, err := writer.WriteInbox(ctx,
-		"inbox-"+whose+"-"+callKey(turn), whose,
+	opID := opIDFor(actor, t.Name(), "inbox", whose, args)
+	result, err := writer.WriteInbox(ctx, opID, whose,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
 	if err != nil {
-		return failed(writeFailure(tracker.MarkInboxTool, err)), nil
+		return failed(writeFailure(actor, tracker.MarkInboxTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.MarkInboxTool,
+			"the inbox was marked", opID, result.Unvouched,
+			unknownNext(result.Unvouched, sameCall(actor, tracker.MarkInboxTool),
+				"Read it with work_inbox",
+				"it marks the same notices again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, actor))
 }
 
 // person resolves the actor and the writer for a priority write.
 func (t *setPriorities) person(ctx context.Context, turn *turnctx.Turn,
-	name string) (Actor, PersonWriter, *tools.Result) {
+	name string, args map[string]any) (Actor, PersonWriter, *tools.Result) {
 
-	return t.deps.personWriter(ctx, turn, name)
+	return t.deps.personWriter(ctx, turn, name, args)
 }
 
-// personWriter resolves the actor and the person write side, or the refusal.
+// personWriter resolves the actor — with the operation the call is, where the
+// surface has one ([WorkDeps.bindOperation]) — and the person write side, or
+// the refusal.
 func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
-	name string) (Actor, PersonWriter, *tools.Result) {
+	name string, args map[string]any) (Actor, PersonWriter, *tools.Result) {
 
 	actor, err := d.actor(ctx, turn)
 	if err != nil {
@@ -437,30 +460,12 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 		refusal := unconfigured(name)
 		return Actor{}, nil, &refusal
 	}
-	return actor, d.PersonWriter(actor), nil
-}
-
-// callKey is the idempotency scope of ONE tool call — the turn's own key
-// inside a turn, and a fresh value outside one.
-//
-// AN OPERATOR HAS NO TURN and no redelivery: their client made one call, so
-// there is nothing to deduplicate against and two calls in one session are two
-// writes, which is what the caller meant.
-//
-// THAT IS WHAT THIS ALWAYS CLAIMED AND NEVER DID. It returned the literal
-// string `operator`, so the operation id it is half of — `prio-<handle>-operator`,
-// `pins-…`, `inbox-…` — was stable for the
-// life of the deployment, and the ledger collapsed every write after the first
-// as a redelivery. `set_priorities` through `/operator/mcp` wrote one list per
-// person, ever; the second call answered `applied` with the FIRST call's
-// position and changed nothing. (The empty string the old comment named would
-// have done exactly the same: what makes a key unique is that it is fresh, not
-// that it is blank.) See [opIDFor], which had the same defect on the same day.
-func callKey(turn *turnctx.Turn) string {
-	if key := turnKey(turn); key != "" {
-		return key
+	actor, bad := d.bindOperation(actor, name, args)
+	if bad != "" {
+		refusal := failed(bad)
+		return Actor{}, nil, &refusal
 	}
-	return "operator-" + uuid.NewString()
+	return actor, d.PersonWriter(actor), nil
 }
 
 // inboxEntries reads one of the three lists.

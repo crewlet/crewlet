@@ -242,7 +242,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot.Stream.StoreDir = streamDir
 
 	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: &boot, Company: cfg,
+		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		// The completion poll, sped up. It is sized in production against
 		// coding jobs that run for minutes; at that cadence a test whose
 		// job finishes in a moment would wait out a real tick to see it.

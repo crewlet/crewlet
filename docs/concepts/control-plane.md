@@ -56,6 +56,19 @@ The body is whatever the node sealed. With a keyring configured the coordination
 
 **Its revision is the epoch.** The coordination store assigns every key write a monotonic revision, so publishing the pointer appends and flips in a single write — there is no instant where a node can read an epoch whose target has not been published, and two operators activating at once get two different epochs rather than racing over a counter the engine keeps. It also gives the counter the property a plain revision-id pointer could never have: it moves on every activation *including re-activation of an unchanged revision*, which is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)).
 
+**Every activation carries a later instant than the one it replaces.** The
+pointer records the instant a revision was activated, and every row a
+configuration derives — a tracker project, a knowledge container — is stamped
+with it and refuses an older stamp, so an older configuration applied late
+cannot walk a newer one back. That guard needs a later activation to carry a
+later instant, and the instant is the activating node's own clock; so inside
+the same compare-and-set that replaces the pointer, an activation whose
+instant is no later, to the millisecond, than the pointer's is published at
+one millisecond after it. Even an unconditional publish is a compare-and-set
+underneath for this reason. `Activate` returns the instant it published, and a
+node keeps that instant on its own copy of the revision, because it is what
+the node boots its chart with next time.
+
 The pointer's bucket has **no retention at all**. Everything else the fleet shares ages out; a pointer that expired would restart the epoch, and a fencing sequence that restarts is not a fence.
 
 > **On an embedded broker the coordination store lives inside the running engine**, so an *offline* `crewlet config import` — one run while the engine is stopped — can mark a revision active locally but cannot move the pointer; it says so, and the node publishes it at its next start. Run against a **running** node the same command goes through that node's `PUT /config` instead, which moves the pointer at once. A node that starts holding an active revision the fleet has no pointer for publishes it, unless the pointer it finds is newer; a restarted single-node deployment therefore comes back pointing at what it was already serving, and a node rejoining a live fleet converges on the fleet rather than rolling it back.
@@ -279,11 +292,11 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "revision_id": "cfg-…",
   "status": "error",
   "error": "engine: apply: …",
-  "applied_subsystems": ["secrets", "company", "tools", "learning"]
+  "applied_subsystems": ["secrets", "company"]
 }
 ```
 
-`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped, out of `secrets`, `company`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `seat_tools`, `mailboxes`, `learning_passes`, `scheduler` (the example above refused the revision's `providers.sandbox` after rebuilding its learning workers). That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with an **empty** list never reached the apply at all: the revision could not be read, opened or parsed.
+`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped, out of `secrets`, `company`, `native`, `sandbox_runtime`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `maintenance`, `seat_tools`, `mailboxes`, `learning_passes`, `scheduler` (the example above refused the revision's `providers.sandbox`, whose catalogue is built straight after the company and before anything else on the node moves). That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with **no** `applied_subsystems` — the field is absent rather than an empty array — means nothing on this node changed, and it still serves the previous epoch. There are two ways to get one, and the `error` text says which. Either the revision never reached the apply: its body is in no store this node can reach, it could not be fetched, read, opened or parsed, or it is not a runnable company (`engine: store: no such config revision: …` — the activation pointer names a revision neither this node's database nor the coordination store holds — `engine: fetch revision …`, `engine: read revision …`, `engine: open revision …`, `engine: parse revision …`, `engine: revision … is not a runnable company`). Or it reached the apply and broke a rule that needs both configuration tiers, which is checked before the first stage (`engine: apply: …`, see [The engine half](configuration.md#the-engine-half)) — today, a native tracker or knowledge base whose log would live on an in-memory stream. The first is a storage, transport or authoring fault; the second is the revision against this node's own Tier A, fixed by changing one or the other.
 
 Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
 

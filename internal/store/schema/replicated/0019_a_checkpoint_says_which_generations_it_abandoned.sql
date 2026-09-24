@@ -1,0 +1,34 @@
+-- A checkpoint says which generations the reanchor that placed it ABANDONED.
+--
+-- # What was missing
+--
+-- A node that re-anchors a log and is then decommissioned before any peer
+-- adopts from it leaves a generation whose history is on no disk the fleet
+-- still has: its rows are gone, and every record it wrote on the log in that
+-- generation was decided from them. Once the operator evicts it, the most
+-- caught-up node left re-anchors — past that generation, since its number and
+-- its record are taken — and follows the log from its OWN checkpoint, because
+-- the log still holds everything its rows are missing. The dead node's records
+-- are on the log after that checkpoint, and applied into these rows they would
+-- mix two histories nothing could ever separate.
+--
+-- So the transition that skips a generation says so on the checkpoint it
+-- commits, and the applier drops — as void, consuming each and advancing its
+-- anchor, and applying it into no row — every record whose writer's generation
+-- lies strictly between the two: above the generation the rows stood at before
+-- the transition, and below the one it opened. On the CHECKPOINT because that
+-- is the one row every follower of it reads before its first record: the node
+-- that re-anchored, after a restart mid-way through those records, and a peer
+-- that adopted its snapshot before it got through them.
+--
+-- # Why two columns and zero for both
+--
+-- The range is exclusive at both ends, so an ordinary reanchor from G to G + 1
+-- abandons nothing and every checkpoint that was never placed by one abandons
+-- nothing either: zero and zero is the empty range, which is what a row that
+-- predates this file means. A single column read against the checkpoint's own
+-- generation would have voided every lower generation on every row a
+-- reanchor had already moved — records the fleet's own nodes wrote there,
+-- which are comparable and safely stale rather than void.
+ALTER TABLE statelog_cursor ADD COLUMN void_after  INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE statelog_cursor ADD COLUMN void_before INTEGER NOT NULL DEFAULT 0;

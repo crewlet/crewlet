@@ -95,7 +95,7 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 
 	withSchedule := scheduledCompany(t)
-	if _, _, err := e.Apply(t.Context(), withSchedule); err != nil {
+	if _, _, err := e.Apply(t.Context(), withSchedule, time.Now()); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !e.SchedulerRunning() {
@@ -104,7 +104,7 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 
 	// ...and back again.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if e.SchedulerRunning() {
@@ -136,7 +136,7 @@ roles:
 			"fires pile up behind inboxes that cannot take a turn")
 	}
 
-	if _, _, err := e.Apply(t.Context(), scheduledCompany(t)); err != nil {
+	if _, _, err := e.Apply(t.Context(), scheduledCompany(t), time.Now()); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !e.SchedulerRunning() {
@@ -145,7 +145,7 @@ roles:
 	}
 
 	// ...and removing every provider stops the loop again.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noModels)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noModels), time.Now()); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if e.SchedulerRunning() {

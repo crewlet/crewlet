@@ -14,6 +14,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet retention set-capacity`, `maintenance`, `reanchor` and
@@ -369,10 +371,25 @@ func maintenanceExclude(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// reanchorRequestTimeout is how long `crewlet retention reanchor` waits for the
+// node's answer to the transition itself.
+//
+// SIX MINUTES. Once its generation record is appended, a reanchor finishes on
+// the node's own budget — the broker's bring-up budget, five minutes on a
+// clustered one — because it rebuilds this node's consumer on the log, a delete
+// and a create of a replicated object each of which is a raft round trip there;
+// the minute on top covers what it reads before the append: the stream, the
+// positions register and the log's tail. At the ten seconds every other call
+// gets, a transition on a fleet whose metadata group was slow was reported to
+// the operator as failed while the node went on to finish it — and the node
+// ran it on the request's own context, so the cancellation stopped it halfway,
+// with its generation open on the log and nothing committed.
+const reanchorRequestTimeout = 6 * time.Minute
+
 // retentionReanchor is `crewlet retention reanchor`.
 func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	var stream, confirm *string
-	var force *bool
+	var force, discard *bool
 	client, err := nodeClientFor(args, "retention reanchor", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log was recreated; required")
@@ -380,9 +397,18 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 				"the live stream's own created_at, which this verb prints when "+
 					"it is omitted")
 			force = fs.Bool("force", false,
-				"re-anchor even though a peer is hydrated on the live stream. "+
-					"Adopting that peer's snapshot is strictly better, so this "+
-					"is for the case where it cannot be reached")
+				"re-anchor although this node may not be the most caught-up "+
+					"on the stream its rows came from, or the positions "+
+					"register cannot be read. It never overrides a peer that "+
+					"has already re-anchored the stream: that peer's rows are "+
+					"the fleet's history in the new generation, and this node "+
+					"adopts its snapshot instead")
+			discard = fs.Bool("discard", false,
+				"re-anchor a RESTORED log although it holds records this "+
+					"node's rows do not — written after the restore, by a node "+
+					"whose rows were the copy's age — accepting that they are "+
+					"applied on no node. Without it the verb refuses and names "+
+					"the newest of them")
 		})
 	if err != nil {
 		return err
@@ -394,9 +420,14 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var status struct {
-		Stream     string    `json:"stream"`
-		CreatedAt  time.Time `json:"created_at"`
-		Generation uint32    `json:"generation"`
+		Stream     string                `json:"stream"`
+		CreatedAt  time.Time             `json:"created_at"`
+		Generation uint32                `json:"generation"`
+		Case       statelog.ReanchorCase `json:"case"`
+		Cursor     uint64                `json:"cursor"`
+		Nothing    string                `json:"nothing_to_reanchor"`
+		Discards   *statelog.TailRecord  `json:"discards"`
+		Discarding string                `json:"discarding"`
 	}
 	if err := client.get(context.Background(),
 		"/work/retention/reanchor?stream="+url.QueryEscape(*stream), &status); err != nil {
@@ -407,14 +438,30 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		// at the thing I am re-anchoring", and a verb that read the
 		// value and fed it straight back would be confirming against
 		// its own output.
-		fmt.Fprintf(stdout, "%s is at generation %d and was created at %s.\n\n"+
-			"A reanchor declares every position below the NEXT generation stale, "+
-			"and does NOT recover records that were on the old stream and were "+
-			"never applied here.\n\nRe-run with:\n  "+
-			"crewlet retention reanchor -stream %s -confirm %s\n",
-			status.Stream, status.Generation,
-			status.CreatedAt.UTC().Format(time.RFC3339Nano),
-			status.Stream, status.CreatedAt.UTC().Format(time.RFC3339Nano))
+		//
+		// IN THE ONE SPELLING THE NODE CHECKS ([statelog.ConfirmationOf]):
+		// this printed nanoseconds while the check compared whole
+		// seconds, so pasting back what it printed was refused.
+		instant := statelog.ConfirmationOf(status.CreatedAt)
+		fmt.Fprintf(stdout, "%s is at generation %d and was created at %s.\n\n",
+			status.Stream, status.Generation, instant)
+		if !status.Case.Valid() {
+			// NOTHING TO CONFIRM: the node would refuse the transition, and
+			// printing a command it would refuse invites running it.
+			fmt.Fprintf(stdout, "There is nothing to re-anchor: %s\n", status.Nothing)
+			return errors.New("nothing to re-anchor")
+		}
+		flags := ""
+		if status.Discards != nil {
+			// WHAT IT WOULD DISCARD, before the command that would: the
+			// operator's word is the only thing that lets it, and a command
+			// printed without it would be refused.
+			fmt.Fprintf(stdout, "%s\n\n", status.Discarding)
+			flags = " -discard"
+		}
+		fmt.Fprintf(stdout, "%s\n\nRe-run with:\n  crewlet retention reanchor "+
+			"-stream %s -confirm %s%s\n", reanchorCaseText(status.Case, status.Cursor),
+			status.Stream, instant, flags)
 		return errors.New("confirm the stream's own created_at")
 	}
 
@@ -423,17 +470,78 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	if *force {
 		path += "&force=true"
 	}
-	var answer struct {
-		Stream     string `json:"stream"`
-		Generation uint32 `json:"generation"`
+	if *discard {
+		path += "&discard=true"
 	}
-	if err := client.post(context.Background(), path, &answer); err != nil {
+	var answer struct {
+		Stream     string                `json:"stream"`
+		Generation uint32                `json:"generation"`
+		Case       statelog.ReanchorCase `json:"case"`
+		Cursor     uint64                `json:"cursor"`
+		Discarded  *statelog.TailRecord  `json:"discarded"`
+	}
+	if err := client.patiently(reanchorRequestTimeout).post(context.Background(),
+		path, &answer); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s is re-anchored at generation %d. Every position "+
-		"below it is now comparable and safely stale.\n",
-		answer.Stream, answer.Generation)
+	from := fmt.Sprintf("from its first surviving record, after sequence %d",
+		answer.Cursor)
+	switch answer.Case {
+	case statelog.ReanchorRestored:
+		from = fmt.Sprintf("from its end, after sequence %d, replaying none of "+
+			"the records the restored copy kept", answer.Cursor)
+	case statelog.ReanchorAbandoned:
+		from = fmt.Sprintf("from this node's own checkpoint, after sequence %d, "+
+			"with every record of the generation the evicted node abandoned void",
+			answer.Cursor)
+	}
+	fmt.Fprintf(stdout, "%s is re-anchored at generation %d (%s): it is followed "+
+		"%s. Every position below the generation is now comparable and safely "+
+		"stale, and its applier has resumed on this node; no other log moved.\n",
+		answer.Stream, answer.Generation, answer.Case, from)
+	if answer.Discarded != nil {
+		fmt.Fprintf(stdout, "The records written to it after the restore that this "+
+			"node's rows did not hold are applied on no node, as you accepted; the "+
+			"newest was %s.\n", *answer.Discarded)
+	}
 	return nil
+}
+
+// reanchorCaseText is what a reanchor of this case would do, in the words an
+// operator confirms against.
+//
+// ONE PARAGRAPH PER CASE, because where the log is followed from is the whole
+// difference between them and the one fact the operator has to agree with: a
+// recreated log holds none of what the rows came from, a restored one holds a
+// prefix the rows already have, and an abandoned one holds everything the rows
+// are missing in a generation nobody left can vouch for.
+func reanchorCaseText(c statelog.ReanchorCase, cursor uint64) string {
+	common := "A reanchor moves THIS log alone to its NEXT generation, declaring " +
+		"every position below it stale; its applier resumes on this node with no " +
+		"restart, and no other log moves."
+	if c == statelog.ReanchorAbandoned {
+		return fmt.Sprintf("This log CONTINUES IN A GENERATION ONLY AN EVICTED NODE "+
+			"HELD: it is the stream this node's rows are keyed to and it holds every "+
+			"record they are missing, but that generation's history was on the "+
+			"evicted node's disk and nowhere else. It is followed from THIS NODE'S "+
+			"CHECKPOINT, after sequence %d, in the generation after the evicted "+
+			"node's; every record written in the generation it abandoned is void "+
+			"here. %s Every other node adopts a snapshot from this one.", cursor, common)
+	}
+	if c == statelog.ReanchorRestored {
+		return fmt.Sprintf("This log was RESTORED from an older copy: it is the "+
+			"stream this node's rows are keyed to, and past the copy it is not "+
+			"their history — it ends below their checkpoint, or another record was "+
+			"written at their checkpoint's sequence after the restore. The "+
+			"rows already hold every record the copy kept, so it is followed from "+
+			"its END, after sequence %d, and none of them is replayed. %s What the "+
+			"rows hold past the copy is on no log, so every other node adopts a "+
+			"snapshot from this one.", cursor, common)
+	}
+	return fmt.Sprintf("This log was RECREATED: it is not the stream this node's "+
+		"rows are keyed to, so it is followed from its first surviving record, "+
+		"after sequence %d. %s It does NOT recover records that were on the old "+
+		"stream and were never applied here.", cursor, common)
 }
 
 // retentionVerify is `crewlet retention verify --restore`.

@@ -5,12 +5,12 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestOnlyOnePlaceWritesARunningStreamsConfiguration fails the build when a
@@ -47,7 +47,7 @@ import (
 // and both would be a stranger thing to write than the call itself.
 func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 	t.Parallel()
-	root := moduleRootOf(t)
+	root := sourcetree.Root(t)
 
 	// THE MATCHER, ON INPUT WHOSE VERDICT IS KNOWN. A guard asserting an
 	// absence passes identically when the thing is absent and when the
@@ -87,13 +87,13 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 
 	var found []string
 	files := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static", "dashboard":
+			case "dist", "static", "dashboard":
 				return fs.SkipDir
 			}
 			return nil
@@ -202,17 +202,4 @@ func itoaLine(n int) string {
 		n /= 10
 	}
 	return string(out)
-}
-
-func moduleRootOf(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file))))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }

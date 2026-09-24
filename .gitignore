@@ -5,11 +5,11 @@
 /dist/
 /build/
 
-# THE OTHER FIVE COMMANDS, which drop their own binaries in exactly the same
-# place for exactly the same reason: `go build ./<dir>` on a `package main`
-# writes an executable named after that directory into the working directory.
-# Only `cmd/crewlet` was listed, so the five below were uncovered -- and one
-# of them landed: a 4 MB `skipgate` sat untracked in the root of this PUBLIC
+# THE OTHER COMMANDS, which drop their own binaries in exactly the same place
+# for exactly the same reason: `go build ./<dir>` on a `package main` writes
+# an executable named after that directory into the working directory. Only
+# `cmd/crewlet` was listed, so the others were uncovered -- and one of them
+# landed: a 4 MB `skipgate` sat untracked in the root of this PUBLIC
 # repository after a `go build ./internal/skipgate`, which is one `git add -A`
 # from a commit that cannot be unpublished.
 #
@@ -33,6 +33,7 @@
 # `go list -f '{{if eq .Name "main"}}{{.Dir}}{{end}}' ./...`.
 /skipgate
 /partition
+/gofiles
 /alarmgen
 /gen
 /notices

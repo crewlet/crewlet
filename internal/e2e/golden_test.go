@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -474,12 +475,11 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // --- the client's half ----------------------------------------------------- //
 
-// replayScript drives the dashboard's own protocol module, the store and the
-// socket built as static/dashboard/protocol.js, over the frames this server
-// produced. See tests/dashboard/js/replay.mjs.
+// The replay script, tests/dashboard/js/replay.mjs, drives the dashboard's
+// own protocol module, the store and the socket built as
+// static/dashboard/protocol.js, over the frames this server produced; it is
+// told where that build is through dashboardEnv.
 const (
-	replayScript  = "../../tests/dashboard/js/replay.mjs"
-	dashboardTree = "../../static/dashboard"
 	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
 	replayTimeout = 60 * time.Second
 )
@@ -538,14 +538,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the capture: %v", err)
 	}
 
-	tree, err := filepath.Abs(dashboardTree)
-	if err != nil {
-		t.Fatalf("resolving the dashboard tree: %v", err)
-	}
-	script, err := filepath.Abs(replayScript)
-	if err != nil {
-		t.Fatalf("resolving the replay script: %v", err)
-	}
+	root := sourcetree.Root(t)
+	tree := filepath.Join(root, "static", "dashboard")
+	script := filepath.Join(root, "tests", "dashboard", "js", "replay.mjs")
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()

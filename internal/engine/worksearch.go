@@ -68,7 +68,7 @@ func (r itemRanker) Building(_ context.Context) bool {
 // WorkSearch is this node's ranked item search, or nil when it has no index —
 // a company on another tracker, or a node whose native backends are off.
 func (e *Engine) WorkSearch() *tracker.Searcher {
-	n := e.native
+	n := e.native.Load()
 	if n == nil || n.itemSearch == nil {
 		return nil
 	}

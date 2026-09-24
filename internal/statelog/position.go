@@ -82,7 +82,10 @@ type Position struct {
 	// Stream is the stream this position is on.
 	Stream string `json:"stream"`
 
-	// Generation is the estate's generation.
+	// Generation is the generation of THIS STREAM — each domain's log has
+	// its own, advanced only by an operator's reanchor of that log — so
+	// it is a coordinate within the stream's number space rather than a
+	// fact about the node.
 	//
 	// uint32, NOT uint64: the packed form shifts it by GenerationStride's
 	// exponent inside an int64, which bounds it at 2^23 either way. A

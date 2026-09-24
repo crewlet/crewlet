@@ -13,7 +13,7 @@
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
  * | 401 or 403                                       | a request for a token, worded by whether one is stored |
- * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
+ * | any other 404 (`no_route`), or a body not JSON    | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
  * A token change mid-edit re-reads without discarding the draft: the draft

@@ -83,6 +83,23 @@ type Routed struct {
 	// one id for all of them would deliver the first and deduplicate the
 	// rest away. See [changefeed.WakeID], which derives them.
 	WakeID uuid.UUID
+
+	// WakeAt is when the change a DERIVED wake announces was made — the
+	// record's own instant — and it becomes the wake's timestamp.
+	//
+	// WITH THE ID, because a wake's timestamp is half of the identity a turn
+	// derives from it: the unit of work's instant is the earliest timestamp
+	// among its triggers ([inbox.WorkSinceFor]), and every operation id the
+	// turn derives carries it. A wake minted with the delivery's own clock
+	// took a FRESH instant on every producer retry while its id stayed put,
+	// so a turn re-run from a later copy derived different operation ids
+	// from the first run's and its writes were not collapsed onto them.
+	// The record's instant is the same on every copy, and it is earlier
+	// than the wake, which is the safe side for a lower bound.
+	//
+	// Zero keeps the delivery's own instant, which is right for a vendor
+	// edge's random id and for a record that carries no instant.
+	WakeAt time.Time
 }
 
 // Recipient is an addressee, in any of the forms a third-party app can name one.
@@ -564,6 +581,11 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// check.
 	if r.WakeID != uuid.Nil {
 		wake.ID = r.WakeID
+		// AND ITS INSTANT, which a producer retry must reproduce exactly
+		// as it reproduces the id — see [Routed.WakeAt].
+		if !r.WakeAt.IsZero() {
+			wake.Timestamp = r.WakeAt.UTC()
+		}
 	}
 	wake.Source = "notify." + r.Source
 	// AND ONTO THE ENVELOPE, which is what every reader actually uses. The

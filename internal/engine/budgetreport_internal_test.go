@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // EVERY REGISTERED EVENT TYPE HAS A PUBLISHER.
@@ -70,7 +71,7 @@ func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 // makes the value reachable.
 func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	declared := guardKinds(t, filepath.Join(root, "internal", "events", "types"))
 	written := sourceMatches(t, root, regexp.MustCompile(`\bKind:\s*types\.(Guard[A-Za-z0-9_]+)\b`))
 	for _, name := range declared {
@@ -126,18 +127,49 @@ func guardKinds(t *testing.T, dir string) []string {
 	return kinds
 }
 
+// THE WALK'S START IS NEVER ONE OF ITS OWN SKIPS. A dot-directory below the
+// module root is one the go command does not build, but the root is wherever
+// somebody cloned it, and judged by that rule a checkout at `~/.crewlet` was
+// skipped whole — so both gates above reported every kind as unpublished.
+// sourcetree.Walk never hands its start to the callback, which is what keeps
+// the rule below from reaching it; this pins that for the rule it would hit.
+func TestAModuleUnderADotNamedDirectoryIsStillRead(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), ".crewlet")
+	for path, body := range map[string]string{
+		"internal/pub/pub.go":        "package pub\nvar _ = types.Published{}\n",
+		"internal/.hidden/hidden.go": "package hidden\nvar _ = types.Hidden{}\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := sourceMatches(t, root, regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
+	if !found["Published"] || found["Hidden"] {
+		t.Errorf("found %v, want the module's own literal and not the dot-directory's", found)
+	}
+}
+
 // sourceMatches is every first submatch of pattern in the module's non-test Go
 // files outside the payloads' own package.
 func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
 	found := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err
 		case d.IsDir():
 			// The payloads' OWN package is skipped: a literal there is
-			// a test fixture or a summary's receiver, not a publisher.
+			// a test fixture or a summary's receiver, not a publisher,
+			// and a dot-directory is one the go command does not build.
+			// The root never arrives here — sourcetree.Walk walks its
+			// start without handing it over — so a checkout at
+			// `~/.crewlet` is read rather than skipped whole.
 			if d.Name() == "testdata" || d.Name() == "types" ||
 				strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
@@ -170,29 +202,10 @@ func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string
 // broker, a store, a company and a fleet.
 func payloadLiterals(t *testing.T) map[string]bool {
 	t.Helper()
-	found := sourceMatches(t, moduleRoot(t),
+	found := sourceMatches(t, sourcetree.Root(t),
 		regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
 	if len(found) == 0 {
 		t.Fatal("no payload literal found anywhere, so this test could not fail")
 	}
 	return found
-}
-
-// moduleRoot is the directory holding go.mod, walking up from this package.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("working directory: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the working directory")
-		}
-		dir = parent
-	}
 }

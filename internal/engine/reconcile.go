@@ -454,7 +454,15 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 				"read, so whether it is the fleet's is unknown; the next tick checks again")
 		return
 	}
-	if found && active.ID == target.RevisionID {
+	// THE SAME REVISION AT ANOTHER INSTANT IS NOT HELD: re-activating an
+	// unchanged revision is the credential-rotation gesture, and this
+	// node's `activated_at` is the instant it boots its chart with next
+	// time and the one its config history shows. Left at the earlier
+	// activation's, both would describe an activation the fleet has
+	// since superseded — harmless to the projects, whose guard refuses
+	// the older stamp, and wrong everywhere the instant is read.
+	if found && active.ID == target.RevisionID &&
+		store.EncodeTime(active.ActivatedAt) == store.EncodeTime(target.At) {
 		return
 	}
 	_, held, err := r.configs.Get(ctx, target.RevisionID)
@@ -493,7 +501,11 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 //
 // The subsystem list is empty on every exit before [Engine.Apply] is reached:
 // nothing on this node has been mutated yet when the revision cannot be read,
-// opened or parsed, and an empty list says exactly that.
+// opened or parsed, and an empty list says exactly that. It is empty on ONE
+// exit from Apply as well — a revision that breaks a rule needing both tiers
+// ([config.CheckTiers]) is refused before the first stage — so an empty list
+// means "nothing changed here", and the error's own prefix says which of the
+// two it was.
 func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, []string, error) {
 	revision, found, err := r.configs.Get(ctx, target.RevisionID)
 	if err != nil {
@@ -551,7 +563,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, nil, fmt.Errorf("engine: revision %s is not a "+
 			"runnable company; activate a corrected revision: %w", target.RevisionID, invalid)
 	}
-	status, applied, err := r.engine.Apply(ctx, cfg)
+	status, applied, err := r.engine.Apply(ctx, cfg, target.At)
 	if status == configplane.StatusOK {
 		// ON THE SUCCESS BRANCH ONLY, which is what makes both warnings once
 		// per node per applied epoch: Tick never re-applies an epoch this node

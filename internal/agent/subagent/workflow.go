@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -364,7 +365,10 @@ func withDependencies(prompt string, deps []Result) string {
 // runner is what the wave executor calls to run one task. A field rather
 // than a direct call so the graph's own behaviour — waves, skipping,
 // ordering, determinism — is testable without a provider.
-type runner func(ctx context.Context, r resolved, deps []Result) Result
+//
+// calls is the task's own fork of the run's call log, which its surface
+// records into — see [runGraph].
+type runner func(ctx context.Context, r resolved, deps []Result, calls *turnctx.CallLog) Result
 
 // runGraph executes the planned tasks wave by wave and returns their results
 // in INPUT order.
@@ -372,7 +376,20 @@ type runner func(ctx context.Context, r resolved, deps []Result) Result
 // Order matters more than it looks: the parent's model wrote the tasks as a
 // list and reads the answers as one, so results ordered by completion would
 // silently re-pair every answer with the wrong question.
-func runGraph(ctx context.Context, tasks []resolved, maxParallel int, run runner) []Result {
+//
+// # And each task counts its own calls
+//
+// Every worker writes under the parent's unit of work, so an operation id it
+// derives carries a repeat count from the run's call log (see
+// [turnctx.CallLog]): it has to see what the run called before it, and what
+// it calls itself. It must NOT see what a sibling in its own wave calls,
+// because siblings run concurrently and a count that depended on which one
+// finished first is one a re-run would not reproduce. So each task runs on a
+// fork taken when its wave starts, and the forks are absorbed back at the
+// wave's barrier in input order — the log every later wave, and the parent,
+// counts from is then the same log however the scheduler interleaved them.
+func runGraph(ctx context.Context, tasks []resolved, maxParallel int,
+	calls *turnctx.CallLog, run runner) []Result {
 	results := make([]Result, len(tasks))
 	byID := make(map[string]*Result, len(tasks))
 	for i := range tasks {
@@ -383,7 +400,8 @@ func runGraph(ctx context.Context, tasks []resolved, maxParallel int, run runner
 	sem := make(chan struct{}, maxParallel)
 	for _, wave := range wavesOf(tasks) {
 		var wg sync.WaitGroup
-		for _, i := range wave {
+		forks := make([]*turnctx.CallLog, len(wave))
+		for w, i := range wave {
 			task := tasks[i]
 
 			// THE DEPENDENCY CHECK COMES FIRST, before the deadline is
@@ -399,6 +417,8 @@ func runGraph(ctx context.Context, tasks []resolved, maxParallel int, run runner
 				continue
 			}
 
+			fork := calls.Fork()
+			forks[w] = fork
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -418,7 +438,7 @@ func runGraph(ctx context.Context, tasks []resolved, maxParallel int, run runner
 					results[i] = neverStarted(ctx, task)
 					return
 				}
-				results[i] = run(ctx, task, deps)
+				results[i] = run(ctx, task, deps, fork)
 				results[i].ID, results[i].Worker = task.ID, task.Worker
 			}()
 		}
@@ -429,6 +449,9 @@ func runGraph(ctx context.Context, tasks []resolved, maxParallel int, run runner
 		// reading a zero Result would see status "" and treat an unfinished
 		// task as one that answered nothing.
 		wg.Wait()
+		for _, fork := range forks {
+			calls.Absorb(fork)
+		}
 	}
 
 	// BACK INTO INPUT ORDER. The slice above is in wave order, because

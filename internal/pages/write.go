@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -128,13 +129,12 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		excerpt(firstLine(in.Body, title)), nil)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return s.decide(actor, subject, OpCreate, scope, opID, CreatePayload{
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
 				Status: page.Status, Labels: page.Labels,
@@ -240,12 +240,11 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -279,7 +278,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(save.Quiet, kind, head,
 				excerptOfSave(save, head), nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
 	if err != nil {
@@ -337,12 +336,11 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	}}
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -352,7 +350,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 			out.Title = title
 			out.UpdatedAt = at
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRename, scope, opID, RenamePayload{
+			return s.decide(stamp, actor, subject, OpRename, scope, opID, RenamePayload{
 				V: DocumentVersion, PageID: pageID,
 				Container: current.Container, Title: title,
 				FormerContainer: current.Container, FormerTitle: current.Title,
@@ -411,12 +409,11 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -455,7 +452,7 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 			out.UpdatedAt = at
 			scope := ScopeSet{Subject: true, Container: current.Container}
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRetitle, scope, opID, RetitlePayload{
+			return s.decide(stamp, actor, subject, OpRetitle, scope, opID, RetitlePayload{
 				V: DocumentVersion, PageID: pageID,
 				Title: title, FormerTitle: current.Title,
 			}, notify, at)
@@ -504,12 +501,11 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -517,7 +513,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 			out, read = head, revision
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(false, kind, head, "", nil)
-			return s.decide(actor, subject, op, scope, opID, StatusPayload{
+			return s.decide(stamp, actor, subject, op, scope, opID, StatusPayload{
 				V: DocumentVersion, Reason: reason,
 			}, notify, at)
 		},
@@ -531,35 +527,70 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	}, nil
 }
 
-// EnsureContainer creates a space if it is not there, or updates its settings.
+// EnsureContainer creates a space if it is not there, or updates its settings,
+// from the configuration activated at activatedAt.
 //
 // THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, not whether the call
 // succeeded. This runs on every boot for every unit's space, so the ordinary
 // outcome is that the row already says what the chart says — and a caller
 // that could not tell that from a create would log "applied" on every restart
 // for a company nobody had edited.
-func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) (
-	Container, bool, error) {
+//
+// # Stamped with the activation, and never walked back
+//
+// A container's name and purpose are the configuration's, and every node
+// applies one configuration separately — at its reconcile tick and again at
+// every boot. So the settings carry the ACTIVATION they came from
+// ([configplane.ActivationStamp] of activatedAt), and a write whose
+// activation is OLDER than the one the row already holds decides nothing: a
+// node that boots on a revision the fleet has since replaced leaves the newer
+// names alone, where it used to rewrite every container back to its own. One
+// at the SAME activation with the same settings decides nothing either, which
+// is what makes the call free after the first node; one at the same
+// activation with DIFFERENT settings is written, because that is a row an
+// equal-epoch race left wrong and the activation that is actually current is
+// what sets it right. A zero instant is refused ([ErrNoActivation]): there is
+// no honest default, and a caller holding no activation has no configuration
+// to apply.
+//
+// A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
+// gives for its own: this is a reconcile decided from the row, so a second
+// call — on another node, at the next boot, after a lost acknowledgement —
+// finds its value there, and N nodes racing one activation are settled by the
+// broker's arbitration. An outcome that is `unknown` is an error, because the
+// next apply is what retries it and the caller is the one that says so.
+func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
+	key, name, purpose string) (Container, bool, error) {
 
 	key = strings.ToUpper(strings.TrimSpace(key))
-	if key == "" {
+	switch {
+	case key == "":
 		return Container{}, false, invalid("container", "a container needs a key")
+	case activatedAt.IsZero():
+		return Container{}, false, fmt.Errorf("%w (container %s)", ErrNoActivation, key)
 	}
+	epoch := configplane.ActivationStamp(activatedAt)
 	at := s.now()
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
-	changed := true
-	out := Container{V: DocumentVersion, Key: key, Name: name,
-		Purpose: purpose, CreatedAt: at}
+	var (
+		changed, restamp bool
+		out              Container
+	)
 
-	_, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindContainer), ID: key},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			var held Container
+	result, err := s.publish(ctx, statelog.Request{
+		Subject: statelog.Subject{Kind: string(KindContainer), ID: key},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// RESET ON EVERY ROUND. A round that decided to write and
+			// lost the broker's arbitration is followed by one that
+			// finds the winner's value already there, and only the last
+			// round says what this call did.
+			changed, restamp = false, false
+			out = Container{V: DocumentVersion, Key: key, Name: name,
+				Purpose: purpose, ChartEpoch: epoch, CreatedAt: at}
 			var document []byte
 			err := tx.QueryRowContext(ctx,
 				`SELECT document FROM pages_containers WHERE key = ?`, key).
@@ -570,32 +601,65 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 				return statelog.Decision{}, fmt.Errorf(
 					"pages: read the container %s: %w", key, err)
 			default:
-				if held, err = DecodeContainer(document); err != nil {
+				held, err := DecodeContainer(document)
+				if err != nil {
 					return statelog.Decision{}, err
 				}
-				if held.Name == name && held.Purpose == purpose {
-					// UNCHANGED IS A NO-OP. This runs on every
-					// boot for every unit's space, and a record
-					// per boot per space is a log that grows
-					// with restarts rather than with edits.
+				switch {
+				case held.ChartEpoch > epoch:
+					// A LATER CONFIGURATION ALREADY WON. Two nodes
+					// applying two revisions is ordinary during a
+					// rollout, and the newer one must not be walked
+					// back by the older node's own apply arriving
+					// second.
 					out = held
-					changed = false
+					return statelog.Decision{}, nil
+				case held.ChartEpoch == epoch && held.Name == name &&
+					held.Purpose == purpose:
+					// UNCHANGED IS A NO-OP. This runs on every boot
+					// for every unit's space, and a record per boot
+					// per space is a log that grows with restarts
+					// rather than with edits.
+					out = held
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
+				restamp = held.Name == name && held.Purpose == purpose
 			}
-			return s.decide(Actor{Handle: "system", Kind: AuthorOperator},
+			changed = true
+			payload := ContainerPayload{
+				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+				ChartEpoch: epoch,
+			}
+			// A LATER ACTIVATION OVER THE SAME SETTINGS IS A RE-STAMP, and
+			// it goes out at the version an older build applies whole —
+			// see [recordVersionOf]. The stamp still lands on every node
+			// that can read it, so the guard above holds against the
+			// older activation that would otherwise follow.
+			var record any = payload
+			if restamp {
+				record = restampPayload{payload}
+			}
+			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				ContainerPayload{
-					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-				}, nil, at)
+				record, nil, at)
 		},
 	})
 	if err != nil {
 		return Container{}, false, err
 	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return Container{}, false, fmt.Errorf("pages: whether container %s's "+
+			"settings landed is unknown (operation %s); the next apply decides "+
+			"them again", key, opID)
+	}
 	return out, changed, nil
 }
+
+// ErrNoActivation refuses a container write that does not name the
+// configuration activation it came from. See [Store.EnsureContainer].
+var ErrNoActivation = errors.New("pages: a container's settings must name the " +
+	"instant their configuration was activated")
 
 // patchOf turns a save into a record's payload and reports what changed.
 //

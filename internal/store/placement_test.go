@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -271,6 +272,15 @@ var nodeEstatePlacements = []placement{
 			"file. It describes a local file operation and means nothing on " +
 			"a peer.",
 	},
+	{
+		Table: "statelog_diverged",
+		Why: "This node's own finding that a log diverged from ITS rows — " +
+			"no log derives it and a peer's rows are not the ones it is about, " +
+			"and it has to outlive both a restart and the log losing the " +
+			"record it was found by. Not replicated, because an adoption " +
+			"replaces that file at exactly the moment the finding has to be " +
+			"judged against the file that replaced it.",
+	},
 
 	// -----------------------------------------------------------------
 	// An index over rows that live in the other estate. Derived, droppable
@@ -370,7 +380,7 @@ const (
 // buckets as dropped tables.
 func estatePage(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join(moduleRoot(t), filepath.FromSlash(estateDoc)))
+	body, err := os.ReadFile(filepath.Join(sourcetree.Root(t), filepath.FromSlash(estateDoc)))
 	if err != nil {
 		t.Fatalf("read %s: %v", estateDoc, err)
 	}

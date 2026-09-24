@@ -1423,15 +1423,9 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
 	// caller that has already lost the race must not leave a payload
 	// behind for a revision the fleet will never point at.
-	seq, err := f.expectedSeq(ctx, req)
+	seq, previous, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
-	}
-	raw, err := json.Marshal(activationRecord{
-		RevisionID: req.RevisionID, At: req.At.UTC(), Summary: req.Summary,
-	})
-	if err != nil {
-		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
 	// THE PAYLOAD FIRST. A crash here leaves a body nothing points at,
 	// which the next activation replaces; the other order points the fleet
@@ -1456,78 +1450,118 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	// between makes this fail rather than overwrite — which is the only
 	// thing standing between two operators editing at once and one of them
 	// losing their change with a 201 in hand.
-	revision, err := f.flip(ctx, req, seq, raw)
+	//
+	// AND THE INSTANT IS DECIDED AGAINST THE POINTER THAT WRITE REPLACES —
+	// see [coord.ActivationAt] — which is why even the unconditional write
+	// is a compare-and-set underneath.
+	revision, at, err := f.flip(ctx, req, seq, previous)
 	if err != nil {
 		return coord.Activation{}, err
 	}
 	return coord.Activation{
 		Epoch:      int64(revision),
 		RevisionID: req.RevisionID,
-		At:         req.At.UTC(),
+		At:         at,
 		Summary:    req.Summary,
 	}, nil
 }
 
+// encodeActivation is the pointer's stored form for req at the instant at.
+func encodeActivation(req coord.ActivationRequest, at time.Time) ([]byte, error) {
+	raw, err := json.Marshal(activationRecord{
+		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the activation: %w", err)
+	}
+	return raw, nil
+}
+
 // expectedSeq resolves the caller's expectation to the KV sequence to
-// compare-and-set against, or reports the race.
+// compare-and-set against, and the instant of the activation it names, or
+// reports the race.
 //
 // Zero means unconditional (see [coord.ActivationRequest.Expect]), and it is
 // also what a create-only write compares against, since there is no entry to
-// take a sequence from.
-func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationRequest) (uint64, error) {
+// take a sequence from. An unconditional write reads the pointer itself, in
+// [FleetStore.flip], because it has to read it again every time it loses.
+func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationRequest) (uint64, time.Time, error) {
 	if req.Expect == "" && !req.ExpectAbsent {
-		return 0, nil
+		return 0, time.Time{}, nil
 	}
-	entry, err := f.config.Get(ctx, activationKey)
-	if errors.Is(err, jetstream.ErrKeyNotFound) {
+	record, seq, held, err := f.pointer(ctx)
+	switch {
+	case err != nil:
+		return 0, time.Time{}, err
+	case !held:
 		// NOTHING TO HAVE RACED WITH. A node seeded from a file holds a
 		// locally-active revision before it has published anything, and
 		// treating that as a race would refuse every config write on it
 		// until it did. See [coord.ActivationRequest.Expect]. It is also
 		// exactly what a create-only write is waiting to see.
-		return 0, nil
+		return 0, time.Time{}, nil
+	case req.ExpectAbsent:
+		return 0, time.Time{}, fmt.Errorf("%w: expected no activation, the fleet is on %s",
+			coord.ErrActivationRaced, record.RevisionID)
+	case record.RevisionID != req.Expect:
+		return 0, time.Time{}, fmt.Errorf("%w: expected %s, the fleet is on %s",
+			coord.ErrActivationRaced, req.Expect, record.RevisionID)
+	}
+	return seq, record.At, nil
+}
+
+// pointer reads the activation pointer: its record, the KV sequence to
+// compare-and-set against, and whether there is one at all.
+func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
+	entry, err := f.config.Get(ctx, activationKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return activationRecord{}, 0, false, nil
 	}
 	if err != nil {
-		return 0, unavailable("read the activation to compare against", err)
+		return activationRecord{}, 0, false, unavailable("read the activation to compare against", err)
 	}
 	var record activationRecord
 	if err = json.Unmarshal(entry.Value(), &record); err != nil {
-		return 0, fmt.Errorf("coord/kv: decode the activation: %w", err)
+		return activationRecord{}, 0, false, fmt.Errorf("coord/kv: decode the activation: %w", err)
 	}
-	if req.ExpectAbsent {
-		return 0, fmt.Errorf("%w: expected no activation, the fleet is on %s",
-			coord.ErrActivationRaced, record.RevisionID)
-	}
-	if record.RevisionID != req.Expect {
-		return 0, fmt.Errorf("%w: expected %s, the fleet is on %s",
-			coord.ErrActivationRaced, req.Expect, record.RevisionID)
-	}
-	return entry.Revision(), nil
+	return record, entry.Revision(), true, nil
 }
 
-// flip writes the pointer, conditionally when there was an expectation.
+// flip writes the pointer, conditionally when there was an expectation, and
+// reports the revision and the instant it was published at.
 //
 // A CREATE-ONLY write is a Create rather than an Update: there is no sequence
 // to name, and the store's own "only if this key is absent" is what makes two
 // nodes both convinced the company is theirs to write resolve to one winner.
-func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq uint64, raw []byte) (uint64, error) {
+//
+// previous is the instant of the pointer seq names, which an expecting write
+// read in [FleetStore.expectedSeq].
+func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
+	seq uint64, previous time.Time) (uint64, time.Time, error) {
+
 	switch {
 	case req.ExpectAbsent:
+		at := coord.ActivationAt(req.At, time.Time{})
+		raw, err := encodeActivation(req, at)
+		if err != nil {
+			return 0, time.Time{}, err
+		}
 		revision, err := f.config.Create(ctx, activationKey, raw)
 		if err != nil {
 			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
-				return 0, fmt.Errorf("%w: an activation was published while this "+
-					"write was being prepared", coord.ErrActivationRaced)
+				return 0, time.Time{}, fmt.Errorf("%w: an activation was published "+
+					"while this write was being prepared", coord.ErrActivationRaced)
 			}
-			return 0, unavailable("publish the activation", err)
+			return 0, time.Time{}, unavailable("publish the activation", err)
 		}
-		return revision, nil
+		return revision, at, nil
 	case req.Expect == "":
-		revision, err := f.config.Put(ctx, activationKey, raw)
-		if err != nil {
-			return 0, unavailable("publish the activation", err)
-		}
-		return revision, nil
+		return f.assert(ctx, req)
+	}
+	at := coord.ActivationAt(req.At, previous)
+	raw, err := encodeActivation(req, at)
+	if err != nil {
+		return 0, time.Time{}, err
 	}
 	revision, err := f.config.Update(ctx, activationKey, raw, seq)
 	if err != nil {
@@ -1535,12 +1569,60 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq 
 			// SOMEBODY WROTE BETWEEN the read and this. Reported as the
 			// race rather than as an unavailable store, because the
 			// caller's fix is to re-read and rebuild rather than retry.
-			return 0, fmt.Errorf("%w: %s was replaced while this write was "+
-				"being prepared", coord.ErrActivationRaced, req.Expect)
+			return 0, time.Time{}, fmt.Errorf("%w: %s was replaced while this "+
+				"write was being prepared", coord.ErrActivationRaced, req.Expect)
 		}
-		return 0, unavailable("publish the activation", err)
+		return 0, time.Time{}, unavailable("publish the activation", err)
 	}
-	return revision, nil
+	return revision, at, nil
+}
+
+// assert is the UNCONDITIONAL write: whatever the pointer names, it ends up
+// naming req — at an instant later than the one it replaces.
+//
+// A COMPARE-AND-SET UNDERNEATH ANYWAY, because the instant is decided against
+// the pointer being replaced ([coord.ActivationAt]) and a plain put would
+// decide it against a pointer that may have moved since it was read. Losing
+// is not a refusal here — an unconditional writer has nothing to have raced
+// with — so it reads the pointer again and retries until it lands.
+//
+// BOUNDED BY THE CONTEXT, not by a count. Every lost round is another
+// writer's successful write, and the writers that reach this path are a
+// node publishing at boot, each of which writes once — so the loop makes
+// progress every round and ends when they have all landed.
+func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest) (uint64, time.Time, error) {
+	for {
+		record, seq, held, err := f.pointer(ctx)
+		if err != nil {
+			return 0, time.Time{}, err
+		}
+		var previous time.Time
+		if held {
+			previous = record.At
+		}
+		at := coord.ActivationAt(req.At, previous)
+		raw, err := encodeActivation(req, at)
+		if err != nil {
+			return 0, time.Time{}, err
+		}
+		var revision uint64
+		if held {
+			revision, err = f.config.Update(ctx, activationKey, raw, seq)
+		} else {
+			revision, err = f.config.Create(ctx, activationKey, raw)
+		}
+		switch {
+		case err == nil:
+			return revision, at, nil
+		case errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err):
+			if ctx.Err() != nil {
+				return 0, time.Time{}, unavailable("publish the activation", ctx.Err())
+			}
+			continue
+		default:
+			return 0, time.Time{}, unavailable("publish the activation", err)
+		}
+	}
 }
 
 // isWrongLastSequence reports a compare-and-set refusal.

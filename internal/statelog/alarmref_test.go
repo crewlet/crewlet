@@ -5,11 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// referencePath is the generated page, relative to this package.
-const referencePath = "../../docs/reference/alarms.md"
+// referencePath is the generated page, from the module root — where
+// `make alarms-doc` writes it.
+const referencePath = "docs/reference/alarms.md"
 
 // THE REFERENCE IS GENERATED AND DIFFED, the same idiom schema/ and the
 // metrics reference use.
@@ -22,7 +24,7 @@ func TestTheAlarmReferenceIsGenerated(t *testing.T) {
 	t.Parallel()
 	want := statelog.AlarmReference()
 
-	got, err := os.ReadFile(filepath.Clean(referencePath))
+	got, err := os.ReadFile(filepath.Join(sourcetree.Root(t), filepath.FromSlash(referencePath)))
 	if err != nil {
 		t.Fatalf("read %s: %v — the page is generated from the alarm table and "+
 			"has to exist for the docs site to link it", referencePath, err)

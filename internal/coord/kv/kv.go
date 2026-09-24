@@ -162,9 +162,9 @@
 // two JetStream metadata proposals on a clustered bucket — and then leaves the
 // caller to spend N more round trips fetching the values it did not carry.
 // Five of this node's fifteen-second duty loops read a bucket on every tick,
-// and the state-log write fence reads the positions register on every first
-// write to a subject, so that cost is paid continuously rather than at the
-// edges.
+// and the state-log write fence lists the trim floors out of the positions
+// register on every write at an expectation of zero — a subject's first write
+// among them — so that cost is paid continuously rather than at the edges.
 //
 // And it could not report a short answer. The client's key lister ends its
 // goroutine on a nil entry, and a receive from the channel its own

@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -42,7 +43,7 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeReflects(t *testing.T) {
 		t.Fatal("an unconfigured node reads completed turns before it has an " +
 			"org to resolve their seats against")
 	}
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !reflecting(t, e) {
@@ -82,7 +83,7 @@ learning:
 func TestTheFirstCompanyOnAnUnconfiguredNodeRunsItsBackgroundPasses(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+fastClustering)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+fastClustering), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	waitFor(t, "the first company's clustering pass to run", func() bool {
@@ -99,7 +100,7 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeRunsItsBackgroundPasses(t *testing.T
 func TestAProviderAddedLaterTurnsOnTheModelPasses(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, noModelsDoc+fastClustering)})
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+fastClustering)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+fastClustering), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	waitFor(t, "the clustering pass the provider made possible to run", func() bool {

@@ -43,7 +43,10 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		}
 		ids = append(ids, id)
 	}
-	svc, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet()})
+	svc, err := configapi.New(configapi.Options{
+		Store: db, Plane: coordmemory.NewFleet(),
+		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
+	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}

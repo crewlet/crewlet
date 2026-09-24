@@ -122,6 +122,12 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // tolerates by construction.
 func (Domain) InstallsGate(statelog.Envelope) bool { return false }
 
+// NodeGate reports a node's eviction or readmission: FALSE, ALWAYS. This
+// domain claims no identity, so no node is counted on its log and none is
+// evicted from it — a record here flagged a node gate is a mistake the
+// publisher refuses rather than one it lets past the fences.
+func (Domain) NodeGate(statelog.Envelope) bool { return false }
+
 // Tables is every durable table this domain writes, with its class.
 //
 // NOTHING IS `Replicated` HERE, and that is the point of the class existing.
@@ -180,6 +186,16 @@ func (Domain) ReadinessInput() bool { return false }
 // none, because it is the one a fleet report would print.
 func (Domain) ClaimsIdentity() bool { return false }
 
+// FeedGroup is EMPTY: this domain has no wake feed.
+//
+// A vector is derived from a page or a task that already woke whoever it was
+// going to on its own log, and an embedding is news to nobody — so there is
+// no consumer here for the trim to wait on, and its `feed_ack_floor` term
+// reports absent rather than zero. Stated rather than inferred from the
+// compaction, because "is compacted" and "notifies nobody" are two facts that
+// merely coincide here.
+func (Domain) FeedGroup() string { return "" }
+
 // NewRows builds the publisher's read seam for this domain.
 //
 // THE FRAMEWORK IMPLEMENTS IT, for the reason the tracker's own seam gives:
@@ -234,7 +250,9 @@ func (Fence) ClearForZero(context.Context, statelog.Position) error { return nil
 // NOTHING GATES A VECTOR, which [Applier.Gated] states from the applier's side
 // and this states from the publisher's. The two must agree: a resolution that
 // looked for a gate the applier never installs would read every unapplied
-// record as "somebody else won".
+// record as "somebody else won". It is also why this domain does not run
+// statelogtest.RunGates: the rule that family certifies is the order of two
+// gates, and there is no gate here to order.
 type Gates struct{}
 
 // NewGates builds it.
@@ -243,17 +261,4 @@ func NewGates() Gates { return Gates{} }
 // GatedAt implements [statelog.Gates].
 func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
 	return "", false, nil
-}
-
-// AdoptedAt implements [statelog.Gates], and is UNREACHABLE on this domain.
-//
-// It exists to qualify a read of the OPERATION LEDGER — an op id minted before
-// this node adopted a donated snapshot cannot be answered for, because the
-// ledger travels scrubbed. This domain keeps no ledger, so the publisher's
-// resolution never reaches the arm that asks. Answering "never adopted" is
-// therefore not a claim about the node; it is the value of a question nobody
-// asks, and a domain that reached for the framework's adoption row here would
-// be reading a table to feed a branch that cannot run.
-func (Gates) AdoptedAt(context.Context) (time.Time, bool, error) {
-	return time.Time{}, false, nil
 }

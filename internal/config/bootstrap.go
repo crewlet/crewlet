@@ -477,6 +477,11 @@ const NodeIDEnvVar = "CREWLET_NODE_ID"
 // and in broker consumer names, so it is restricted to what both accept.
 var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+// ValidNodeID reports whether id is one a node could run under — the rule
+// [Node.ID] is resolved against, for a caller naming some OTHER node, such as
+// the operator gesture that evicts one.
+func ValidNodeID(id string) bool { return nodeIDPattern.MatchString(id) }
+
 // Node is Tier A identity of THIS process within the company.
 //
 // The id must be STABLE ACROSS RESTARTS, which is why it comes from the
@@ -931,9 +936,10 @@ type Stream struct {
 	// EVERY STATE LOG SHARES ONE BUDGET, and a derived value is only what
 	// this log asks for within it. The broker reserves each ceiling in full
 	// when it creates the stream, so the derived ceilings of every state
-	// log are scaled down together to fit half of what the broker can
-	// grant them; a value set here is never scaled, and a boot that cannot
-	// reserve it fails naming this field.
+	// log being created are scaled down together to fit what the logs that
+	// already exist leave of half of what the broker can grant them; a
+	// value set here is never scaled, and a boot that cannot reserve it
+	// fails naming this field.
 	//
 	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
 	// stream is CREATED with, and thereafter a DECLARATION the engine

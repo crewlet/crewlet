@@ -21,6 +21,22 @@ type fakeCapacityNode struct {
 	status                 map[string]any
 	operation              map[string]any
 	reanchorConfirm        string
+
+	// reanchorCase is the case the node's status reports — "recreated" when
+	// unset, and none at all when it is "-" — with reanchorCursor the
+	// sequence it would put the checkpoint at.
+	reanchorCase   string
+	reanchorCursor uint64
+
+	// reanchorDiscards makes the status name a record written after a
+	// restore that the node's rows do not hold, and reanchorDiscard is
+	// whether the transition was asked to discard it.
+	reanchorDiscards bool
+	reanchorDiscard  bool
+
+	// reanchorTakes is how long the transition takes to answer — a node
+	// rebuilding its consumer on a slow metadata group.
+	reanchorTakes time.Duration
 }
 
 func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
@@ -56,16 +72,41 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		reply(w, body)
 	})
 	mux.HandleFunc("GET /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{
+		body := map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 0,
 			"created_at": "2031-04-02T03:00:00Z",
-		})
+		}
+		switch n.reanchorCase {
+		case "-":
+			body["nothing_to_reanchor"] = "it still holds every record the rows are missing"
+		case "":
+			body["case"], body["cursor"] = "recreated", n.reanchorCursor
+		default:
+			body["case"], body["cursor"] = n.reanchorCase, n.reanchorCursor
+		}
+		if n.reanchorDiscards {
+			body["discards"] = discardedRecord()
+			body["discarding"] = "statelog: reanchor refused: it holds records this " +
+				"node's rows do not; re-run with the discard flag"
+		}
+		reply(w, body)
 	})
 	mux.HandleFunc("POST /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(n.reanchorTakes)
 		n.reanchorConfirm = r.URL.Query().Get("confirm")
-		reply(w, map[string]any{
+		n.reanchorDiscard = r.URL.Query().Get("discard") == "true"
+		which := n.reanchorCase
+		if which == "" {
+			which = "recreated"
+		}
+		answer := map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 1,
-		})
+			"case": which, "cursor": n.reanchorCursor,
+		}
+		if n.reanchorDiscard {
+			answer["discarded"] = discardedRecord()
+		}
+		reply(w, answer)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
@@ -227,6 +268,11 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 	if !strings.Contains(stdout, "does NOT recover records") {
 		t.Errorf("the verb does not say what a reanchor loses:\n%s", stdout)
 	}
+	for _, want := range []string{"RECREATED", "first surviving record"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the recreated prompt never says %q:\n%s", want, stdout)
+		}
+	}
 	if node.reanchorConfirm != "" {
 		t.Fatalf("the node was asked to re-anchor anyway, confirming %q",
 			node.reanchorConfirm)
@@ -240,8 +286,103 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 	if node.reanchorConfirm != "2031-04-02T03:00:00Z" {
 		t.Fatalf("the node was asked to re-anchor confirming %q", node.reanchorConfirm)
 	}
-	if !strings.Contains(stdout, "generation 1") {
-		t.Errorf("the report does not name the new generation:\n%s", stdout)
+	for _, want := range []string{"generation 1", "(recreated)", "first surviving record"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// TestAReanchorNamesTheCaseTheOperatorConfirms: a restored log is followed from
+// its END and a recreated one from its first record, which is the one fact
+// about the transition the operator has to agree with — so the prompt says
+// which, before the confirmation, and the report says which again after. And a
+// log with nothing to re-anchor offers no command to run.
+func TestAReanchorNamesTheCaseTheOperatorConfirms(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor = "restored", 7000
+
+	stdout, _, err := cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil {
+		t.Fatal("a reanchor with no confirmation was accepted")
+	}
+	for _, want := range []string{"RESTORED", "7000", "END", "none of them is replayed",
+		"-confirm 2031-04-02T03:00:00Z"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the restored prompt never says %q:\n%s", want, stdout)
+		}
+	}
+	stdout, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("reanchor: %v", err)
+	}
+	for _, want := range []string{"(restored)", "from its end, after sequence 7000"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the restored report never says %q:\n%s", want, stdout)
+		}
+	}
+
+	node.reanchorCase, node.reanchorConfirm = "-", ""
+	stdout, _, err = cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil || !strings.Contains(stdout, "nothing to re-anchor") {
+		t.Fatalf("a log with nothing to re-anchor = %v:\n%s", err, stdout)
+	}
+	if strings.Contains(stdout, "-confirm") {
+		t.Errorf("a log with nothing to re-anchor was offered a command to run:\n%s", stdout)
+	}
+}
+
+// discardedRecord is the record the fake node names as written after a restore.
+func discardedRecord() map[string]any {
+	return map[string]any{
+		"seq": 7100, "kind": "task", "subject": "task.t-1",
+		"writer": "node-b", "op_id": "op-b-1", "stored_at": "2031-04-02T04:00:00Z",
+	}
+}
+
+// TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag: a restored log holding
+// records written after the restore that this node's rows do not hold is one a
+// reanchor would apply nowhere, so the prompt says so — naming the node's own
+// refusal — and the command it offers carries -discard, which the transition
+// then passes on and whose answer names what it discarded.
+func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor, node.reanchorDiscards = "restored", 7100, true
+
+	stdout, _, err := cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil {
+		t.Fatal("a reanchor with no confirmation was accepted")
+	}
+	for _, want := range []string{"discard flag", "-confirm 2031-04-02T03:00:00Z -discard"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the prompt never says %q:\n%s", want, stdout)
+		}
+	}
+
+	_, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("reanchor: %v", err)
+	}
+	if node.reanchorDiscard {
+		t.Fatal("the node was asked to discard although the flag was not given")
+	}
+
+	stdout, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z", "-discard")
+	if err != nil {
+		t.Fatalf("reanchor -discard: %v", err)
+	}
+	if !node.reanchorDiscard {
+		t.Fatal("-discard never reached the node")
+	}
+	for _, want := range []string{"applied on no node", "sequence 7100", "node-b", "op-b-1"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -339,5 +480,30 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), body, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A REANCHOR IS WAITED FOR PAST THE ORDINARY TEN SECONDS.
+//
+// Once its generation record is on the log a reanchor rebuilds the node's
+// consumer — a delete and a create of a replicated object — and on a fleet
+// whose metadata group is slow that outlasts the ten seconds every other call
+// gets. The CLI gave up there and reported a failure for a transition the node
+// went on to finish; the node had also been running it on the request's own
+// context, so the cancellation stopped it halfway.
+func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor = "restored", 7000
+	node.reanchorTakes = nodeRequestTimeout + 500*time.Millisecond
+
+	stdout, _, err := cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("a reanchor the node answered after %s was reported as %v — the "+
+			"CLI gave up on a transition the node finished", node.reanchorTakes, err)
+	}
+	if !strings.Contains(stdout, "is re-anchored at generation") {
+		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout)
 	}
 }

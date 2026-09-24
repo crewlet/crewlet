@@ -445,12 +445,11 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			post, _, err := readPerson(ctx, tx, handle)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -460,7 +459,7 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			return w.decide(subject, OpPatch, kind, scope, opID, post, notify, at)
+			return w.decide(stamp, subject, OpPatch, kind, scope, opID, post, notify, at)
 		},
 	})
 }

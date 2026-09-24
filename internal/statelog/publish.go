@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -59,6 +60,81 @@ type Waiter interface {
 	WaitApplied(ctx context.Context, s ScopeSet, p Position) error
 }
 
+// Identity is whether this node's positions are sequences on the stream the
+// broker serves under the domain's name — [Runner.StreamIdentity], as the
+// publisher needs it.
+//
+// # Why a write asks this before anything else, and asks it EVERY time
+//
+// The write authority's safety argument is that the broker arbitrates, and
+// arbitration means something only while the expectation and the log are in
+// ONE sequence space. A stream deleted and rebuilt under the same name keeps
+// the generation and counts from 1 again, so every number this node holds is
+// still a plausible number there — and the broker, which cannot know which
+// history a number was read from, arbitrates it as one about ITSELF:
+//
+//   - An ordinary expectation is a claim that the subject's last record is the
+//     one at A. On the rebuilt log A is a different record or none, and where
+//     the subject's last sequence happens to be A the broker ACCEPTS a
+//     decision taken from rows that never saw that record.
+//   - An expectation of zero is cleared against this node's checkpoint and
+//     the floor, both from the old history, so the floor theorem — every term
+//     of which is a sequence on one stream — proves nothing about the new
+//     one, and a subject whose anchor sat above the rebuilt log's content
+//     is overwritten from nothing.
+//   - Even an additive write, which forms no expectation, is RESOLVED against
+//     this node's applier: a position on the rebuilt log compared with a
+//     checkpoint from the old one, so a record at a low sequence reads as
+//     already applied and the answer — applied, or a ledger contract
+//     violation — is false either way.
+//
+// And whatever lands is not a local mistake: the recovery that follows a
+// rebuild follows the new log from its head, so every node applies it as
+// though it continued a history it was never arbitrated in. So every pattern
+// refuses, not only the retry at zero the floor theorem names.
+//
+// # And a checkpoint past the log's end is the same failure, without the instant
+//
+// A broker restored from a copy older than this node's rows keeps its stream,
+// creation instant and all, so the rebuild check passes — and the log ENDS
+// below this node's checkpoint. That is the premise failing just as surely:
+// the sequences between the log's end and the checkpoint are ones this node
+// applied records at and the log will issue to different ones. And it has a
+// consequence of its own that decides the question for every pattern at once:
+// whatever this node appends lands at the log's next sequence, which is at or
+// below its own checkpoint — a record its applier has already passed and will
+// never apply. The resolution then has nothing true to say: an arbitrated or
+// created record is absent from a ledger the applier never wrote, which reads
+// as a contract violation, and a ledgerless one is reported applied because
+// the wait is already past it — while the record is on the log for every other
+// node. An expectation above the end is refused by the broker into the retry at
+// zero, the lost update the floor theorem names, and one at or below it is
+// accepted on a subject whose history on this log the node's rows may not
+// contain. So [Runner.StreamIdentity] answers for both findings, and every
+// pattern refuses on either.
+//
+// The answer is what this node has ESTABLISHED, and a reading that could not
+// be taken establishes nothing in either direction — the next one decides. On
+// the zero branch that costs nothing, because it reads the log within the call
+// and its fence refuses on a log it cannot read; on every other branch it
+// widens the window [Publisher.clearForZero] states by one missed reading,
+// inside which harm still needs the rebuilt log's history on the subject to
+// end at exactly the sequence this node's row names.
+//
+// # And what the fleet knows that this node's own log cannot show
+//
+// Truncated answers for a PEER: a node whose rows hold records the log lost
+// ([ErrLogTruncated]). This node's rows are the log's history, so its reads are
+// served and StreamIdentity says nothing — but on a broker restored from an
+// older copy, a write from here is one the restored reanchor of that peer would
+// apply nowhere, acknowledged to a caller who then loses it. So every write
+// refuses on it too, but for the one gesture that is how the operator ends it:
+// the peer's eviction ([Request.NodeGate]).
+type Identity interface {
+	StreamIdentity() error
+	Truncated() error
+}
+
 // Fence refuses a write this node must not make.
 //
 // TWO METHODS BECAUSE THERE ARE TWO PRICES. Evicted runs on EVERY append and
@@ -76,13 +152,46 @@ type Fence interface {
 	Evicted(ctx context.Context) (bool, error)
 
 	// ClearForZero verifies, freshly, that publishing at an expectation
-	// of ZERO is safe from this node: that it is not evicted, and that
-	// the published trim floor is at or below this node's own cursor.
+	// of ZERO is safe from this node: that it is not evicted, that its
+	// applier's checkpoint is not past the log's end, and that
+	// [Replayable](cursor, F) holds for F the HIGHER of the published trim
+	// floor and the log's own first surviving sequence — the F the floor
+	// theorem in this package's doc is stated over. Either bound alone
+	// clears a node the other refuses. [ZeroFence] is that check, written
+	// once; a domain that can reach an expectation of zero supplies its
+	// four reads to it.
+	//
+	// EVERY REFUSAL IS AN [*Unavailable] NAMING ITS REASON — evicted,
+	// floor_unknown, wrong_stream, below_floor, or behind for a node
+	// replaying up to the floor — and never [ErrConflict], which a caller
+	// reads as a colleague editing the same object.
+	//
+	// cursor is the write's own [Snap.Checkpoint] — the position the rows
+	// its decision was made from are at — and the published floor is read
+	// at cursor's GENERATION. Neither may be the applier's live position:
+	// that only moves forward, and a check against it clears a node whose
+	// decision predates a record it has since applied and the trim has
+	// since removed. And a floor read at another generation is a number
+	// in another sequence space, which says nothing about this cursor.
+	// The END is the exception, and is compared with the applier's live
+	// checkpoint rather than with cursor: it asks where a record this node
+	// appends will land relative to where its applier stands, which is a
+	// property of the node and not of the decision.
 	//
 	// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 	// departure from the fail-open rule a delivery claim uses. Failing
 	// open there is a duplicate delivery, which is recoverable; failing
 	// open here is a lost update, which is not.
+	//
+	// THE READ OF THE LOG IS ALSO THE IDENTITY CHECK, and the publisher
+	// relies on it: the answer that carries the log's ends carries the
+	// stream's creation instant beside it, so an implementation that reads
+	// the live log hands both to this node's applier
+	// ([Runner.ObserveStream], [Runner.ObserveEnd]) — and whatever the
+	// publisher does next asks [Identity] after that read: over a refusal
+	// from this, at once, and otherwise in the fence 0 it runs before the
+	// append. That is what makes the zero branch's identity as fresh as its
+	// floor, within the call, rather than as fresh as the last heartbeat.
 	ClearForZero(ctx context.Context, cursor Position) error
 }
 
@@ -93,9 +202,38 @@ type Fence interface {
 // this seam the resolution rule reads "absent, so somebody else won", the
 // writer re-decides, republishes, is dropped again, and burns its whole round
 // budget to a conflict a model reads as a colleague editing the same object.
+//
+// # The rule every reader keeps
+//
+// Each domain spells its own two queries, and every one of them answers by
+// ONE rule — certified for all of them by the same family,
+// statelogtest.RunGates, because two readers that agree only by looking alike
+// have already drifted apart once:
+//
+//   - THE DELETION GATE IS REPORTED FIRST. A marker is a fact about the
+//     OBJECT, holding for every writer on every node for ever; an eviction is
+//     a fact about one WRITER, and a readmission ends it. So a record both
+//     gates hold is reported `deleted`: that is the answer that stays true,
+//     and a caller told `evicted` who waited out a readmission would only
+//     meet the marker on its next write. (The applier checks the eviction
+//     first; its order decides only which gate a drop is COUNTED under.)
+//   - THE MARKER HAS NO POSITION, exactly as the applier's does not: it gates
+//     every record on its object that did not apply, whenever that record is
+//     processed — one deferred past the purge and reprocessed after it
+//     included. So once an object is purged, a record the eviction dropped
+//     below the purge is reported `deleted` too. What is reported is the gate
+//     that holds the record NOW, which is the one a caller can act on; which
+//     gate fired first at p is the applier's `statelog_record_gated` line.
+//   - THE PURGE'S OWN RECORD IS EXEMPT FROM ITS OWN MARKER, by operation id,
+//     and from that gate alone: it still falls through to the eviction
+//     window, because the exemption says nothing about its writer.
+//   - THE EVICTION WINDOW IS HALF-OPEN AT BOTH ENDS, as the applier's is: a
+//     record is gated when the eviction's position is below it and no
+//     readmission is at or below it.
 type Gates interface {
-	// GatedAt reports the gate that dropped a record at p on this
-	// subject, published by writer under opID.
+	// GatedAt reports whether a record at p on this subject, published by
+	// writer under opID, applies nowhere, and the gate that answers for it
+	// by the rule above.
 	//
 	// THE OPERATION ID IS NOT DECORATION. A gate that destroys an object
 	// is written BY a record, and that record must not be gated by the
@@ -103,16 +241,6 @@ type Gates interface {
 	// resolves as "applied nowhere" and its caller is told the
 	// destruction it asked for did not happen, when it did.
 	GatedAt(ctx context.Context, subj Subject, writer, opID string, p Position) (Reason, bool, error)
-
-	// AdoptedAt is when this node's adoption of a donated snapshot
-	// completed, reporting false when it never adopted one.
-	//
-	// The ops table is this node's own and is scrubbed from every
-	// donated snapshot, so an op id minted before this instant cannot be
-	// answered for here at all — and reading its absence as "somebody
-	// else won" would re-decide against a row that moved because of this
-	// very write.
-	AdoptedAt(ctx context.Context) (time.Time, bool, error)
 }
 
 // Request is one caller-visible write.
@@ -132,11 +260,14 @@ type Request struct {
 	// itself — a rejection means nothing landed — so the only case a
 	// stable id collapses is a retry after a copy that landed, which is
 	// the case it is for.
+	//
+	// AND IT CARRIES THE INSTANT IT WAS MINTED AT, in its own bytes —
+	// see [NewOpID], [DeriveOpID] and [OpMintedAt]. There is deliberately
+	// no field beside it for that instant: a retry reuses the id, so the
+	// instant is the id's, and a value the caller stamps is the CALL's —
+	// later than the mint on every retry, which is exactly the case the
+	// ledger cannot vouch for.
 	OpID string
-
-	// MintedAt is when the op id was minted, which is what the
-	// pre-adoption arm compares against.
-	MintedAt time.Time
 
 	// Session is this caller's own high-water mark on the stream. The
 	// publisher waits for its own applier to reach it BEFORE it opens a
@@ -160,10 +291,93 @@ type Request struct {
 	// Pattern is how this write arbitrates.
 	Pattern Pattern
 
+	// NodeGate marks an eviction or a readmission of a node: a statement
+	// about a MACHINE, arbitrated on that machine's own subject, whose
+	// content nothing in this node's rows decided. It is the one write a
+	// node the fleet re-anchored past may still make, because the gesture
+	// that releases a fleet stranded by a decommissioned peer is exactly
+	// that peer's eviction — see [Publisher.checkIdentity] — and the one
+	// write a peer's truncated rows do not stop ([Publisher.checkTruncated]).
+	//
+	// And it is the one write that may use the GATE RESERVE at the top of
+	// the log's byte ceiling, which every other write is refused `log_full`
+	// short of ([GateReserve]): a log a gone node has filled is unpinned by
+	// that node's eviction, a record on that log. So the three excuses are
+	// one flag, and a node gate passes every fence that could otherwise
+	// stand between an operator and the gesture that ends the fault. The
+	// publisher holds the flag to the record, refusing a NodeGate write
+	// whose record the domain does not call a node gate ([Domain.NodeGate],
+	// [Publisher.stamped]).
+	NodeGate bool
+
+	// Standing judges a retry this node's ledger already answers
+	// ([Snap.Held]), for a write whose landed record a LATER write can
+	// undo: nil when the operation's record is still the one in force, a
+	// refusal ([ReasonSuperseded]) when it is not. It runs in the snapshot's
+	// own transaction, handed where the record landed, and only after the
+	// row was found to be this write's ([Publisher.heldHere]).
+	//
+	// Nil for every write whose record nothing undoes, where a ledger row
+	// is the whole answer. A node gate sets it ([GateStanding]): an
+	// eviction a readmission has since inverted landed, and answering its
+	// retry `applied` reports a node stopped that every row counts.
+	Standing func(tx *sql.Tx, held Position) error
+
 	// Decide runs inside the snapshot's transaction and returns the
 	// record to publish. It may run more than once — each round takes a
 	// fresh snapshot — and must decide only from rows it reads there.
-	Decide func(*sql.Tx) (Decision, error)
+	//
+	// It is handed the round's [Stamp], and the record it returns MUST
+	// carry both halves in its envelope: the publisher refuses one that
+	// does not, before anything is appended.
+	Decide func(tx *sql.Tx, stamp Stamp) (Decision, error)
+}
+
+// Stamp is what every record a publisher appends carries about WHERE IT CAME
+// FROM, handed to the domain's decision rather than left for the domain to
+// find.
+//
+// # Why the framework hands it over, and then checks it
+//
+// Both halves are read by somebody who cannot ask the writer. The eviction gate
+// compares a record's Writer against the node an eviction names, on every
+// applier in the fleet and on a node that may not be able to decode the payload
+// at all; the generation is what makes a record from before a reanchor
+// comparable and safely stale rather than plausible. Each domain's envelope had
+// a field for both and NO write path in the tree filled either — the publisher
+// held its node id and stamped nothing — so every record reached every applier
+// with an empty writer, the eviction gate's "is this writer evicted" never
+// matched a row, and clause (iii) of the floor theorem, the one that holds when
+// the other two are defeated, dropped nothing. Nothing looked wrong, because a
+// gate that fires never and a gate with nothing to fire on read the same.
+//
+// So the values are the framework's and not the domain's to find: a domain's
+// decision receives them, and [Publisher] decodes the envelope of what came
+// back — through [Domain.Envelope], the same reader every applier uses — and
+// refuses a record whose envelope does not carry them. A domain that forgets is
+// a write that fails on its first attempt, naming the field, rather than a
+// fleet whose evictions quietly do nothing.
+type Stamp struct {
+	// Writer is this node's id — the publisher's own, which is what the
+	// eviction gate compares against.
+	Writer string
+
+	// Gen is the generation of the snapshot the decision was taken from:
+	// [Snap.Checkpoint]'s, read in the decision's own transaction, so a
+	// record is stamped with the generation of the rows it was decided
+	// from rather than with a value read beside them.
+	Gen uint32
+}
+
+// Admission holds a log's ordinary appends out of its gate reserve.
+//
+// DECLARED HERE, by its callers — this publisher and the read index — and
+// satisfied by [*Reserve].
+type Admission interface {
+	// Admit takes room for one ordinary append of size bytes, refusing it
+	// `log_full` past the log's ordinary ceiling. On a nil error the caller
+	// releases the room once the broker has answered.
+	Admit(ctx context.Context, size int64) (release func(), err error)
 }
 
 // ErrExists reports a first-writer-wins create for an object that is already
@@ -192,24 +406,30 @@ var ErrExists = errors.New("statelog: the object already exists")
 //   - Never guess: an unknown outcome is resolved, not retried blindly and not
 //     reported as a loss.
 type Publisher struct {
-	domain  Domain
-	stream  string
-	prefix  string
-	log     Appender
-	rows    Rows
-	fence   Fence
-	gates   Gates
-	waiter  Waiter
-	metrics *metrics.Recorder
-	logger  *slog.Logger
+	domain   Domain
+	stream   string
+	prefix   string
+	log      Appender
+	rows     Rows
+	fence    Fence
+	gates    Gates
+	waiter   Waiter
+	identity Identity
+	metrics  *metrics.Recorder
+	logger   *slog.Logger
 
-	// nodeID is this node's own identity, stamped on every record so the
-	// eviction gate has something to compare against.
+	// admission holds this log's ordinary appends out of its gate reserve,
+	// nil on a log that keeps none ([KeepsGateReserve]).
+	admission Admission
+
+	// nodeID is this node's own identity, handed to every decision as
+	// [Stamp.Writer] and checked on every record before it is appended, so
+	// the eviction gate has something to compare against.
 	nodeID string
 
-	// generation is the estate's current generation, read fresh on every
-	// publish rather than captured, because a reanchor moves it under a
-	// running process.
+	// generation is this domain's current generation, read fresh on every
+	// publish rather than captured, because a reanchor of this domain's
+	// stream moves it under a running process.
 	generation func() uint32
 
 	// resolveBudget bounds the wait a resolution spends before it
@@ -230,14 +450,28 @@ const DefaultResolveBudget = 5 * time.Second
 
 // Deps is everything a publisher needs that it does not own.
 type Deps struct {
-	Domain     Domain
-	Log        Appender
-	Rows       Rows
-	Fence      Fence
-	Gates      Gates
-	Waiter     Waiter
-	Metrics    *metrics.Recorder
-	Logger     *slog.Logger
+	Domain Domain
+	Log    Appender
+	Rows   Rows
+	Fence  Fence
+	Gates  Gates
+	Waiter Waiter
+
+	// Identity is the stream identity of the positions Waiter holds —
+	// in the engine the same runner, which is the one place both the
+	// boot's comparison and every live reading land.
+	Identity Identity
+
+	Metrics *metrics.Recorder
+
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
+	Logger *slog.Logger
+
+	// Admission is the log's gate reserve: required of a domain that keeps
+	// one ([KeepsGateReserve]) and refused on one that does not.
+	Admission Admission
+
 	NodeID     string
 	Generation func() uint32
 
@@ -264,21 +498,32 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no gates")
 	case d.Waiter == nil:
 		return nil, fmt.Errorf("statelog: publisher has no waiter")
+	case d.Identity == nil:
+		return nil, fmt.Errorf("statelog: publisher has no stream identity — " +
+			"every expectation it forms is a sequence on the stream its rows " +
+			"came from, and one that cannot ask whether that is still the live " +
+			"stream is one whose writes a rebuilt log arbitrates as its own")
 	case d.Generation == nil:
 		return nil, fmt.Errorf("statelog: publisher has no generation source")
 	case d.NodeID == "":
 		return nil, fmt.Errorf("statelog: publisher has no node id — the " +
 			"eviction gate compares against it, so a record with none is a " +
 			"record no gate can drop")
+	case KeepsGateReserve(d.Domain) && d.Admission == nil:
+		return nil, fmt.Errorf("statelog: %s claims identity and its publisher "+
+			"has no admission — without one its ordinary writes fill the log to "+
+			"the broker's ceiling and the eviction that could unpin it is refused "+
+			"with them", d.Domain.Name())
+	case !KeepsGateReserve(d.Domain) && d.Admission != nil:
+		return nil, fmt.Errorf("statelog: %s claims no identity, so its log "+
+			"carries no gate record and a reserve would only refuse its ordinary "+
+			"writes early", d.Domain.Name())
 	}
 	spec := d.Domain.Stream()
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	budget := d.ResolveBudget
 	if budget <= 0 {
 		budget = DefaultResolveBudget
@@ -292,8 +537,10 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		fence:         d.Fence,
 		gates:         d.Gates,
 		waiter:        d.Waiter,
+		identity:      d.Identity,
 		metrics:       d.Metrics,
 		logger:        logger,
+		admission:     d.Admission,
 		nodeID:        d.NodeID,
 		generation:    d.Generation,
 		resolveBudget: budget,
@@ -323,12 +570,16 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			"claim a record no build may be able to read cannot make", req.Subject)
 	}
 
-	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. It costs one
-	// indexed local read of a table that is empty in every healthy
-	// company, and what it removes is the shape where a node that KNOWS
-	// it has been removed from the fleet still collects acknowledgements
-	// for records every applier will drop.
-	if err := p.checkEvicted(ctx); err != nil {
+	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. Its identity
+	// half is a field read of what this node has already established, and
+	// its eviction half one indexed local read of a table that is empty in
+	// every healthy company. What they remove is the two shapes where a
+	// node KNOWS its writes are meaningless and publishes anyway: a node
+	// whose log was rebuilt under it, whose expectations the broker
+	// arbitrates against a history they were not read from, and a node
+	// removed from the fleet, which collects acknowledgements for records
+	// every applier will drop.
+	if err := p.fence0(ctx, req); err != nil {
 		return Result{}, err
 	}
 
@@ -344,12 +595,27 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 
 	gen := p.generation()
 	for round := 1; round <= casRounds; round++ {
-		snap, err := p.rows.Snapshot(ctx, req.Subject, req.Scope, req.Decide)
+		snap, err := p.snapshot(ctx, req)
 		if err != nil {
-			return Result{Rounds: round}, err
+			return p.refusedUnlessUnvouched(ctx, req, round, err)
+		}
+		if snap.HeldOK {
+			// THIS OPERATION ALREADY APPLIED HERE, so this call is its
+			// retry and is answered with the first copy's position
+			// rather than decided again — see [Snap.Held]. Before any
+			// refusal, because a refusal says nothing landed and this
+			// operation did.
+			return Result{
+				Outcome:   OutcomeApplied,
+				Position:  snap.Held,
+				OpID:      req.OpID,
+				Version:   snap.Held.Packed(),
+				Rounds:    round,
+				Collapsed: true,
+			}, nil
 		}
 		if refusal := p.refuseFromSnapshot(req, snap); refusal != nil {
-			return Result{Rounds: round}, refusal
+			return p.refusedUnlessUnvouched(ctx, req, round, refusal)
 		}
 		if snap.Decision.Empty() {
 			// NOTHING TO PUBLISH IS A SUCCESS, not an error: an update
@@ -362,6 +628,36 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 				Version: snap.Decision.Version,
 				Rounds:  round,
 			}, nil
+		}
+		// BEFORE ANY BROKER CALL: a record that does not say who wrote it
+		// is one no eviction gate can drop, and nothing after the append
+		// could take it back.
+		if err = p.stamped(req, snap); err != nil {
+			return Result{Rounds: round}, err
+		}
+		// A DECISION THIS NODE'S LEDGER CANNOT VOUCH FOR IS NEVER
+		// PUBLISHED. See [Publisher.vouches]; it is read AFTER the
+		// snapshot, so an adoption that replaced the rows this decision
+		// read is one it sees, and the snapshot already said the ledger
+		// holds no row for it.
+		vouched, err := p.vouches(ctx, req)
+		if err != nil {
+			return Result{Rounds: round}, err
+		}
+		if !vouched {
+			p.logger.WarnContext(ctx, "statelog_write_unvouched",
+				"domain", p.domain.Name(), "subject", req.Subject.String(),
+				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
+				"detail", "this operation was minted before this node's "+
+					"operation ledger may have lost rows — to the ledger's "+
+					"retention sweep, or to a snapshot adopted from a donor "+
+					"that scrubbed its ledger — and it holds no row saying "+
+					"whether the operation already applied, so it is "+
+					"answered unknown rather than decided a second time; "+
+					"a node whose ledger lost nothing that far back can "+
+					"answer it")
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round,
+				Unvouched: true}, nil
 		}
 
 		expect, behind, err := p.expectation(ctx, req, snap, gen)
@@ -399,7 +695,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		// THE BROKER REFUSED THE EXPECTATION. Discriminate it: a
 		// trimmed anchor is retried ONCE at zero within this round, and
 		// anything else re-decides from a fresh snapshot.
-		zero, err := p.afterRejection(ctx, req, expect)
+		zero, err := p.afterRejection(ctx, req, snap, expect)
 		if err != nil {
 			return Result{Rounds: round}, err
 		}
@@ -413,6 +709,171 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	}
 	return Result{Rounds: casRounds}, fmt.Errorf("%w: %s kept changing under this write",
 		ErrConflict, req.Subject)
+}
+
+// refusedUnlessUnvouched is a refusal this round settled on, or `unknown`
+// where this node's operation ledger cannot vouch for the operation.
+//
+// A REFUSAL IS A DECISION TOO, and the ledger's gate before a publish exists
+// because a decision taken on rows that may already hold this operation's own
+// first application is about the wrong world. A refusal is the sharpest case
+// of it, since the rows refuse precisely BECAUSE that application happened: a
+// cross-project move re-run finds its root already in the target and refuses
+// it as somebody else's, a create finds its guarding row and calls the object
+// taken, an update conditioned on a version finds it moved by its own first
+// copy. On a node whose ledger may have lost the operation's row — its sweep,
+// or an adoption from a donor that scrubbed its ledger — the refusal was
+// returned before the ledger was ever asked, so a retry was told "no" where
+// the only true answer is that this node cannot say. A domain whose decision
+// only PROBES the ledger (it refuses whenever it runs, because running means
+// the ledger held no row) is the whole of this case: without the question,
+// its "somebody else did it" was the ledger's silence read as an answer.
+//
+// So for an operation the ledger cannot vouch for, every conclusion a round
+// can reach is `unknown` — publishing is answered so already — EXCEPT ONE THIS
+// NODE CANNOT SERVE AT ALL. An [Unavailable] is a fact about this node rather
+// than about the operation (it holds a record it cannot decode, it is behind,
+// the object is deleted for good), true whether or not the operation applied,
+// and it names the remedy — another node, or giving up — which an `unknown`
+// would hide.
+//
+// A LEDGER THAT CANNOT BE READ, or a caller that has gone, leaves the refusal
+// standing: an error the caller can act on beats an unknown this node could
+// not establish either.
+func (p *Publisher) refusedUnlessUnvouched(ctx context.Context, req Request,
+	round int, refusal error) (Result, error) {
+
+	var unavailable *Unavailable
+	if ctx.Err() != nil || errors.As(refusal, &unavailable) {
+		return Result{Rounds: round}, refusal
+	}
+	vouched, err := p.vouches(ctx, req)
+	if err != nil || vouched {
+		return Result{Rounds: round}, refusal
+	}
+	p.logger.WarnContext(ctx, "statelog_write_unvouched",
+		"domain", p.domain.Name(), "subject", req.Subject.String(),
+		"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
+		"refusal", refusal.Error(),
+		"detail", "this operation was minted before this node's operation "+
+			"ledger may have lost rows, it holds no row saying whether the "+
+			"operation already applied, and its decision refused on rows that "+
+			"may hold that very application — so it is answered unknown "+
+			"rather than refused; a node whose ledger lost nothing that far "+
+			"back can answer it")
+	return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round,
+		Unvouched: true}, nil
+}
+
+// snapshot takes one round's snapshot, handing the domain's decision the
+// [Stamp] it must carry: this node's id, and the generation of the checkpoint
+// the same transaction read.
+func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
+	return p.rows.Snapshot(ctx, req.Subject, req.Scope, req.OpID,
+		func(tx *sql.Tx, held OpEntry) error {
+			if err := p.heldHere(req, held); err != nil {
+				return err
+			}
+			if req.Standing != nil {
+				return req.Standing(tx, held.Position)
+			}
+			return nil
+		},
+		func(tx *sql.Tx, checkpoint Position) (Decision, error) {
+			return req.Decide(tx, p.stampAt(checkpoint))
+		})
+}
+
+// heldHere judges a row of this node's ledger found under the write's own
+// operation id: nil when it answers for this write, a refusal when it does not.
+//
+// ONE JUDGEMENT FOR BOTH PLACES THE LEDGER ANSWERS — a retry the snapshot
+// finds already applied ([Snap.Held]) and an append whose answer is resolved
+// from the ledger ([Publisher.Resolve]) — because they are the same question
+// asked before and after the broker.
+//
+// # A row on another subject answers for some other write
+//
+// An operation id is the caller's — a seat carries one forward and asks again,
+// a route takes `?op_id=` — and the ledger keeps an id's FIRST row. So the same
+// id sent with a write to a second object finds the first object's row: the
+// snapshot answered `applied` at the first object's position, and inside the
+// broker's duplicate window the second append collapsed onto the first record
+// and the resolution answered the same. Either way the caller was told a write
+// to b was done, at a position on a, with nothing written to b at all. It is
+// refused `op_reused`, naming where the id landed, rather than confirmed.
+func (p *Publisher) heldHere(req Request, held OpEntry) error {
+	if held.Subject == p.subjectOf(req.Subject) {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonOpReused,
+		Detail: fmt.Sprintf("operation %q landed on %s at %s, and this write is "+
+			"to %s — an operation id names one write, so a different one needs "+
+			"a fresh id", req.OpID, held.Subject, held.Position,
+			p.subjectOf(req.Subject)),
+		Position: held.Position,
+		OpID:     req.OpID,
+	}
+}
+
+// stampAt is the stamp a decision taken at checkpoint is handed. One function
+// for both the handing and the check in [Publisher.stamped], so the two can
+// never name different values.
+func (p *Publisher) stampAt(checkpoint Position) Stamp {
+	return Stamp{Writer: p.nodeID, Gen: checkpoint.Generation}
+}
+
+// stamped refuses a decision whose record does not carry the stamp it was
+// decided under — see [Stamp] for what an unstamped record cost.
+//
+// THE PAYLOAD'S OWN ENVELOPE, decoded by the domain's own reader: that is the
+// only envelope any applier ever sees, so it is the only one worth checking.
+// And it is the REQUEST's op id the record must carry too, because the two
+// travel separately — the request's is the message id and the one Resolve asks
+// the ledger for, the record's is the one the applier writes there — and a
+// record that named another would be answered, by the ledger that exists to
+// answer it, as an operation that never landed.
+func (p *Publisher) stamped(req Request, snap Snap) error {
+	want := p.stampAt(snap.Checkpoint)
+	env, err := p.domain.Envelope(snap.Decision.Payload)
+	if err != nil {
+		return fmt.Errorf("statelog: the %s record decided for %s does not "+
+			"decode through its own domain's envelope reader: %w — every "+
+			"applier reads it that way first", p.domain.Name(), req.Subject, err)
+	}
+	switch {
+	case env.Writer != want.Writer:
+		return fmt.Errorf("statelog: the %s record decided for %s names writer "+
+			"%q, and this publisher is %q — the eviction gate compares a record's "+
+			"writer against every eviction on the log, so a record carrying "+
+			"another node's id, or none, is one no eviction of this node can "+
+			"drop; the domain's decision must put [Stamp.Writer] in its envelope",
+			p.domain.Name(), req.Subject, env.Writer, want.Writer)
+	case env.Gen != want.Gen:
+		return fmt.Errorf("statelog: the %s record decided for %s is stamped "+
+			"generation %d, and the snapshot it was decided from is at %d — the "+
+			"domain's decision must put [Stamp.Gen] in its envelope",
+			p.domain.Name(), req.Subject, env.Gen, want.Gen)
+	case env.OpID != req.OpID:
+		return fmt.Errorf("statelog: the %s record decided for %s carries "+
+			"operation %q and the write is %q — the ledger an ambiguous publish "+
+			"is resolved by is keyed on the record's, so this write could never "+
+			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
+	case req.NodeGate && !p.domain.NodeGate(env):
+		// A NODE GATE IS JUDGED FROM THE RECORD ITSELF, because the flag
+		// excuses three fences — the passed generation, a peer's truncated
+		// rows and the gate reserve — and one the caller set alone would
+		// let an ordinary write past all three. Asked of the domain's NODE
+		// gate rather than its apply gate: a purge installs one too, and
+		// flagged by mistake it would spend the reserve and pass the fences.
+		return fmt.Errorf("statelog: the %s record decided for %s is a %s %q "+
+			"record, which is not a node's eviction or readmission, and the "+
+			"write is flagged a node gate — only those may pass the fences a "+
+			"node gate is excused",
+			p.domain.Name(), req.Subject, env.Kind, env.Op)
+	}
+	return nil
 }
 
 // disposition is what one append attempt leaves the round loop to do, and
@@ -438,8 +899,41 @@ const (
 
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
-	seq, _, err := p.append(ctx, req, snap, expect)
-	switch f, detail := classify(err); f {
+	// FENCE 0 AGAIN, because a round is not free of it: a write that has
+	// spent fifteen rounds losing races has been running for as long as
+	// those races took, and the eviction it must not publish under — or
+	// the heartbeat's reading of a rebuilt log — may have landed inside
+	// that window.
+	//
+	// AND ITS REFUSAL ENDS THE WRITE HERE, before [classify] ever sees it.
+	// It is this node's own decision, taken before anything reached the
+	// broker, so there is nothing ambiguous about it — but to the
+	// classifier every error that is not the broker's own is no answer at
+	// all. Handed over with the append's, it sent the write to ask the log
+	// what landed, find nothing, retake its snapshot and be refused again,
+	// until the round budget reported a conflict: a colleague editing the
+	// object, told to a caller this node had refused for a reason of its
+	// own.
+	if err := p.fence0(ctx, req); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	// THE RESERVE, for every append but a node gate's, held until the
+	// broker answers: the reading it is admitted against cannot see this
+	// append, so the append is counted in this node's budget until it has
+	// landed or been refused — and not a moment past that, since the
+	// resolution below can wait out a whole budget. A refusal is this
+	// node's own decision, made before the broker was asked, and ends the
+	// write here for fence 0's reason.
+	release := func() {}
+	if p.admission != nil && !req.NodeGate {
+		var err error
+		if release, err = p.admission.Admit(ctx, appendBytes(snap.Decision.Payload)); err != nil {
+			return Result{Rounds: round}, dispDone, withOpID(err, req.OpID)
+		}
+	}
+	seq, duplicate, appendErr := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	release()
+	switch f, detail := classify(appendErr); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 		if err := at.Valid(); err != nil {
@@ -447,24 +941,59 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		}
 		res, err := p.Resolve(ctx, req, at, true)
 		res.Rounds = round
+		// A DUPLICATE ACKNOWLEDGEMENT IS THE BROKER COLLAPSING THIS
+		// APPEND onto an earlier copy of the operation still inside its
+		// window: `at` is that copy's, and this call's decision was never
+		// stored — which a caller computing its answer inside the
+		// decision has to be told. See [Result.Collapsed].
+		//
+		// ADDED TO what the resolution concluded, never in place of it:
+		// a clean acknowledgement whose ledger row names another position
+		// is collapsed too, and assigning the duplicate flag over it
+		// would say otherwise.
+		res.Collapsed = res.Collapsed || (duplicate && res.Outcome != "")
 		return res, dispDone, err
 
 	case faultFull:
+		// AND WHERE THE BLOCKING TERM IS NAMED. "Unblock the trim" is a
+		// remedy an operator cannot act on without knowing which of the
+		// six terms came lowest, and that is a property of the last tick
+		// rather than of this append — so the message points at the
+		// surface that holds it instead of taking a coordination round
+		// trip on a refusal path.
+		remedy := "raise the stream's byte ceiling (`crewlet retention " +
+			"set-capacity`) or unblock the trim (`crewlet retention status` " +
+			"names the term holding it)"
+		if req.NodeGate && p.admission != nil {
+			// A GATE RECORD REFUSED HERE found the reserve kept for it
+			// spent as well, and the gesture it belongs to is often
+			// the one that unblocks the trim — so it cannot be told to
+			// do that, and nothing but a larger ceiling makes room.
+			remedy = "this was a gate record, refused past even the reserve " +
+				"kept for it, so raise the stream's byte ceiling with " +
+				"`crewlet retention set-capacity`: no retry makes room"
+		}
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonLogFull,
-			// AND WHERE THE BLOCKING TERM IS NAMED. "Unblock the trim"
-			// is a remedy an operator cannot act on without knowing
-			// which of the six terms came lowest, and that is a
-			// property of the last tick rather than of this append —
-			// so the message points at the surface that holds it
-			// instead of taking a coordination round trip on a
-			// refusal path.
 			Detail: fmt.Sprintf("the broker refused to store the record: %s — a "+
-				"full log refuses appends rather than dropping records, so raise "+
-				"the stream's byte ceiling or unblock the trim (`crewlet "+
-				"retention status` names the term holding it)", detail),
+				"full log refuses appends rather than dropping records, so %s",
+				detail, remedy),
 			OpID: req.OpID,
 		}
+
+	case faultTooLarge:
+		// NOTHING WAS STORED AND NOTHING EVER WILL BE: the same record
+		// is refused the same way on every round, so there is no round
+		// to run again.
+		return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: the %s "+
+			"record for %s is %d bytes, more than the broker carries (%s), so "+
+			"nothing was stored: %w", p.domain.Name(), req.Subject,
+			len(snap.Decision.Payload), detail, queue.ErrTooLarge)
+
+	case faultRefused:
+		return Result{Rounds: round}, dispDone, fmt.Errorf("statelog: the broker "+
+			"refused the %s record for %s and stored nothing: %w",
+			p.domain.Name(), req.Subject, appendErr)
 
 	case faultUnknown:
 		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
@@ -482,6 +1011,16 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		})
 		return Result{Rounds: round}, dispRejected, nil
 	}
+}
+
+// withOpID puts the write's operation id on a refusal that was made without
+// it, so a caller retrying under the id the refusal names retries this write.
+func withOpID(err error, opID string) error {
+	var refusal *Unavailable
+	if errors.As(err, &refusal) && refusal.OpID == "" {
+		refusal.OpID = opID
+	}
+	return err
 }
 
 // refuseFromSnapshot is every refusal a committed snapshot settles on its
@@ -576,12 +1115,35 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 	if !found {
 		// The subject genuinely holds nothing. Publishing at zero is
 		// correct — and fenced, because being wrong here is a lost
-		// update rather than a refused write.
-		if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+		// update rather than a refused write. Fenced at the SNAPSHOT's
+		// checkpoint, since that snapshot's decision is what gets
+		// published; see [Snap.Checkpoint].
+		if err := p.clearForZero(ctx, req, snap.Checkpoint); err != nil {
 			return nil, nil, err
 		}
 		zero := uint64(0)
 		return &zero, nil, nil
+	}
+	// A RECORD THE SNAPSHOT'S CHECKPOINT ALREADY COVERS is one these rows
+	// hold, so it is the expectation rather than a position to wait for.
+	//
+	// On an ordinary log this cannot be reached: every record at or below
+	// the checkpoint was consumed in this generation, and consuming an
+	// arbitrated one writes its anchor, so the branch above answered. What
+	// reaches it is a checkpoint placed where the log's records were never
+	// consumed in this generation — a RESTORED log's reanchor, which puts it
+	// at the log's end because the rows already hold every record the copy
+	// kept ([ReanchorRestored]). There the subject's last record is below
+	// the checkpoint and its anchor is in the generation before; waiting for
+	// the applier to reach it returns at once, the snapshot reads the same
+	// anchor, and every write to every object the copy kept ran out of
+	// rounds as a conflict nobody was causing.
+	//
+	// AT THE SNAPSHOT'S checkpoint, not the applier's live one, for the
+	// reason the zero fence takes it: the claim is about the rows the
+	// decision read.
+	if snap.Checkpoint.Generation == gen && seq <= snap.Checkpoint.Seq {
+		return &seq, nil, nil
 	}
 	at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 	return nil, &at, nil
@@ -590,8 +1152,10 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 // afterRejection discriminates a rejection, which is the one place a trimmed
 // anchor and a lost race are told apart.
 //
-// It returns a non-nil expectation ONLY for the trimmed-anchor retry.
-func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uint64) (*uint64, error) {
+// It returns a non-nil expectation ONLY for the trimmed-anchor retry, and
+// that retry publishes snap's decision again — which is why snap is what the
+// fence is asked about.
+func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, expect *uint64) (*uint64, error) {
 	subject := p.subjectOf(req.Subject)
 
 	// ON EVERY REJECTION, and the cheap pre-filter that used to stand in
@@ -621,7 +1185,21 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uin
 		// decision rather than the same one repeated, and a subject
 		// somebody is genuinely racing on runs out of rounds and is
 		// told so.
-		if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+		//
+		// AN EMPTY SUBJECT IS ALSO WHAT A REBUILT LOG LOOKS LIKE, and
+		// nothing in this branch's own arithmetic can tell the two
+		// apart: the anchor, the checkpoint and the floor are all
+		// sequences on the stream this node's rows came from. That is
+		// why the identity is asked after the clearance's own read of
+		// the log, before the retry is appended — see
+		// [Publisher.clearForZero].
+		//
+		// AT THE SNAPSHOT'S CHECKPOINT, not the applier's live one: the
+		// retry publishes the decision this round's snapshot made, and
+		// the theorem's conclusion — the trimmed record is already in
+		// the rows — is about the rows that decision read. By now the
+		// applier may have moved past a record that snapshot never saw.
+		if err := p.clearForZero(ctx, req, snap.Checkpoint); err != nil {
 			return nil, err
 		}
 		zero := uint64(0)
@@ -681,7 +1259,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 		// value. The op id travels with it because retrying under the
 		// SAME id is the only safe retry: a fresh one would defeat the
 		// ledger that exists for exactly this case.
-		p.logger.Warn("statelog_publish_unknown",
+		p.logger.WarnContext(ctx, "statelog_publish_unknown",
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "publish_error", detail, "probe_error", err.Error())
 		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
@@ -697,7 +1275,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 		// record is what the resolution answers, from this node's own
 		// applied rows rather than from a guess — and its gated arm is
 		// why "landed" is not the same as "applied".
-		p.logger.Debug("statelog_publish_ambiguous",
+		p.logger.DebugContext(ctx, "statelog_publish_ambiguous",
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "at", seq, "publish_error", detail)
 		at := Position{Stream: p.stream, Generation: p.generation(), Seq: seq}
@@ -727,7 +1305,11 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 // is contiguous: passing p forces applying everything below it, an eviction
 // gate drops a record only when the eviction commit is strictly below it, and
 // a deletion marker that could gate p is on the record's own subject and
-// therefore below it, or the broker would have refused the append.
+// therefore below it, or the broker would have refused the append. So a gate
+// that DID drop p is in the rows the wait already covered. The converse is
+// not claimed: a marker can also land ABOVE p, after an eviction dropped the
+// record, and the reader then reports `deleted` by the rule [Gates] states.
+//
 // mine says whether the caller KNOWS the record at at is its own — true when
 // the broker acknowledged it, false when the ambiguous path merely found
 // something above the anchor. The two differ in one arm and it matters: an
@@ -751,16 +1333,33 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	// table is permanently empty, so a read of it would answer "absent"
 	// for every record including its own.
 	if p.domain.OpsTable() != "" {
-		where, ok, err := p.rows.Op(ctx, req.OpID)
+		entry, ok, err := p.rows.Op(ctx, req.OpID)
 		if err != nil {
 			return Result{}, fmt.Errorf("statelog: read the operation ledger: %w", err)
 		}
 		if ok {
+			if err := p.heldHere(req, entry); err != nil {
+				return Result{}, err
+			}
+			// COLLAPSED UNLESS THE ROW IS PROVABLY THIS CALL'S OWN
+			// RECORD, which is one case: the broker acknowledged this
+			// call's append at `at` and the ledger names that very
+			// position. Anything else is a copy of the operation this
+			// call did not decide — the ambiguous path found a record
+			// above its anchor and cannot say whose, and a row at
+			// another position than an acknowledged one is an earlier
+			// copy this call's append arrived after. A retry on a node
+			// that was behind decided on stale rows, lost the race to
+			// that earlier copy with its acknowledgement lost, and was
+			// answered here as the application of ITS decision: a key
+			// mint handed back the number its stale counter implied,
+			// and two tasks were filed under one key.
 			return Result{
-				Outcome:  OutcomeApplied,
-				Position: where,
-				OpID:     req.OpID,
-				Version:  where.Packed(),
+				Outcome:   OutcomeApplied,
+				Position:  entry.Position,
+				OpID:      req.OpID,
+				Version:   entry.Position.Packed(),
+				Collapsed: !mine || entry.Position != at,
 			}, nil
 		}
 	}
@@ -774,7 +1373,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
 		// than an outcome, and never a re-decide: republishing produces
 		// another durable record nothing applies.
-		p.logger.Warn("statelog_write_gated",
+		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID)
 		p.count(metrics.StatelogRecordsGated, metrics.Attrs{
@@ -803,68 +1402,279 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		}, nil
 	}
 
+	// THE LEDGER'S SILENCE MEANS SOMETHING ONLY WHERE IT CAN VOUCH, and
+	// that is asked before either reading of it below — the mine arm's
+	// included, because a sweep, or an adoption from a donor that
+	// scrubbed its ledger, is exactly what loses the row of a record this
+	// node was acknowledged for.
+	vouched, err := p.vouches(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+
 	if mine {
+		if !vouched {
+			// THE ACKNOWLEDGEMENT IS THE PROOF, and the ledger's loss
+			// is why the row is missing. The broker named this
+			// operation's own record at `at`, this node's rows are past
+			// it and no gate dropped it — so it applied, and its row
+			// went with the rows the watermark says this ledger lost.
+			return Result{
+				Outcome:  OutcomeApplied,
+				Position: at,
+				OpID:     req.OpID,
+				Version:  at.Packed(),
+			}, nil
+		}
 		// THE BROKER ACKNOWLEDGED THIS RECORD, this node applied past
-		// it, and no gate dropped it — so the applier applied it and
-		// wrote no ledger row. That is a contract violation rather than
-		// a race, and re-deciding would republish a record that already
-		// landed, so it is reported instead of guessed at.
+		// it, no gate dropped it, and its ledger has lost nothing since
+		// the operation was minted — so the applier applied it and wrote
+		// no ledger row. That is a contract violation rather than a race,
+		// and re-deciding would republish a record that already landed,
+		// so it is reported instead of guessed at.
 		return Result{}, fmt.Errorf("statelog: %s applied the record at %s but "+
 			"wrote no %s row for operation %q — that ledger is what an ambiguous "+
 			"publish is resolved by, and a record applied without one cannot be "+
 			"answered for", p.domain.Name(), at, p.domain.OpsTable(), req.OpID)
 	}
 
-	adopted, ever, err := p.gates.AdoptedAt(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("statelog: read the adoption record: %w", err)
-	}
-	if ever && !req.MintedAt.IsZero() && req.MintedAt.Before(adopted) {
-		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE. It
-		// is scrubbed from every donated snapshot, so a node that
-		// adopted one arrives with an empty table — and reading that
-		// absence as "somebody else won" would re-decide against a row
-		// that moved because of this very write.
-		return Result{Outcome: OutcomeUnknown, Position: at, OpID: req.OpID}, nil
+	if !vouched {
+		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE: it
+		// may have lost the row, and reading that absence as "somebody
+		// else won" would re-decide against a row that moved because of
+		// this very write.
+		//
+		// NO POSITION, which is the whole content of unknown (see
+		// [Result.Position]): the record at `at` is merely the newest on
+		// the subject, and naming it would tell the caller "your write
+		// landed here" — the one thing nobody here can say.
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Unvouched: true}, nil
 	}
 
 	// Somebody else won. Re-decide.
 	return Result{}, nil
 }
 
-// append publishes one record, stamping the framework's own fields onto the
-// envelope the domain decided.
-func (p *Publisher) append(ctx context.Context, req Request, snap Snap, expect *uint64) (uint64, bool, error) {
-	// FENCE 0 AGAIN, because a round is not free of it: a write that has
-	// spent fifteen rounds losing races has been running for as long as
-	// those races took, and the eviction it must not publish under may
-	// have landed inside that window.
-	if err := p.checkEvicted(ctx); err != nil {
-		return 0, false, err
+// vouches reports whether this node's operation ledger can answer for req's
+// operation — whether "its row is absent" means "it has not applied here".
+//
+// # Why the ledger can lose a row, and what that costs a retry
+//
+// ONE WATERMARK SAYS HOW FAR BACK IT MAY HAVE ([Rows.LostBefore]), and it
+// travels in the same file as the ledger. Two things move it, each in the
+// transaction or the file that loses the rows, and only ever forward.
+//
+// The SWEEP deletes every row applied more than [OpsRetention] ago, and
+// records its cutoff with the delete. Every copy of an operation is applied at
+// or after the instant it was minted, so one minted at or after that cutoff
+// cannot have lost its row; one minted before it may have, and absence says
+// nothing. Without this, a retry a month on — an operator repeating an
+// `unknown`, a seat carrying an operation id across a long pause — was decided
+// again and published a second copy.
+//
+// An ADOPTION FROM A DONOR THAT SCRUBBED ITS LEDGER — a build from before the
+// ledger travelled — installs a file whose ledger holds none of the donor's
+// rows, so the adopter writes the join's own start into that file before it
+// installs it (see [Adopter.Join]): an operation minted after the start was
+// published after every artefact the join could install, and its every copy
+// is one this node's own applier writes a row for.
+//
+// AN ADOPTION FROM ANY OTHER DONOR LOSES NOTHING. Its ledger travels with its
+// rows ([Domain.OpsTable]), so the adopter holds a row for every operation the
+// donor applied and inherits the donor's own watermark besides — and a turn
+// woken by a trigger from before the join, which derives its operation ids
+// from that trigger's instant, has its FIRST attempts decided and published
+// like anyone's. With the ledger scrubbed, those first attempts were answered
+// `unknown` and never published: the recovering node refusing its own
+// backlog.
+//
+// That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
+// resolution of an ambiguous one. A retry — a turn re-run after a crash, a
+// caller repeating an `unknown` under the same operation id — takes a fresh
+// snapshot whose rows already hold the first application, decides again on
+// top of them, and publishes a second copy of the operation the broker has no
+// reason to refuse: its expectation is current, and the duplicate window
+// that might have collapsed it is two minutes wide. The resolution never runs
+// on that path at all, because the append is acknowledged cleanly.
+//
+// # The instant is the operation id's own
+//
+// Read off the id with [OpMintedAt], never off a field the caller fills, for
+// the reason [Request.OpID] gives. An id that carries none is read as minted
+// at the zero instant, so a ledger that has lost anything vouches for it only
+// by holding its row — see opid.go.
+//
+// # Where it is cheap
+//
+// The watermark is one row by key, and the ledger row is read only for an
+// operation minted before it — which on a ledger that has lost nothing is no
+// operation at all. A domain with no ledger has nothing to vouch with and
+// nothing that reads it, so it is answered without any read.
+func (p *Publisher) vouches(ctx context.Context, req Request) (bool, error) {
+	if p.domain.OpsTable() == "" {
+		return true, nil
 	}
-	return p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	bound, lost, err := p.rows.LostBefore(ctx)
+	if err != nil {
+		return false, fmt.Errorf("statelog: read how far back the operation "+
+			"ledger may have lost rows: %w", err)
+	}
+	if !lost || !mintedAt(req.OpID).Before(bound) {
+		return true, nil
+	}
+	// MINTED BEFORE THE BOUND, so only the row itself can speak — and it
+	// is read AFTER the bound, so a sweep or an install landing between
+	// the two reads is one whose effect on the table this read sees.
+	_, held, err := p.rows.Op(ctx, req.OpID)
+	if err != nil {
+		return false, fmt.Errorf("statelog: read the operation ledger: %w", err)
+	}
+	return held, nil
 }
 
-// checkEvicted is fence 0.
+// fence0 is every refusal this node can make from what it already knows,
+// cheapest first: the stream identity is a field read, the eviction a local
+// row.
+func (p *Publisher) fence0(ctx context.Context, req Request) error {
+	if err := p.checkIdentity(req); err != nil {
+		return err
+	}
+	if err := p.checkTruncated(req); err != nil {
+		return err
+	}
+	return p.checkEvicted(ctx)
+}
+
+// checkTruncated refuses a write while a peer's rows hold records the log lost
+// — see [Identity] — except a node gate, whose content is the operator's and
+// whose purpose may be exactly to evict that peer.
+//
+// AFTER THE IDENTITY, because a node whose own rows are not the log's history
+// has the truer refusal: its writes would be wrong whatever the fleet chose.
+func (p *Publisher) checkTruncated(req Request) error {
+	err := p.identity.Truncated()
+	if err == nil || req.NodeGate {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonLogTruncated,
+		Detail: fmt.Sprintf("%v — so %s was not published", err, req.Subject),
+		OpID:   req.OpID,
+		Cause:  err,
+	}
+}
+
+// clearForZero is the fence on an expectation of zero, with the identity asked
+// over any refusal the fence makes.
+//
+// cursor is the checkpoint of the snapshot the write decided from — see
+// [Snap.Checkpoint] — and never the applier's live position, which only moves
+// forward and so clears a decision against records it never read. The one
+// comparison the fence makes against the live position instead is its own,
+// with the log's end, because that one is about the NODE rather than the
+// decision: whether what this node appends lands where its applier will apply
+// it depends on where the applier stands now — see [ZeroFence].
+//
+// # How a rebuild the fence's own read finds is refused within the call
+//
+// Fence 0 answers from the last reading of the stream's instant and its end,
+// and the reading that sets them on a running node is the position heartbeat
+// — so a log rebuilt since the last beat passes the fence 0 at the top of the
+// write, and on this branch that window is a lost update rather than a refused
+// write: the rebuilt log holds nothing on the subject, the expectation of zero
+// is accepted, and the floor the fence clears against is a number from the old
+// history. What closes it is the fence's own read of the log, the one read on
+// the write path that carries the stream's creation instant: it hands the
+// instant to this node's applier (see [Fence.ClearForZero]), and the fence 0
+// the attempt runs before its append ([Publisher.attempt]) asks the identity
+// after that read — so the write is refused in the round that found the
+// rebuild, before anything reaches the broker at zero, for exactly the branch
+// where letting it through is not recoverable. A checkpoint past the log's END
+// does not wait for that: the fence compares this node's checkpoint with the
+// end it just read and refuses on the spot ([ZeroFence]), because that answer
+// is its own and must not depend on what a concurrent reading made of the
+// shared verdict in between.
+//
+// The other branches keep the heartbeat's window, and the trade is stated
+// rather than hidden. An expectation above zero is accepted on a rebuilt log
+// only where the subject's last sequence there happens to equal it. An
+// additive record needs no such luck and does land — but it is the one kind
+// that commutes, so a history it was never arbitrated in is one it cannot
+// contradict; what is wrong about it is its resolution, and only for the
+// seconds until the next beat. Checking the instant on every append would put
+// a broker round trip on the hottest path the write authority has, to close a
+// window that bounded. A checkpoint past the end has no such window at boot,
+// which is when a restored broker is met: the engine's boot hands the applier
+// the end it read beside the checkpoint before any write can run.
+//
+// # And why the identity OUTRANKS the fence's refusal, and is asked only there
+//
+// The fence's read that establishes a rebuild also finds the checkpoint past
+// the rebuilt log's end — a log counting from 1 again ends below almost any
+// checkpoint — and the fence refuses on the end, so the write never reaches
+// the attempt whose fence 0 would have named the rebuild. Both are
+// `wrong_stream`, but only one is the finding: a rebuild is permanent and is
+// what an operator has to act on, and a checkpoint past the end of a log that
+// was rebuilt is its consequence. So over any refusal the fence makes, the
+// identity is asked and answers first — the order fence 0 asks in, and the
+// order [Runner.StreamIdentity] reports in. Where it finds nothing the fence's
+// refusal stands, which is what keeps the end check within the call even when
+// a concurrent reading has cleared the shared verdict in between.
+//
+// Over a fence that CLEARED, nothing is asked here. The attempt's fence 0 is
+// the next thing this write does, and it asks the same identity after the
+// same read — so a second ask on that path could never be the one that
+// refused, and a check nothing can ever find doing anything is a claim rather
+// than a guard.
+func (p *Publisher) clearForZero(ctx context.Context, req Request, cursor Position) error {
+	fenced := p.fence.ClearForZero(ctx, cursor)
+	if fenced == nil {
+		return nil
+	}
+	if err := p.checkIdentity(req); err != nil {
+		return err
+	}
+	return fenced
+}
+
+// checkIdentity is fence 0's identity half: a node whose log is not the one
+// its positions are on refuses every write — see [Identity] for why every
+// pattern and not only the retry at zero.
+//
+// # With one exception: a node gate over a passed generation
+//
+// A node a peer re-anchored past holds rows the log no longer continues, so
+// anything it decides from them is refused — but an eviction or a readmission
+// ([Request.NodeGate]) is decided from nothing in them. Its content is the
+// operator's gesture; its arbitration is on the gated node's own subject,
+// which only another such gesture writes, so an expectation formed from this
+// node's rows is either the broker's own last record there or refused by the
+// broker; and the generation it is stamped with is below the fleet's, which
+// every applier in the new generation applies at its own position. Refused
+// here, it was the gesture no node of a fleet stranded by a decommissioned peer
+// could make: every one of them had been passed by that peer, and evicting it
+// is how the peer's generation stops being the fleet's. A RECREATED stream is
+// never excused — this node's expectations there are sequences on another
+// stream — and that finding outranks the passed one, so it is what is asked.
+func (p *Publisher) checkIdentity(req Request) error {
+	err := p.identity.StreamIdentity()
+	if err == nil || (req.NodeGate && errors.Is(err, ErrGenerationPassed)) {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonWrongStream,
+		Detail: fmt.Sprintf("%v — a write here would be arbitrated against a "+
+			"history it was not decided from, so %s was not published", err, req.Subject),
+		OpID:  req.OpID,
+		Cause: err,
+	}
+}
+
+// checkEvicted is fence 0's eviction half, answered in the one sentence the
+// zero fence answers the same finding with ([evictionRefusal]).
 func (p *Publisher) checkEvicted(ctx context.Context) error {
 	evicted, err := p.fence.Evicted(ctx)
-	if err != nil {
-		// THE THIRD VALUE BLOCKS. An eviction that cannot be read is
-		// not an eviction that did not happen, and publishing under it
-		// produces durable records every node drops.
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
-		}
-	}
-	if evicted {
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: "this node has been removed from the fleet; nothing it " +
-				"publishes will be applied anywhere. An operator readmits it",
-		}
-	}
-	return nil
+	return evictionRefusal(ctx, evicted, err)
 }
 
 // waitSession waits for this node's applier to reach the caller's own

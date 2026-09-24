@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -14,6 +15,7 @@ func launchReq(turnID string) LaunchRequest {
 	return LaunchRequest{
 		Turn: TurnRef{
 			TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
+			WorkKey: "wk-1", WorkSince: launchWorkSince,
 			// A DIRECT MESSAGE, the one shape where the two keys differ:
 			// the conversation an answer is matched on is the bare
 			// channel, while the partition the kick-off arrived in is a
@@ -28,6 +30,9 @@ func launchReq(turnID string) LaunchRequest {
 		Spec:  Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}
 }
+
+// launchWorkSince is when the launching turn's unit of work began.
+var launchWorkSince = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	rig := newWaiterRig(t)
@@ -69,6 +74,14 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	}
 	if run.ConversationKey != "chat:D1" {
 		t.Fatalf("the run has nowhere to report back to: %+v", run)
+	}
+	// THE UNIT OF WORK AND WHEN IT BEGAN, together: the resumed turn
+	// derives its writes' operation ids from both, and an id derived from
+	// the key under another instant is a DIFFERENT operation from the one
+	// the first half of the turn wrote under.
+	if run.WorkKey != "wk-1" || !run.WorkSince.Equal(launchWorkSince) {
+		t.Fatalf("the row keeps work %q begun at %s, want %q begun at %s",
+			run.WorkKey, run.WorkSince, "wk-1", launchWorkSince)
 	}
 	if !rig.runner.Installed(res.SandboxID) {
 		t.Fatal("the coding agent was never installed in the box")

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -63,6 +64,15 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	}
 	state := r.cfg.Resume.State
 	answer := r.cfg.Resume.Answer
+
+	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
+	// is the same run in a fresh process, so a count it derives must see
+	// every call made before it parked — the rounds that closed, the parked
+	// round's own calls and whatever an agent-mode run called over the
+	// bridge — or a call made again after a different one would take its
+	// first copy's operation id. See [turnctx.CallLog].
+	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),
+		r.cfg.Resume.Bridged)
 
 	if state.AgentRun {
 		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic
@@ -154,6 +164,12 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 // re-entry: a resumed turn that saw only the post-resume calls would read a
 // delivery made before the suspend as never having happened, and re-fire it.
 func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
+	return append(parkedCalls(state), calls(s)...)
+}
+
+// parkedCalls is what the parked round called before it suspended, read back
+// off the state's wire rows.
+func parkedCalls(state execstate.State) []ledger.Call {
 	prior := make([]ledger.Call, 0, len(state.ToolExecutions))
 	for _, exec := range state.ToolExecutions {
 		call := ledger.Call{}
@@ -174,7 +190,21 @@ func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
 		}
 		prior = append(prior, call)
 	}
-	return append(prior, calls(s)...)
+	return prior
+}
+
+// seedCalls records into a resumed run's log every call it made before it
+// parked. Order does not matter to a count, and a call recorded twice — a
+// bridged call the parked round also holds — only raises one, which is safe.
+func seedCalls(log *turnctx.CallLog, history []ledger.Iteration, groups ...[]ledger.Call) {
+	for _, iteration := range history {
+		groups = append(groups, iteration.Calls)
+	}
+	for _, group := range groups {
+		for _, call := range group {
+			log.Seed(turnctx.SeededCall{Tool: call.Name, Args: call.Args})
+		}
+	}
 }
 
 // priorRounds is what the phase did before it suspended, back in the loop's

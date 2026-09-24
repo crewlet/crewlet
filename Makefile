@@ -157,6 +157,15 @@ SOLO_PKGS      = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
 # added or dropped here belongs in the other two in the same commit.
 CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
+# The Go files gofmt is handed: this tree's, by internal/sourcetree's rule,
+# and never `.` — gofmt enters every directory under the one it is given, so
+# with an agent's worktree under .claude/worktrees/ `fmt-check` reported that
+# checkout's half-edited files as this tree's and `fmt` REWROTE them. Each
+# recipe captures the list before using it and stops if listing failed,
+# because gofmt handed no paths formats its standard input and passes. See
+# `go doc ./internal/sourcetree/gofiles`; ci.yml's gofmt step is the same.
+GOFILES = $(GO) run ./internal/sourcetree/gofiles
+
 COMPOSE ?= docker compose
 
 # Passed through to the vendor bootstrap scripts, which provision the seats of
@@ -166,7 +175,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -193,7 +202,8 @@ install: ## go install the engine onto your PATH
 	$(GO) install ./cmd/crewlet
 
 fmt: ## rewrite everything gofmt would change
-	gofmt -w .
+	@files="$$($(GOFILES))" || exit 1; \
+	gofmt -w $$files
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy
@@ -294,7 +304,8 @@ check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross
 	@echo "  - the release pipeline  ->  make snapshot"
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
-	@unformatted="$$(gofmt -l .)"; \
+	@files="$$($(GOFILES))" || exit 1; \
+	unformatted="$$(gofmt -l $$files)" || exit 1; \
 	if [ -n "$$unformatted" ]; then \
 	  { echo "gofmt needed:"; \
 	    echo "$$unformatted"; \
@@ -532,6 +543,18 @@ alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
 derived: ## regenerate internal/config/testdata/derived/*.derived.json from the config models
 	CREWLET_REGENERATE_DERIVED=1 $(GO) test ./internal/config -count=1 \
 	  -run TestTheDerivedHierarchyMatchesItsGoldenFiles
+
+# internal/api/testdata/gate_answer.json is the eviction and readmission
+# routes' answer — every 200 shape and every refusal — rendered by the route's
+# own renderer and never hand-edited. internal/api regenerates it and compares,
+# and the dashboard's gate dialog suite loads the SAME file as its fixture, so a
+# change to the rendering is a failing Go test until this runs and a failing
+# Vitest suite until the dialog follows it. The dialog once read a top-level
+# outcome for as long as the route had stopped writing one, on fixtures it had
+# typed itself. Read the diff before committing it, as with `derived`.
+gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
+	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheGateAnswerMatchesItsGoldenFile
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

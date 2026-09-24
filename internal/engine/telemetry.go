@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -17,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -47,10 +46,13 @@ type turnTelemetry struct {
 	// turn and used at both ends, so a turn's opening phase event and its
 	// completion name the same run. See ADR-0017.
 	runID string
-	// workKey is the unit of work, stable across a re-run.
-	workKey string
-	agentID string
-	trigger types.Trigger
+	// workKey is the unit of work, stable across a re-run, and workSince
+	// when it began — the instant every operation id derived from the key
+	// carries, and so reproduced by a re-run exactly as the key is.
+	workKey   string
+	workSince time.Time
+	agentID   string
+	trigger   types.Trigger
 
 	// convKey is the CONVERSATION IDENTITY — what every event this turn
 	// publishes is tagged with, what the episode row is filed under, and
@@ -87,7 +89,17 @@ type turnTelemetry struct {
 // Not a package-level counter either: a run id is read by other processes (a
 // detached sandbox row, a peer's dashboard), so it has to be unique across the
 // fleet rather than within this process.
-func newRunID() string { return uuid.NewString() }
+//
+// TIME-ORDERED, and the instant it carries is read: a write a run with no unit
+// of work makes is seeded from the RUN, and the operation id derived from it
+// carries the run's start as its mint instant — which is what the state log
+// compares with its operation ledger's watermark before it will decide an
+// operation again (builtin.Actor.OperationSince). A resumed run keeps its id, so the
+// instant rides the pending row with no field of its own. Minted by the state
+// log's own grammar ([statelog.NewOpID]) so the one reader of that instant
+// needs no second parser; its random tail keeps two runs from colliding
+// exactly as a v4 did.
+func newRunID() string { return statelog.NewOpID(time.Now(), "") }
 
 // describeTurn assembles the identity for one dispatch.
 //
@@ -97,10 +109,11 @@ func newRunID() string { return uuid.NewString() }
 // message happened to arrive while the seat was busy.
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
-		handle:  req.Handle,
-		runID:   req.RunID,
-		workKey: req.WorkKey,
-		convKey: req.ConversationKey,
+		handle:    req.Handle,
+		runID:     req.RunID,
+		workKey:   req.WorkKey,
+		workSince: req.WorkSince,
+		convKey:   req.ConversationKey,
 		// READ OFF THE PARTITION'S OWN EVENTS rather than carried on the
 		// Request beside the identity, because every constituent already
 		// holds it and a field would be one more thing a second Request
@@ -155,8 +168,16 @@ func (t turnTelemetry) runnerTurn(company *Company,
 		Trigger:         t.trigger,
 		ConversationKey: t.convKey, Trace: t.trace,
 		Context: &turnctx.Turn{
-			RunID:   t.runID,
-			WorkKey: t.workKey,
+			RunID:     t.runID,
+			WorkKey:   t.workKey,
+			WorkSince: t.workSince,
+			// EVERY RUN STARTS ITS OWN CALL LOG, which a derived operation
+			// id reads its repeat count from (see [turnctx.CallLog]). Empty
+			// for a new run, a re-run included: it makes its calls again,
+			// and each count comes out as it did. A RESUMED run passes
+			// through here too, and the runner seeds its log with what the
+			// run called before it parked.
+			Calls: turnctx.NewCallLog(),
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath
@@ -435,9 +456,12 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// remaining phases belong to the run that started them; minting a
 		// second id here would split one turn across two on every screen.
 		// The work key rides the row for the same reason its reply does:
-		// the resume sees no trigger and could not re-derive it.
-		runID:   in.Run.TurnID,
-		workKey: in.Run.UnitOfWork(),
+		// the resume sees no trigger and could not re-derive it — and so
+		// does the instant it began, without which the resumed half of the
+		// turn would derive different operation ids from the first half.
+		runID:     in.Run.TurnID,
+		workKey:   in.Run.UnitOfWork(),
+		workSince: in.Run.WorkBegan(),
 		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
 		// turn's events are tagged with the conversation it reports back
 		// to and is answered on, while the partition it was launched from

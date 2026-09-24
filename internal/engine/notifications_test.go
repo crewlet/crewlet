@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
 )
@@ -42,7 +43,7 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
     handle: staff
     llm: alpha
 `)
-	if _, _, err := e.Apply(t.Context(), grown); err != nil {
+	if _, _, err := e.Apply(t.Context(), grown, time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -141,7 +142,7 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 
 	limited := parsedCompany(t, strings.Replace(companyDoc,
 		"name: Acme", "name: Acme\nnotification_rate_limit: 5", 1))
-	if _, _, err := e.Apply(t.Context(), limited); err != nil {
+	if _, _, err := e.Apply(t.Context(), limited, time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.Company().Config.NotificationRateLimit; got != 5 {
@@ -514,7 +515,7 @@ integrations:
 	}
 
 	// The same company with the block removed.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -555,7 +556,7 @@ integrations:
     enabled: false
     webhook_secret: gh-secret
 `
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, disabled)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, disabled), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.WebhookSecrets().GitHub; got != "" {
@@ -599,7 +600,7 @@ integrations:
 	}
 
 	// Disconnected: the parser goes, which has always worked.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without confluence: %v", err)
 	}
 	if slices.Contains(e.RoutedSources(), "confluence") {
@@ -608,7 +609,7 @@ integrations:
 
 	// Connected again: the parser has to come back, and this is the half
 	// that did not.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with), time.Now()); err != nil {
 		t.Fatalf("Apply with confluence: %v", err)
 	}
 	if !slices.Contains(e.RoutedSources(), "confluence") {
@@ -698,7 +699,7 @@ func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
 				t.Fatalf("%s routes before it is configured: %v", tc.source, e.RoutedSources())
 			}
 
-			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block), time.Now()); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !slices.Contains(e.RoutedSources(), tc.source) {
@@ -730,7 +731,7 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeRoutesItsIntegrations(t *testing.T) 
 				t.Fatalf("an unconfigured node reports routed sources %v", got)
 			}
 
-			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block), time.Now()); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !slices.Contains(e.RoutedSources(), tc.source) {
@@ -772,7 +773,7 @@ integrations:
 	}
 
 	// Turned off, which is the gesture after a leaked webhook token.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without datadog: %v", err)
 	}
 	if slices.Contains(e.RoutedSources(), "datadog") {
@@ -780,7 +781,7 @@ integrations:
 	}
 
 	// And back, which is what a reconnect is.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("ceo"))); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("ceo")), time.Now()); err != nil {
 		t.Fatalf("Apply with datadog: %v", err)
 	}
 	if !slices.Contains(e.RoutedSources(), "datadog") {

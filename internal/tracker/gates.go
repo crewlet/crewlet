@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -80,11 +79,31 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the published trim floor, and Cursor this node's own
-	// committed position. Both are needed by the one check that costs a
-	// round trip.
-	Floor  func(ctx context.Context) (uint64, error)
-	Cursor func() statelog.Position
+	// Floor is the fleet's published trim floor at a generation and Ends
+	// the log's two ends, read live: the first surviving sequence is the
+	// other bound the one check that costs a round trip takes the higher
+	// of, and the last is what says this node is on this log at all — see
+	// [Fence.ClearForZero].
+	//
+	// The cursor the floor is compared against is the caller's, passed per
+	// call, and the floor is read at THAT CURSOR'S GENERATION. The cursor
+	// is the checkpoint the write's own snapshot read
+	// ([statelog.Snap.Checkpoint]), because the floor theorem concludes
+	// that a trimmed record is already in the rows the decision was made
+	// from: the applier's live position only moves forward, so a check
+	// against it clears a node whose decision never saw a record it has
+	// applied since. And a floor published at another generation names
+	// another sequence space — read at the live one, a snapshot taken
+	// before an adoption moved this node would be compared against numbers
+	// that say nothing about it.
+	Floor func(ctx context.Context, generation uint32) (uint64, error)
+	Ends  func(ctx context.Context) (statelog.LogEnds, error)
+
+	// Committed is this node's applier's live checkpoint, which the end is
+	// compared against instead of the cursor — where a record this node
+	// appends lands against where its applier stands is a property of the
+	// node rather than of one decision. See [statelog.ZeroFence].
+	Committed func() statelog.Position
 }
 
 // NewFence builds the write fence for one node.
@@ -134,47 +153,37 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // been TRIMMED away beneath this node. In the second case publishing at zero
 // overwrites a mutation nothing can recover.
 //
-// What makes the first case safe is the floor: if the published trim floor is
-// at or below this node's own cursor, then nothing was trimmed that this node
+// What makes the first case safe is that nothing was removed which this node
 // has not already consumed, so an absent anchor really does mean an empty
 // subject. That reading has to be FRESH — a cached floor is a floor that moved
 // — and A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 // departure from the fail-open rule the delivery claim uses: failing open
 // there is a duplicate delivery and is recoverable, failing open here is a
 // lost update and is not.
+//
+// # Why it asks of TWO bounds, and takes the higher
+//
+// "Nothing was removed below this" has two witnesses and neither is enough
+// alone. The published floor is written before the purge it licenses, so it
+// covers a purge in flight and one the stream's own answer has not caught up
+// with. The stream's first sequence covers what the floor cannot see — a
+// floor published at another generation reads as zero here. Asked of the
+// floor alone, this check cleared a node below the log whenever the floor
+// said zero; asked of the stream alone, it cleared one a purge was about to
+// pass. The floor theorem in [statelog] is stated over the higher of the two.
+//
+// # Why the check itself is not here
+//
+// It is [statelog.ZeroFence], and this supplies the four reads. It was
+// written here and again in the pages fence, and both copies refused an
+// evicted node with [statelog.ErrConflict] — the refusal a model reads as a
+// colleague editing the item — and a node below the floor with prose rather
+// than a reason, so neither `below_floor` nor `floor_unknown` was ever
+// produced. Every refusal is now an [*statelog.Unavailable] naming its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("tracker: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil {
-		return fmt.Errorf("tracker: no published trim floor is readable, so " +
-			"this node cannot establish that an absent anchor means an empty " +
-			"subject rather than a record trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx)
-	if err != nil {
-		return fmt.Errorf("tracker: read the published trim floor: %w — a floor "+
-			"that cannot be read is not a floor that is low, and publishing at "+
-			"zero on the guess is a lost update nothing recovers", err)
-	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone. Compared against the cursor itself the
-	// check refused a node exactly at the floor, which is the ordinary
-	// state of every node the instant the trim advances to it.
-	if floor > cursor.Seq+1 {
-		return fmt.Errorf("tracker: the trim may have removed everything below %d "+
-			"and this node has consumed through %d, so an absent anchor may be a "+
-			"record trimmed beneath it rather than a subject that was never "+
-			"written: %w", floor, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.ZeroFence{
+		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
+	}.ClearForZero(ctx, cursor)
 }
 
 // Gates answers whether a durable record produced rows on NO node.
@@ -190,16 +199,21 @@ type Gates struct {
 // NewGates builds the gate reader for one node.
 func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 
-// GatedAt reports the gate that dropped a record at a position.
+// GatedAt reports whether a record at a position applies nowhere, and the
+// gate that answers for it, by the rule [statelog.Gates] states — which the
+// knowledge base's reader keeps too, and statelogtest.RunGates certifies for
+// both.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID string,
 	p statelog.Position) (statelog.Reason, bool, error) {
 
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		// THE DELETION GATE FIRST, because it is permanent where an
-		// eviction can be reversed: a caller told "evicted" retries after
-		// a readmission, and a caller told "deleted" never should.
+		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
+		// marker holds the task for every writer for ever, where an
+		// eviction is one writer's and a readmission ends it, so `deleted`
+		// is the answer that stays true. The applier's opposite order
+		// decides only which gate a drop is COUNTED under.
 		if ObjectKind(subj.Kind) == KindTask {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
@@ -245,25 +259,6 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		return "", false, err
 	}
 	return reason, gated, nil
-}
-
-// AdoptedAt is when this node's adoption of a donated snapshot completed.
-//
-// The operation ledger is this node's own and is SCRUBBED from every donated
-// snapshot, so an op id minted before this instant cannot be answered for here
-// at all — and reading its absence as "somebody else won" would re-decide
-// against a row that moved because of this very write.
-func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	// THE FRAMEWORK'S OWN READER, not a second query against its table.
-	// This one had drifted into looking for a row keyed `id = 'current'`
-	// on a table keyed on `started_at` — which fails on every call with a
-	// missing column rather than reporting no adoption, and the caller
-	// then treats a working node as one that cannot answer for anything.
-	//
-	// It is still THE NODE'S OWN ESTATE that is read: an adoption record
-	// is a fact about this machine's history, and a donated snapshot must
-	// not carry the recipient's own.
-	return statelog.AdoptedAt(ctx, g.db)
 }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
@@ -412,12 +407,11 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -426,7 +420,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
 					"not on this node: %w", id, statelog.ErrUnavailable)
 			}
-			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
+			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
 			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
@@ -439,7 +433,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 	})
 }
 
-// EvictNode installs the gate that drops a node's records.
+// EvictNode installs the gate that drops a node's records on this log.
 //
 // # Why the record carries the position and not a time
 //
@@ -447,10 +441,20 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 // is the log's own — so every node reaches the same verdict about every record
 // with no clock, no coordination read and no agreement beyond the order they
 // all already have. That is what makes it the fence that holds when
-// coordination cannot be reached at all, which is the only state in which an
-// eviction is permitted: the fleet refuses one while the target's presence
-// lease is live, so an evicted node has already been silent for at least
-// three coordination round trips.
+// coordination cannot be reached at all.
+//
+// # And why nothing here judges whether the node may be evicted
+//
+// An eviction is ONE fleet gesture over every identity-claiming log, and
+// whether it is permitted — the target must not be holding a live presence
+// lease ([statelog.PermitEviction]) — is asked once, before the first log is
+// written, by the engine's node gate. Judged here, and again beside every
+// other log's gate record, one gesture could reach two answers about one node
+// and leave it evicted on one log and counted on the other. The gate is the
+// one production caller of this method and of [Writer.ReadmitNode].
+//
+// EvictedBy is this writer's own actor, so the caller hands it a writer acting
+// as the operator who ran the gesture — see [Writer.As].
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, false)
 }
@@ -458,10 +462,22 @@ func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResul
 // ReadmitNode is the INVERSE COMMIT rather than a delete, so an eviction's
 // whole history survives a replay — and a node that was evicted, readmitted
 // and evicted again reads correctly rather than as one long absence.
+//
+// Unjudged here for [Writer.EvictNode]'s reason: a node below a trim floor is
+// refused a readmission by the engine's node gate, which reads the positions
+// register, the published floors and every identity-claiming log once, before
+// either log is written — see [statelog.PermitReadmission].
 func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, true)
 }
 
+// gateNode publishes one eviction record.
+//
+// A RETRY IS ANSWERED BY THE FRAMEWORK from this node's ledger, before this
+// decision runs ([statelog.Snap.Held]); what this write adds is the one thing
+// the ledger cannot say — whether the record its operation landed is still in
+// force, judged from the node's own row in the same snapshot
+// ([statelog.GateStanding]).
 func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool) (WriteResult, error) {
 	if nodeID == "" {
 		return WriteResult{}, fmt.Errorf("tracker: an eviction names no node")
@@ -473,13 +489,44 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
-		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpEviction, "", scope, opID, Eviction{
+		NodeGate: true,
+		Standing: func(tx *sql.Tx, held statelog.Position) error {
+			row, found, err := standingIn(ctx, tx, nodeID)
+			if err != nil {
+				return err
+			}
+			return statelog.GateStanding(opID, nodeID, readmit, held, row, found)
+		},
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)
 		},
 	})
+}
+
+// standingIn is nodeID's eviction row on this log, read in the transaction the
+// caller holds.
+func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.EvictionRow, bool, error) {
+	var from int64
+	var readmitted sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT from_position, readmitted_position FROM tracker_evictions
+		WHERE node_id = ? AND log_stream = ?`,
+		nodeID, trackerStream).Scan(&from, &readmitted)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return statelog.EvictionRow{}, false, nil
+	case err != nil:
+		return statelog.EvictionRow{}, false, fmt.Errorf("tracker: read %s's "+
+			"eviction row: %w", nodeID, err)
+	}
+	return statelog.EvictionRow{
+		NodeID: nodeID, From: uint64(from), Readmitted: uint64(readmitted.Int64),
+		// THE COMPARISON [Fence.Evicted] MAKES, so a retry and the node's
+		// own fence can never disagree about whether it is back.
+		Back: readmitted.Valid && readmitted.Int64 > from,
+	}, true, nil
 }

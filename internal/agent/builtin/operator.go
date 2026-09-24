@@ -70,6 +70,12 @@ type OperatorDeps struct {
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	work, pages := deps.Work, deps.Pages
+	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
+	// turn to derive one from: every write answers with its `op_id`, and
+	// the call brought back with it is that operation again. See
+	// [WorkDeps.bindOperation] — and this is the only place that says so,
+	// because it is a fact about this surface rather than a setting.
+	work.callerOperations = true
 	candidates := []struct {
 		tool tools.Callable
 		on   bool
@@ -81,6 +87,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			work.Writer != nil && work.Reader != nil},
 		{&commentOnWorkItem{deps: work}, work.Writer != nil && work.Reader != nil},
 		{&mergeWorkItem{deps: work}, work.Merges != nil && work.Reader != nil},
+		{&moveWorkItem{deps: work, leads: deps.LeadsProject},
+			work.Moves != nil && work.Reader != nil},
 		{&searchWorkItems{deps: work}, work.Search != nil},
 		// THE VIEW TOOLS ARE HERE AND IN NO SEAT'S REGISTRY. A saved
 		// view is furniture a person arranges; see the file head of

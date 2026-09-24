@@ -99,7 +99,27 @@ a cache cannot:
   write, and never something to retry. `unknown` means the acknowledgement was
   lost and the record may or may not be there; that is the one worth retrying,
   and the reply carries the operation id to retry it with, which collapses a
-  duplicate rather than filing one.
+  duplicate rather than filing one. The id carries the instant it was minted,
+  so a retry — a turn re-run included — is judged by when the operation began
+  rather than when it was retried: on a node whose record of what already
+  landed may have lost that operation's row since — to its thirty-day sweep,
+  or to a snapshot adopted from a peer on an older build — it answers
+  `unknown` rather than applying it twice (see
+  [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
+  A gesture that writes **several** records in order — a cross-project move, a
+  merge, a promotion, a dependency change, a subtree's removal or restore, a
+  write that declares its labels first (`labels_create_missing`), an update
+  that changes the item and its dependencies — stops at the first one whose
+  outcome is `unknown` rather than carrying on over it: nothing after that
+  step is written, a mid-move or mid-merge mark stays up, and the caller is
+  told the gesture stopped and under which operation id. Running it again
+  under that id — a seat by repeating the call, the operator's assistant by
+  sending back the `op_id` its answer carried — answers the steps that landed
+  and finishes the rest. The exception is a step this node's ledger cannot
+  vouch for: the answer then says so, because running it again here stops at
+  the same step. A create in that position answers from its own item's row
+  instead: the item, where this node holds it, and `unknown` with no key
+  minted where it does not.
 - **A write can wait for itself.** A turn that files a task and then lists the
   project sees what it just filed, because the tool waits for this node to
   apply its own position before it reads. A gesture that writes one item

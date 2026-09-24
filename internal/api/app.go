@@ -398,14 +398,22 @@ func New(opts Options) (*App, error) {
 	// The security headers go on outside both, so a refusal and a preflight
 	// carry them as well as an answer does, and before routing, so the
 	// responses no handler writes deliberately (the mux's own 404 and 405,
-	// the redirect from `/`, which has an HTML body) are covered without
-	// each needing to remember. A handler serving a page replaces the
+	// which [httpjson.Mux] answers, and the redirect from `/`, which has an
+	// HTML body) are covered without each needing to remember. A handler serving a page replaces the
 	// policy with its own.
 	//
 	// And the drain gate sits inside all three, next to the routes it
 	// refuses: see [App.drainGate].
+	//
+	// THE MUX'S OWN 404 AND 405 ARE JSON, like every other answer this
+	// surface writes ([httpjson.Mux]): a client reads a refusal with no
+	// code as something in front of the node, so a route this node simply
+	// does not serve — the purge on a company with no native tracker, any
+	// route a newer client asks an older node for — read as a write whose
+	// outcome was unknown.
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(a.drainGate(mux))))
+	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(
+		a.drainGate(httpjson.Mux(mux)))))
 	return a, nil
 }
 

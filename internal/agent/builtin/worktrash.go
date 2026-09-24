@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -60,7 +61,7 @@ func (t *removeWorkItem) Description() string {
 }
 
 func (t *removeWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -76,7 +77,7 @@ func (t *removeWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}
+	})
 }
 
 func (t *removeWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -93,6 +94,10 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.RemoveWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.RemoveWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
@@ -113,20 +118,34 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Removed = &tracker.Tombstone{
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
-	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx,
-		opIDFor(actor, "remove", before.Task.ID), before.Task.ID,
+	opID := opIDFor(actor, t.Name(), "remove", before.Task.ID, args)
+	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx, opID, before.Task.ID,
 		before.Task.Project, argBool(args, "subtree"),
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	if err != nil {
-		return failed(writeFailure(tracker.RemoveWorkItemTool, err)), nil
+	var stopped *tracker.SubtreeStopped
+	switch {
+	case errors.As(err, &stopped):
+		return t.deps.subtreeStopped(ctx, actor, tracker.RemoveWorkItemTool,
+			before.Task.Key, "removed", got, stopped)
+	case err != nil:
+		return failed(writeFailure(actor, tracker.RemoveWorkItemTool, err)), nil
+	case got.Outcome == statelog.OutcomeUnknown:
+		// See [mergeWorkItem]: the seam's contract, held here.
+		return failed(unknownWrite(actor, tracker.RemoveWorkItemTool,
+			fmt.Sprintf("%s went to the trash", before.Task.Key), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, tracker.RemoveWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+					"is in the trash", before.Task.Key),
+				"it changes nothing, since the item is already there"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "removed": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
 }
 
 // ---- restore_work_item -------------------------------------------------- //
@@ -146,7 +165,7 @@ func (t *restoreWorkItem) Description() string {
 }
 
 func (t *restoreWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -155,7 +174,7 @@ func (t *restoreWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}
+	})
 }
 
 func (t *restoreWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -173,6 +192,10 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.RestoreWorkItemTool), nil
 	}
+	actor, denied := t.deps.bindOperation(actor, tracker.RestoreWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
+	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
 		return failed("restore_work_item needs an `item` — a key like ENG-42, or an id."), nil
@@ -188,25 +211,86 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
 	}
-	if before.Task.Removed == nil {
-		return failed(fmt.Sprintf("%s is not in the trash, so there is "+
-			"nothing to restore.", before.Task.Key)), nil
-	}
+	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
+	// that stopped part of the way through leaves: the root is back and
+	// what went with it is not, and this call is how that is finished. The
+	// tracker says when there is truly nothing to bring back.
 
 	after := before.Task
 	after.Removed = nil
-	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx,
-		opIDFor(actor, "restore", before.Task.ID), before.Task.ID,
+	opID := opIDFor(actor, t.Name(), "restore", before.Task.ID, args)
+	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx, opID, before.Task.ID,
 		before.Task.Project,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	if err != nil {
-		return failed(writeFailure(tracker.RestoreWorkItemTool, err)), nil
+	var stopped *tracker.SubtreeStopped
+	switch {
+	case errors.Is(err, tracker.ErrNothingToRestore):
+		return failed(fmt.Sprintf("%s is not in the trash, and nothing is in "+
+			"the trash with it, so there is nothing to restore.",
+			before.Task.Key)), nil
+	case errors.As(err, &stopped):
+		return t.deps.subtreeStopped(ctx, actor, tracker.RestoreWorkItemTool,
+			before.Task.Key, "restored", got, stopped)
+	case err != nil:
+		return failed(writeFailure(actor, tracker.RestoreWorkItemTool, err)), nil
+	case got.Outcome == statelog.OutcomeUnknown:
+		return failed(unknownWrite(actor, tracker.RestoreWorkItemTool,
+			fmt.Sprintf("%s came out of the trash", before.Task.Key), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, tracker.RestoreWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+					"is still in the trash", before.Task.Key),
+				"it is refused, since there is nothing left to restore"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "restored": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
+}
+
+// subtreeStopped answers a subtree removal or restore whose ROOT landed and
+// whose walk over the rest did not finish.
+//
+// # Why it is not a failure, and not a success either
+//
+// The item the caller named IS in the trash, or out of it — so "the change was
+// NOT made", which is what this answered, was false about the one thing the
+// caller asked about by name, and a retry was refused because the restored
+// root was no longer in the trash. And the gesture is NOT done: the tasks that
+// go with it are split across the trash. So the answer is the root's receipt
+// with the walk's own count beside it and what finishes it, the shape
+// `dependencies_failed` gives a create whose item landed.
+//
+// EITHER VERB FINISHES WHEN MADE AGAIN, under the same operation or a new one
+// — a task already where the gesture leaves it is nothing to do. The one stop
+// that differs is a step this node's ledger cannot vouch for: the same
+// operation stops at the same task here every time, and only a new one decides
+// it afresh — which the operator's surface, the only one these two tools are
+// served on, gets by leaving the op_id out.
+func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool, key,
+	done string, got tracker.WriteResult,
+	stopped *tracker.SubtreeStopped) (tools.Result, error) {
+
+	next := fmt.Sprintf("Call %s on %s again, with the same arguments, to "+
+		"finish: whatever has not followed yet goes, and what already has is "+
+		"left where it is.", tool, key)
+	if errors.Is(stopped.Err, tracker.ErrStepUnvouched) {
+		next = fmt.Sprintf("This node cannot vouch for the task it stopped at "+
+			"under this operation, so call %s on %s again WITHOUT an op_id: a "+
+			"new operation decides afresh and finishes it.", tool, key)
+	}
+	d.settle(ctx, got.Position)
+	return jsonResult(withOperation(map[string]any{
+		"key": key, done: true,
+		"outcome": string(got.Outcome), "position": positionOf(got.Position),
+		"version":          got.Version,
+		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
+		"subtree_stopped": fmt.Sprintf("%s is %s, but only %d of the %d tasks "+
+			"that go with it followed before the walk stopped (%v). Do not "+
+			"report it as done. %s", key, done, stopped.Followed, stopped.Of,
+			stopped.Err, next),
+	}, actor))
 }

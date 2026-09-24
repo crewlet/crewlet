@@ -279,7 +279,7 @@ func TestTheEvictionGateDropsOnlyWhatFollowsIt(t *testing.T) {
 
 	eviction := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "evict-1",
+			V: tracker.GateRecordVersion, OpID: "evict-1",
 			Subject: tracker.EvictionSubject("node-b"), Op: tracker.OpEviction,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},

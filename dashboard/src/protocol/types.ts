@@ -1220,20 +1220,82 @@ export interface RetentionDomain {
   last_seq: number;
   bytes: number;
   max_bytes?: number;
-  /** ABSENT when the broker could not be asked — which is not zero headroom. */
+  /** On a log that claims identity, the top of `max_bytes` kept for the
+   *  records that install or lift a gate, so an eviction still lands on a log
+   *  full for everything else. ABSENT on a log that keeps none. */
+  reserve_bytes?: number;
+  /** Of the ceiling ORDINARY writes are held to — `max_bytes` less
+   *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
+   *  zero headroom. */
   headroom_fraction?: number;
-  /** What has actually been removed, and what THIS tick concluded may be. */
+  /** Everything below it may already be gone; it never moves down within a
+   *  generation. Meaningful only where `trim_floor_state` is `published`. */
   trim_floor: number;
+  /** What the last tick concluded may be removed — zero while blocked.
+   *  Meaningful only where `trim_floor_state` is `published`. */
   trim_to: number;
+  /**
+   * Whether the floor, the conclusion, the terms and the blocking term are a
+   * conclusion at all. After every reanchor the trim has concluded nothing
+   * about the adopted stream until its first tick on it, and that row read
+   * as "floor 0 · advancing" — about a trim that had looked at nothing.
+   */
+  trim_floor_state: RetentionTrimFloorState;
+  /** An EMPTY LIST where nothing is concluded — never null. */
   terms: RetentionTerm[];
   blocked_by?: string;
   blocked_since?: string;
+  /** Why the answering node refuses every read of this domain right now, and
+   *  which finding is behind a `wrong_stream`. ABSENT while it serves them. */
+  not_ready?: RetentionRefusal;
+  /** Why it refuses this domain's WRITES while serving its reads — a peer's
+   *  rows hold records the log lost (`log_truncated`). */
+  writes_refused?: RetentionRefusal;
   /** The sentence a blocked trim leads with. */
   prose?: string;
   /** The snapshot loop's OWN skip reason — a different problem from a blocked
    *  trim, with a different remedy, which is why it is its own field. */
   snapshot_blocked_by?: string;
+  /**
+   * The answering node could not read this log's evictions when it assembled
+   * the report — a failed store read, or the replicated estate closed for an
+   * adoption's rename or a shutdown. An unread log contributes no tombstone,
+   * so every node reads as NOT evicted there: a guess, not a fact, and never
+   * proof that a node was readmitted. ABSENT when they were read.
+   */
+  evictions_unreadable?: boolean;
 }
+
+/**
+ * What a domain's floor is — `statelog.TrimFloorStates`, held to the engine's
+ * by a gate in `internal/statelog`.
+ */
+export type RetentionTrimFloorState = "published" | "none_at_generation" | "unreadable";
+
+/**
+ * Which finding is behind a `wrong_stream` — `statelog.IdentityCauses`. One
+ * word refuses for four facts, each with its own remedy.
+ */
+export type RetentionIdentityCause =
+  "recreated" | "ahead_of_log" | "log_diverged" | "generation_passed";
+
+/** Why the answering node refuses a domain. */
+export interface RetentionRefusal {
+  /** A read refusal (`wrong_stream`, `stalled`, …) or a write refusal (`log_truncated`). */
+  code: string;
+  /** Kept as strings, so a cause a newer node names is shown rather than dropped. */
+  causes?: string[];
+  /** The sentence the refusal carries everywhere else it is met. */
+  detail: string;
+}
+
+/**
+ * A node's position generation against its domain's —
+ * `statelog.GenerationStates`. Only `current` compares with the log's
+ * sequences: a position from a generation the log has left is a number in a
+ * space that no longer exists.
+ */
+export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
 
 /**
  * A term's value made explicit: read, unreadable, not applicable, or read and
@@ -1280,9 +1342,19 @@ export interface RetentionNodeDomain {
   /** BESIDE seq, never instead of it: a node applying nothing while its
    *  position advances looks identical to a caught-up one from either alone. */
   applied_through: number;
-  /** ABSENT rather than zero when the stream could not be read. */
+  /** Whether `seq` compares with the log's at all. */
+  generation_state: RetentionGenerationState;
+  /** ABSENT rather than zero when the stream could not be read — and for a
+   *  position from another generation, whose sequence is in another space. */
   lag?: number;
   deferred?: number;
+  /** The node's own report that the log holds another record at its
+   *  checkpoint than the one it consumed there. */
+  log_diverged?: boolean;
+  /** The stream its rows are keyed to, and the record its checkpoint stands
+   *  on — what a reanchor weighs. ABSENT where the node did not publish them. */
+  stream_created_at?: string;
+  checkpoint_stored_at?: string;
 }
 
 export interface RetentionEviction {
@@ -1318,18 +1390,61 @@ export interface RetentionAlarm {
   remedy: string;
 }
 
-/** What a retention gate answered. The outcome is three-valued (D134). */
+/**
+ * What a retention gate answered once the gesture was past its judgement: ONE
+ * GESTURE over every identity-claiming log, answered per log.
+ *
+ * The shape is `api.GateAnswer`, and the fixtures this dashboard's suite
+ * renders it from are the engine's own rendering
+ * (`internal/api/testdata/gate_answer.json`) — the dialog read a top-level
+ * `outcome` for as long as the route had stopped writing one, on fixtures it
+ * had typed itself, and rendered every gesture as "no acknowledgement".
+ */
 export interface RetentionGateResult {
   node: string;
   evicted: boolean;
+  /** The GESTURE's operation id — what finishes it, sent back unchanged. */
+  op_id: string;
+  /** Whether every log holds the record durably (`applied` or `pending`). */
+  complete: boolean;
+  domains: RetentionGateDomain[];
+}
+
+/** One log's answer to a gate gesture. */
+export interface RetentionGateDomain {
+  domain: string;
+  stream: string;
+  /** This log's own operation, derived from the gesture's. */
+  op_id: string;
   /**
-   * `applied` is durable AND in this node's rows; `pending` is durable at the
-   * position and unapplied HERE, so what it produced is unresolved rather
-   * than failed; `unknown` is the only one where retrying is correct.
+   * The write's three-valued outcome (D134), ABSENT when `error` is set: a
+   * refusal is not one of the three. `applied` is durable AND in this node's
+   * rows; `pending` is durable at the position and unapplied HERE; `unknown`
+   * may or may not be on the log.
    */
-  outcome: "applied" | "pending" | "unknown";
-  position?: { stream?: string; generation?: number; seq?: number };
-  op_id?: string;
+  outcome?: "applied" | "pending" | "unknown";
+  /**
+   * Set on an `unknown` THIS node cannot settle: its operation ledger may
+   * have lost the row the operation needs, so it published nothing and
+   * answers the same gesture the same way every time. Its remedy is another
+   * node (`other_node`), never Finish here.
+   */
+  unvouched?: boolean;
+  /** Where the record is durable — ABSENT for `unknown`, which has none: a
+   *  zero position would read as a record at the log's origin. */
+  position?: { stream: string; generation: number; seq: number };
+  /** Why the log gave no outcome, and the refusal's name (`log_full`,
+   *  `evicted`, …) where it was a refusal. */
+  error?: string;
+  reason?: string;
+  /**
+   * What to do about a log the gesture did not finish — values of
+   * [GATE_ACTIONS], kept as strings so an action a newer node sends is shown
+   * rather than dropped — and the sentence saying why, naming no surface's
+   * controls. Both absent on a finished log.
+   */
+  actions?: string[];
+  hint?: string;
 }
 
 export interface FleetSeatLease {

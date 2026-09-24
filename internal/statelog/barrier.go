@@ -63,6 +63,12 @@ type ReadIndex struct {
 	gen     func() uint32
 	metrics *metrics.Recorder
 
+	// admission holds a barrier out of the log's gate reserve like any
+	// other ordinary append: barriers go on for as long as reads do, and
+	// allowed into the reserve they would spend, a record at a time, the
+	// room an eviction is kept.
+	admission Admission
+
 	// budget bounds the append itself, and it is separate from any one
 	// caller's context for the reason the append is shared: a reader
 	// that walks away must not cancel the round trip the readers behind
@@ -93,14 +99,27 @@ type barrierRun struct {
 const DefaultBarrierBudget = 5 * time.Second
 
 // NewReadIndex builds a domain's read index.
-func NewReadIndex(d Domain, log Appender, encode func(Envelope) ([]byte, error),
-	gen func() uint32, rec *metrics.Recorder) (*ReadIndex, error) {
+//
+// admission is the log's gate reserve ([Reserve]) — required of a domain that
+// keeps one, the one every other ordinary append on this log on this node is
+// admitted through, and refused on a domain that keeps none.
+func NewReadIndex(d Domain, log Appender, admission Admission,
+	encode func(Envelope) ([]byte, error), gen func() uint32,
+	rec *metrics.Recorder) (*ReadIndex, error) {
 	spec := d.Stream()
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
 	if encode == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no encoder", d.Name())
+	}
+	switch {
+	case KeepsGateReserve(d) && admission == nil:
+		return nil, fmt.Errorf("statelog: read index for %q has no admission, so "+
+			"its barriers would fill the gate reserve an eviction needs", d.Name())
+	case !KeepsGateReserve(d) && admission != nil:
+		return nil, fmt.Errorf("statelog: read index for %q was given an "+
+			"admission, and its log keeps no gate reserve", d.Name())
 	}
 	if gen == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no generation source", d.Name())
@@ -110,14 +129,15 @@ func NewReadIndex(d Domain, log Appender, encode func(Envelope) ([]byte, error),
 			"barrier writes no rows at all", d.Name(), class)
 	}
 	return &ReadIndex{
-		log:     log,
-		stream:  spec.Name,
-		subject: spec.SubjectPrefix + "." + BarrierKind,
-		domain:  d.Name(),
-		encode:  encode,
-		gen:     gen,
-		metrics: rec,
-		budget:  DefaultBarrierBudget,
+		log:       log,
+		stream:    spec.Name,
+		subject:   spec.SubjectPrefix + "." + BarrierKind,
+		domain:    d.Name(),
+		encode:    encode,
+		gen:       gen,
+		metrics:   rec,
+		admission: admission,
+		budget:    DefaultBarrierBudget,
 	}, nil
 }
 
@@ -221,9 +241,20 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		// return a PubAck for a position nothing confirmed, which is
 		// exactly the proof the level rests on. A duplicate here is a
 		// refusal rather than an answer.
+		// HELD OUT OF THE RESERVE, and refused `log_full` at the ordinary
+		// ceiling as every other ordinary append is — which the read path
+		// renders as the same refusal a full log gives.
+		release := func() {}
+		if r.admission != nil {
+			if release, err = r.admission.Admit(appendCtx, appendBytes(body)); err != nil {
+				run.err = err
+				return
+			}
+		}
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
+		release()
 		if err != nil {
-			run.err = fmt.Errorf("statelog: append a barrier on %s: %w", r.subject, err)
+			run.err = barrierAppendError(r.subject, err)
 			return
 		}
 		if duplicate {
@@ -244,4 +275,23 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()
+}
+
+// barrierAppendError is what a barrier append that did not land tells the
+// readers waiting on it.
+//
+// A FULL LOG IS NAMED AS ONE. The append's own error was handed on raw, and
+// the read path's mapping ([barrierRefusal]) only knows a full log by its
+// refusal reason — so every linearizable read on a full log was refused
+// `no_quorum`, a majority that did not agree and a thing worth coming back
+// for, where the truth was a byte ceiling an operator has to raise.
+func barrierAppendError(subject string, err error) error {
+	if f, detail := classify(err); f == faultFull {
+		return &Unavailable{
+			Reason: ReasonLogFull,
+			Detail: fmt.Sprintf("the broker refused the barrier on %s: %s", subject, detail),
+			Cause:  err,
+		}
+	}
+	return fmt.Errorf("statelog: append a barrier on %s: %w", subject, err)
 }

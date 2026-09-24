@@ -112,9 +112,8 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain:          probeDomain{},
-			Health:          func() statelog.Health { return h.health },
-			StreamCreatedAt: liveStreamCreatedAt,
+			Domain: probeDomain{},
+			Health: func() statelog.Health { return h.health },
 		}},
 		DB:            h.db,
 		Dir:           h.dir,
@@ -201,23 +200,29 @@ func TestASnapshotNamesEveryDomainAndItsManifestIsTheClaim(t *testing.T) {
 	}
 }
 
-// THE DONOR SCRUBS, ON A LIST DERIVED FROM THE DOMAIN'S DECLARATION.
+// THE DONOR SCRUBS, ON A LIST DERIVED FROM THE DOMAIN'S DECLARATION — AND ITS
+// OPERATION LEDGER IS NOT ON IT.
 //
 // An offered artefact carries no authority a peer does not already hold only
 // once every table still in it is fleet-visible — so a table this node owns
 // must be empty before the artefact exists, not after it arrives. And the list
 // comes from what the domain says about its own tables: a hardcoded one would
 // silently omit whatever a deployment actually has.
+//
+// The ledger is fleet-visible in exactly that sense: its rows are what every
+// node's applier writes from the same records. Scrubbed, it left the adopter
+// unable to tell a first attempt from a retry of anything the donor applied.
 func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
-	// A row in the replicated table that travels, and rows in the two the
-	// domain classes Local.
+	// A row in the replicated table, a row in the ledger, both of which
+	// travel, and one in a table the domain classes Local.
 	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_rows (position, kind, stored_at) VALUES (1, 'edit', 0);
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
-				VALUES ('op-1', 's', 1, 0);`)
+				VALUES ('op-1', 's', 1, 0);
+			INSERT INTO probe_deferred_scope (position, path) VALUES (1, 'object.a');`)
 		return err
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -230,10 +235,15 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	if len(m.Scrubbed) == 0 {
 		t.Fatal("the manifest claims nothing was scrubbed")
 	}
-	for _, want := range []string{"probe_ops"} {
+	for _, want := range []string{"probe_log_deferred", "probe_deferred_scope"} {
 		if !slicesContains(m.Scrubbed, want) {
 			t.Errorf("the manifest does not list %s as scrubbed: %v", want, m.Scrubbed)
 		}
+	}
+	if slicesContains(m.Scrubbed, "probe_ops") {
+		t.Errorf("the manifest lists the operation ledger as scrubbed: %v — an "+
+			"adopter answers every operation minted before the join `unknown`",
+			m.Scrubbed)
 	}
 	// THE CLAIM IS TRUE, checked the way a recipient checks it.
 	copyPath := filepath.Join(h.dir, m.Artifact)
@@ -245,14 +255,15 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 		t.Fatalf("the artefact claims %v scrubbed and %v are actually empty — a "+
 			"claim nobody checks is a claim", m.Scrubbed, empty)
 	}
-	// AND WHAT TRAVELS IS STILL THERE.
-	remaining, err := store.EmptyTables(t.Context(), copyPath, []string{"probe_rows"})
+	// AND WHAT TRAVELS IS STILL THERE — the ledger with the rows.
+	remaining, err := store.EmptyTables(t.Context(), copyPath, []string{"probe_rows", "probe_ops"})
 	if err != nil {
-		t.Fatalf("check the replicated table: %v", err)
+		t.Fatalf("check the tables that travel: %v", err)
 	}
 	if len(remaining) != 0 {
-		t.Fatal("the replicated table was scrubbed too — the artefact would " +
-			"carry a checkpoint and none of the rows it covers")
+		t.Fatalf("%v arrived empty — the artefact would carry a checkpoint and "+
+			"none of the rows it covers, or a ledger that answers for nothing",
+			remaining)
 	}
 }
 
@@ -296,6 +307,13 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 				h.health.LastSeq = &end
 			},
 			want: statelog.SkipAheadOfLog,
+		},
+		// AND THE ONE THAT ONE STOPS SEEING: a restored log written back
+		// past the checkpoint ends where a caught-up node's does, and
+		// holds another history from there.
+		"the log diverged from its rows": {
+			arrange: func(h *snapHarness) { h.health.LogDiverged = true },
+			want:    statelog.SkipLogDiverged,
 		},
 		"too far behind to be worth transferring": {
 			arrange: func(h *snapHarness) {
@@ -343,6 +361,42 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 			t.Fatalf("a second take inside the interval = %v, want a recent skip", err)
 		}
 	})
+
+	// BUT RECENT MEANS ADOPTABLE: once a reanchor has moved a domain to a new
+	// generation, the artefact from before it is one no joiner can take —
+	// they ask at the generation the domain is on — so the next take runs
+	// inside the interval. Skipped as recent, every peer the reanchor left
+	// behind had no donor until the interval ran out.
+	t.Run("the recent one is from a generation a domain has left", func(t *testing.T) {
+		t.Parallel()
+		h := newSnapHarness(t)
+		if _, err := h.snap.Take(t.Context()); err != nil {
+			t.Fatalf("the first take: %v", err)
+		}
+		seedCursor(t, h.db, probeStream,
+			statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}, h.created)
+		h.health.Position = statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}
+		h.clock = h.clock.Add(time.Minute)
+		m, err := h.snap.Take(t.Context())
+		if err != nil {
+			t.Fatalf("a take after the domain moved generation = %v, want a snapshot "+
+				"— the one held is from generation 1, which nobody can adopt", err)
+		}
+		if got := m.Domains["probe"].Generation; got != 2 {
+			t.Fatalf("the new artefact names generation %d, want 2", got)
+		}
+		// AND ONE AT THE CURRENT GENERATION IS RECENT AGAIN.
+		h.clock = h.clock.Add(time.Minute)
+		if _, err := h.snap.Take(t.Context()); !isRecent(err) {
+			t.Fatalf("a third take = %v, want a recent skip", err)
+		}
+	})
+}
+
+// isRecent reports a take skipped because the newest artefact is recent.
+func isRecent(err error) bool {
+	reason, ok := statelog.Skipped(err)
+	return ok && reason == statelog.SkipRecent
 }
 
 // THE PREVIOUS SNAPSHOT GOES LAST.

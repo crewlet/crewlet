@@ -69,11 +69,15 @@ var ReproducibleTables = []string{
 }
 
 // MachineryTables are the log's own, excluded from the audit and from the
-// identity claim, and scrubbed out of every donated snapshot.
+// identity claim.
 //
-// A DONOR'S OPERATION LEDGER IS THE SHARPEST OF THEM: an adopted peer's ops
-// table would let this node resolve its own ambiguous publish against somebody
-// else's history, which is a write reported as landed that never happened.
+// THEY DO NOT ALL TRAVEL. The deferred record and its scope are this node's
+// own verdict about bytes this build could not decode, and are scrubbed out of
+// every donated snapshot. The operation ledger (tracker_ops) TRAVELS: its rows are
+// what every node's applier writes from the same records, so the donor's are
+// exactly the ones this node would have written, and an adopter without them
+// cannot tell a first attempt from a retry of anything the donor applied — see
+// [statelog.Domain.OpsTable].
 var MachineryTables = []string{
 	"tracker_ops", "tracker_log_deferred", "tracker_log_deferred_scope",
 }

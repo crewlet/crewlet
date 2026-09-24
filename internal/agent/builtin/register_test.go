@@ -24,7 +24,7 @@ func TestTheNativeWritesDeliverToTheirOwnFeedSource(t *testing.T) {
 	kb := newFakeKB()
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
-		Work:  builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges},
+		Work:  builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves},
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
 	}); err != nil {
 		t.Fatalf("Register: %v", err)

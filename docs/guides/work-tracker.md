@@ -19,6 +19,24 @@ the company config creates the project on the next apply, on every node, with
 no gesture from anybody. That is what lets a fresh company file its first task
 in its first minute.
 
+A project's name, purpose and unit follow the configuration that was
+**activated last**, whichever node applies what when: each project is stamped
+with the instant its configuration was activated, and a chart activated
+earlier never overwrites one activated later — so a node restarting on a
+revision the fleet has since replaced, or applying an older one late during a
+rollout, leaves the newer names alone. Re-applying an activation that has
+already landed writes nothing, which is every restart of every node on a
+company nobody has edited; re-activating an unchanged revision (the
+credential-rotation gesture) is a new activation, and writes one record per
+project to say so. The instant is the activating node's clock, except that an
+activation is never published at an instant no later (to the millisecond)
+than the one it replaces: the activation pointer moves it to a millisecond
+after, so an activation made on a node whose clock runs behind the last
+activator's — or a node republishing an older `activated_at` at boot — is
+still applied to every project, where it used to be applied to none. Keep the
+fleet's clocks synchronised anyway: the rule orders activations against each
+other, and the stamps a chart carries are still read off real clocks.
+
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between
 the two costs a number rather than risking two tasks sharing a key. A key is
@@ -55,6 +73,43 @@ two can never disagree. That decides what counts:
   changing.
 - A task **moved between projects** counts against the project it moved *to*,
   which is where a reader following it up will look. Both projects' counts move.
+
+A move between projects — `move_work_item`, the item's project **lead's or a
+person's own** — carries the task's **whole subtree**: only a root task moves,
+and every task beneath it follows, re-keyed in the new project with its old key
+still resolving. The tags the subtree carries are declared in the new project
+as its old one declares them, and the people on the root are told. A tag the
+new project already has under the same slug is simply used. One whose label
+the new project already gives a **different** tag — ENG's `api` and OPS's
+`backend-api`, both labelled "API" — refuses the move before anything is
+written, naming both tags, because declaring it would make two tags nobody
+could tell apart; so does a new project already holding its 512 tags. The move
+is never rewritten onto a tag it did not carry: put the items under the target's
+tag first if they mean the same thing, or declare the slug in the target under
+a label of its own (`write_project`'s `tags_add`), and move again. A task in the trash anywhere in that subtree refuses
+the move until it is restored or purged, because a removed task is frozen and
+the move could not carry it. A move that stops part-way — its node died, or the
+stream refused an append — leaves its root **marked mid-move**, and the
+`tracker` duty finishes it on its first pass (every 15 minutes) after the
+move's claim has lapsed, which is a minute after its last heartbeat and never
+while it is still running: the tasks still in the old project follow on fresh
+keys, which leaves a gap in the numbering like any other interrupted write. A
+task removed while the move was running is waited for — the root stays marked
+until it is restored, and the next pass carries it. Until the walk is finished,
+every task still in the old project is in the attention queue as
+`flag=inconsistent_project`: a subtask filed in another project than its root
+is not drawn under that root on either board. A merge never leaves one: a fold
+that would re-parent a duplicate's subtasks onto an item in another project is
+refused before it starts, naming the move that makes it possible.
+
+The same call made again — what a move answered `unknown`, or stopped part-way,
+tells you to do — is answered by the move itself even once its first attempt has
+carried the item into the new project: it reports the move that landed, under the
+key the item left (`moved_from`), and finishes whatever of the subtree has not
+followed. The lead check is on the move *out* of a project, so the lead of the
+old project finishing their own move is not sent to the new project's lead about
+a move that already happened; and a move into the project an item is already in
+that no earlier attempt of that same call made is refused, as somebody else's.
 
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
@@ -161,7 +216,7 @@ answer is that there is no such work.
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
-| **checklist** | items with their own assignees. |
+| **checklist** | items with their own assignees. No tool, route or command writes a checklist in this build, so a task's checklists are empty and nothing promotes an item to a subtask. |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
 | **spend** | turns, rounds, tokens and wall-clock this task has cost. |
@@ -369,7 +424,23 @@ refusal, and both are deliberate rather than automatic:
   declares what that write is about to use, in one append before the task's
   own. The answer lists what it created under `labels_created`, so a caller
   that set the flag out of habit still sees a typo now rather than on a board
-  three weeks later.
+  three weeks later. A declaration refused, or one whose outcome is unknown,
+  stops the write before the task's own append, and the answer says so under
+  the tool that was called: the item was not filed, or the change not made, by
+  that call. The same call made again — a seat's with the same arguments, your
+  assistant's with the `op_id` the answer carried — answers the declaration
+  and then makes the write, once. Where the node's ledger cannot vouch for the
+  declaration, that repeat stops at the same step until the declaration
+  reaches the node, so the answer says to declare the tags with `write_project`
+  first, which is harmless if they already landed. The repeat after it skips
+  the declaration — but the write itself dates from the same instant, so the
+  node cannot vouch for that either: it answers with the item an earlier
+  attempt filed, or with the change where the node still holds its record, and
+  otherwise answers `unknown` again. That second `unknown` means the write may
+  exist where this node cannot see it: look for the item (`list_work_items`),
+  or read it (`get_work_item`), rather than making it any other way — or, from
+  your assistant, make the same call with its `op_id` through another node,
+  whose ledger may reach back that far.
 
 A slug within a **typo** of an existing one is accepted with a warning naming
 the nearest three — advisory, never a refusal, because a lead can merge two
@@ -655,7 +726,7 @@ correct board.
 
 ## What a seat can do
 
-Thirteen tools, and they are deliberately few — eight that act on a task,
+Fourteen tools, and they are deliberately few — nine that act on a task,
 three that read the container it is filed into, one that writes the one part of
 that container a seat owns, and one about CHANGE rather than about state:
 
@@ -668,7 +739,8 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
-| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
+| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A subtask in the trash stays under the duplicate, where a restore finds it — a removed item is frozen. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running; a duplicate that is itself in the trash waits for its restore. A merge that would re-parent subtasks onto an item in **another project** is refused before it starts — a subtask under an item in another project is drawn under it on neither board — so move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false` |
+| `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or a person's own**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each with an optional leading `-`), so `-open` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
@@ -830,7 +902,7 @@ can say a company has filed nothing while sitting on its Active segment, and
 can tell a reader whose company wound a programme down exactly how many
 projects are waiting under Archived.
 
-An operator holds the same thirteen and more that no seat does, including the
+An operator holds the same fourteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
@@ -843,11 +915,23 @@ names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
 its own reasons.
 
+Both are one commit per item, parent first, so a subtree gesture can stop part
+of the way through — a step whose outcome is unknown, or the stream refusing an
+append. It then stops there rather than carrying on over it, and the answer
+says so: the item you named is removed (or restored), with
+`subtree_followed` and `subtree_total` counting how many of the items that go
+with it followed, and `subtree_stopped` saying why and what finishes it. What
+finishes it is the same call again — a task already where the gesture leaves it
+is nothing to do, so a second removal takes what the first did not reach, and a
+second restore brings back whatever is still in the trash with a parent that
+is already back. A restore of an item that is not in the trash and has nothing
+in the trash with it says there is nothing to restore.
+
 Neither is `purge`, which destroys every row on every node and has no inverse.
 That one is `crewlet work purge`, with a typed confirmation and a required
 reason, and it is deliberately not a tool at all.
 
-Three of those count as a **delivery**: create, update and comment. A turn
+Five of those count as a **delivery**: create, update, comment, merge and move. A turn
 woken by an assignment answers by moving the task, commenting on it, or filing
 the follow-up — and the delivery gate knows that, so such a turn is not
 corrected and looped for "having done nothing". Reading is not delivering,
@@ -1029,6 +1113,12 @@ or is full — the edge is stamped **permanently** one-sided and never retried.
 Both states are in the attention queue: `flag=one_sided` is the repair still
 pending, `flag=one_sided_final` the one a person has to resolve. The `flag`
 filter takes any number of values and matches a task carrying **any** of them.
+The duty logs under `component=tracker`: `tracker_one_sided_repaired` with how
+many edges a pass settled (`edges`), split into those it mirrored (`mirrored`)
+and those it stamped permanently one-sided (`final`);
+`tracker_one_sided_final` for each edge it stamped, with the reason; and
+`tracker_one_sided_repair_failed` (a warning) for an edge whose repair failed
+and is retried on the next pass.
 
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying

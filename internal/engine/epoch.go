@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -180,11 +181,33 @@ func embeddingWidth(c *Company) int {
 // refusal happened, which is the whole of what makes a degraded apply
 // diagnosable after the fact — it travels on ConfigRevisionApplied into the
 // audit event log, where it outlives the fleet view's one-minute bucket.
-func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
+//
+// activatedAt is the instant the fleet activated cfg — the activation
+// pointer's own ([coord.Activation.At]) — and it is what every clause that
+// must agree across nodes about WHEN this configuration took effect reads:
+// the chart apply stamps each project with it, so an older configuration
+// arriving late on another node cannot walk a newer one back. Zero is a
+// configuration no activation named, whose chart is not applied; see
+// [Engine.applyChart].
+func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
+	activatedAt time.Time) (configplane.ApplyStatus, []string, error) {
 	e.applying.Lock()
 	defer e.applying.Unlock()
 	if e.stopped {
 		return configplane.StatusError, nil, errStopped
+	}
+	// THE RULES THAT NEED BOTH TIERS, before anything is touched — the same
+	// check [New] makes of the company a node boots with. A boot was the
+	// only place it ran, so a node that booted unconfigured, or on the
+	// vendor backends, accepted a revision whose native backend would keep
+	// its log on an in-memory stream: now that an apply brings the native
+	// runtime up, that revision would start the unrecoverable state the
+	// rule exists to refuse.
+	if err := config.CheckTiers(e.boot, cfg); err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the revision was refused before anything changed; "+
+				"this node still serves the previous epoch")
+		return configplane.StatusError, nil, fmt.Errorf("engine: apply: %w", err)
 	}
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
@@ -202,6 +225,49 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	applied = append(applied, "company")
+	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
+	// a part of, before anything below mutates this node — because a
+	// catalogue that cannot be built is a revision that cannot be served:
+	// its code-enabled seats would plan around boxes nobody can mint. It was
+	// built only where a coordinator already existed, so on every other
+	// node a broken block was published rather than refused. Nil is a
+	// company that reaches no sandbox cell, which is not a failure.
+	sandboxManager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
+	if err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the revision's providers.sandbox could not be built; "+
+				"this node still serves the previous epoch")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
+	// THE NATIVE RUNTIME, on a node whose first company on a native backend
+	// this is — before the tools, which are registered only where its
+	// halves exist, and before the inbound edge, whose parsers include its
+	// own. See [Engine.startNativeFor], and the bug it fixes.
+	startedNative, err := e.startNativeFor(ctx, next)
+	if err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the native tracker and knowledge base could not be "+
+				"started for this node's first company on them; the previous "+
+				"epoch is still current")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
+	if startedNative {
+		applied = append(applied, "native")
+	}
+	// THE SANDBOX RUNTIME, on a node that has never run one and whose
+	// revision reaches a sandbox cell — before the tools for the reason the
+	// native runtime is: run_sandbox and an agent-mode executor are offered
+	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
+	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
+	if err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the code sandbox could not be started for this revision; "+
+				"the previous epoch is still current")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
+	if startedSandbox {
+		applied = append(applied, "sandbox_runtime")
+	}
 	// Equipped before it is published, for the same reason as at boot: a
 	// turn can start the instant the pointer moves, and a revision that
 	// silently dropped every builtin would look like a model that stopped
@@ -230,21 +296,17 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
 	// and the waiter hold this process's busy set and poll loop, so
 	// rebuilding them would forget which seats are mid-run and start a
-	// second loop against the same rows. A revision whose provider block is
-	// broken is refused here rather than published — the alternative serves
-	// a company whose sandbox-enabled seats plan around a box that will
-	// never be minted.
-	if e.sandboxCoordinator != nil {
-		manager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
-		if err != nil {
-			log.WarnContext(ctx, "config_apply_failed", "error", err,
-				"detail", "the revision's providers.sandbox could not be built; "+
-					"the previous epoch is still current")
-			return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-		}
-		if manager != nil {
-			e.sandboxCoordinator.SetManager(manager)
-		}
+	// second loop against the same rows. The swap carries the backends of a
+	// cell the revision dropped for the runs still on it, and a revision
+	// with no catalogue changes nothing — see [sandbox.Coordinator.SetManager].
+	//
+	// HERE rather than beside the build, and it cannot fail: every stage
+	// that can refuse a node already serving a company has run, so a
+	// manager swapped in is one whose epoch is about to be published, and a
+	// refusal never leaves a node launching through a catalogue its
+	// current epoch does not have.
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.SetManager(sandboxManager)
 		applied = append(applied, "sandbox")
 	}
 
@@ -296,7 +358,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// the same reason. Their projectors, index, stores and feeds are NOT:
 	// those follow a coordination family, which a company revision does
 	// not change — see [Engine.reconcileNative].
-	e.reconcileNative(ctx, next)
+	e.reconcileNative(ctx, next, activatedAt)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
 	// running. See [Engine.reconcileSkills].
@@ -306,6 +368,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	previous := e.Company()
 	e.installEpoch(next)
 	applied = append(applied, "epoch")
+
+	// THE SWEEP, rebuilt for a node's FIRST company — after the epoch is
+	// current, because it reads the conversation and inbox horizons off
+	// it, and only then: its job list is the one thing built once at boot
+	// that a first company changes. See [Engine.rebuildMaintenance].
+	if previous == nil || startedNative {
+		e.rebuildMaintenance(ctx)
+		applied = append(applied, "maintenance")
+	}
 
 	// AFTER the epoch is published, because a seat registry is a clone of
 	// the CURRENT company's surface: rebuilding from `next` before it is

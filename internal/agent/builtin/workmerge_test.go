@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -106,5 +107,23 @@ func TestNoMergeSequenceMeansNoMergeTool(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 	if _, held := reg.Lookup(builtin.MergeWorkItemTool); held {
 		t.Error("merge_work_item was registered with no merge sequence behind it")
+	}
+}
+
+// A MERGE THAT WOULD CARRY SUBTASKS INTO ANOTHER PROJECT IS REFUSED NAMING BOTH
+// WAYS OUT. The tracker refuses it; what this surface adds is the tool and the
+// argument each way out is reached by, which the tracker cannot know.
+func TestAMergeAcrossProjectsNamesTheMoveAndTheArgument(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.writeErr = fmt.Errorf("tracker: ENG-1's subtasks are in ENG: %w",
+		tracker.ErrReparentAcrossProjects)
+	got := callWork(t, workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, Merges: trk.merges,
+	}), builtin.MergeWorkItemTool, map[string]any{"item": "ENG-1", "into": "ENG-2"})
+	for _, want := range []string{"move_work_item", "`move_subtasks: false`"} {
+		if !got.Failed || !strings.Contains(got.Output, want) {
+			t.Errorf("the refusal does not name %s: %q", want, got.Output)
+		}
 	}
 }

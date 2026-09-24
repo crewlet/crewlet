@@ -14,12 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -33,62 +35,6 @@ type memorySandbox struct{}
 func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
-
-// declaration finds the ONE file under the dashboard tree whose source matches
-// `pattern`, and hands back its first capture.
-//
-// A GATE OVER A CONSTANT IS A GATE OVER THE CONSTANT. Reading it from a fixed
-// path makes every such gate a second thing that breaks when a screen moves —
-// and breaks LOUDLY but WRONGLY, reporting a drift between two lists neither of
-// which changed. Keyed on the declaration, a move and a rename are both
-// invisible, and the two failures that matter are the ones it names: nothing
-// declares it, which is a gate certifying nothing; and TWO files declare it,
-// which is two copies that can drift from each other as well as from the
-// engine.
-func declaration(t *testing.T, pattern string) string {
-	t.Helper()
-	re := regexp.MustCompile(pattern)
-	var found []string
-	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir(), !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx"):
-			return nil
-		case strings.Contains(d.Name(), ".test."):
-			return nil
-		}
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if m := re.FindStringSubmatch(string(source)); m != nil {
-			found = append(found, m[1])
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("the dashboard tree at %s could not be walked, so this gate "+
-			"certifies nothing: %v", dashboardTree, err)
-	}
-	if len(found) != 1 {
-		t.Fatalf("%d files under %s match %s, want exactly one — none is a "+
-			"gate certifying nothing, and two are two copies that can drift "+
-			"from each other as well as from the engine",
-			len(found), dashboardTree, pattern)
-	}
-	return found[0]
-}
-
-// dashboardTree is the room source this sweep reads. Relative, because the
-// package it certifies is the one that serves those rooms.
-//
-// THE SOURCE, not the build output. It pointed at `static/dashboard/js` — the
-// hand-written bundle the React rewrite deleted — so WalkDir failed, the skip
-// below fired, and both gates in this file certified nothing for the whole of
-// that rewrite while reporting a pass. That is the exact failure they exist to
-// catch, one level up.
-const dashboardTree = "../../../dashboard/src"
 
 // roomQueries scans the dashboard for every query kind a room asks for.
 //
@@ -107,8 +53,9 @@ func roomQueries(t *testing.T) map[string][]string {
 	// fit, and `useQuery(\n  "config_diff",` is the same call as the one that
 	// fits on a line. Without it the sweep reported a live reader as missing.
 	calls := regexp.MustCompile(`\b(?:useQuery|query)\(\s*"([a-z0-9_]+)"`)
+	tree := clientsource.Tree(t)
 	out := map[string][]string{}
-	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(tree, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() ||
 			(!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) ||
 			strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx") {
@@ -132,7 +79,7 @@ func roomQueries(t *testing.T) map[string][]string {
 		// from a pass, which is how this gate went quiet the last time the
 		// tree moved.
 		t.Fatalf("the dashboard source at %s could not be read, so this gate "+
-			"certifies nothing: %v", dashboardTree, err)
+			"certifies nothing: %v", tree, err)
 	}
 	if len(out) == 0 {
 		t.Fatal("the sweep found no query calls at all, so it certifies nothing")
@@ -396,10 +343,15 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // behind and a live one missing.
 func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	t.Parallel()
-	// FOUND RATHER THAN ADDRESSED — see [declaration]. This table has not
-	// moved, but a gate that names a path is one more thing a reorganisation
-	// breaks, and it breaks by reporting a drift that did not happen.
-	table := declaration(t, `(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
+	// FOUND RATHER THAN ADDRESSED — see [clientsource.Declaration]. This
+	// table has not moved, but a gate that names a path is one more thing a
+	// reorganisation breaks, and it breaks by reporting a drift that did not
+	// happen.
+	table, err := clientsource.Declaration(clientsource.Tree(t),
+		`(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The table is `key: { short: …, why: … }`, one per line.
 	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
 	phrased := map[string]bool{}
@@ -446,7 +398,11 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	// workspace, reporting a drift between two lists that had not changed.
 	// A gate over a constant is a gate over the constant, and the file it
 	// happens to sit in is not the subject.
-	block := declaration(t, `(?s)const GROUPS = \[(.*?)\] as const;`)
+	block, err := clientsource.Declaration(clientsource.Tree(t),
+		`(?s)const GROUPS = \[(.*?)\] as const;`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
 	offered := map[string]bool{}
 	for _, m := range entry.FindAllStringSubmatch(block, -1) {

@@ -104,14 +104,21 @@ func NewStore(opts Options) (*Store, error) {
 	return s, nil
 }
 
-// newTimeOrderedID mints an id that sorts by creation time. UUIDv7, for the
-// reason [tracker] gives, falling back to v4 rather than failing a write.
-func newTimeOrderedID() string {
-	if id, err := uuid.NewV7(); err == nil {
-		return id.String()
-	}
-	return uuid.NewString()
-}
+// newTimeOrderedID mints a fresh operation id, which sorts by creation time and
+// carries the instant it was minted.
+//
+// THROUGH [statelog.NewOpID] rather than a UUIDv7 minted here, because the
+// instant is what the state log reads to decide whether its ledger can vouch
+// for a retry of this operation — and the fallback this had, a v4 when a v7
+// could not be minted, is an id carrying no instant at all, which a node whose
+// ledger ever lost a row — to its sweep, or to a snapshot from a donor that
+// scrubbed it — answers `unknown` for ever.
+//
+// THE WALL CLOCK and not the store's own [Store.now], which is the clock the
+// AUTHORED instants are stamped from and which a test pins: the mint instant
+// is compared with the ledger's watermark, which a sweep and a join set off
+// the wall.
+func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 
 // publish forms one record and appends it, translating the framework's
 // refusals into this package's own vocabulary.
@@ -159,8 +166,15 @@ func refusal(err error, subject string) error {
 }
 
 // decide builds one record inside the snapshot's own transaction.
-func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
-	opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
+//
+// THE STAMP IS THE FRAMEWORK'S, and it goes on the envelope here because this
+// is the one builder every write path shares. It was never set: the writer and
+// the generation were fields every record carried empty, so the eviction gate
+// — which reads the writer on every applier before any kind rule — had nobody
+// to drop, and a node the fleet had evicted went on writing pages everybody
+// applied. The publisher now refuses a record that does not carry it.
+func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
+	scope ScopeSet, opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
 	if err := scope.Validate(); err != nil {
 		return statelog.Decision{}, err
@@ -172,8 +186,8 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,
 		Actor:      actor.Name(),
@@ -187,14 +201,7 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
-	return statelog.Decision{
-		Payload: encoded,
-		Envelope: statelog.Envelope{
-			V: record.V, Kind: string(subject.Kind),
-			Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
-			Op:      string(op), OpID: opID, Scope: scope.Resolve(subject),
-		},
-	}, nil
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // Validate refuses a scope a writer cannot mean.

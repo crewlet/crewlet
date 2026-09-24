@@ -2,12 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -47,28 +46,35 @@ type retentionWriter interface {
 	PutBackupPoint(ctx context.Context, p coord.BackupPoint) error
 }
 
-// NodeGate is the eviction half, which is a RECORD on the log rather than a
-// coordination write — so it goes through the same writer a seat's tools do,
-// and its outcome is the same three-valued answer every other write has.
+// NodeGate is the eviction half, which is a RECORD on every identity-claiming
+// log rather than a coordination write — one gesture, judged once, written to
+// each log, and answered per log with the same three-valued outcome every other
+// write has. See [engine.NodeGate].
 //
 // EXPORTED, unlike its neighbour, because the caller has to convert a typed
-// nil to a genuine one before handing it over: a nil *tracker.Writer inside a
+// nil to a genuine one before handing it over: a nil *engine.NodeGate inside a
 // non-nil interface passes this route's own check and panics on the first
 // press.
 type NodeGate interface {
-	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
-	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+	// Evict answers a [*statelog.EvictionRefusal], wrapped, for a node
+	// still holding a live presence lease — which this route reports as a
+	// refusal rather than a failure.
+	Evict(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
+
+	// Readmit answers a [*statelog.ReadmissionRefusal], wrapped, for a node
+	// below a trim floor it would be counted against — likewise a refusal.
+	Readmit(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
 }
 
 // TaskPurger is the purge half, and it is a SEPARATE seam rather than a third
 // method on [NodeGate].
 //
-// Every other write on that surface is the FLEET's — an eviction is a decision
-// about a machine, and the process's own writer is the right author. A purge
-// destroys a company's data, and the record has to carry the PERSON who asked
-// for it, so the identity is an argument rather than a property of the writer
-// this process happens to hold. Keeping it apart is also what lets this route
-// be exercised without a broker: the alternative signature hands back a
+// The gate is a decision about a MACHINE, written to every identity-claiming
+// log from one judgement; a purge destroys one task's rows on one log, and has
+// nothing to judge but the confirmation. Both records carry the PERSON who
+// asked, so the identity is an argument on each rather than a property of the
+// writer this process happens to hold. Keeping it apart is also what lets this
+// route be exercised without a broker: the alternative signature hands back a
 // concrete `*tracker.Writer`, which no test can supply without a publisher, a
 // store and a log.
 type TaskPurger interface {
@@ -99,7 +105,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	generation, err := a.generationOf(r.Context(), stream)
+	generation, err := a.generationOf(stream)
 	if err != nil {
 		// A BARE SEQUENCE NAMES A NUMBER SPACE. Publishing one at the
 		// wrong generation pins a position on a log that no longer
@@ -178,15 +184,12 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 // the register sources answered it confidently with some other log's number:
 // a mistyped stream name used to read back as a successful acknowledgement
 // that nothing would ever count.
-func (a *App) generationOf(ctx context.Context, stream string) (uint32, error) {
-	// The instant is the reanchor confirmation's business and not this
-	// route's; the generation beside it is this node's own answer for the
-	// stream, which is exactly what has to be stamped on the point.
-	_, generation, err := a.capacity.ReanchorStatus(ctx, stream)
-	if err != nil {
-		return 0, err
-	}
-	return generation, nil
+func (a *App) generationOf(stream string) (uint32, error) {
+	// FROM MEMORY, never through the reanchor's status read: that one reads
+	// the stream's creation instant LIVE from the broker, which this route
+	// has no use for — and a broker that did not answer would then have
+	// been reported as a stream name the operator mistyped.
+	return a.capacity.StreamGeneration(stream)
 }
 
 // mountRetention registers the write half of the retention surface.
@@ -276,17 +279,15 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// THE CALLER MAY BRING ITS OWN OPERATION ID, and this is the one
-	// route where that matters. A purge that answers `unknown` has no
-	// acknowledgement and no position — it may have landed and it may
-	// not — so the only correct response is to retry, and a retry with a
-	// FRESH id would append a second purge of a task the first one may
-	// already have destroyed. A fresh id per press is right for the
-	// eviction beside this (two operators evicting one node are two
-	// decisions worth recording); it is wrong here.
-	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))
-	if opID == "" {
-		opID = uuid.NewString()
+	// THE CALLER MAY BRING ITS OWN OPERATION ID. A purge that answers
+	// `unknown` has no acknowledgement and no position — it may have
+	// landed and it may not — so the only correct response is to retry,
+	// and a retry with a FRESH id would append a second purge of a task the
+	// first one may already have destroyed. The gate routes beside this
+	// take one for the same reason.
+	opID, ok := callerOpID(w, r, "purge-"+id)
+	if !ok {
+		return
 	}
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
 	if err != nil {
@@ -300,32 +301,104 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	// whose subject no longer exists to be inspected afterwards.
 	log.Info("task_purged", "task", id, "key", key, "project", project,
 		"operator", operator, "reason", reason, "outcome", result.Outcome)
-	writeJSON(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"task": id, "key": key, "project": project,
-		"outcome":  result.Outcome,
-		"position": result.Position,
-		"op_id":    result.OpID,
-	})
+		"outcome": result.Outcome,
+		"op_id":   result.OpID,
+	}
+	// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the
+	// gate routes' rule, for the gate routes' reason: a zero position reads
+	// as a record at the log's origin, and the purge this answers may never
+	// have reached the log at all.
+	if result.Outcome != statelog.OutcomeUnknown {
+		answer["position"] = result.Position
+	}
+	writeJSON(w, http.StatusOK, answer)
+}
+
+// callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
+// named name where it brought none.
+//
+// A retry is only a retry under the SAME id: a gesture that came back `unknown`
+// or partial is finished by sending the id it answered with, and one sent with
+// a fresh id is a second gesture.
+//
+// THE ID CARRIES THE INSTANT IT WAS MINTED, which is what the state log reads
+// to decide whether its ledger can vouch for the retry — so the one minted here
+// is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
+// answered with, instant and all.
+//
+// An id [statelog.CheckCallerOpID] refuses is answered `400 op_id_invalid` and
+// false is returned with the response already written; nothing is judged or
+// written.
+func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	opID := r.URL.Query().Get("op_id")
+	if opID == "" {
+		return statelog.NewOpID(time.Now(), name), true
+	}
+	if err := statelog.CheckCallerOpID(opID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "op_id_invalid", "detail": err.Error(),
+		})
+		return "", false
+	}
+	return opID, true
+}
+
+// gateVerb names a gate gesture in the fresh operation id it is minted under.
+func gateVerb(evict bool) string {
+	if evict {
+		return "evict"
+	}
+	return "readmit"
 }
 
 // gate answers the eviction and readmission routes.
 //
 // ONE HANDLER FOR BOTH, because they are one gesture with a sign: a
-// readmission is the INVERSE COMMIT rather than a delete, written by the same
-// writer onto the same subject, so two handlers would be two copies of one
-// refusal vocabulary.
+// readmission is the INVERSE COMMIT rather than a delete, written onto the same
+// subjects of the same logs, so two handlers would be two copies of one refusal
+// vocabulary.
+//
+// # One gesture, every identity-claiming log, and each log's own answer
+//
+// The engine judges the gesture once and then writes its record to every log
+// the trim counts nodes on — see [engine.NodeGate]. A refusal is a 409 with
+// nothing written anywhere: an eviction of a node still holding a live
+// presence lease (unless `force=true`), a readmission of one below a trim
+// floor it would be counted against, each carrying the numbers the refusal is
+// about, and every refusal carries its remedy as `actions` — what to do, in a
+// closed set ([statelog.GateAction]) each surface renders in its own words —
+// beside `hint`, the sentence saying why in none of them. Past the judgement
+// the answer is 200 and PER LOG ([GateAnswer], rendered by [RenderGate] and by
+// nothing else) — each with its own three-valued outcome, or the refusal that
+// stopped that log — and `complete` says whether every log now holds the
+// record. An incomplete answer is not a failure to report as one: the logs
+// that answered hold their record, and a log the gesture did not finish
+// carries `actions` and `hint` — `retry_same_op` where the same request sent
+// again with the `op_id` it answered with can finish it, something else where
+// it cannot.
+//
+// A dropped request does not stop a gesture half-way: once its first record is
+// about to be written the engine finishes it under its own budget
+// ([engine.GateBudget]), and the caller that minted the `op_id` it sent can ask
+// again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
-			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]string{"error": "no_tracker"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "no_state_log",
+				"detail": "this node runs no state log, so there is no log to " +
+					"write an eviction to — ask a node that runs the native " +
+					"tracker or knowledge base",
+			})
 			return
 		}
 		node := r.PathValue("node")
 		// THE CONFIRMATION ECHOES THE NODE ID, the same shape the
 		// destructive CLI gestures already use: an eviction stops a
-		// machine writing and a readmission lets it write again, and
-		// neither is a value to get from a shell history.
+		// machine's records applying and a readmission lets them apply
+		// again, and neither is a value to get from a shell history.
 		if node == "" || r.URL.Query().Get("confirm") != node {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": "confirm_required",
@@ -334,18 +407,43 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
-		operator, _ := auth.OperatorFrom(r.Context())
-		// A FRESH ID PER PRESS, unlike the chart apply's derived one:
-		// every node computes the chart's id from the revision so the
-		// losers collapse, but two operators evicting one node are two
-		// decisions and the ledger should record both.
-		opID := uuid.NewString()
-		var result tracker.WriteResult
+		operator, ok := auth.OperatorFrom(r.Context())
+		if !ok || operator == "" {
+			// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so
+			// this is the build with no operator identity on the
+			// context at all — and every log's record names who ran
+			// the gesture, which is what `retention status` prints
+			// beside an eviction.
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "operator_required",
+				"detail": "an eviction and a readmission are operator gestures " +
+					"and this request carries no operator identity",
+			})
+			return
+		}
+		opID, ok := callerOpID(w, r, gateVerb(evict)+"-"+node)
+		if !ok {
+			return
+		}
+		req := engine.GateRequest{
+			Node: node, OpID: opID, By: operator,
+			Force: evict && r.URL.Query().Get("force") == "true",
+		}
+		var result engine.GateResult
 		var err error
 		if evict {
-			result, err = a.nodes.EvictNode(r.Context(), opID, node)
+			result, err = a.nodes.Evict(r.Context(), req)
 		} else {
-			result, err = a.nodes.ReadmitNode(r.Context(), opID, node)
+			result, err = a.nodes.Readmit(r.Context(), req)
+		}
+		if refusal, ok := RenderGateRefusal(node, opID, err); ok {
+			// A REFUSAL IS AN ANSWER, NOT A FAULT: nothing was judged, or
+			// the judgement said no, and nothing was written anywhere. Its
+			// body is rendered in one place for the reason the 200 is; what
+			// is logged is this route's own.
+			logGateRefusal(operator, node, err)
+			writeJSON(w, refusal.Status, refusal.Body)
+			return
 		}
 		if err != nil {
 			log.Warn("api_retention_gate_failed", "node", node,
@@ -354,17 +452,11 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				map[string]string{"error": "gate_failed", "detail": err.Error()})
 			return
 		}
-		log.Info("retention_gate", "operator", operator, "node", node, "evict", evict)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"node": node, "evicted": evict,
-			// THE THREE-VALUED OUTCOME, whole. A gate the caller
-			// believes landed and which is only `pending` is the
-			// difference between a node that has stopped writing and
-			// one that is about to.
-			"outcome":  result.Outcome,
-			"position": result.Position,
-			"op_id":    result.OpID,
-		})
+		answer := RenderGate(evict, result)
+		log.Info("retention_gate", "operator", operator, "node", node,
+			"evict", evict, "force", req.Force, "op_id", answer.OpID,
+			"complete", answer.Complete)
+		writeJSON(w, http.StatusOK, answer)
 	}
 }
 
@@ -373,8 +465,9 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 // Declared here, by the consumer: a route that could also reach the seat host
 // or the config surface would eventually be given a reason to.
 type capacityRunner interface {
-	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
-	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
+	Reanchor(ctx context.Context, req engine.ReanchorRequest) (statelog.ReanchorPlan, error)
+	ReanchorStatus(ctx context.Context, stream string) (engine.ReanchorView, error)
+	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
 	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
@@ -403,7 +496,15 @@ func (a *App) mountCapacity(mux *http.ServeMux) {
 }
 
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
-// creation instant, which is the value the confirmation has to echo.
+// creation instant, which is the value the confirmation has to echo, and the
+// case a reanchor would answer now — `recreated` (followed from its first
+// surviving record), `restored` (followed from its end) or `abandoned`
+// (followed from this node's own checkpoint, a generation only an evicted peer
+// held made void), with the sequence the checkpoint would go to — or, with no
+// case, why there is nothing to re-anchor. A restored log holding records this
+// node's rows do not — written after the restore — also answers `discards`,
+// the newest of them, and `discarding`, why a reanchor refuses them without
+// `discard=true`.
 //
 // A SEPARATE READ, because the confirmation is meant to say "I looked at the
 // thing I am re-anchoring": a verb that printed the value and accepted it back
@@ -415,15 +516,33 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "stream_required"})
 		return
 	}
-	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
-	if err != nil {
+	view, err := a.capacity.ReanchorStatus(r.Context(), stream)
+	switch {
+	case errors.Is(err, engine.ErrUnknownStream):
 		writeJSON(w, http.StatusNotFound,
 			map[string]string{"error": "unknown_stream", "detail": err.Error()})
 		return
+	case err != nil:
+		// THE LOG EXISTS AND THE BROKER DID NOT ANSWER. The instant is read
+		// live, so this is the one failure here worth retrying — and
+		// reporting it as an unknown stream sent an operator looking for a
+		// typo in a name that was right.
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "stream_unreadable", "detail": err.Error()})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"stream": stream, "created_at": createdAt, "generation": generation,
-	})
+	answer := map[string]any{
+		"stream": stream, "created_at": view.CreatedAt, "generation": view.Generation,
+	}
+	if view.Case != "" {
+		answer["case"], answer["cursor"] = view.Case, view.Cursor
+	} else {
+		answer["nothing_to_reanchor"] = view.Refusal
+	}
+	if view.Discards != nil {
+		answer["discards"], answer["discarding"] = view.Discards, view.Discarding
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // serveReanchor answers POST /work/retention/reanchor.
@@ -440,9 +559,10 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
-	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
+	plan, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
-		Force: r.URL.Query().Get("force") == "true",
+		Force:   r.URL.Query().Get("force") == "true",
+		Discard: r.URL.Query().Get("discard") == "true",
 	})
 	if err != nil {
 		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
@@ -450,10 +570,20 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
 		return
 	}
-	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"stream": stream, "generation": gen,
-	})
+	log.Warn("reanchored", "operator", operator, "stream", stream,
+		"generation", plan.Generation, "case", string(plan.Case), "cursor", plan.Cursor,
+		"discarded", plan.Discarded != nil)
+	answer := map[string]any{
+		"stream": stream, "generation": plan.Generation, "case": plan.Case,
+		"cursor": plan.Cursor,
+	}
+	if plan.Discarded != nil {
+		// WHAT THE OPERATOR'S WORD DISCARDED, in the answer as well as the
+		// audit row: the newest record written after the restore that is
+		// now applied on no node.
+		answer["discarded"] = plan.Discarded
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // serveSetCapacity answers POST /work/retention/capacity.

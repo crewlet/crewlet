@@ -49,6 +49,7 @@ package turnctx
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -57,7 +58,8 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion.
+// decision downstream a suggestion. The one exception is [Turn.Calls], a log
+// that only grows and that nothing authorizes on.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -84,6 +86,21 @@ type Turn struct {
 	// sub-agent — which has no cross-run duplicate to collapse.
 	WorkKey string
 
+	// WorkSince is when that unit of work BEGAN: the earliest instant at
+	// which any trigger event the key is derived from was created. Zero
+	// exactly when WorkKey is empty.
+	//
+	// It travels with the key because it is half of the same identity. An
+	// idempotent write derived from the key carries this instant as its
+	// mint time, and the state log answers `unknown` rather than deciding
+	// again an operation minted before its node's operation ledger may
+	// have lost rows — to the ledger's own sweep, or to a snapshot adopted
+	// from a donor that scrubbed it — so a
+	// re-run must reproduce the instant exactly, as it reproduces
+	// the key, and neither may move with the run. It is derived from the
+	// SAME events the key is, for that reason (inbox.WorkSinceFor).
+	WorkSince time.Time
+
 	// Seat is who is acting. THE authorization fact: a tool that speaks
 	// for a seat — asking a colleague, marking an onboarding step, writing
 	// a diary entry — reads it from here and never from its arguments,
@@ -96,8 +113,9 @@ type Turn struct {
 	Org *org.Organization
 
 	// Depth is the delegation depth this turn inherited, and Chain is who
-	// it came through. Both travel so a sub-agent or an A2A ask can refuse
-	// past the cap rather than discovering the loop at runtime.
+	// it came through. Both travel so an A2A ask can refuse past the cap
+	// rather than discovering the loop at runtime. A delegated worker needs
+	// neither: it is a leaf that contacts nobody (see agent/subagent).
 	Depth int
 	Chain []string
 
@@ -142,6 +160,37 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+
+	// Calls is what this run has called so far, which a derived operation
+	// id reads its repeat count from — see [CallLog].
+	//
+	// THE ONE PART OF A TURN THAT CHANGES, and only by growing: the tool
+	// surface appends each call it made, and nothing can rewrite or drop an
+	// entry, so no authorization decision reads it and nothing a model says
+	// reaches it but the calls it actually made.
+	Calls *CallLog
+}
+
+// CallLog is this run's call log, or nil outside a turn — see [Turn.Calls].
+func (t *Turn) CallLog() *CallLog {
+	if t == nil {
+		return nil
+	}
+	return t.Calls
+}
+
+// WithCalls is this turn with calls as its log — a delegated worker's view of
+// the run, on a fork of the run's own log ([CallLog.Fork]).
+//
+// A DERIVED TURN, never this one changed: a worker's calls must not reach the
+// parent's log until its wave is done.
+func (t *Turn) WithCalls(calls *CallLog) *Turn {
+	if t == nil {
+		return nil
+	}
+	derived := *t
+	derived.Calls = calls
+	return &derived
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.
@@ -199,33 +248,4 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 		return nil, ErrNoSeat
 	}
 	return t.Seat, nil
-}
-
-// ForSubagent derives the context an ephemeral sub-agent runs under.
-//
-// It KEEPS the org (a sub-agent must see the same company its parent does) and
-// EXTENDS the delegation chain, refusing past the cap. The seat becomes the
-// child's own: a sub-agent acting as its parent would make the delegation cap
-// unenforceable, because nothing downstream could tell the two apart.
-func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
-	if t == nil {
-		return nil, ErrNoSeat
-	}
-	depth := t.Depth + 1
-	if limit > 0 && depth > limit {
-		return nil, fmt.Errorf("turnctx: delegation depth %d exceeds the limit of %d "+
-			"(chain: %v)", depth, limit, t.Chain)
-	}
-	// Copied, not appended in place: append can share a backing array, and
-	// two sub-agents derived from one parent would then write over each
-	// other's chain.
-	chain := make([]string, len(t.Chain), len(t.Chain)+1)
-	copy(chain, t.Chain)
-	if h := t.Handle(); h != "" {
-		chain = append(chain, h)
-	}
-	return &Turn{
-		RunID: t.RunID, WorkKey: t.WorkKey,
-		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
-	}, nil
 }

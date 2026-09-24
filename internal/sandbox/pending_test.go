@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -56,6 +57,37 @@ func TestAPreSplitRunStillAnswersForItsUnitOfWork(t *testing.T) {
 	} {
 		if got := tc.run.UnitOfWork(); got != tc.want {
 			t.Errorf("%s: UnitOfWork = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A ROW AN OLDER BUILD PARKED STILL DERIVES ITS IDS FROM A REAL INSTANT.
+//
+// Nothing rewrites a parked row, so one parked before `work_since` existed has
+// a unit of work and no instant — and the zero instant reads as older than
+// every loss the operation ledger has recorded, so on any node whose ledger
+// had swept once every write the resumed turn made answered `unknown`. Such a
+// row answers a fixed instant off itself instead: its CreatedAt, the same on
+// every resume.
+func TestAParkedRunAnswersWhenItsWorkBegan(t *testing.T) {
+	t.Parallel()
+	key := workkey.Derive([]string{"evt-a"})
+	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	launched := began.Add(10 * time.Minute)
+	for name, tc := range map[string]struct {
+		run  sandbox.PendingRun
+		want time.Time
+	}{
+		"a stamped row": {sandbox.PendingRun{TurnID: uuid.NewString(), WorkKey: key,
+			WorkSince: began, CreatedAt: launched}, began},
+		"an older build's keyed row": {sandbox.PendingRun{TurnID: uuid.NewString(),
+			WorkKey: key, CreatedAt: launched}, launched},
+		"a pre-split row": {sandbox.PendingRun{TurnID: key, CreatedAt: launched}, launched},
+		"a row with no unit of work": {sandbox.PendingRun{TurnID: uuid.NewString(),
+			CreatedAt: launched}, time.Time{}},
+	} {
+		if got := tc.run.WorkBegan(); !got.Equal(tc.want) {
+			t.Errorf("%s: WorkBegan = %s, want %s", name, got, tc.want)
 		}
 	}
 }

@@ -57,7 +57,7 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 	// caller choose part of the address the engine's OWN credential is
 	// sent to.
 	if !sandbox.ValidSignal(signal) {
-		http.Error(w, "unknown signal", http.StatusNotFound)
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoRoute)
 		return
 	}
 	// VERIFIED BEFORE THE BODY IS READ, so an unauthenticated caller
@@ -68,7 +68,7 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 		// facts, and telling the caller which one it was tells an
 		// attacker the same. The exporter's only move is identical for
 		// all three.
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
 

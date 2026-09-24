@@ -422,9 +422,11 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same thirteen tools a seat holds, and its writes are attributed to
-the token's own name rather than to a seat — so an audit can tell your edit
-from an agent's. See
+It gets the same tracker and knowledge-base tools a seat holds — fourteen over
+the tracker and five over the pages — and ten more that no seat is given: the
+saved views, the catalogue write, a person's own queue and inbox, and the
+trash. Its writes are attributed to the token's own name rather than to a
+seat — so an audit can tell your edit from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 The same picture is available over the API:
@@ -444,7 +446,11 @@ dashboard prompts for the token on first load. See
 [Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
-with the API still serving — you can then bootstrap live without restarting:
+with the API still serving — you can then bootstrap live without restarting.
+The first revision brings up everything the company needs, the engine's own
+tracker and knowledge base included, with their projects and spaces, and the
+[code sandbox](../concepts/code-sandbox.md) when it configures
+`providers.sandbox`:
 
 ```bash
 curl -X PUT http://localhost:8000/config \

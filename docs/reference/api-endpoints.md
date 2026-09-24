@@ -55,6 +55,25 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 
 ---
 
+## Every refusal carries a code
+
+Every answer the API writes other than a success is JSON with an `error` code:
+the auth guard's `401 invalid_token`, each route's own refusals, and a request
+nothing on the node serves — `404 no_route` for a path (one this node's build
+does not have, or one its configuration leaves unmounted, such as
+`POST /work/{id}/purge` on a company with no native tracker) and
+`405 method_not_allowed`, with an `Allow` header, for a served path under
+another method. Both of those carry a `detail` naming the method and path.
+
+The CLI and the dashboard rely on it. A non-2xx answer with no code was written
+by something **in front of** the node — most often a reverse proxy's read
+timeout — and says nothing about what the node did, so a write that meets one
+is reported as *unknown*, with the operation id to finish it under, rather than
+as refused. An answer with a code is the node's own, and a refusal from the
+node means nothing was done.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -81,15 +100,15 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node, so the trim can pass a floor it is pinning |
-| `POST` | `/work/retention/readmit/{node}` | Lift it — the inverse commit rather than a delete |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
-| `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
-| `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker, where it answers `404 no_route` like any path the node does not serve |
+| `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
+| `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — the maintained `open`/`done`/`closed` columns, never an aggregate per poll — its `last_change` (when the project's work last changed and who changed it, ABSENT for a project nothing has been filed into), its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose and `?unit=` to the projects one unit owns — **named by the unit's `id` or by its name, in any case**, since a stored unit carries whichever was current when the row was written. `?archived=` SELECTS a set rather than widening one — `false` (the default) for the live projects, `only` for the retired ones alone, `true` for both — so "what did we retire" is a query rather than a caller's own filter over a wider answer. `?sort=` orders the whole selected set before the page is taken: one of `key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each optionally with a leading `-` for descending, defaulting to `key`, with the key breaking every tie. An `archived` or `sort` value that is neither is a **400** naming the parameter and what it accepts. `?limit=` caps at 200, which is also the default. The answer carries a `census` — `{active, archived}`, the same question under the same `q` and `unit` MINUS its archival term — so a caller that selected one set can still tell an empty set from an empty company; `total` is the census of the mode that was asked for. A set read, so it carries `complete` and its `incomplete` beside the read level |
@@ -101,7 +120,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
-| `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
+| `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds, absent on a container no stamped apply has written), so a configuration activated earlier never overwrites them |
 | `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
@@ -503,7 +522,8 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
+- `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
@@ -641,6 +661,12 @@ document, and to the rules its question needs:
   admission rule is accepted, and each node logs `org_admission_warning` when it
   applies it. A revert to a revision sealed under a key this node does not hold
   answers `409 unreadable_revision`.
+- **Every one of them** is also judged against the answering node's own Tier A,
+  with the rule the apply runs: a document this deployment cannot run — the
+  engine's own tracker or knowledge base on an embedded stream that keeps its
+  streams in memory — answers `400 validation_error` naming
+  `stream.store_dir`, rather than being activated for every node to refuse a
+  moment later and leave the fleet on its old epoch.
 
 #### Fields a newer build wrote survive every write
 
@@ -1177,7 +1203,8 @@ channel reaches. The generic form `GET /query/{what}?a=b` reaches the same
 answers by name and is what the socket's own frames map onto, so the two can
 never drift. A question whose source this node lacks — an event log, a
 schedule ledger — is left *unregistered* rather than answered empty, so its
-route replies `404` with a JSON error code rather than a bare mux miss.
+route replies `404` with `unknown_query`, which tells it apart from the
+`no_route` a path nothing serves answers.
 
 ### An event on the wire
 
@@ -1980,7 +2007,7 @@ Point any MCP client at it:
 
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
-`merge_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
@@ -1995,6 +2022,33 @@ on any read above, so an assistant that files an item here and redraws the
 board over `GET /work/items` is served an answer that includes it rather than
 whatever this node happened to hold. The tools' own reads need none of it —
 they read `linearizable` — but the answer travels to a client that does not.
+
+A write's answer here also carries **`op_id`**: the operation that call *was*.
+A seat's writes derive their operation ids from its turn, so a seat repeating a
+call is the same operation; a call here has no turn, so each one is minted an
+operation of its own and told it. To finish a write that came back `unknown`,
+or a gesture that stopped part of the way through, send the call again with
+exactly the same arguments and that `op_id` — every write it makes is then the
+same operation again, a created item or a new comment or saved view included,
+answered from the ledger where it landed and finished where it did not. A call
+without one is a new operation: repeated, a create files a second item. The
+argument is offered by `create_work_item`, `update_work_item`,
+`comment_on_work_item`, `merge_work_item`, `move_work_item`, `remove_work_item`,
+`restore_work_item`, `set_priorities`, `set_pins`, `mark_inbox` and
+`save_work_view`, and held to the rule the purge and gate routes hold theirs
+to: an id this engine minted, at most 128 bytes of visible ASCII — anything
+else is refused naming `op_id`. An `op_id` belongs to **the one call it was
+answered for**: the id names that call's tool and carries a digest of its
+arguments, so brought back with the same tool and exactly the same arguments it
+is that operation again, and with any other argument — another item, another
+project, another title, another blocker — or with another tool, it is refused
+naming `op_id` before anything is written. Nothing is ever made twice under
+one, and nothing is half-made: a looser rule would answer the steps the two
+calls share from the first call and write the ones they do not. To make a
+different write, leave `op_id` out. One case is refused later, by the ledger,
+and says so: an operation whose step now meets another object — a move whose
+item somebody else moved in between, so the key it aliases is another — is
+refused `op_reused`, and the answer says to leave `op_id` out.
 
 The one field that differs is **who the call acts as**. There is no turn and no
 seat here, so this surface supplies its own identity, and every tool resolves
@@ -2200,8 +2254,10 @@ is three per-node facts attributed to a fleet.
       "last_seq": 918280001,
       "bytes": 67108864,
       "max_bytes": 4294967296,
-      "headroom_fraction": 0.984,
+      "reserve_bytes": 268435456,
+      "headroom_fraction": 0.983,
       "trim_floor": 918100000,
+      "trim_to": 0,
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
@@ -2215,6 +2271,45 @@ is three per-node facts attributed to a fleet.
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
 }
 ```
+
+`trim_floor` and `trim_to` are two different numbers, and a blocked domain is
+where they part. `trim_floor` is the floor the fleet has published: everything
+below it may already have been deleted, it is written before the delete it
+licenses, and it never moves down within a generation — so a blocked domain
+keeps the floor its last advance reached. `trim_to` is what the last tick
+itself concluded: zero while blocked, and below the floor whenever the lowest
+counted node is. The first is what a node must hold to replay; the second says
+whether the trim is moving. Both, with `terms`, `blocked_by` and
+`blocked_since`, come from the row the trim published at the domain's OWN
+`generation` only: just after a reanchor that row is about the stream the
+domain left. **`trim_floor_state`** says which it is — `published` (the floor,
+the conclusion, the terms and the blocking term are that tick's),
+`none_at_generation` (the trim has concluded nothing about this generation yet:
+a fresh fleet before its first tick, or any fleet just after a reanchor, until
+the trim's first tick on the adopted stream) or `unreadable` (the floor
+register could not be read). Only `published` makes `trim_floor` and `trim_to`
+a number worth reading; `terms` is always a list, **empty** rather than null
+where nothing is concluded. See [Retention](../guides/retention.md#the-trim-floor).
+
+**`not_ready`** is present when the answering node refuses every read of the
+domain right now — the same refusal its readiness probe reads — with `code`
+(`wrong_stream`, `stalled`, `below_floor`, `behind`, `floor_unknown`,
+`evicted`, or `broker_unreachable` where its health could not be read),
+`causes` naming each identity finding behind a `wrong_stream` (`recreated`,
+`ahead_of_log`, `log_diverged`, `generation_passed`) and `detail`, the sentence
+the refusal carries everywhere else. **`writes_refused`** is present while the
+node serves the domain's reads and refuses its writes: `code` `log_truncated`,
+with `detail` naming the peer whose rows hold records the log lost. Both are
+the answering node's own facts, like the replica block.
+
+Each node's per-domain row carries **`generation_state`** — `current`, `left`
+(a generation the log has since left), `ahead` (one above the answering node's)
+or `unknown` (a domain the answering node does not run) — and `lag` only where
+it is `current`, because a sequence from another generation is a number in
+another space and the difference is not a distance. It also carries the node's
+own **`log_diverged`**, and **`stream_created_at`** and
+**`checkpoint_stored_at`** — the stream its rows are keyed to and the record its
+checkpoint stands on — where the node published them.
 
 A term's `state` is one of four, and `seq` is an answer in exactly one of them:
 `ok` carries the sequence the term permits, `unknown` is a term that could not
@@ -2230,9 +2325,27 @@ fleet has no nodes" cannot happen, and "coordination could not be listed"
 happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
+**`evictions_unreadable`** is `true` on the tracker's or the pages log's row
+when the answering node could not read that log's evictions as it assembled
+the report — a failed store read, or its replicated estate closed for a
+snapshot adoption's rename or a shutdown — and absent otherwise. It is the
+same kind of honesty for the node block's `evicted`: an unread log contributes
+no tombstone, so every node reads as **not** evicted there and stays counted
+(the conservative side, which is the trim's own), and "not evicted" is then not
+an answer. Read it before concluding a node was readmitted; both `crewlet
+retention status` and the Fleet screen say so above the node block, and the
+Fleet screen keeps an eviction it just made on the row until a report whose
+evictions were read.
+
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
-the one alarm an operator cannot ignore fires on.
+the one alarm an operator cannot ignore fires on. It is a fraction of the
+ceiling **ordinary writes** are held to: `max_bytes` less `reserve_bytes`,
+which on the tracker and pages logs is the top sixteenth kept for the records
+that install or lift a gate, so that an eviction still lands on a log full for
+everything else ([the gate reserve](../guides/retention.md#the-gate-reserve)).
+`reserve_bytes` is absent on a log that keeps none — the vector changelog —
+where the headroom is of the whole ceiling.
 
 `crewlet retention status` renders exactly these bytes.
 
@@ -2245,19 +2358,142 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
-`confirm` echoes the node id, and a mismatch is `400`. Both gate routes answer
-with the write's **three-valued outcome** — `applied`, `pending` or `unknown` —
-its position and its operation id: a gate the caller believes has landed and
-which is only `pending` is the difference between a node that has stopped
-writing and one that is about to.
+`confirm` echoes the node id, and a mismatch is `400`. A node id no node could
+run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
+id becomes a subject token on every log — is `400 invalid_gate`, with nothing
+judged or written. A request carrying no operator identity is
+`403 operator_required`, because every log's record names the operator who made
+the gesture and `crewlet retention status` prints it beside the eviction.
 
-A node whose company runs no native tracker has no eviction gate, and both gate
-routes answer `503 no_tracker` rather than `404`. The routes exist on this
-build, and telling an operator they do not sends them looking for a version
-mismatch that is not there.
+**The gesture is judged once, before any log is written**, and then its record
+goes to each identity-claiming log in turn. The trim counts nodes per log, so a
+record on one log lifts that log's pin and no other. A `200` answers **per
+log**:
+
+```json
+{
+  "node": "node-4",
+  "evicted": true,
+  "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4",
+  "complete": false,
+  "domains": [
+    {"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.tracker:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 918280002}},
+    {"domain": "pages", "stream": "CREWLET_PAGES_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.pages:node-4",
+     "outcome": "unknown",
+     "actions": ["retry_same_op"],
+     "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"}
+  ]
+}
+```
+
+Each entry is one log's own answer. `outcome` is the write's
+[three-valued outcome](../guides/replication.md#a-write-has-three-outcomes) —
+`applied`, `pending` or `unknown` — with the `position` the record holds, absent
+for `unknown`, which has none: a gate the caller believes has landed and which is only
+`pending` is the difference between a node that has stopped writing and one
+that is about to. An entry with `error` in place of an `outcome` was **not
+written**, and `reason` names why in the vocabulary every write refusal uses
+(`log_full`, `evicted`, …). A log that answered holds its record whatever the
+other did.
+
+An `unknown` entry may also carry **`"unvouched": true`**: this node's
+operation ledger may have lost the row the operation needs — it was minted
+before the node adopted a peer's snapshot, or before the ledger's own sweep
+reached it — so the node published nothing and cannot tell whether the record
+landed, and the same request through it answers the same way every time. Such
+an entry offers `other_node` rather than `retry_same_op`: send the same request,
+with the same `op_id`, through a node whose ledger reaches back that far.
+
+A log the gesture did not finish also carries **`actions`** — what to do, in
+order — and **`hint`**, the sentence saying why. Both are absent on a log that
+holds its record. The actions are a closed set a client switches on, and
+`hint` names no client's controls: `crewlet retention evict` renders an action
+as its own flags and the dashboard's evict dialog as its own buttons, so a
+sentence spelling `-force` is never shown beside a screen that has no such
+flag. Every refusal answer above carries `actions` beside its `hint` too,
+and the `op_id` the request was sent under — so `retry_same_op` on a refusal
+(`503 eviction_unjudged`) is the same request with that `op_id`, read off the
+answer like any other. Nothing was written under it, so sending it again with
+a fresh one is equally safe.
+
+| Action | What the operator does | Where the gate answers it |
+|---|---|---|
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`); `503 eviction_unjudged` |
+| `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
+| `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | `evicted` (this node is evicted itself), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred` and `below_floor` |
+| `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
+| `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
+| `wait` | Wait for what `hint` names to clear on its own, then run it again | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up) |
+| `restore` | Restore the store and the stream from one backup | `skew` |
+
+A log with a `hint` and **no** `actions` is one no gesture clears — a record
+larger than the broker's `max_payload`, or a refusal reason this build has no
+word for — and the hint says what does. Only `retry_same_op` makes the same
+request, sent again **now**, the remedy. But four actions — `retry_same_op`,
+`other_node`, `reanchor` and `set_capacity` — keep the gesture's own `op_id` as
+how it is finished once the operator has acted: a gesture sent afresh after
+raising a ceiling is a second one, which writes every log that already holds
+the first one's record again, re-dates that eviction, restarts its fence
+window and turns the first `op_id` into `superseded`. Only `new_gesture` ends
+the operation for good.
+
+`complete` is true only when every log answered `applied` or `pending`. When it
+is false and a log offers `retry_same_op`, send **the same request again with `op_id`**
+set to the operation id the answer carried. Each log's record is published
+under an id derived from it — the entry's own `op_id`, which carries the
+gesture's sign, the log and the node — and each log's snapshot reads that id's
+ledger row before anything is decided: a log whose record is already the gate
+in force answers at the position it has and is not written twice, and only a
+missing log is written — through a node whose applier had not reached the
+first record yet as well, and however long after the first request the retry
+comes, since the broker's two-minute duplicate window plays no part in it.
+Without `op_id` the route mints a fresh one, which is a second gesture rather
+than this one finished; an id carried from an eviction to the readmission after
+it is a different operation on every log, and one carried to another node is
+that node's own operation.
+
+An `op_id` is held to one rule, here and on the purge route, and anything else
+is `400 op_id_invalid` with nothing judged or written: an id **in the engine's
+grammar** — a UUIDv7 whose leading 48 bits are the Unix millisecond it was
+minted at, optionally followed by `.` and a name — of **at most 128 bytes** of
+**visible ASCII with no space**. A client may mint its own, and both of the
+engine's own clients do, before the first request: `crewlet retention evict`
+on the workstation's clock and the dashboard's evict dialog on the browser's.
+The mint instant is read by the state log to decide whether its ledger can
+vouch for a retry, so a client clock far ahead of the fleet's is the one case
+this trusts a caller with — the same one it trusts the engine's own nodes with.
+An id with no instant carries nothing to read, so no node could tell whether it
+already ran. The rest of the rule is the broker's: only the id's leading uuid
+is minted and the rest is free text, while the whole id travels as the
+broker's message-id header, which trims its ends and turns a line break into a
+space — so such an id would be deduplicated at the broker as a different id
+from the one every log's ledger answers for. It is refused rather than
+cleaned, because a retry has to send back the id it holds, byte for byte; every
+id an answer carries already fits.
+
+**The gesture does not stop when its caller does.** The judgement runs under
+the request, so a request abandoned before it wrote nothing; once the first
+record is about to be written the node finishes the gesture under its own
+one-minute budget, so a dropped connection or a client timeout never leaves a
+node evicted on one log and counted on the other. A caller that sends its own
+`op_id` — `crewlet retention evict` and the dashboard both do — can ask again
+with it and read every log's answer; one that let the route mint it has lost
+the id with the answer that never arrived.
+
+Every node running the state log serves both routes, whichever backends the
+company uses: a company on an external tracker still runs both logs. A node
+running no state log has no log to write a gate to and answers
+`503 no_state_log` rather than `404` — the routes exist on this build, and
+telling an operator they do not sends them looking for a version mismatch that
+is not there.
 
 ### The capacity window
 
@@ -2287,15 +2523,23 @@ would drift.
 
 | Route | What it does |
 |---|---|
-| `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
-| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+| `GET /work/retention/reanchor?stream=NAME` | The LIVE stream's own `created_at`, read from the broker on the call — the instant a `wrong_stream` refusal names — the generation that stream's domain stands at, and what a reanchor run now would do: `case` — `recreated` (another stream than the rows are keyed to, followed from its first surviving record), `restored` (the same stream brought back from an older copy, ending below the checkpoint or holding another record at it since, followed from its end — one below the node's own generation record where an earlier attempt already appended it) or `abandoned` (the same stream, continuing in a generation only an evicted peer held, followed from this node's own checkpoint with that generation's records void) — with `cursor`, the sequence the new checkpoint would sit at. With nothing to re-anchor there is no `case`, and `nothing_to_reanchor` says why. A restored log holding records this node's rows do not hold, written after the restore, also answers `discards` (the newest of them: `seq`, `kind`, `subject`, `writer`, `op_id`, `stored_at`, and `ledger_lost_before` when its operation is older than the instant this node's operation ledger may have lost rows from — the rows may hold it after all) and `discarding` (why a reanchor refuses without `discard=true`). `404 unknown_stream` for a stream this node does not run; `503 stream_unreadable` when the broker did not answer the read, which is worth retrying. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true][&discard=true]` | Runs that ONE domain's generation transition, answering with the new `generation`, the `case` it answered, the `cursor` its checkpoint went to (for a restored log, one below the generation record the transition appended; once that record is appended the transition finishes on its own time, so a client that disconnects does not stop it halfway) and, when it discarded records written after a restore, the newest as `discarded`. No other domain's checkpoint moves, and the domain's applier resumes with no restart. |
 
 `confirm` is the value the `GET` returns, supplied by the caller: the
 confirmation means *I looked at the thing I am re-anchoring*, so the two are
 deliberately separate round trips rather than one route that reads and acts.
-`force=true` is refused-by-default's escape, for a fleet whose hydrated peer
-cannot be reached — adopting that peer's snapshot is strictly the better
-recovery, and the refusal names it.
+It is compared as an instant at microsecond precision, so the RFC 3339 value the
+`GET` answers is accepted as it came. `force=true` overrides the rule that only
+the most caught-up node may re-anchor, for a fleet whose register cannot say;
+it never overrides a peer that has already re-anchored the stream, whose rows
+are the fleet's history in the new generation and which the refusal names.
+`discard=true` accepts that a restored log's records this node's rows do not
+hold — written after the restore, and named by the `GET` as `discards` — are
+applied on no node; without it that reanchor is refused `409
+reanchor_refused`, and with it the answer carries the newest one as
+`discarded`. The two flags are separate because neither answers the other's
+question.
 
 ## Agent Memory
 

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -386,9 +387,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 				// is still a credential, and a log is a place it would
 				// outlive the request.
 				"remote", remoteHost(r))
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)

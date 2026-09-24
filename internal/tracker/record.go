@@ -414,10 +414,16 @@ type Task struct {
 	// It rides the DOCUMENT rather than a column of its own: nothing
 	// selects on it, and what the duty selects on is `merging`, which
 	// already has its partial index.
-	Merging       bool       `json:"merging,omitempty"`
-	MergeReparent bool       `json:"merge_reparent,omitempty"`
-	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
-	ArchivedBy    string     `json:"archived_by,omitempty"`
+	Merging       bool `json:"merging,omitempty"`
+	MergeReparent bool `json:"merge_reparent,omitempty"`
+
+	// Moving is true on a ROOT whose cross-project move has carried it
+	// and has not yet carried every task beneath it. See
+	// [TaskPatch.Moving].
+	Moving bool `json:"moving,omitempty"`
+
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy string     `json:"archived_by,omitempty"`
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
@@ -661,6 +667,23 @@ type TaskPatch struct {
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
 
+	// Moving is the cross-project move's own marker, and it does for that
+	// walk what Merging does for a merge's: it is set by the SAME append
+	// that moves the root, cleared by the move's last one, and it is what
+	// the duty selects on to finish a walk whose holder died.
+	//
+	// ON THE ROOT'S OWN MOVE rather than an append of its own before it,
+	// because the root landing in the target is the moment the subtree is
+	// split: a separate mark could land without the move behind it, or the
+	// move without the mark, and either is a state no reader can tell
+	// from the other.
+	//
+	// A NEW FIELD ON A SHARED RECORD, so a record carrying it is written at
+	// [moveMarkVersion] — see [recordVersionOf]. Merging is a version-1
+	// field every build reads; this one the build before it would drop,
+	// and that node would then hold a row the rest of the fleet does not.
+	Moving *bool `json:"moving,omitempty"`
+
 	// Reassignments is the hand-off counter this write leaves behind,
 	// decided by the WRITER inside its own snapshot — see
 	// [Writer.chargeHandOff]. Carried as a value rather than derived at
@@ -703,6 +726,16 @@ type TaskPatch struct {
 	// re-deriving a set from whatever it had applied by then.
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
+
+	// Promote is the PARENT's half of a checklist item's promotion — the
+	// same kind of gesture again, for the same reason: [TaskPatch.Checklists]
+	// is carried whole, and a promotion that composed it from the parent it
+	// read before minting the subtask's key discarded every checklist edit
+	// that landed between that read and the mark. Resolved by
+	// [settlePromote] inside the decide snapshot.
+	//
+	// NEVER ON THE WIRE, like Watch.
+	Promote *PromoteIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
@@ -763,6 +796,16 @@ type WatchIntent struct {
 	// because sixty-four other people are watching — a write refused for
 	// a reason that has nothing to do with what the writer asked for.
 	Auto bool
+}
+
+// PromoteIntent marks one checklist item as having become one task.
+//
+// AN ITEM AND A TASK, never a checklist: what a promotion knows is which line
+// became which subtask, and the lists as a whole belong to whatever the parent
+// holds when the mark is decided.
+type PromoteIntent struct {
+	Item    string
+	Subtask string
 }
 
 // RelationIntent is a gesture over a task's relation set, resolved inside the
@@ -1072,10 +1115,14 @@ type Project struct {
 	// column re-settles on the current key at the next epoch apply — which
 	// is why a company that adds an id holds the older spelling only in
 	// TASK rows, and only those need reading through [unitSpellings].
-	Name       string `json:"name"`
-	Purpose    string `json:"purpose,omitempty"`
-	Unit       string `json:"unit,omitempty"`
-	ChartEpoch int64  `json:"chart_epoch,omitempty"`
+	Name    string `json:"name"`
+	Purpose string `json:"purpose,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+
+	// ChartEpoch is the activation the chart-owned fields were last
+	// written from ([configplane.ActivationStamp]) — the guard that stops an older chart
+	// walking a newer one back.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`
@@ -1302,22 +1349,15 @@ const MaxCommitBytes = 1_279_262
 
 // KeyMint is a counter value a record took, carried on the record that uses it.
 //
-// # Why the RANGE rides the record and is not recomputed
-//
-// A cross-project move re-keys a whole subtree from one range mint, and the
-// base is NOT recoverable afterwards: by the time a duty completes an
-// abandoned walk, other creates have advanced the counter, so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node. The ordering by (depth, id) fixes the ORDER; only the base on
-// the record fixes the ORIGIN — which is what makes the walk's completion a
-// pure function of the record rather than of when it runs.
+// ONE NUMBER, even on the root of a moving subtree. The root's record carried
+// the whole range's base and length once, for a duty that would complete an
+// abandoned walk by re-deriving every descendant's number from them; no such
+// duty was ever written, nothing read the two fields, and the re-derivation
+// could not have worked — the subtree's membership moves while a walk is
+// stopped. A move that stopped is finished by its re-run, on a fresh range
+// ([Writer.MoveTaskToProject]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.
 	N uint64 `json:"n"`
-
-	// Base and Length describe the whole range, on the ROOT record of a
-	// moving subtree alone. Zero on every other mint.
-	Base   uint64 `json:"base,omitempty"`
-	Length int    `json:"length,omitempty"`
 }

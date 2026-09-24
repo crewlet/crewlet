@@ -329,6 +329,44 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 // than the pointer. One that is not the fleet's, left there after the node
 // applied the fleet's epoch, is a node serving a company the fleet is not
 // running, and republishing it one restart later over the one that is.
+// RE-ACTIVATING THE REVISION THIS NODE HOLDS MOVES ITS ACTIVATION INSTANT.
+//
+// Re-activation is the credential-rotation gesture, and the local row's
+// instant is the one this node boots its chart with and the one its config
+// history shows. The early return for "already the fleet's revision" used to
+// leave it at the first activation's.
+func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	later := pinnedNow.Add(time.Hour)
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: target.RevisionID, Summary: "rotate", Payload: yamlToJSON(t, grownCompanyDoc),
+		At: later,
+	}); err != nil {
+		t.Fatalf("re-activate: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	active, found, err := p.store.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active: found=%v err=%v", found, err)
+	}
+	if active.ID != target.RevisionID || !active.ActivatedAt.Equal(later) {
+		t.Errorf("this node's active revision is %s activated at %s, want %s "+
+			"activated at the re-activation's %s", active.ID, active.ActivatedAt,
+			target.RevisionID, later)
+	}
+}
+
 func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 	t.Parallel()
 	activeID := func(t *testing.T, p *plane) string {
@@ -801,7 +839,7 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
-	status, applied, err := e.Apply(t.Context(), &config.Company{})
+	status, applied, err := e.Apply(t.Context(), &config.Company{}, time.Now())
 	if err == nil {
 		t.Fatal("a company with no name was applied")
 	}

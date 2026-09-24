@@ -125,7 +125,12 @@ as the rows, so a store copy is a claim about what has already been applied.
   log that has since moved past it. A restore replays the difference. The gap
   is bounded and replayable, and it costs a few minutes of work being applied
   twice — which is free, because the applier's guard is monotone in the
-  position.
+  position. The replay starts from the restored rows, not from the broker's
+  record of what the node read: the node's reader of each log was copied with
+  the streams, *after* the store, and may already have acknowledged past *P*.
+  The node rebuilds such a reader at *P* when it boots and logs
+  `jetstream_domain_consumer_rebuilt` (see
+  [Replication](replication.md#a-node-resumes-from-its-rows-never-from-its-reader)).
 - **Store last** would leave a store at position *P* beside a log whose newest
   record is *below* it. Every subsequent record then lands at a sequence the
   store has already marked applied, and the version-guarded write drops it
@@ -362,7 +367,11 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   changelog when the seat is next acquired, so what is actually lost is that
   node's audit log, its scheduled-run history and its config revision
   history. Start the node with an empty store; it migrates fresh and its
-  seats arrive remembering.
+  seats arrive remembering. A lost replicated database is re-derived as
+  [above](#what-state-exists-and-where) describes, and the node rebuilds its
+  reader of each log at the checkpoint its new rows hold, so the records its
+  old reader acknowledged are delivered again (see
+  [Replication](replication.md#a-node-resumes-from-its-rows-never-from-its-reader)).
 - **Total loss of the stream estate without a backup is survivable by
   re-provisioning** — secrets resolve store-first-env-second so a brand-new
   node starts from the environment, and every stream, bucket and mailbox is

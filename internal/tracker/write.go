@@ -72,6 +72,14 @@ const NoIfMatch uint64 = 0
 const ReassignmentBudget = 8
 
 // Writer is the tracker's write authority.
+//
+// Every write takes the OPERATION ID it publishes under from its caller, and
+// the id carries the instant it was minted: a caller mints it with
+// [statelog.NewOpID], or derives it with [statelog.DeriveOpID] when a retry
+// must reproduce it. There is no instant beside it to stamp, because the
+// state log reads that one to decide whether this node's ledger can vouch for
+// a retry — see [statelog.OpMintedAt] — and the writer's own clock at the call
+// is always later than the mint on exactly the retry that question is for.
 type Writer struct {
 	publisher *statelog.Publisher
 
@@ -82,8 +90,9 @@ type Writer struct {
 	db *store.DB
 
 	// claims is the coordination a walking sequence takes its claim from,
-	// and nodeID is who holds it. Both may be nil or empty on a writer
-	// that only makes single-append writes; a sequence that needs one
+	// and nodeID is where it runs — the prefix of every claim's owner, never
+	// the owner itself ([Writer.claimOwner]). Both may be nil or empty on a
+	// writer that only makes single-append writes; a sequence that needs one
 	// refuses by name rather than running without it.
 	claims Claims
 	nodeID string
@@ -171,7 +180,8 @@ type WriterDeps struct {
 
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
-	World     FieldWorld
+	World FieldWorld
+
 	Metrics   *metrics.Recorder
 	Drain     func() float64
 	Actor     string
@@ -481,14 +491,13 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
 	// every round: the LAST run is the one whose record was published, so
 	// the slice is replaced rather than appended to.
-	var fieldWarnings []string
+	var fieldWarnings, promoteWarnings []string
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
 			if err != nil {
@@ -507,11 +516,33 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
+			if current.Project != project {
+				// THE SCOPE NAMES THE PROJECT THE CALLER SAID, and the
+				// record is filed and probed under it. A task in
+				// another one would be written under a container it is
+				// not in — so a deferral on its real project would not
+				// hold this write back, and one on the named project
+				// would hold back a write that never touches it. A bulk
+				// edit names one project for every task in it, which is
+				// where a task from elsewhere arrives.
+				return statelog.Decision{}, fmt.Errorf("tracker: task %s is in "+
+					"project %s, not %s — resolve it again and name the "+
+					"project it is in", id, current.Project, project)
+			}
 			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			if markOnly(patch) && *patch.Moving == current.Moving {
+				// THE MARK ALREADY SAYS IT: a walk's last append whose
+				// mark somebody else took down — the holder, racing the
+				// duty that finished its walk — or a re-run of one that
+				// landed. An empty decision is a success, as it is for
+				// a promotion with nothing left to mark, rather than a
+				// history row recording that nothing moved.
+				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
@@ -542,6 +573,23 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			charged, err = settleDependents(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
+			}
+			var note string
+			charged, note, err = settlePromote(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			promoteWarnings = nil
+			if note != "" {
+				promoteWarnings = []string{note}
+			}
+			if patch.Promote != nil && charged.Empty() {
+				// NOTHING LEFT TO MARK: the item already points at
+				// this subtask, or is no longer on the parent. An
+				// empty decision is a success rather than a record
+				// saying nothing — which is what makes the parent
+				// step of a promotion re-runnable.
+				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
 			if charged.Fields != nil {
 				// THE COERCION TABLE, and the required-field half that
@@ -583,7 +631,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(subject, OpPatch, kind, scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -596,7 +644,67 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
+	result.Warnings = append(result.Warnings, promoteWarnings...)
 	return result, err
+}
+
+// markOnly reports a patch whose one change is the cross-project move's mark.
+func markOnly(patch TaskPatch) bool {
+	if patch.Moving == nil {
+		return false
+	}
+	patch.Moving = nil
+	return patch.Empty()
+}
+
+// settlePromote resolves a promotion's mark into the parent's whole checklist
+// set, against the parent this decide read.
+//
+// INSIDE THE DECIDE SNAPSHOT for the reason [settleWatch] gives: the mark is a
+// change to ONE item of a collection carried whole, and composing the whole
+// from any other read loses whatever landed in between.
+//
+// Three outcomes besides the mark. The item ALREADY POINTS AT THIS SUBTASK —
+// an earlier run marked it — and there is nothing to write. The item is NO
+// LONGER THERE — somebody deleted the line after the subtask was minted — and
+// there is nothing to mark either: the subtask stands on its own, and the
+// caller is told rather than refused, because a refusal would make the
+// promotion unfinishable for a reason nothing can undo. And the item already
+// became ANOTHER task, which is refused: one line is one piece of work.
+//
+// It returns a COPY, like every settle here.
+func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
+	if patch.Promote == nil {
+		return patch, "", nil
+	}
+	intent := *patch.Promote
+	switch {
+	case patch.Checklists != nil:
+		return patch, "", fmt.Errorf("tracker: this patch carries both a "+
+			"promotion of item %s and a whole checklist set — a caller states "+
+			"one or the other", intent.Item)
+	case intent.Item == "" || intent.Subtask == "":
+		return patch, "", fmt.Errorf("tracker: a promotion mark names item %q "+
+			"and subtask %q, and needs both", intent.Item, intent.Subtask)
+	}
+	patch.Promote = nil
+	l, i, found := findItem(current, intent.Item)
+	if !found {
+		return patch, fmt.Sprintf("checklist item %s is no longer on task %s, so "+
+			"nothing marks it as having become task %s; the subtask stands on "+
+			"its own", intent.Item, current.ID, intent.Subtask), nil
+	}
+	if to := current.Checklists[l].Items[i].PromotedTo; to != nil {
+		if *to == intent.Subtask {
+			return patch, "", nil
+		}
+		return patch, "", fmt.Errorf("tracker: checklist item %s of task %s "+
+			"already became task %s, so it cannot also become %s",
+			intent.Item, current.ID, *to, intent.Subtask)
+	}
+	lists := markPromoted(current, intent.Item, intent.Subtask)
+	patch.Checklists = &lists
+	return patch, "", nil
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.
@@ -763,12 +871,11 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 	at := w.Now()
 
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			for _, placement := range placements {
 				if !placement.Rank.Valid() {
 					return statelog.Decision{}, fmt.Errorf("tracker: %q is not "+
@@ -779,7 +886,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(subject, OpPatch, "", scope, opID, RankOrder{
+			return w.decide(stamp, subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -811,13 +918,12 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	scope := ScopeSet{Subject: true, Container: container}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpPatch, kind, scope, opID, document, notify, at)
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -839,13 +945,12 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternAdditive,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpTurn, "", scope, opID, payload, nil, at)
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternAdditive,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
 		},
 	})
 }
@@ -908,8 +1013,14 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 // in one place: a path that filled seven of them would publish a record the
 // deferral index could not file, and the failure would only show up on a
 // rolling upgrade.
-func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
-	scope ScopeSet, opID string, payload any, notify *Notify,
+//
+// IT FILLED SIX. The generation and the writer were declared, documented and
+// read — the writer by the eviction gate on every applier — and never set, so
+// every record this domain ever published named nobody and the gate had no
+// node to drop. Both now arrive as the framework's [statelog.Stamp], which the
+// publisher checks on the encoded record before it appends anything.
+func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
+	kind ChangeKind, scope ScopeSet, opID string, payload any, notify *Notify,
 	at time.Time) (statelog.Decision, error) {
 
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
@@ -934,8 +1045,8 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Kind:       kind,
 		Mutation:   body,
@@ -963,27 +1074,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 			"rather than trimmed, because a trimmed one cannot rebuild its row",
 			op, subject, len(encoded), MaxCommitBytes)
 	}
-	return statelog.Decision{
-		Payload:  encoded,
-		Envelope: envelopeOf(record, scope, subject),
-	}, nil
-}
-
-// envelopeOf is the framework's own view of a record.
-//
-// IT RESOLVES THE SAME SCOPE THE RECORD CARRIES, through the same one-argument
-// call every other side uses. The publisher probes the deferral index with the
-// request's scope and the applier files a deferral under the envelope's, so a
-// second spelling here is a record filed where its own writer never looks.
-func envelopeOf(record MutationRecord, scope ScopeSet, subject Subject) statelog.Envelope {
-	return statelog.Envelope{
-		V:       record.V,
-		Kind:    string(subject.Kind),
-		Subject: wire(subject),
-		Op:      string(record.Op),
-		OpID:    record.OpID,
-		Scope:   scope.Resolve(subject),
-	}
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // wire is the framework's subject for one of this domain's.

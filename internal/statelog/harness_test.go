@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // The fakes below are the framework's own seams and nothing else. A real
@@ -58,11 +60,14 @@ func (probeDomain) Envelope(payload []byte) (statelog.Envelope, error) {
 }
 
 func (probeDomain) InstallsGate(statelog.Envelope) bool { return false }
+func (probeDomain) NodeGate(statelog.Envelope) bool     { return false }
 
 func (probeDomain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"probe_objects": statelog.Replicated,
-		"probe_ops":     statelog.Local,
+		"probe_objects":        statelog.Replicated,
+		"probe_ops":            statelog.Divergent,
+		"probe_log_deferred":   statelog.Local,
+		"probe_deferred_scope": statelog.Local,
 	}
 }
 
@@ -71,13 +76,25 @@ func (probeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
 func (probeDomain) OpsTable() string      { return "probe_ops" }
 func (probeDomain) ReadinessInput() bool  { return true }
 func (probeDomain) ClaimsIdentity() bool  { return true }
+func (probeDomain) FeedGroup() string     { return "" }
 
 // applier stands in for this node's own apply loop: what it has committed,
 // and which operations it has written rows for.
 type applier struct {
 	mu        sync.Mutex
 	committed statelog.Position
-	ops       map[string]statelog.Position
+	ops       map[string]statelog.OpEntry
+
+	// lost is the instant the ledger last lost rows before — zero while it
+	// never has. See [harness.sweep].
+	lost time.Time
+
+	// lostReads counts LostBefore calls, and lostFrom, when non-zero, is
+	// the read from which the loss is REPORTED — which is how a case lands
+	// a loss in the middle of one write, between the check its decision
+	// passed and the resolution of its append.
+	lostReads int
+	lostFrom  int
 
 	// auto makes this node apply its own record the instant it is
 	// acknowledged, which is the ordinary branch. Off, the node is
@@ -100,18 +117,71 @@ type applier struct {
 	// wait's own budget, and without it an unbounded wait there looks
 	// exactly like a fast one.
 	stalled bool
+
+	// foreign is what StreamIdentity answers: nil while this node's
+	// positions are on the live stream, and a recreation once a reading
+	// found them not to be.
+	foreign error
+
+	// truncated is what Truncated answers: nil while no peer's rows hold
+	// records the log lost.
+	truncated error
+}
+
+func (a *applier) StreamIdentity() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.foreign
+}
+
+func (a *applier) Truncated() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.truncated
+}
+
+// truncatedBy is what a reading of the register establishes about this node
+// once a peer's rows are found to hold records the log lost.
+func (a *applier) truncatedBy(peer string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.truncated = fmt.Errorf("%w: %s stands past the probe log's end",
+		statelog.ErrLogTruncated, peer)
+}
+
+// rebuilt is what a reading of a rebuilt log establishes about this node.
+func (a *applier) rebuilt() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.foreign = fmt.Errorf("%w: the probe log was rebuilt under this node",
+		statelog.ErrStreamRecreated)
+}
+
+// passedBy is what a reading of the register establishes about this node once a
+// peer has re-anchored the log past it.
+func (a *applier) passedBy() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.foreign = fmt.Errorf("%w: a peer re-anchored the probe log past this node",
+		statelog.ErrGenerationPassed)
 }
 
 func newApplier() *applier {
 	return &applier{
 		committed: statelog.Position{Stream: probeStream, Generation: 1},
-		ops:       map[string]statelog.Position{},
+		ops:       map[string]statelog.OpEntry{},
 		auto:      true,
 	}
 }
 
-// landed is what the appender calls when the broker acknowledges a record.
-func (a *applier) landed(opID string, at statelog.Position) {
+// landed is what the appender calls when the broker acknowledges a record on
+// subject.
+//
+// AN ID'S FIRST ROW IS KEPT, as the real ledger's `ON CONFLICT DO NOTHING`
+// keeps it: an acknowledgement the broker served out of its duplicate window
+// names the FIRST record's sequence, and a write that reused the id on
+// another subject must find the first record's subject here, not its own.
+func (a *applier) landed(opID, subject string, at statelog.Position) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.auto {
@@ -120,8 +190,8 @@ func (a *applier) landed(opID string, at statelog.Position) {
 	if a.committed.Packed() < at.Packed() {
 		a.committed = at
 	}
-	if opID != "" {
-		a.ops[opID] = at
+	if _, held := a.ops[opID]; opID != "" && !held {
+		a.ops[opID] = statelog.OpEntry{Position: at, Subject: subject}
 	}
 }
 
@@ -170,11 +240,23 @@ func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statel
 	return ctx.Err()
 }
 
-func (a *applier) Op(_ context.Context, opID string) (statelog.Position, bool, error) {
+func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	at, ok := a.ops[opID]
-	return at, ok, nil
+	entry, ok := a.ops[opID]
+	return entry, ok, nil
+}
+
+// LostBefore answers the instant [harness.sweep] or
+// [harness.adoptFromAScrubbingDonor] last lost rows before.
+func (a *applier) LostBefore(context.Context) (time.Time, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lostReads++
+	if a.lostFrom > 0 && a.lostReads < a.lostFrom {
+		return time.Time{}, false, nil
+	}
+	return a.lost, !a.lost.IsZero(), nil
 }
 
 // fakeRows hands back one snapshot the test composed.
@@ -192,17 +274,53 @@ type fakeRows struct {
 	// reaches and a derived value never does.
 	override map[string]statelog.Position
 
+	// pinned, when a subject has one, is the anchor the snapshot reports
+	// WHATEVER this node's applier has committed — the state a restored
+	// log's reanchor leaves: the subject's record is at or below the
+	// checkpoint, and the anchor the row holds for it is in the generation
+	// before, because the new generation's checkpoint was PLACED at the log's
+	// end rather than reached by consuming it. The fake's own derivation
+	// reads every record at or below the checkpoint as consumed in the
+	// current generation, which is exactly the invariant that transition
+	// breaks.
+	pinned map[string]statelog.Position
+
 	// decideErr, when set, is what the domain's own decision returns.
 	decideErr error
+
+	// afterSnapshot, when set, runs once a snapshot has been taken and
+	// before the publisher acts on it — which is how a test lands a
+	// record on this node's applier between a decision and the checks
+	// made about it.
+	afterSnapshot func()
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
-	decide func(*sql.Tx) (statelog.Decision, error)) (statelog.Snap, error) {
+	opID string, judge func(*sql.Tx, statelog.OpEntry) error,
+	decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
+	// THE OPERATION FIRST, exactly as the real snapshot reads it: an
+	// operation this node's ledger holds is judged and answered, and not
+	// decided.
+	if held, ok, _ := r.applier.Op(ctx, opID); ok {
+		r.mu.Lock()
+		r.calls++
+		r.mu.Unlock()
+		if err := judge(nil, held); err != nil {
+			return statelog.Snap{}, err
+		}
+		return statelog.Snap{Held: held.Position, HeldOK: true}, nil
+	}
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]
+	pinned, pin := r.pinned[subj.String()]
+	after := r.afterSnapshot
 	r.calls++
 	r.mu.Unlock()
+	// THE CHECKPOINT THE ROWS ARE AT, which a real snapshot reads in the
+	// same transaction as the decision: the checkpoint commits with the
+	// rows, so it is this node's committed position at this instant.
+	snap.Checkpoint = r.applier.Committed()
 	// THE ANCHOR IS WHATEVER THIS NODE'S APPLIER LAST WROTE for this
 	// subject. A staged override stands for a row the applier wrote
 	// BEFORE a trim or a reanchor and has not written since — so it holds
@@ -213,16 +331,24 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	if override && snap.Anchor.Seq == 0 {
 		snap.Anchor = staged
 	}
+	if pin {
+		snap.Anchor = pinned
+	}
 	if err != nil {
 		return statelog.Snap{}, err
 	}
 	// The fake holds no transaction, which is honest: what is under test
-	// is the framework's branching on what the snapshot SAYS.
-	d, derr := decide(nil)
+	// is the framework's branching on what the snapshot SAYS. The
+	// checkpoint it hands the decision is the one it reports, which is the
+	// real snapshot's contract: one read, stamped and returned.
+	d, derr := decide(nil, snap.Checkpoint)
 	if derr != nil {
 		return statelog.Snap{}, derr
 	}
 	snap.Decision = d
+	if after != nil {
+		after()
+	}
 	return snap, nil
 }
 
@@ -248,6 +374,17 @@ func (r *fakeRows) stage(subj statelog.Subject, at statelog.Position) {
 	r.override[subj.String()] = at
 }
 
+// pin makes the snapshot report at as the subject's anchor whatever the applier
+// has committed — see [fakeRows.pinned].
+func (r *fakeRows) pin(subj statelog.Subject, at statelog.Position) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pinned == nil {
+		r.pinned = map[string]statelog.Position{}
+	}
+	r.pinned[subj.String()] = at
+}
+
 func (r *fakeRows) set(fn func(*statelog.Snap)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -267,6 +404,21 @@ type fakeFence struct {
 	evictErr error
 	zeroErr  error
 	zeroes   atomic.Int64
+
+	// reads, when set, is what the fence's own read of the live log
+	// finds — which is where a real fence hands the stream's creation
+	// instant to the applier, and so where a rebuild since the last
+	// heartbeat is first seen.
+	reads func()
+
+	// cursors is every cursor ClearForZero was asked about, in order.
+	cursors []statelog.Position
+
+	// zero, when set, is the REAL zero fence this fake answers
+	// ClearForZero with, over whatever reads a case composes — so the
+	// refusal the publisher receives is the one a domain's fence produces,
+	// not one a test typed out.
+	zero *statelog.ZeroFence
 }
 
 func (f *fakeFence) Evicted(context.Context) (bool, error) {
@@ -275,20 +427,35 @@ func (f *fakeFence) Evicted(context.Context) (bool, error) {
 	return f.evicted, f.evictErr
 }
 
-func (f *fakeFence) ClearForZero(_ context.Context, _ statelog.Position) error {
+func (f *fakeFence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	f.zeroes.Add(1)
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.zeroErr
+	f.cursors = append(f.cursors, cursor)
+	reads, err, zero := f.reads, f.zeroErr, f.zero
+	f.mu.Unlock()
+	if reads != nil {
+		reads()
+	}
+	if zero != nil {
+		return zero.ClearForZero(ctx, cursor)
+	}
+	return err
 }
 
-// fakeGates answers the two questions that make an absent operation mean
-// something other than "somebody else won".
+// asked is every cursor ClearForZero was asked about, in order.
+func (f *fakeFence) asked() []statelog.Position {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]statelog.Position(nil), f.cursors...)
+}
+
+// fakeGates answers whether a record is gated, which is one of the two
+// questions that make an absent operation mean something other than "somebody
+// else won" — the other is the ledger's own watermark ([applier.LostBefore]).
 type fakeGates struct {
-	mu      sync.Mutex
-	reason  statelog.Reason
-	gated   bool
-	adopted time.Time
+	mu     sync.Mutex
+	reason statelog.Reason
+	gated  bool
 }
 
 func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
@@ -297,10 +464,29 @@ func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, s
 	return g.reason, g.gated, nil
 }
 
-func (g *fakeGates) AdoptedAt(context.Context) (time.Time, bool, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.adopted, !g.adopted.IsZero(), nil
+// sweep is this node's retention sweep deleting every ledger row, as a sweep
+// whose cutoff is after all of them does, and recording that cutoff.
+func (h *harness) sweep(cutoff time.Time) { h.lose(cutoff) }
+
+// adoptFromAScrubbingDonor is what installing a snapshot from a donor that
+// scrubbed its ledger — a build from before the ledger travelled — does to
+// this node's: the artefact arrives with none of the ledger's rows, and the
+// join writes its own start `at` into it as the watermark.
+//
+// AN ADOPTION FROM ANY OTHER DONOR HAS NO HELPER HERE, because it changes
+// nothing this harness models: the ledger and its watermark travel with the
+// rows, so the adopter answers exactly as its donor would have. The real
+// transfer is exercised end to end in adopt_test.go.
+func (h *harness) adoptFromAScrubbingDonor(at time.Time) { h.lose(at) }
+
+// lose empties the ledger and moves its watermark to at, never backwards.
+func (h *harness) lose(at time.Time) {
+	h.applier.mu.Lock()
+	defer h.applier.mu.Unlock()
+	h.applier.ops = map[string]statelog.OpEntry{}
+	if at.After(h.applier.lost) {
+		h.applier.lost = at
+	}
 }
 
 // countingAppender wraps the real broker so a test can assert that a fenced
@@ -324,6 +510,14 @@ type countingAppender struct {
 	// swallow drops the append silently and returns failNext, so the
 	// record genuinely never lands.
 	swallow bool
+	// beforeLastSeq, when set, runs as the publisher asks the broker for a
+	// subject's last message and before the broker answers — which is how
+	// a case moves the log between the write's snapshot and the moment it
+	// learns what the subject holds.
+	beforeLastSeq func()
+	// lastSeqErr, when set, is what that question answers instead: a
+	// broker nobody can probe, which leaves an ambiguous publish unknown.
+	lastSeqErr error
 }
 
 func (c *countingAppender) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
@@ -341,7 +535,7 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 		return seq, dup, err
 	}
 	c.lastSeq.Store(int64(seq))
-	c.applier.landed(msgID, statelog.Position{Stream: probeStream, Generation: c.gen(), Seq: seq})
+	c.applier.landed(msgID, subject, statelog.Position{Stream: probeStream, Generation: c.gen(), Seq: seq})
 	if fail != nil {
 		// THE RECORD LANDED AND THE ANSWER DID NOT, which is the whole
 		// content of an ambiguous publish.
@@ -351,6 +545,15 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 }
 
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	c.mu.Lock()
+	before, fail := c.beforeLastSeq, c.lastSeqErr
+	c.mu.Unlock()
+	if before != nil {
+		before()
+	}
+	if fail != nil {
+		return 0, false, fail
+	}
 	return c.inner.LastSeq(ctx, subject)
 }
 
@@ -372,16 +575,47 @@ type harness struct {
 	t       *testing.T
 	q       *js.Queue
 	pub     *statelog.Publisher
+	metrics *metrics.Recorder
 	rows    *fakeRows
 	fence   *fakeFence
 	gates   *fakeGates
 	applier *applier
 	appends *countingAppender
 	log     *js.DomainLog
+
+	// reserve is the log's gate reserve, nil for a domain that keeps none.
+	reserve *statelog.Reserve
 	gen     atomic.Uint32
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
+
+// noCeiling is a gate reserve over a log with no byte ceiling, for a case
+// about something other than capacity.
+func noCeiling(t testing.TB) *statelog.Reserve {
+	t.Helper()
+	reserve, err := statelog.NewReserve(probeStream,
+		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
+	if err != nil {
+		t.Fatalf("NewReserve: %v", err)
+	}
+	return reserve
+}
+
+// reserveOn is the gate reserve on a real log, reading its usage from the
+// broker as the engine's does.
+func reserveOn(t testing.TB, log *js.DomainLog) *statelog.Reserve {
+	t.Helper()
+	reserve, err := statelog.NewReserve(probeStream,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("NewReserve: %v", err)
+	}
+	return reserve
+}
 
 // newHarnessFor builds a publisher over a real embedded broker for one
 // domain, so a case can vary what the domain DECLARES — which is what
@@ -420,18 +654,34 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	h.fence = &fakeFence{}
 	h.gates = &fakeGates{}
 	h.appends = &countingAppender{inner: log, applier: h.applier, gen: h.gen.Load}
+	// A REAL RECORDER, because what the publisher counts a refusal as is an
+	// operator's only view of which remedy a fleet needs, and a case that
+	// asserts it has no other witness.
+	if h.metrics, err = metrics.New(); err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
 
-	pub, err := statelog.NewPublisher(statelog.Deps{
+	deps := statelog.Deps{
 		Domain:        domain,
 		Log:           h.appends,
 		Rows:          h.rows,
 		Fence:         h.fence,
 		Gates:         h.gates,
 		Waiter:        h.applier,
+		Identity:      h.applier,
+		Metrics:       h.metrics,
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
-	})
+	}
+	// THE REAL LOG'S OWN RESERVE, where the domain keeps one: every write
+	// through the harness is admitted against the broker's usage, as the
+	// engine's are.
+	if statelog.KeepsGateReserve(domain) {
+		h.reserve = reserveOn(t, log)
+		deps.Admission = h.reserve
+	}
+	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -443,15 +693,38 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 func (h *harness) write(subject statelog.Subject, opID string, body string) (statelog.Result, error) {
 	h.t.Helper()
 	return h.pub.Publish(h.t.Context(), statelog.Request{
-		Subject:  subject,
-		Scope:    statelog.ScopeSet{Paths: []string{subject.String()}},
-		OpID:     opID,
-		MintedAt: time.Now(),
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return statelog.Decision{Payload: []byte(body), Version: 1}, nil
+		Subject: subject,
+		Scope:   statelog.ScopeSet{Paths: []string{subject.String()}},
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
 		},
 	})
+}
+
+// probeRecord is one probe-domain record carrying the stamp its decision was
+// handed and the op id it is published under — the two things the publisher
+// refuses a record without — plus an opaque body.
+//
+// THROUGH [probeDomain.Envelope]'s OWN SHAPE, because that reader is what the
+// publisher decodes the record with: a helper that wrote any other shape would
+// be testing a record no domain publishes.
+func probeRecord(stamp statelog.Stamp, opID, body string) []byte {
+	payload, err := json.Marshal(struct {
+		statelog.Envelope
+		Body string
+	}{
+		Envelope: statelog.Envelope{
+			V: 1, Kind: "object", OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer,
+		},
+		Body: body,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("encode a probe record: %v", err))
+	}
+	return payload
 }
 
 // anchorAt stages a durable row whose anchor is seq in the current

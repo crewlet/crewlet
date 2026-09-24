@@ -60,7 +60,11 @@ type ReadRefusal string
 
 const (
 	// RefuseBehind — this node has not reached the position this read
-	// needs. It clears on its own, and the hint says roughly when.
+	// needs. It clears on its own, and the hint says roughly when. That
+	// includes a node below the published trim floor whose missing records
+	// the log still holds ([FloorReplaying]): the floor is the lowest
+	// position any read may be answered from, and the node is replaying
+	// its way to it.
 	RefuseBehind ReadRefusal = "behind"
 
 	// RefuseDeferred — this node holds a record it cannot decode covering
@@ -78,13 +82,14 @@ const (
 	// rows are frozen, so a short answer would be wrong rather than old.
 	RefuseStalled ReadRefusal = "stalled"
 
-	// RefuseBelowFloor — records this node never applied have been
-	// trimmed, so its rows are missing state no replay can supply.
+	// RefuseBelowFloor — records this node never applied are gone from
+	// the log, so its rows are missing state no replay can supply. It
+	// adopts a peer's snapshot; another node can answer meanwhile.
 	RefuseBelowFloor ReadRefusal = "below_floor"
 
-	// RefuseFloorUnknown — the published floor could not be read, and the
-	// third value BLOCKS. Guessing here keeps a node serving over a hole
-	// it cannot see.
+	// RefuseFloorUnknown — the published floor could not be read, and an
+	// unreadable floor BLOCKS. Guessing here keeps a node serving over a
+	// hole it cannot see.
 	RefuseFloorUnknown ReadRefusal = "floor_unknown"
 
 	// RefuseEvicted — this node has been removed from the fleet.
@@ -386,8 +391,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //
 // # The order, and why every step is where it is
 //
-//  1. The cheap LOCAL refusals, so a doomed read never appends: eviction,
-//     then the floor, then a stall. Each is answered from what this node
+//  1. The cheap LOCAL refusals, so a doomed read never appends, in
+//     [Health.Refusal]'s order. Each is answered from what this node
 //     already knows, for nothing.
 //  2. COVERAGE, still before any append. A read whose objects this node
 //     cannot answer for could never be certified however fresh it got, so it
@@ -415,8 +420,19 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		// A CONSISTENT-PREFIX READ SURVIVES A STALL and nothing else
 		// does: it asks only for a coherent point in the log's order,
 		// which a frozen prefix still is. Every other refusal here says
-		// this node's rows are wrong rather than old.
-		if code != RefuseStalled || q.Level != ReadConsistentPrefix {
+		// this node's rows are wrong, or below the published floor every
+		// node must hold before it answers.
+		//
+		// AND ONLY A STALL AT OR ABOVE THE FLOOR. [Health.Refusal]
+		// reports a stall BEFORE a node replaying up to the floor,
+		// because a replay that is not moving is not one to wait on — so
+		// without this term a stalled node below the published floor
+		// served these reads, where the same node with a lower first
+		// sequence reported `below_floor` and served nothing. Whether a
+		// node answers must not turn on which below-the-floor state a
+		// possibly stale first sequence happened to pick.
+		if code != RefuseStalled || q.Level != ReadConsistentPrefix ||
+			h.Floor.Effective(now) != FloorOK {
 			return r.refuse(h, q, code, r.refusalDetail(h, code, now), started)
 		}
 	}
@@ -747,8 +763,19 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 			"UNKNOWN rather than satisfied",
 			h.Floor.Age(now).Round(time.Second), FloorCacheStale)
 	case RefuseBelowFloor:
-		return "records this node never applied have been trimmed, so its rows " +
-			"are missing state no replay can supply; it adopts a peer's snapshot"
+		return "records this node never applied are gone from the log, so its " +
+			"rows are missing state no replay can supply; it adopts a peer's " +
+			"snapshot"
+	case RefuseBehind:
+		// A LOCAL `behind` IS ONLY EVER THE FLOOR'S: every other lag is
+		// found by the wait, which writes its own detail.
+		if h.TrimFloor == nil || *h.TrimFloor == 0 {
+			return ""
+		}
+		return fmt.Sprintf("this node is replaying records below the published "+
+			"trim floor %d: the trim has licensed removing them and the log "+
+			"still holds them, so this clears on its own once it has applied "+
+			"through %d", *h.TrimFloor, *h.TrimFloor-1)
 	case RefuseStalled:
 		if h.Err != "" {
 			return h.Err

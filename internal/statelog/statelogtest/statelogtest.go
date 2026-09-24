@@ -10,7 +10,12 @@
 // documentation: the table that must carry a class, the stream whose settings
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
-// read.
+// read, the record that must name the node that wrote it and the generation it
+// was decided in, the evictions a domain that claims identity must be able to
+// list — because the trim counts nodes per log, and a log whose evictions
+// nothing reads counts an evicted node for ever — and the node gate that is
+// the domain's own eviction and nothing else, because a write flagged one is
+// excused the fences and the reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -42,6 +47,16 @@
 // through the same cases. A suite that reports a problem in everything it
 // touches is a suite nobody reads, and the control is what says the cases can
 // come back clean at all.
+//
+// # The gates, for the domains that have them
+//
+// [RunGates] is a second family, called beside [Run] by every domain whose
+// applier installs a deletion marker and an eviction window: it holds the
+// publisher-side reader, [statelog.Gates], to the one rule that interface
+// states, and the domain's node-gate answer to its own purge and eviction. It
+// has no control domain of its own, so it bends the candidate's own reader and
+// domain each way either could break its rule and requires every bend to be
+// reported.
 package statelogtest
 
 import (
@@ -76,6 +91,23 @@ type Candidate struct {
 	// Kinds are the subject kinds the suite may publish. The first is
 	// used wherever one is needed.
 	Kinds []string
+
+	// Rows builds the domain's own read seam over an estate — the one its
+	// production publisher decides through.
+	Rows func(db *store.DB) (statelog.Rows, error)
+
+	// Write performs at least one write through the domain's OWN
+	// production write path — the writer every caller reaches, not a
+	// fixture — over the publisher the suite hands it, which decides from
+	// db. It is how [Stamped] reaches the one builder that can forget the
+	// framework's stamp.
+	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
+
+	// EncodeGate builds the record that evicts nodeID from this domain's log
+	// — or, with readmit, takes it back — as the domain's own writer
+	// publishes it. Required of a domain that claims identity, whose log the
+	// trim counts nodes on; see [Evictions].
+	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 }
 
 // Factory builds a fresh candidate for one case.
@@ -88,6 +120,9 @@ func Run(t *testing.T, new Factory) {
 	t.Run("tables", func(t *testing.T) { runTables(t, new) })
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
+	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
+	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
+	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and the

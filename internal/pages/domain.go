@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -124,6 +125,45 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
+// NodeGate reports a node's eviction or readmission — the one record a write
+// flagged [statelog.Request.NodeGate] may carry.
+//
+// BY ITS KIND, which nothing but a node's eviction or readmission is published
+// under — and deliberately not InstallsGate: the purge is this log's other
+// gate, and it is an ordinary write that the gate reserve and the fences a
+// node gate is excused must hold.
+func (Domain) NodeGate(env statelog.Envelope) bool {
+	return ObjectKind(env.Kind) == KindEviction
+}
+
+// EvictionSubject is where a node's evictions and readmissions are published
+// on this log — the [statelog.EvictionProbe] half, for the tracker's reason: a
+// node the fleet re-anchored past never applies an eviction written after its
+// applier stopped.
+func (Domain) EvictionSubject(node string) statelog.Subject {
+	subject := EvictionSubject(node)
+	return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
+}
+
+// Evicts decodes one record from a node's eviction subject: true for an
+// eviction, false for the readmission that inverts one.
+func (Domain) Evicts(payload []byte) (bool, error) {
+	record, err := Decode(payload)
+	if err != nil {
+		return false, fmt.Errorf("pages: decode a record from an eviction subject: %w", err)
+	}
+	mutation, err := DecodeMutation(record)
+	if err != nil {
+		return false, fmt.Errorf("pages: decode the eviction: %w", err)
+	}
+	eviction, ok := mutation.(Eviction)
+	if !ok {
+		return false, fmt.Errorf("pages: the record on an eviction subject carries a %T",
+			mutation)
+	}
+	return !eviction.Readmitted, nil
+}
+
 // Tables is every durable table this domain writes, with its class.
 //
 // THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
@@ -148,6 +188,9 @@ func (Domain) Tables() map[string]statelog.TableClass {
 	for _, table := range MachineryTables {
 		out[table] = statelog.Local
 	}
+	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
+	// [MachineryTables].
+	out[Domain{}.OpsTable()] = statelog.Divergent
 	return out
 }
 
@@ -183,6 +226,13 @@ func (Domain) ReadinessInput() bool { return true }
 // writes is owned by a record, so the exclusion that domain needs does not
 // arise here.
 func (Domain) ClaimsIdentity() bool { return true }
+
+// FeedGroup is the change feed's own consumer on this log: [FeedGroup], the
+// same constant the [Translator] opens, and NOT the tracker's. The trim once
+// read the tracker's group on this log too — a consumer that never exists
+// here — so its feed term permitted nothing and the knowledge base's log was
+// never trimmed at all.
+func (Domain) FeedGroup() string { return FeedGroup }
 
 // BarrierTables is the empty set, DECLARED.
 //

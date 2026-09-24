@@ -389,9 +389,28 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, fmt.Errorf("pages: the container record at %s carries a %T",
 			at.position, payload)
 	}
+	// THE CONTAINER'S OWN CREATION, kept through every later write. The
+	// document used to take this record's instant on every update while the
+	// `created_at` column kept the first, so a listing — which reads the
+	// document — reported a container as created when it was last renamed.
+	// The column is the first record's broker instant on every node, so
+	// reading it back keeps the document identical everywhere. At the
+	// column's own resolution from the first write, so the document says the
+	// same instant before an update and after one.
+	created := store.DecodeTime(store.EncodeTime(at.brokerAt))
+	var first sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT created_at FROM pages_containers
+		WHERE key = ?`, c.Key).Scan(&first)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("pages: read the container %s at %s: %w",
+			c.Key, at.position, err)
+	}
+	if first.Valid {
+		created = store.DecodeTime(first.Int64)
+	}
 	document, err := EncodeContainer(Container{
 		V: DocumentVersion, Key: c.Key, Name: c.Name, Purpose: c.Purpose,
-		CreatedAt: at.brokerAt,
+		ChartEpoch: c.ChartEpoch, CreatedAt: created,
 	})
 	if err != nil {
 		return 0, err

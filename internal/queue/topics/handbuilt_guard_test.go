@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +11,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoPackageBuildsASubjectByHand fails the build when any package outside
@@ -76,7 +77,7 @@ import (
 func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	t.Parallel()
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	markers := subjectMarkers(t, filepath.Join(root, "internal", "queue", "topics"))
 
 	// A guard asserting an ABSENCE passes identically when the thing is
@@ -221,7 +222,7 @@ func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests b
 
 	for _, tree := range []string{"internal", "cmd"} {
 		treeRoot := filepath.Join(root, tree)
-		err := filepath.WalkDir(treeRoot, func(path string, d fs.DirEntry, err error) error {
+		err := sourcetree.Walk(treeRoot, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -233,7 +234,7 @@ func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests b
 				if path == topicsDir || base == "testdata" {
 					return fs.SkipDir
 				}
-				if !tests && path != treeRoot && isSupportPackage(base) {
+				if !tests && isSupportPackage(base) {
 					return fs.SkipDir
 				}
 				return nil
@@ -536,22 +537,6 @@ func evalString(e ast.Expr, env map[string]string) (string, bool) {
 		return l + r, true
 	}
 	return "", false
-}
-
-// moduleRoot locates the go module this test lives in, from its own source
-// path rather than from the working directory, which `go test` sets to the
-// package under test and a future caller may not.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file))))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortPos(root, pos string) string {

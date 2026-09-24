@@ -96,6 +96,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// all, and a job nobody registered is a re-spread that never
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
+		"tracker_abandoned_moves",
 		"tracker_duplicate_ranks",
 		// AND A PERSON'S INBOX, which IS a range delete and is the one
 		// entry on this list that deletes something a person reads. The

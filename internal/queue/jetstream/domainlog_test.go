@@ -4,12 +4,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A LOG CANNOT REMOVE AN INTERIOR SEQUENCE, and this is what keeps that a
@@ -97,7 +98,11 @@ func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
 // somebody reaches for on meeting the hazard for the first time.
 func TestNothingPurgesPerSubject(t *testing.T) {
 	t.Parallel()
-	for _, dir := range []string{".", filepath.Join("..", "..", "statelog")} {
+	root := sourcetree.Root(t)
+	for _, dir := range []string{
+		filepath.Join(root, "internal", "queue", "jetstream"),
+		filepath.Join(root, "internal", "statelog"),
+	} {
 		fset := token.NewFileSet()
 		for path, file := range parseEveryGoFile(t, fset, dir) {
 			ast.Inspect(file, func(n ast.Node) bool {
@@ -111,7 +116,7 @@ func TestNothingPurgesPerSubject(t *testing.T) {
 						"exclusive with purging by sequence, so it must be "+
 						"issued per subject, and it removes the interior "+
 						"sequences the strict replay protocol treats as an "+
-						"invariant", relative(path), sel.Sel.Name)
+						"invariant", relative(root, path), sel.Sel.Name)
 				}
 				return true
 			})
@@ -147,12 +152,11 @@ func parseEveryGoFile(t *testing.T, fset *token.FileSet, dir string) map[string]
 	return files
 }
 
-// relative renders a path the way a person reading the failure would type it.
-func relative(path string) string {
-	if wd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(wd, path); err == nil {
-			return filepath.ToSlash(rel)
-		}
+// relative renders a path the way a person reading the failure would type it:
+// from the module root, where every make target and CI step runs.
+func relative(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return filepath.ToSlash(rel)
 	}
 	return path
 }

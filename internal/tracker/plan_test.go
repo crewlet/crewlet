@@ -187,7 +187,19 @@ func dutyReads() map[string]struct {
 			 WHERE project_key = ? AND length(rank) > 64
 			 ORDER BY rank, id LIMIT 64`, []any{"P01"}},
 		"the abandoned merge walk": {
-			`SELECT id FROM tracker_tasks WHERE merging = 1 LIMIT 64`, nil},
+			`SELECT id FROM tracker_tasks
+			 WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
+			[]any{64}},
+		"the abandoned merge gate": {
+			`SELECT EXISTS (SELECT 1 FROM tracker_tasks
+			                WHERE merging = 1 AND removed_at IS NULL)`, nil},
+		"the abandoned move walk": {
+			`SELECT id FROM tracker_tasks
+			 WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
+			[]any{64}},
+		"the abandoned move gate": {
+			`SELECT EXISTS (SELECT 1 FROM tracker_tasks
+			                WHERE moving = 1 AND removed_at IS NULL)`, nil},
 		"the apply's duplicate probe": {
 			`SELECT 1 FROM tracker_tasks
 			 WHERE project_key = ? AND rank = ? AND id <> ?`,

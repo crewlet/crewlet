@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -121,13 +124,15 @@ func TestAPurgeMissingItsConfirmationProjectOrReasonNeverWrites(t *testing.T) {
 func TestAPurgeRetryReusesTheOperationIdItWasGiven(t *testing.T) {
 	p := &fakePurger{}
 	a := purgeApp(t, p)
+	given := statelog.NewOpID(time.Now().Add(-time.Minute), "purge-t-1")
 	if code, _ := postPurge(t, a,
-		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id=op-abc"); code != http.StatusOK {
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id="+
+			url.QueryEscape(given)); code != http.StatusOK {
 		t.Fatalf("the route answered %d", code)
 	}
-	if p.opID != "op-abc" {
+	if p.opID != given {
 		t.Errorf("the retry was written under %q rather than the id it was "+
-			"given", p.opID)
+			"given, %q", p.opID, given)
 	}
 	// AND WITHOUT ONE IT MINTS ITS OWN, or two operators purging two
 	// tasks would share an operation id.
@@ -135,8 +140,133 @@ func TestAPurgeRetryReusesTheOperationIdItWasGiven(t *testing.T) {
 		"/work/t-2/purge?confirm=ENG-43&project=ENG&reason=why"); code != http.StatusOK {
 		t.Fatalf("the route answered %d", code)
 	}
-	if p.opID == "op-abc" || p.opID == "" {
+	if p.opID == given || p.opID == "" {
 		t.Errorf("a call with no operation id was written under %q", p.opID)
+	}
+	if _, minted := statelog.OpMintedAt(p.opID); !minted {
+		t.Errorf("the route minted %q, which carries no mint instant", p.opID)
+	}
+}
+
+// AN OPERATION ID THE ENGINE DID NOT MINT IS REFUSED, not passed on — by the
+// purge and by the node gate, the two routes that take one.
+//
+// It carries no instant, so the state log reads it as older than every loss
+// its ledger has had — and on any deployment old enough to have swept its
+// ledger once, that answers the gesture `unknown` without publishing it, on
+// the first attempt as on every retry: a gesture that can never run and never
+// says why.
+func TestAGestureRefusesAnOperationIdTheEngineDidNotMint(t *testing.T) {
+	p := &fakePurger{}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id=op-abc")
+	if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+		t.Fatalf("an invented purge op_id answered %d %v, want 400 op_id_invalid",
+			code, body)
+	}
+	if p.calls != 0 {
+		t.Errorf("the invented op_id still reached the purge")
+	}
+
+	b := closedPosture()
+	gate := &fakeNodeGate{}
+	code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/work/retention/evict/node-4?confirm=node-4&op_id=op-abc")
+	if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+		t.Fatalf("an invented gate op_id answered %d %v, want 400 op_id_invalid",
+			code, body)
+	}
+	if len(gate.asked) != 0 {
+		t.Errorf("the invented op_id still reached the gate: %+v", gate.asked)
+	}
+}
+
+// AN OPERATION ID THE BROKER WOULD CARRY AS ANOTHER IS REFUSED, ON BOTH ROUTES
+// THAT TAKE ONE, BEFORE ANYTHING IS WRITTEN — minted by the engine or not.
+//
+// Only an id's first thirty-six bytes are the minted uuid; the rest is free
+// text, and the whole id travels as the broker's message-id header, whose
+// writer trims its ends and turns a line break into a space. So an engine id
+// carrying either was deduplicated at the broker as another id than the one
+// every ledger answers for, and the route's own trim answered with an id the
+// caller never sent. The one an answer carried goes through byte for byte.
+func TestAnOperationIDTheBrokerWouldRewriteIsRefused(t *testing.T) {
+	minted := statelog.NewOpID(time.Now().Add(-time.Minute), "purge-t-1")
+	for name, opID := range map[string]string{
+		"a leading space":       " " + minted,
+		"a trailing space":      minted + " ",
+		"an inner space":        minted + ".a b",
+		"a line break":          minted + "\n",
+		"a tab":                 minted + ".\ttab",
+		"a byte past ASCII":     minted + ".\u00e9",
+		"one byte over the cap": minted + "." + strings.Repeat("a", 128-len(minted)),
+	} {
+		query := url.Values{"op_id": {opID}}.Encode()
+		p := &fakePurger{}
+		code, body := postPurge(t, purgeApp(t, p),
+			"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&"+query)
+		if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+			t.Errorf("a purge under an op_id with %s answered %d %v, want 400 "+
+				"op_id_invalid", name, code, body)
+		}
+		if p.calls != 0 {
+			t.Errorf("a purge under an op_id with %s reached the writer", name)
+		}
+
+		b := closedPosture()
+		gate := &fakeNodeGate{}
+		code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+			"/work/retention/evict/node-4?confirm=node-4&"+query)
+		if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+			t.Errorf("an eviction under an op_id with %s answered %d %v, want "+
+				"400 op_id_invalid", name, code, body)
+		}
+		if len(gate.asked) != 0 {
+			t.Errorf("an eviction under an op_id with %s reached the gate", name)
+		}
+	}
+
+	// THE CONTROL: a minted id at the cap, carrying punctuation from across
+	// the visible range, is the caller's and goes through verbatim.
+	good := minted + "." + strings.Repeat("a", 128-len(minted)-1-8) + "-_.:~!@9"
+	if len(good) != 128 {
+		t.Fatalf("the control is %d bytes, want exactly the cap", len(good))
+	}
+	p := &fakePurger{}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&"+
+			url.Values{"op_id": {good}}.Encode())
+	if code != http.StatusOK || p.opID != good {
+		t.Fatalf("a purge under a valid op_id answered %d %v and ran under %q",
+			code, body, p.opID)
+	}
+}
+
+// AN UNKNOWN PURGE CARRIES NO POSITION, and every other outcome does.
+//
+// `unknown` is the one outcome with no acknowledgement: the record may never
+// have reached the log. The route sent the writer's zero position anyway,
+// which reads as a record at the log's origin, and the command printed it as
+// "unknown at  0".
+func TestAnUnknownPurgeCarriesNoPosition(t *testing.T) {
+	for outcome, positioned := range map[statelog.Outcome]bool{
+		statelog.OutcomeApplied: true,
+		statelog.OutcomePending: true,
+		statelog.OutcomeUnknown: false,
+	} {
+		p := &fakePurger{outcome: outcome}
+		code, body := postPurge(t, purgeApp(t, p),
+			"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why")
+		if code != http.StatusOK {
+			t.Fatalf("an %s purge answered %d %v", outcome, code, body)
+		}
+		if _, has := body["position"]; has != positioned {
+			t.Errorf("an %s purge answered position %v, want present = %v",
+				outcome, body["position"], positioned)
+		}
+		if body["op_id"] == "" || body["op_id"] == nil {
+			t.Errorf("an %s purge answered no op_id — it is what a retry names", outcome)
+		}
 	}
 }
 

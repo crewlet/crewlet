@@ -25,6 +25,14 @@ const (
 	// holding a record it cannot decode block the whole fleet's trim for
 	// ever. The committed sequence is safe because a deferred record's
 	// bytes are durable before the checkpoint moves over it.
+	//
+	// It keeps the record AT that sequence, the purge bound being
+	// exclusive — which is also what keeps a node's checkpoint record on
+	// the log while the log has DIVERGED from its rows ([ErrLogDiverged]),
+	// for as long as the node is counted. An evicted node stops being
+	// counted, and the trim may then remove it: the verdict does not rest
+	// on that record, being recorded in the node's own estate
+	// ([NodeEstate]).
 	TermApplied TermName = "applied"
 
 	// TermMinHold is the lowest live hold. A joining node holds the tail
@@ -107,8 +115,9 @@ type Term struct {
 	Detail string
 
 	// Absent marks a term that does not exist for this domain rather than
-	// one that could not be read — a compacted domain has no wake feed,
-	// and an absent term is `n/a` rather than zero.
+	// one that could not be read — a domain that declares no wake feed
+	// ([Domain.FeedGroup] empty) has no such term, and an absent term is
+	// `n/a` rather than zero.
 	Absent bool
 }
 
@@ -231,7 +240,7 @@ type Hold struct {
 // can only be exercised through a live fleet is one nobody checks. This struct
 // is what makes the six terms a pure function of what was read.
 type TrimInputs struct {
-	// Generation is the estate's current generation. A term reported at a
+	// Generation is this domain's current generation. A term reported at a
 	// LOWER one is unknown and blocks — its sequences name a dead number
 	// space, and comparing them would be comparing two different logs.
 	Generation uint32
@@ -263,8 +272,8 @@ type TrimInputs struct {
 	BackupMaxAge time.Duration
 
 	// FeedAckFloor is how far the wake feed has scanned, and whether this
-	// domain HAS a feed at all — a compacted domain does not, and an
-	// absent term is not a zero one.
+	// domain HAS a feed at all — false for a domain whose
+	// [Domain.FeedGroup] is empty, and an absent term is not a zero one.
 	FeedAckFloor uint64
 	HasFeed      bool
 	FeedReadable bool
@@ -309,7 +318,7 @@ func (in TrimInputs) applied() Term {
 			// comparing it with this generation's would be comparing
 			// two different logs.
 			return Term{Name: TermApplied, Detail: fmt.Sprintf(
-				"%s last reported at generation %d and this estate is on %d, so "+
+				"%s last reported at generation %d and this log is on %d, so "+
 					"its position names a sequence space that no longer exists",
 				n.NodeID, n.Generation, in.Generation)}
 		}
@@ -343,7 +352,7 @@ func (in TrimInputs) minHold() Term {
 		}
 		if h.Generation < in.Generation {
 			return Term{Name: TermMinHold, Detail: fmt.Sprintf(
-				"the hold held by %s is at generation %d and this estate is on %d",
+				"the hold held by %s is at generation %d and this log is on %d",
 				h.Owner, h.Generation, in.Generation)}
 		}
 		live++
@@ -373,7 +382,7 @@ func (in TrimInputs) backup() Term {
 	}
 	if in.BackupFloorGen < in.Generation {
 		return Term{Name: TermBackupFloor, Detail: fmt.Sprintf(
-			"the recorded backup is at generation %d and this estate is on %d",
+			"the recorded backup is at generation %d and this log is on %d",
 			in.BackupFloorGen, in.Generation)}
 	}
 	if in.BackupMaxAge > 0 && in.Now.Sub(in.BackupAt) > in.BackupMaxAge {
@@ -443,9 +452,9 @@ func (in TrimInputs) snapshotFloor() Term {
 // feed is how far the wake feed has scanned.
 func (in TrimInputs) feed() Term {
 	if !in.HasFeed {
-		// ABSENT RATHER THAN ZERO. A compacted domain has no wake feed
-		// at all, and reporting `0` would block its trim for ever on a
-		// term it does not have.
+		// ABSENT RATHER THAN ZERO. A domain that declares no wake feed
+		// has no consumer to wait on, and reporting `0` would block its
+		// trim for ever on a term it does not have.
 		return Term{Name: TermFeedAckFloor, Absent: true,
 			Detail: "this domain has no wake feed"}
 	}

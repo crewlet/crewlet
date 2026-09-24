@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,9 +29,10 @@ import (
 // counts has committed past a record — and nothing else needs it — the record
 // can go. [statelog.Trim] is the arithmetic that decides how far, from six
 // terms that each move the point DOWN; this file is what reads those terms
-// from a live fleet, applies the answer to the broker, and publishes what it
-// concluded so a node that is not holding the duty can still say why the log
-// is not shrinking.
+// from a live fleet, publishes what it concluded — so a node that is not
+// holding the duty can still say why the log is not shrinking, and so every
+// write fence knows what may be gone — and only THEN applies the answer to the
+// broker, for the reason [retention.apply] gives.
 //
 // # Why nothing here re-decides
 //
@@ -176,18 +178,18 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	// is trimming behind for no reason a reader could find.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
-	e.retention = r
+	e.retention.Store(r)
 	go r.run(loop)
 }
 
 // stopRetention ends the trim, waiting for an in-flight tick.
 func (e *Engine) stopRetention() {
-	if e.retention == nil {
+	r := e.retention.Swap(nil)
+	if r == nil {
 		return
 	}
-	e.retention.stop()
-	<-e.retention.done
-	e.retention = nil
+	r.stop()
+	<-r.done
 }
 
 // RetentionReport answers "is the log being trimmed, and what is stopping it"
@@ -196,10 +198,11 @@ func (e *Engine) stopRetention() {
 // deployment and NOT a report of zeros: a document full of zeros would claim a
 // fleet whose log is perfectly trimmed.
 func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
-	if e.retention == nil {
+	r := e.retention.Load()
+	if r == nil {
 		return statelog.Report{}, false
 	}
-	return e.retention.Report(ctx), true
+	return r.Report(ctx), true
 }
 
 // run ticks until the context ends.
@@ -328,14 +331,8 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// counts at position zero and blocks, which is correct: trimming past
 	// a node that is joining is deleting what it is about to replay.
 	if r.leases != nil {
-		leases, err := r.leases.ListLive(ctx, coord.ClassNode)
-		if err != nil {
-			return in, fmt.Errorf("list the live nodes: %w", err)
-		}
-		for _, lease := range leases {
-			if id, ok := coord.NodeID(lease.Resource); ok {
-				in.live = append(in.live, statelog.Presence{NodeID: id})
-			}
+		if in.live, err = livePresences(ctx, r.leases); err != nil {
+			return in, err
 		}
 	}
 	return in, nil
@@ -367,9 +364,12 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
 	}
+	// AN UNREAD LOG'S TOMBSTONES ARE NONE HERE, which is the conservative
+	// direction for the trim: a node it could not establish was gone stays
+	// counted. The report is the one reader that has to say so as well.
+	tombs, _ := r.tombstones(ctx, running, generation)
 	in.Counted = statelog.CountedSet(shared.at,
-		reportedPositions(shared.positions, name),
-		shared.live, r.tombstones(ctx, running, generation))
+		reportedPositions(shared.positions, name), shared.live, tombs)
 	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
 		r.backupTerm(shared.backups, running.domain.Stream().Name)
@@ -380,16 +380,92 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 	}
 
 	decision := statelog.Trim(in.Terms())
-	r.gauges(name, stats, decision, shared)
-	if !decision.Blocked() && decision.To > stats.FirstSeq {
-		if err := running.log.Purge(ctx, decision.To); err != nil {
+	r.gauges(name, statelog.KeepsGateReserve(running.domain), stats, decision, shared)
+	return r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
+}
+
+// apply carries out what one tick decided: it publishes the conclusion, and
+// then it purges.
+//
+// THE FLOOR IS PUBLISHED BEFORE THE PURGE IT LICENSES, and a floor that
+// could not be published licenses nothing.
+//
+// The write fence clears an expectation of zero against this floor —
+// [statelog]'s floor theorem, clause (ii) — and the proof needs every record
+// ever removed to sit below the floor a writer reads. Purged first, the two
+// steps leave a window in which the log has lost records the published floor
+// still says are held, and a node the purge just left behind is cleared
+// against the old number. Nor is that window one tick wide: a purge followed
+// by a publish that FAILS leaves it open until some later tick's publish
+// succeeds, for as long as the register refuses writes.
+//
+// The opposite failure — published, then the purge fails or this process dies
+// between the two — is the safe one. Readers treat records the log still holds
+// as possibly gone, which refuses only a node below what this tick licensed; no
+// node the tick counted is, because the applied term put it at or under every
+// counted position, and one it did not count catches up by replay, since the
+// records are still there. Meanwhile a node between the log's first record and
+// the floor refuses reads as `behind` while it replays them
+// ([statelog.FloorReplaying]) and is never sent to adopt a snapshot. The gap
+// closes only when a later tick licenses removing at least that far, and that
+// can be a while: a blocked tick purges nothing, and one whose lowest counted
+// node is lower purges less.
+func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name string,
+	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
+
+	if err := r.publish(ctx, name, generation, decision, first, shared); err != nil {
+		return err
+	}
+	if !decision.Blocked() && decision.To > first {
+		if err := stream.Purge(ctx, decision.To); err != nil {
 			return fmt.Errorf("purge below %d: %w", decision.To, err)
 		}
 		log.InfoContext(ctx, "retention_trimmed", "domain", name,
-			"trim_to", decision.To, "was", stats.FirstSeq,
-			"generation", generation)
+			"trim_to", decision.To, "was", first, "generation", generation)
 	}
-	return r.publish(ctx, name, generation, decision, shared)
+	return nil
+}
+
+// nextFloor is the [coord.TrimFloor.Floor] a tick publishes: the previous
+// row's floor carried forward, raised by what this tick licenses removing and
+// by what the stream has already lost.
+//
+// # Why it never moves down
+//
+// A tick's own conclusion does. It is zero on every blocked tick, and it falls
+// to the lowest counted node's position whenever that node is lower than the
+// last tick's minimum — a readmitted node, one restored from an old backup,
+// one that came up on its own history because nobody could donate. Records an
+// earlier tick licensed removing are gone all the same, so a floor that
+// followed the conclusion down would tell exactly that node it holds
+// everything that may be missing: a minimum that includes a node can never
+// exceed it. That is the vacuous comparand [stateLog.trimFloor] once was,
+// arriving by a second route.
+//
+// # Why a row from a HIGHER generation refuses
+//
+// This node's positions and this tick's conclusion name a sequence space the
+// fleet has left, and publishing over that row would put a floor nobody on the
+// live generation can read where theirs was — the reader's own rule in
+// [floorFor], applied to the writer. Refusing publishes nothing, and so purges
+// nothing: the purge is licensed only by a floor that was published.
+//
+// A row from a LOWER generation is not carried either: its sequences name a
+// dead number space, so this generation's floor starts from what this tick
+// licenses and what the stream still holds.
+func nextFloor(previous coord.TrimFloor, had bool, generation uint32, to, first uint64) (uint64, error) {
+	floor := max(to, first)
+	switch {
+	case !had || previous.Generation < generation:
+	case previous.Generation > generation:
+		return 0, fmt.Errorf("the published floor for %s is at generation %d and "+
+			"this node is on %d — its positions name a sequence space the fleet "+
+			"has left, so it neither publishes over that floor nor purges",
+			previous.Domain, previous.Generation, generation)
+	default:
+		floor = max(floor, previous.Floor)
+	}
+	return floor, nil
 }
 
 // publish writes what this tick concluded.
@@ -398,14 +474,21 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 // and it is carried through the register rather than in memory for exactly
 // that reason: the duty moves, and a value held by the holder would reset on
 // every flap — so the twenty-four-hour backup condition would never be
-// reached, which is the bug the field exists to close.
+// reached, which is the bug the field exists to close. The floor is the other,
+// and it is carried for the reason [nextFloor] gives.
 func (r *retention) publish(ctx context.Context, name string, generation uint32,
-	decision statelog.TrimDecision, shared fleetInputs) error {
+	decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
 
+	previous, had := shared.previous[name]
+	floor, err := nextFloor(previous, had, generation, decision.To, first)
+	if err != nil {
+		return err
+	}
 	row := coord.TrimFloor{
 		Domain:     name,
 		Generation: generation,
 		TrimTo:     decision.To,
+		Floor:      floor,
 		BlockedBy:  string(decision.BlockedBy),
 		At:         shared.at,
 		By:         r.nodeID,
@@ -416,7 +499,6 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 			Absent: t.Absent, Detail: t.Detail,
 		})
 	}
-	previous, had := shared.previous[name]
 	switch {
 	case !decision.Blocked():
 		// NOT BLOCKED IS NOT "blocked since now": the field is only
@@ -543,30 +625,69 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.
+//
+// THE GROUP IS THE DOMAIN'S OWN DECLARATION ([statelog.Domain.FeedGroup]),
+// never a name this file knows. It read the tracker's group for every domain
+// that claims identity, and on the knowledge base's log that consumer does not
+// exist — so the lookup below answered "never created", the term permitted
+// nothing, and that log was blocked on `feed_ack_floor` for the life of the
+// deployment while its own feed acknowledged every record.
 func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	seq uint64, has, readable bool) {
 
-	if !running.domain.ClaimsIdentity() {
+	group := running.domain.FeedGroup()
+	if group == "" {
 		// THIS DOMAIN HAS NO WAKE FEED, which is absent rather than
-		// unreadable: a compacted domain never had one, and reporting
-		// zero would block its trim for ever on a term it does not
-		// have.
+		// unreadable: reporting zero would block its trim for ever on a
+		// term it does not have.
 		return 0, false, false
 	}
-	floor, exists, err := running.log.GroupAckFloor(ctx, tracker.FeedGroup)
+	floor, exists, err := running.log.GroupAckFloor(ctx, group)
 	switch {
 	case err != nil:
+		// LOGGED HERE because the term can carry only that it is
+		// unknown: the blocked-trim line names the term and not the
+		// broker's answer, and without this the cause of an unreadable
+		// consumer is nowhere at all.
+		log.WarnContext(ctx, "retention_feed_unreadable",
+			"domain", running.domain.Name(), "group", group, "err", err)
 		return 0, true, false
 	case !exists:
-		// THE FEED HAS NOT BEEN CREATED YET, which is a fleet that has
-		// never started one rather than one whose consumer could not be
-		// read. It permits nothing, because a record no feed has seen is
-		// one nobody has been told about — and that is exactly what the
-		// term says.
+		// THE DECLARED FEED HAS NOT BEEN OPENED YET, which is a fleet
+		// that has never started it rather than one whose consumer
+		// could not be read. It permits nothing, because a record no
+		// feed has seen is one nobody has been told about — and that is
+		// exactly what the term says.
+		//
+		// It is also precisely what a WRONG group looks like, for ever,
+		// which is why the name is the domain's declaration and
+		// [Engine.feedFor] refuses a feed that opens any other.
 		return 0, true, true
 	}
 	return floor, true, true
 }
+
+// evictionLister is what the trim asks an identity-claiming domain: every
+// eviction its OWN applied rows hold, on its OWN log.
+//
+// DECLARED HERE, by the caller that counts nodes per log, and answered by each
+// domain for itself. The trim used to call the tracker's reader for every
+// identity-claiming domain with that domain's stream name — so on the pages
+// log it asked the tracker's table for rows filed under the pages stream,
+// found none, and counted an evicted node there for ever. `startStateLog`
+// refuses a registered identity-claiming domain that does not answer this,
+// and the statelogtest suite certifies that every one answers it correctly.
+type evictionLister interface {
+	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+}
+
+// The two identity-claiming domains this build registers, held to the
+// interface at compile time so a reshaped method is a build failure rather
+// than a boot refusal.
+var (
+	_ evictionLister = tracker.Domain{}
+	_ evictionLister = pages.Domain{}
+)
 
 // tombstones is every eviction this node has applied for one domain's log.
 //
@@ -578,32 +699,51 @@ func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 // A read failure yields NO tombstones, which is the conservative direction: an
 // evicted node stays counted and pins the floor, rather than the trim
 // advancing past a node it could not establish was gone.
+//
+// AND IT SAYS SO: read is false wherever the rows were not read. No tombstone
+// is then not an answer about any node — the report prints every node as not
+// evicted on that log, and a reader that took that for a readmission released
+// an eviction it had just made. A domain that claims no identity carries no
+// evictions and was read in full, trivially.
 func (r *retention) tombstones(ctx context.Context, running *runningDomain,
-	generation uint32) []statelog.Tombstone {
+	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
-	if r.db == nil || !running.domain.ClaimsIdentity() {
-		// ONLY THE IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A
-		// domain that does not claim identity has no say in who the
-		// fleet counts, and asking it would be reading another
-		// domain's table under this one's stream name.
-		return nil
+	if !running.domain.ClaimsIdentity() {
+		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
+		// that does not claim identity has no say in who the fleet
+		// counts on its log.
+		return nil, true
 	}
-	rows, err := tracker.Evictions(ctx, r.db.Replicated(), running.domain.Stream().Name)
+	if r.db == nil {
+		return nil, false
+	}
+	lister, ok := running.domain.(evictionLister)
+	if !ok {
+		// UNREACHABLE ON A NODE THAT BOOTED — [Engine.startStateLog]
+		// refuses such a domain — and logged rather than assumed, on the
+		// conservative side: nobody is uncounted.
+		log.ErrorContext(ctx, "retention_evictions_unlisted",
+			"domain", running.domain.Name())
+		return nil, false
+	}
+	rows, err := lister.Evictions(ctx, r.db)
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
 		// replicated estate closes during shutdown and during an
 		// adoption's rename, and a tick already in flight reaches it —
 		// which is the honest answer rather than a fault, and logging
-		// it at WARN would put a line in every clean shutdown.
-		return nil
+		// it at WARN would put a line in every clean shutdown. It is
+		// still not a read.
+		return nil, false
 	case err != nil:
-		log.WarnContext(ctx, "retention_evictions_unreadable", "err", err)
-		return nil
+		log.WarnContext(ctx, "retention_evictions_unreadable",
+			"domain", running.domain.Name(), "err", err)
+		return nil, false
 	}
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
-		if row.IsBack {
+		if row.Back {
 			// READMITTED, so there is no tombstone: the node is
 			// counted again and its position pins the floor as any
 			// other node's does.
@@ -613,7 +753,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 			NodeID: row.NodeID, At: row.At, By: row.By, Generation: generation,
 		})
 	}
-	return out
+	return out, true
 }
 
 // ageFloor is the first sequence the age term will keep.
@@ -696,7 +836,13 @@ func ageFloorOf(first, last, messages uint64, cutoff time.Time,
 //
 // A NIL RECORDER RECORDS NOTHING, which is a legal deployment: the numbers are
 // on the report either way, and a collector is what this adds.
-func (r *retention) gauges(domain string, stats jetstream.LogStats,
+//
+// THE HEADROOM IS OF THE CEILING ORDINARY WRITES ARE HELD TO, which on a log
+// that keeps a gate reserve is [statelog.GateReserve] below the broker's —
+// the figure the report prints and the alarm fires on, from the one function
+// all three read, so a collector's graph reaches zero exactly where writes
+// start being refused.
+func (r *retention) gauges(domain string, reserved bool, stats jetstream.LogStats,
 	decision statelog.TrimDecision, shared fleetInputs) {
 
 	if r.metrics == nil {
@@ -709,9 +855,9 @@ func (r *retention) gauges(domain string, stats jetstream.LogStats,
 		// unbounded log is not zero headroom, and zero is the value the
 		// one alarm an operator cannot ignore fires on.
 		r.metrics.Set(metrics.StatelogLogMaxBytes, float64(stats.MaxBytes), at)
-		free := float64(stats.MaxBytes-min(stats.Bytes, stats.MaxBytes)) /
-			float64(stats.MaxBytes)
-		r.metrics.Set(metrics.StatelogLogHeadroomFraction, free, at)
+		if free := statelog.Headroom(stats.Bytes, stats.MaxBytes, reserved); free != nil {
+			r.metrics.Set(metrics.StatelogLogHeadroomFraction, *free, at)
+		}
 	}
 	blocked := 0.0
 	if decision.Blocked() {

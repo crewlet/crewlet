@@ -3,31 +3,31 @@ package statelog
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// This node's own record of the snapshots it has adopted — the WRITER and the
-// READER of `statelog_adoption`, in one file.
+// This node's own record of the snapshots it has adopted — `statelog_adoption`,
+// in the node estate, written through every phase of a join.
 //
-// # Why both halves are here
+// # What it is for now, and what it stopped being for
 //
-// The row answers one question and it is a subtle one: which operation ids
-// this node's ledger can be trusted to have an opinion about. A donated
-// snapshot arrives with the donor's ledger SCRUBBED out of it, so an operation
-// minted before the adoption completed is one this node cannot answer for at
-// all — and reading the ledger's silence as "somebody else won" would make a
-// writer re-decide against a row that moved because of its own write.
+// It is this node's HISTORY: which donor's artefact it installed, which one
+// (the checksum), when the join began and whether it finished — the record an
+// operator reads when a node is behaving oddly and the question is what it is
+// actually running.
 //
-// Written in one place and read in another, that question gets two answers
-// eventually. It already had: the reader looked for a row keyed `id =
-// 'current'` on a table keyed on `started_at`, which fails on every call with
-// a missing column rather than reporting no adoption. The table's own rule —
-// rows ACCUMULATE, and the newest one is what counts — was written in the
-// migration and nowhere in the code.
+// It used to be the BOUND on this node's operation ledger as well: a donated
+// snapshot arrived with the donor's ledger scrubbed, so the ledger could vouch
+// for nothing minted before the latest adoption, and the publisher read that
+// instant off these rows. The ledger travels now, with a watermark of its own
+// in the same file ([RecordLedgerLoss]), so nothing on the write path reads
+// this table. What remains of that role is the rows a build from before the
+// change wrote: each of them is an adoption whose ledger WAS scrubbed, and
+// [FoldLegacyAdoptions] carries them into the watermark once. `ledger_folded`
+// (node migration 0030) is what says which rows that has happened to.
 
 // RecordAdoption writes or advances this node's adoption row.
 //
@@ -37,6 +37,13 @@ import (
 // the last stamps `completed_at`, which is what makes an interrupted adoption
 // visible as an interrupted adoption rather than as a node that has always
 // been here.
+//
+// startedAt is the instant [Adopter.Join] stamps once the fleet's offers are
+// in, and never one the caller reads off its own clock.
+//
+// FOLDED FROM THE START: the adopter wrote whatever the artefact's ledger had
+// lost into the artefact itself before it recorded anything here, so there is
+// nothing for [FoldLegacyAdoptions] to carry.
 //
 // IN THE NODE ESTATE. The replicated estate is the thing being replaced, so a
 // row written there would be renamed away between the second phase and the
@@ -54,8 +61,8 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_adoption
-				(started_at, donor, manifest, completed_at)
-			VALUES (?, ?, ?, ?)
+				(started_at, donor, manifest, completed_at, ledger_folded)
+			VALUES (?, ?, ?, ?, 1)
 			ON CONFLICT (started_at) DO UPDATE SET
 				donor        = excluded.donor,
 				manifest     = excluded.manifest,
@@ -74,40 +81,60 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 	return nil
 }
 
-// AdoptedAt is when this node's most recent adoption COMPLETED.
+// FoldLegacyAdoptions carries every adoption a build from before the ledger
+// travelled recorded into the watermark of each domain's ledger, and marks the
+// rows so it never carries them again. The engine runs it at boot, before any
+// join and before anything publishes.
 //
-// THE NEWEST ROW, complete or not, and the difference is the whole point:
+// # Why those rows, and why this bound
 //
-//   - No rows at all — this node has never adopted, so its ledger covers its
-//     whole life and every operation id can be answered for. (zero, false)
-//   - The newest row is incomplete — a join is running or one died partway.
-//     The ledger is scrubbed and there is no instant to compare against, so
-//     the honest answer is that nothing can be answered for. (zero, false)
-//   - The newest row is complete — operations minted after that instant are
-//     this node's own and the ones before it are not. (instant, true)
+// Such an adoption installed a file whose ledger was SCRUBBED, and that file —
+// or one derived from it by this node's own applier — is the one this node
+// runs: the only thing that replaces it is another adoption, and one run by
+// this build marks its rows as it records them. The bound is the one those
+// builds read, the latest of each row's completion or, where it did not
+// complete, its start, which follows every offer its join collected — so an
+// operation minted after it was published after every artefact that join
+// could have installed. An upgraded node that skipped this would read its
+// scrubbed ledger's silence as conclusive, and decide again every retry of an
+// operation minted before its last adoption.
 //
-// The first two answer identically here and are read differently upstream: an
-// incomplete adoption also blocks serving, through the phase the row carries,
-// so a node in that state is not asking this question yet.
-func AdoptedAt(ctx context.Context, db *store.DB) (time.Time, bool, error) {
+// # Why this order
+//
+// The watermark first and the mark second, and the two are in different files
+// with no transaction across them: a crash between them folds the same rows
+// again at the next boot, which the watermark's own monotonicity makes a
+// no-op. The other order would mark rows whose loss was never recorded.
+func FoldLegacyAdoptions(ctx context.Context, db *store.DB, domains []Domain) error {
 	if db == nil {
-		return time.Time{}, false, fmt.Errorf("statelog: no store to read an " +
-			"adoption record from")
+		return fmt.Errorf("statelog: no store to fold an adoption history in")
 	}
-	var completed sql.NullInt64
-	err := db.Read(ctx, func(tx *sql.Tx) error {
+	// ONE AGGREGATE, which answers NULL over no unfolded row rather than no
+	// row: "nothing to fold" is the NULL, and there is no second shape of it.
+	var bound sql.NullInt64
+	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
-			SELECT completed_at FROM statelog_adoption
-			ORDER BY started_at DESC LIMIT 1`).Scan(&completed)
-	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return time.Time{}, false, nil
-	case err != nil:
-		return time.Time{}, false, fmt.Errorf("statelog: read this node's "+
-			"adoption record: %w", err)
-	case !completed.Valid:
-		return time.Time{}, false, nil
+			SELECT MAX(COALESCE(completed_at, started_at)) FROM statelog_adoption
+			WHERE ledger_folded = 0`).Scan(&bound)
+	}); err != nil {
+		return fmt.Errorf("statelog: read this node's adoption history: %w", err)
 	}
-	return store.DecodeTime(completed.Int64), true, nil
+	if !bound.Valid {
+		return nil
+	}
+	before := store.DecodeTime(bound.Int64)
+	for _, d := range domains {
+		if err := RecordLedgerLoss(ctx, db.Replicated(), d, before); err != nil {
+			return err
+		}
+	}
+	if err := db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE statelog_adoption SET ledger_folded = 1 WHERE ledger_folded = 0`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("statelog: mark this node's earlier adoptions as "+
+			"carried into the ledger's watermark: %w", err)
+	}
+	return nil
 }

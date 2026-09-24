@@ -59,13 +59,13 @@ sequenceDiagram
 
 ## Establishing a seat, and giving it back
 
-The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prepareSeat`) establishes the seat in a known state and attaches the inbox consumer **last**: the per-role MCP children, the seat's memory hydrated from the changelog, the sandbox control subscription and the interrupted sandbox-run recovery, *then* the inbox. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prepareSeat`) establishes the seat in a known state and attaches the inbox consumer **last**: the per-role MCP children, the seat's memory hydrated from the changelog, the sandbox control subscription and the interrupted sandbox-run recovery, *then* the inbox. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The sandbox half has one more way in: on a node whose [code sandbox](code-sandbox.md) arrives with an apply, after it already holds seats, that apply gives every held seat its control subscription and run recovery then, under the same per-seat lock an acquisition and a release take, so neither is raced; a seat that cannot be prepared is handed back voluntarily (`unprepared`), and its next acquisition runs the whole hook. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 Releasing has **two modes**, because losing a lease and choosing to let go are opposites:
 
 | Mode | When | What happens |
 |---|---|---|
-| **Voluntary** | drain, capacity rebalance, role decommissioned | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
+| **Voluntary** | drain, capacity rebalance, role decommissioned, placement moved, this node's records wrong (`unserviceable`), a held seat that could not be prepared for a code sandbox an apply brought up (`unprepared`) | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
 | **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
 Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
@@ -114,13 +114,18 @@ far along they are:
 - the applier has **stopped** at a record it cannot apply;
 - the node has been **evicted** from the fleet, so its peers drop everything it
   writes;
-- its rows are **below the trim floor** — records it never applied have been
+- its rows are **below the log** — records it never applied have been
   deleted, and the hole will never fill. A floor that has been *unreadable* for
   four heartbeats counts here too: an unread floor is not a floor that is
-  satisfied;
+  satisfied. A node that is only below the published trim floor, while the log
+  still holds every record it lacks, is not here: it is replaying them, which
+  is *behind*;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
-  repair);
+  repair) — or a history that log no longer continues from, because a peer
+  re-anchored it past this node's generation (the node repairs that itself, by
+  [adopting](../guides/retention.md#a-node-a-peer-re-anchored-past) a snapshot
+  from the new generation);
 - its applied position has **stopped moving** for a minute while records wait —
   a stall, which is the one of these that looks like lag and is not: the node
   owes progress and is not making it;

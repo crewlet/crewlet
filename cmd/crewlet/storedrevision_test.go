@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -41,6 +42,88 @@ func activateStored(t *testing.T, cfg, payload string) string {
 		t.Fatalf("store the revision: %v", err)
 	}
 	return id
+}
+
+// A BOOT FROM THE STORE CARRIES THE INSTANT ITS REVISION WAS ACTIVATED, which
+// the engine stamps the company's chart with — and a company with no revision
+// carries none.
+func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	if company, at, err := companyFromStore(t.Context(), cfg); err != nil ||
+		company != nil || !at.IsZero() {
+		t.Fatalf("an empty store booted (%v, %s, %v), want no company and no instant",
+			company, at, err)
+	}
+
+	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
+	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
+		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
+		Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
+	}); err != nil {
+		closeStore()
+		t.Fatalf("store the revision: %v", err)
+	}
+	closeStore()
+
+	company, at, err := companyFromStore(t.Context(), cfg)
+	if err != nil || company == nil {
+		t.Fatalf("boot from the store: (%v, %v)", company, err)
+	}
+	if !at.Equal(activated) {
+		t.Errorf("the boot carries activation %s, want the revision's %s", at, activated)
+	}
+}
+
+// `crewlet run` HANDS THE ENGINE THE INSTANT ITS STORED COMPANY WAS ACTIVATED.
+//
+// The engine stamps the chart and the knowledge spaces with it at boot and
+// writes neither without one, so a run that read the instant and did not pass
+// it on booted a node on its store's company with no projects until the next
+// apply. A Tier B file's company has no activation yet, and carries none.
+func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	boot := &config.Bootstrap{}
+	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
+	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
+		Source: "fleet", CreatedBy: "peer", Summary: "from a peer",
+		Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
+	}); err != nil {
+		closeStore()
+		t.Fatalf("store the revision: %v", err)
+	}
+	closeStore()
+
+	opts, err := bootOptions(t.Context(), cfg, boot, nil)
+	if err != nil || opts.Company == nil {
+		t.Fatalf("the options from the store = (%+v, %v), want its company", opts, err)
+	}
+	if !opts.ActivatedAt.Equal(activated) {
+		t.Errorf("the engine is handed activation %s, want the stored revision's %s",
+			opts.ActivatedAt, activated)
+	}
+	if opts.Bootstrap != boot {
+		t.Error("the engine is not handed the Tier A the run loaded")
+	}
+
+	file := &config.Company{Name: "From a file"}
+	if opts, err = bootOptions(t.Context(), cfg, boot, file); err != nil {
+		t.Fatalf("the options from a file: %v", err)
+	}
+	if opts.Company != file || !opts.ActivatedAt.IsZero() {
+		t.Errorf("a file's company boots as (%v, %s), want the file's with no "+
+			"activation — the stored revision's instant is not the file's",
+			opts.Company, opts.ActivatedAt)
+	}
 }
 
 // SHOW, EXPORT AND DIFF READ A REVISION WITHOUT RUNNING IT.
@@ -115,7 +198,7 @@ func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
 	cfg := bootstrapForStore(t, dir)
 	activateStored(t, cfg, duplicateNamesRevision)
 
-	company, err := companyFromStore(t.Context(), cfg)
+	company, _, err := companyFromStore(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("a node refused to boot on a stored company with duplicate names: %v", err)
 	}
@@ -152,7 +235,7 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, storedRevisionDoc)
 
-	company, err := companyFromStore(t.Context(), cfg)
+	company, _, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
 		t.Fatalf("a node booted onto a revision this build cannot run: %+v", company)
 	}

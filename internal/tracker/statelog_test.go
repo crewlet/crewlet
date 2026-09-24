@@ -1,12 +1,15 @@
 package tracker_test
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -37,9 +40,53 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// publishes every kind it arbitrates — an anchor row for a
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
-			Kinds: suiteKinds(),
+			Kinds:      suiteKinds(),
+			Rows:       tracker.NewRows,
+			Write:      suiteWrite,
+			EncodeGate: encodeSuiteGate,
 		}
 	})
+}
+
+// encodeSuiteGate is the eviction record a peer's writer publishes onto this
+// log — or, with readmit, the inverse commit that takes the node back.
+func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	body, err := json.Marshal(tracker.Eviction{
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		EvictedAt: at, Readmitted: readmit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	op := "suite-evict-" + node
+	if readmit {
+		op = "suite-readmit-" + node
+	}
+	return tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: op,
+			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
+			CreatedAt: at, Writer: "suite-peer",
+			Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: tracker.AuthorSystem,
+	}.Encode()
+}
+
+// suiteWrite is one write through the tracker's own [tracker.Writer] — the
+// builder every write path in the domain shares, which is where the
+// framework's stamp is kept or lost.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+	w, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
+		Actor: "suite", ActorKind: tracker.AuthorSystem,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.EvictNode(ctx, "suite-evict", "node-away")
+	return err
 }
 
 // encodeSuiteRecord builds one valid record at an arbitrary version.
@@ -115,4 +162,80 @@ func suiteKinds() []string {
 		out = append(out, string(k))
 	}
 	return out
+}
+
+// THE TRACKER'S GATE READER KEEPS THE RULE EVERY READER SHARES, certified by
+// the same family as the knowledge base's.
+//
+// The two readers agreed on which gate they report, on the purge's own id
+// falling through to the eviction, and on the eviction window only because
+// their code looked alike — and the knowledge base's had already drifted to
+// the opposite precedence once. A family both run is what makes agreeing a
+// test rather than a resemblance.
+func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
+	t.Parallel()
+	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
+		return statelogtest.GateCandidate{
+			Candidate: statelogtest.Candidate{
+				Domain:  tracker.Domain{},
+				Applier: tracker.NewApplier("suite-node"),
+				Encode:  encodeSuiteRecord,
+				Kinds:   suiteKinds(),
+			},
+			Reader: func(db *store.DB) statelog.Gates { return tracker.NewGates(db) },
+			Kind:   string(tracker.KindTask),
+			Create: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpCreate,
+					writer, opID, newTask(id))
+			},
+			Write: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpPatch,
+					writer, opID, tracker.TaskPatch{Title: ptr("edited " + opID)})
+			},
+			Purge: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpPurge,
+					writer, opID, map[string]any{
+						"v": tracker.GateRecordVersion, "reason": "the gate suite",
+					})
+			},
+			Evict: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpEviction,
+					writer, opID, gateSuiteEviction(node, false))
+			},
+			Readmit: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpEviction,
+					writer, opID, gateSuiteEviction(node, true))
+			},
+		}
+	})
+}
+
+// gateSuiteRecord is one record the gate family applies, written by writer.
+func gateSuiteRecord(subject tracker.Subject, op tracker.OpKind, writer, opID string,
+	payload any) ([]byte, error) {
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	scope := tracker.ScopeSet{Subject: true, Container: "ENG"}
+	if subject.Kind == tracker.KindEviction {
+		scope = tracker.ScopeSet{Subject: true}
+	}
+	return json.Marshal(tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: opID, Subject: subject, Op: op,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: writer,
+			Scope: scope,
+		},
+		Mutation: body, Actor: "suite", ActorKind: tracker.AuthorSystem,
+	})
+}
+
+// gateSuiteEviction is an eviction of node, or its readmission.
+func gateSuiteEviction(node string, readmitted bool) tracker.Eviction {
+	return tracker.Eviction{
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
+	}
 }

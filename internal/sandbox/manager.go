@@ -105,6 +105,12 @@ type Manager struct {
 	placement Placement
 	runners   map[string]Runner
 
+	// retired are the cells an EARLIER catalogue configured and this one
+	// does not, each with the backend that catalogue built for it. Only
+	// the boxes already on a cell reach these — see [Manager.Provider] and
+	// [Manager.carrying] — and nothing is ever provisioned through one.
+	retired map[Placement]Provider
+
 	codingAgent string
 	timeout     time.Duration
 	pauseTTL    time.Duration
@@ -192,7 +198,28 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 // "this backend", "this build has no such placement" and "this company did not
 // configure it" — the last two are an operator's problem and must reach a log
 // saying which, not a nil the caller turns into "the box is gone".
+//
+// A CELL THE CATALOGUE HAS SINCE DROPPED is still answered, with the backend
+// the catalogue that configured it built, for as long as this process has one
+// (see [Manager.carrying]). Every caller here holds a box that already EXISTS
+// — a row naming it, a reaper about to kill it — and a revision that stops
+// offering a cell to new runs has not made the boxes already on it vanish:
+// answered "not configured", a running job on it was settled failed with its
+// box never reclaimed, and a paused one was never killed at all. Provisioning
+// a NEW box goes through the current catalogue alone ([Manager.Acquire]).
 func (m *Manager) Provider(placement Placement) (Provider, error) {
+	provider, err := m.configured(placement)
+	if err != nil && placement != "" {
+		if retired, ok := m.retired[placement]; ok {
+			return retired, nil
+		}
+	}
+	return provider, err
+}
+
+// configured is the backend the CURRENT catalogue configured for a placement,
+// the only one a new box may be provisioned through.
+func (m *Manager) configured(placement Placement) (Provider, error) {
 	if placement == "" {
 		placement = m.placement
 	}
@@ -224,7 +251,52 @@ func (m *Manager) Provider(placement Placement) (Provider, error) {
 func (m *Manager) DefaultPlacement() Placement { return m.placement }
 
 // Placements are the cells this company configured, for the operator surface.
+// A retired cell is not among them: nothing may be provisioned there.
 func (m *Manager) Placements() []Placement { return slices.Sorted(maps.Keys(m.providers)) }
+
+// carrying is this manager with the cells previous could reach and this one
+// does not configure kept as retired backends: the manager a live reload
+// installs ([Coordinator.SetManager]).
+//
+// A RUN'S PLACEMENT IS ON ITS ROW, and a revision only changes what the NEXT
+// run may pick. So the boxes a job is still running in, or a paused run is
+// held in, stay reachable through the backend that made them — the newest
+// catalogue that configured the cell, since a later one that configures it
+// again replaces it here. Bounded by the closed set of placements, and held
+// for the life of this process: a restart builds only the current catalogue,
+// and a row naming a cell nothing configures any more is then settled failed
+// by whoever polls it, naming the cell (see [Waiter]).
+//
+// A COPY, never a write through the receiver: a manager is shared by every
+// caller that already read it, and a reader that saw its catalogue change
+// under it would be reading two revisions at once.
+func (m *Manager) carrying(previous *Manager) *Manager {
+	if previous == nil || previous == m {
+		return m
+	}
+	carried := *m
+	carried.retired = maps.Clone(m.retired)
+	if carried.retired == nil {
+		carried.retired = map[Placement]Provider{}
+	}
+	keep := func(placement Placement, provider Provider) {
+		if _, configured := m.providers[placement]; !configured {
+			carried.retired[placement] = provider
+		}
+	}
+	// THE OLDER RETIREMENTS FIRST, so where previous both retired a cell
+	// and configured it again, the backend it configured wins.
+	for placement, provider := range previous.retired {
+		keep(placement, provider)
+	}
+	for placement, provider := range previous.providers {
+		keep(placement, provider)
+	}
+	if len(carried.retired) == 0 {
+		carried.retired = nil
+	}
+	return &carried
+}
 
 // DefaultCodingAgent is the effective agent for a role that names none.
 func (m *Manager) DefaultCodingAgent() string { return m.codingAgent }
@@ -321,7 +393,9 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	if err != nil {
 		return nil, nil, err
 	}
-	provider, err := m.Provider(spec.Placement)
+	// THE CURRENT CATALOGUE ALONE: a retired cell reaches the boxes already
+	// on it and never a new one.
+	provider, err := m.configured(spec.Placement)
 	if err != nil {
 		return nil, nil, err
 	}

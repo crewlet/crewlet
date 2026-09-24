@@ -1074,25 +1074,19 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON. With a Tier B file it is that file's
-	// company, which the reconcile below converges onto the fleet's before
-	// anything is claimed. Without one it is whatever this node's store has
-	// marked active — because the store is authoritative at runtime and a
-	// node whose company already lives there needs no file at all.
-	//
-	// Read BEFORE the engine, in its own open-and-close, so the engine still
-	// owns the backends it opens; see [companyFromStore].
-	if company == nil {
-		if company, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
-			return err
-		}
+	// THE EPOCH THIS NODE STARTS ON, and the instant it was activated at:
+	// see [bootOptions], which is where it is decided and what its test
+	// holds. The options go to the engine WHOLE, so no field of them can be
+	// decided there and dropped here.
+	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	if err != nil {
+		return err
 	}
+	opts.Metrics, opts.Mode = recorder, nodeMode
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
-	})
+		"company", companyName(opts.Company))
+	e, err := engine.New(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -1166,6 +1160,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
+		// And this node's Tier A, which a document is judged against as
+		// the apply judges it — see configapi.Options.Bootstrap.
+		Bootstrap: boot,
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
@@ -1683,9 +1680,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
 		Retention: e.Backends().Fleet,
-		// And the eviction gate, which is a RECORD rather than a
-		// coordination write — so it goes through the same writer a
-		// seat's tools do, and carries the same three-valued outcome.
+		// And the eviction gate, which is a RECORD on every
+		// identity-claiming log rather than a coordination write —
+		// judged once, written to each log, and answered per log with
+		// the same three-valued outcome every write has.
 		Nodes: nativeNodes(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
@@ -2402,12 +2400,18 @@ func nativeWork(e *engine.Engine) queries.WorkReader {
 	return nil
 }
 
-// nativeNodes is the eviction gate, or nil where this node runs no tracker —
-// converted for [nativeWork]'s reason: a typed nil would pass the route's
-// registration check and panic on the first press.
+// nativeNodes is the eviction gate over every identity-claiming log, or nil
+// where this node runs no state log — converted for [nativeWork]'s reason: a
+// typed nil would pass the route's registration check and panic on the first
+// press.
+//
+// NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
+// log alone, so an eviction lifted one log's pin and left the pages log
+// counting the node for ever — and a company whose tracker is external, which
+// still runs both logs, could not evict anybody at all.
 func nativeNodes(e *engine.Engine) api.NodeGate {
-	if w := e.TrackerWriter(); w != nil {
-		return w
+	if g := e.NodeGate(); g != nil {
+		return g
 	}
 	return nil
 }
@@ -2519,6 +2523,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return operatorWriter(writer, actor)
 			},
 			Merges: func(actor builtin.Actor) builtin.WorkMerger {
+				return operatorWriter(writer, actor)
+			},
+			Moves: func(actor builtin.Actor) builtin.WorkMover {
 				return operatorWriter(writer, actor)
 			},
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —

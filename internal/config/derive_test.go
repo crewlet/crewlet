@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // regenerateDerived names the variable that writes the golden files instead of
@@ -29,7 +30,8 @@ func TestTheDerivedHierarchyMatchesItsGoldenFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	examples, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.company.yaml"))
+	examplesDir := filepath.Join(sourcetree.Root(t), "examples")
+	examples, err := filepath.Glob(filepath.Join(examplesDir, "*.company.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func TestTheDerivedHierarchyMatchesItsGoldenFiles(t *testing.T) {
 	for _, input := range append(inputs, examples...) {
 		golden := filepath.Join("testdata", "derived",
 			strings.TrimSuffix(filepath.Base(input), ".company.yaml")+".derived.json")
-		if strings.HasPrefix(input, filepath.Join("..", "..", "examples")) {
+		if filepath.Dir(input) == examplesDir {
 			golden = filepath.Join("testdata", "derived", "example-"+filepath.Base(golden))
 		}
 		t.Run(filepath.Base(input), func(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"time"
 
@@ -64,24 +63,43 @@ type AdoptDeps struct {
 	// Close and Reopen bracket the install: both databases must be CLOSED
 	// when the rename happens, because this process's own claim is on the
 	// path rather than the inode.
+	//
+	// A FAILED CLOSE IS UNWOUND BY A REOPEN, as a failed install is: a
+	// close may take the database out of service before it reports its
+	// failure — the engine's does — and the join cannot tell which kind
+	// it got. So Reopen must do nothing to a database that is still open.
 	Close  func(ctx context.Context) error
 	Reopen func(ctx context.Context) error
 
-	// Record writes this node's own adoption row, which must complete
-	// before it serves.
-	Record func(ctx context.Context, donor string, m Manifest, phase AdoptionPhase) error
+	// Record writes this node's own adoption row at each phase, and the
+	// join fails if it cannot: the row is this node's history of what it
+	// installed, and a crash mid-adoption must read as one — see
+	// [RecordAdoption].
+	//
+	// began is the adoption's start, the same at every phase of one join,
+	// and the ADOPTER stamps it rather than the caller: it is also the
+	// watermark a donor that scrubbed its ledger leaves the artefact
+	// with, and what makes it a bound is that it follows every offer the
+	// join collected — only [Adopter.Join] knows when the last one was in.
+	Record func(ctx context.Context, began time.Time, donor string, m Manifest,
+		phase AdoptionPhase) error
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
 
-// AdoptionPhase is how far a join has got, and it is PERSISTED rather than
-// held in memory.
+// AdoptionPhase is how far a join has got, as [AdoptDeps.Record] is told it.
 //
-// A node that crashed mid-adoption and came back looks, from its checkpoint
-// alone, exactly like a node that is caught up: the checkpoint came from the
-// artefact. The row is what tells them apart, and a row that has not completed
-// blocks serving whatever the checkpoint says.
+// THE ROW DOES NOT KEEP IT. [RecordAdoption] writes the same columns at every
+// phase and stamps completed_at only at [AdoptionComplete], so what survives a
+// crash is when the adoption began and whether it finished — not which side
+// of the install it stopped on. Nothing on the write path needs to know: the
+// ledger's watermark is inside the file, so whichever side of the rename a
+// join stopped on, the live file says how far back its own ledger may have
+// lost rows. Nothing refuses to serve on an incomplete row; the phase names
+// the step in the error a failed Record returns.
 type AdoptionPhase string
 
 const (
@@ -127,10 +145,7 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 		return nil, fmt.Errorf("statelog: a join cannot record itself, so a crash " +
 			"mid-adoption would be indistinguishable from a node that is caught up")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now
@@ -139,7 +154,34 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 }
 
 // ErrNoOffer reports a join that found no artefact it could use.
+//
+// It is a statement about the FLEET, so it is never the answer to a join whose
+// context ended: that comes back as an error wrapping ctx.Err() whichever step
+// it interrupted, because a caller acts on this one by carrying on without a
+// snapshot, and a caller that gave up is not carrying on at all. Nor is it ever
+// the answer to a join that lost this node's own database — that is
+// [ErrEstateNotRestored], for the same reason: there is nothing to carry on
+// with.
 var ErrNoOffer = errors.New("statelog: no usable snapshot was offered")
+
+// ErrEstateNotRestored reports a join that closed the live database for an
+// install and could not open it again.
+//
+// A STATEMENT ABOUT THIS NODE, and the one outcome of a join that must never
+// reach its caller as [ErrNoOffer]. The engine answers that one by carrying on
+// without a snapshot — a boot comes up on the history it has — and a node
+// whose replicated estate is not open has no history to come up on: every
+// read, every applier and every hold answers [store.ErrNoEstate] until
+// something opens it again. So a boot must stop, naming why, and a running
+// node must reopen it before it asks the fleet for anything.
+//
+// IT ENDS THE JOIN rather than moving on to the next offer. Each offer is
+// installed through the same close-and-reopen bracket, and its hold — in the
+// engine's wiring — reads this node's checkpoint out of the very estate that
+// is gone, so every remaining donor would be logged as refusing a node that
+// could not have taken anything from it.
+var ErrEstateNotRestored = errors.New("statelog: the live replicated database " +
+	"a join closed for its install is not open again")
 
 // Join runs the whole sequence and reports the manifest it adopted.
 //
@@ -160,7 +202,10 @@ var ErrNoOffer = errors.New("statelog: no usable snapshot was offered")
 //     the checkpoint commits with the rows and a metadata claim the file does
 //     not keep is a corrupt snapshot.
 //  6. VERIFY THE SCRUB against the manifest's own list, on the still-temporary
-//     file. A claim nobody checks is a claim.
+//     file. A claim nobody checks is a claim. And where the donor scrubbed a
+//     domain's operation ledger — a build from before the ledger travelled —
+//     WRITE THE LOSS INTO THE ARTEFACT, so the file that lost the rows and the
+//     watermark that says so are installed by one rename.
 //  7. RE-CHECK that every adopted position is still above the floor. The hold
 //     makes this a belt; a fleet that trimmed anyway is one this node must not
 //     follow into a hole.
@@ -177,6 +222,20 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// THE ADOPTION BEGINS HERE, once every offer is in, and this is the
+	// instant its row keeps — and the watermark an artefact whose donor
+	// scrubbed its ledger is installed with. It is one instant for every
+	// offer this join tries, so one join writes one row.
+	//
+	// IT FOLLOWS EVERY DONOR'S ANSWER, and that is the whole of why it is a
+	// bound. A donor offers the artefact it holds WHEN IT ANSWERS, so every
+	// artefact this join can install was finished before its donor
+	// answered, and so before now. Stamped when the join began, it would
+	// precede the ask itself: a donor's snapshotter can finish an artefact
+	// between the ask and its answer, and an operation this node published
+	// in between would then sit inside that artefact with its ledger row
+	// scrubbed by a donor that scrubs, minted after the bound.
+	began := a.now().UTC()
 
 	var refusals []error
 	for _, offer := range offers {
@@ -184,9 +243,30 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 			continue
 		}
-		m, err := a.adopt(ctx, offer)
+		m, err := a.adopt(ctx, offer, began)
 		if err == nil {
 			return m, nil
+		}
+		// A CALLER THAT GAVE UP IS NOT A DONOR THAT FAILED. Filed as a
+		// refusal, the cancellation would end every remaining offer the
+		// same way, log each donor as refused, and come back as
+		// [ErrNoOffer] — which the engine reads as "nobody could donate"
+		// and answers by bringing a boot up on the history it has or
+		// scheduling a rejoin's retry, where the node is in fact being
+		// stopped. Returned rather than joined to the refusals, so
+		// [ErrNoOffer] never wraps it.
+		if ctx.Err() != nil {
+			return Manifest{}, fmt.Errorf("statelog: the join was abandoned "+
+				"adopting %s's snapshot: %w: %w", offer.Manifest.NodeID, ctx.Err(), err)
+		}
+		// NOR IS A NODE THAT LOST ITS OWN DATABASE — see
+		// [ErrEstateNotRestored]. Filed as a refusal it would try every
+		// remaining offer against an estate that is not open and come
+		// back as [ErrNoOffer], which a boot answers by coming up with
+		// no replicated estate at all.
+		if errors.Is(err, ErrEstateNotRestored) {
+			return Manifest{}, fmt.Errorf("statelog: adopting %s's snapshot: %w",
+				offer.Manifest.NodeID, err)
 		}
 		refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 		a.log.WarnContext(ctx, "statelog_adoption_refused",
@@ -198,8 +278,9 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	return Manifest{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
 }
 
-// adopt runs steps 1 and 3 through 9 for one chosen offer.
-func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
+// adopt runs steps 1 and 3 through 9 for one chosen offer, recording each
+// phase under the adoption's start, began.
+func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Manifest, error) {
 	at := make(map[string]uint64, len(offer.Manifest.Domains))
 	for name, pos := range offer.Manifest.Domains {
 		at[name] = pos.Seq
@@ -215,23 +296,28 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	defer release()
 
 	part := a.deps.LivePath + AdoptPartSuffix
-	// A part file from a previous attempt is debris rather than a resume
-	// point: only this path is written here, and a partial one that
-	// survived would be refused as an existing destination for ever.
-	_ = os.Remove(part)
+	// A PART FILE FROM A PREVIOUS ATTEMPT IS DEBRIS rather than a resume
+	// point, and so are its sidecars: only this path is written here, a
+	// partial one that survived would be refused as an existing destination
+	// for ever, and a stale -wal beside a fresh artefact is applied to it
+	// the moment step 4 opens it. What a copy grows beside itself is the
+	// store's list, so [store.RemoveCopy] clears it rather than a name here.
+	if err = store.RemoveCopy(part); err != nil {
+		return Manifest{}, fmt.Errorf("statelog: clear an earlier attempt's "+
+			"artefact: %w", err)
+	}
 
 	// 3. TRANSFER.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := FetchArtefact(ctx, a.deps.Conn, offer, part); err != nil {
 		return Manifest{}, err
 	}
-	defer func() {
-		// Removed on every path that did not install it.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if _, err := os.Stat(part); err == nil {
-			_ = os.Remove(part)
-		}
-	}()
+	// Discarded on every path, the install's included: the rename moves the
+	// file and leaves nothing of it behind for this to find, and every
+	// other path leaves the artefact and whatever step 4's reads opened
+	// beside it. A failure here is not the caller's — the next attempt's
+	// clear above reports it by name, and refuses to fetch over it.
+	defer func() { _ = store.RemoveCopy(part) }()
 
 	// 4. INSPECT, READ-ONLY, before anything migrates it.
 	schema, err := store.PendingEstate(ctx, store.EstateReplicated, part, store.Options{})
@@ -286,7 +372,10 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 			"is that everything still in it is fleet-visible",
 			offer.Manifest.Scrubbed, empty)
 	}
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
+	if err := a.recordScrubbedLedgers(ctx, part, offer.Manifest, began); err != nil {
+		return Manifest{}, err
+	}
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)
 	}
 
@@ -304,30 +393,127 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	// on the PATH rather than the inode, so an open handle would be
 	// writing into a file that is no longer at that name.
 	if err := a.deps.Close(ctx); err != nil {
-		return Manifest{}, fmt.Errorf("statelog: close the database being replaced: %w", err)
+		// A CLOSE THAT FAILED MAY STILL HAVE CLOSED — the engine's takes
+		// the handle out of service before it closes it — and nothing
+		// was renamed, so it unwinds exactly as a failed install does.
+		return Manifest{}, a.rollback(ctx, part, fmt.Errorf("statelog: close "+
+			"the database being replaced: %w", err))
 	}
 	if err := store.AdoptFile(ctx, a.deps.LivePath, part); err != nil {
 		// The database is closed and the rename did not happen, so the
 		// live file is still the live file — reopening it is the
 		// recovery rather than an extra step.
-		_ = a.deps.Reopen(ctx)
-		return Manifest{}, err
+		return Manifest{}, a.rollback(ctx, part, err)
 	}
 	if err := a.deps.Reopen(ctx); err != nil {
-		return Manifest{}, fmt.Errorf("statelog: reopen after the install: %w", err)
+		// FORWARD PROGRESS, NOT A ROLLBACK, so it keeps the caller's
+		// context: the artefact is the live file now, and whatever opens
+		// the estate next — a running node's restore, or the next start
+		// of one being stopped — opens the artefact. The row stays as
+		// [AdoptionScrubbed] left it, incomplete, which is what happened,
+		// and the file carries its own ledger's watermark whichever side
+		// of the install it stopped on. But the estate is not open, and
+		// that is what the caller has to be told.
+		return Manifest{}, fmt.Errorf("%w: the artefact is installed and "+
+			"opening it failed: %w", ErrEstateNotRestored, err)
 	}
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionInstalled); err != nil {
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionInstalled); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the install: %w", err)
 	}
 
 	// 9. COMPLETE.
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionComplete); err != nil {
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionComplete); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: complete the adoption: %w", err)
 	}
+	// THE ONE LINE AN ADOPTION WRITES, carrying which artefact it was: the
+	// checksum is what matches it to the donor's `statelog_snapshot_sent`,
+	// and the instant it was taken is how old the history it installed is.
+	// The engine wrote a second `statelog_adopted` holding those two, and
+	// one adoption read as two.
 	a.log.InfoContext(ctx, "statelog_adopted",
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
+		"sha256", offer.Manifest.SHA256, "taken_at", offer.Manifest.TakenAt,
 		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
 	return offer.Manifest, nil
+}
+
+// recordScrubbedLedgers writes, into the artefact at part, that every domain
+// ledger its donor scrubbed may have lost every row applied before began.
+//
+// ONLY WHERE THE MANIFEST SAYS SO. A donor of this build or later scrubs no
+// ledger — it travels, with the donor's own watermark beside it — and the
+// artefact is installed exactly as it arrived. A donor from before scrubbed
+// every ledger, and the manifest's list is its own account of which: the
+// adopter holds that list checked against the file already (step 6), so a
+// ledger it names is empty and one it does not name is the donor's.
+//
+// INTO THE ARTEFACT, BEFORE IT IS INSTALLED, never into the live estate after:
+// a live estate reopens into service with a publisher already able to read
+// it, and a write that landed a moment later would leave a window in which
+// the scrubbed ledger's silence reads as conclusive. The artefact is migrated
+// by the open here — it may come from a build whose schema predates the
+// watermark's table — which is the same migration the reopen would have run.
+func (a *Adopter) recordScrubbedLedgers(ctx context.Context, part string, m Manifest,
+	began time.Time) error {
+
+	var lost []Domain
+	for _, reg := range a.deps.Domains {
+		if ops := reg.Domain.OpsTable(); ops != "" && slices.Contains(m.Scrubbed, ops) {
+			lost = append(lost, reg.Domain)
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, part, store.Options{})
+	if err != nil {
+		return fmt.Errorf("statelog: open the artefact to record the ledger its "+
+			"donor scrubbed: %w", err)
+	}
+	for _, d := range lost {
+		if err := RecordLedgerLoss(ctx, db, d, began); err != nil {
+			_ = db.Close()
+			return err
+		}
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("statelog: close the artefact after recording the "+
+			"ledger its donor scrubbed: %w", err)
+	}
+	return nil
+}
+
+// rollback undoes an install that stopped before its rename: the live file is
+// still the live file, so discarding the artefact at part and reopening the
+// live file is the whole recovery.
+//
+// A ROLLBACK, so it takes [context.WithoutCancel]: the failure it undoes is
+// routinely the cancellation itself — a Stop or a signal landing while the
+// install checkpoints — and a reopen under that dead context fails too,
+// leaving a node whose install never happened with no replicated estate open
+// at all.
+//
+// AND ITS OWN FAILURE IS [ErrEstateNotRestored], carrying both causes, because
+// that outcome is the worse of the two and the one the caller has to act on:
+// it is told the install failed, and must also be told the live database did
+// not come back.
+//
+// THE ABANDONED ARTEFACT GOES FIRST. It is a whole copy of the estate on the
+// live file's own volume, and nothing will ever install it, so a reopen run
+// beside it competes with it for room — on a full disk, exactly the room the
+// reopen needed. In the other order the reopen fails, the artefact is deleted
+// a moment later on the way out, and the node has lost its database to a file
+// it had already given up on.
+func (a *Adopter) rollback(ctx context.Context, part string, cause error) error {
+	// A failure to discard is not this unwind's to report: the reopen is
+	// what it is for, and the next attempt's clear names what it could not
+	// remove.
+	_ = store.RemoveCopy(part)
+	if err := a.deps.Reopen(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w — %w; and reopening it failed: %w",
+			ErrEstateNotRestored, cause, err)
+	}
+	return cause
 }
 
 // verifyPositions re-reads every checkpoint FROM THE FILE and compares it with

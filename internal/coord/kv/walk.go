@@ -6,9 +6,9 @@
 // key ON TOP of an ordered ephemeral consumer created and destroyed per call:
 // two JetStream metadata proposals on a clustered bucket, for a question that
 // is one pass over the stream. Several of a node's fifteen-second duty loops
-// read a bucket on every tick and the state-log write fence reads the
-// positions register on every first write to a subject, so that cost is paid
-// continuously rather than at the edges.
+// read a bucket on every tick and the state-log write fence lists the trim
+// floors out of the positions register on every write at an expectation of
+// zero, so that cost is paid continuously rather than at the edges.
 //
 // So the walk is ONE pass that carries each key AND its value together, and
 // the filter goes to the BROKER rather than to a client-side test.
@@ -73,7 +73,8 @@ func eachEntry(ctx context.Context, kv jetstream.KeyValue,
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
 // shared positions register holds SEVEN classes, so a walk that read the whole
 // bucket moved all seven to use one. That read is not an edge case: the
-// state-log write fence takes it on every first write to a subject.
+// state-log write fence takes it, for the floors, on every write at an
+// expectation of zero.
 //
 // The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
 // and not "$KV.crewlet_x.floor.>" — because a key is what the caller holds and
@@ -95,11 +96,10 @@ func eachEntryUnder(ctx context.Context, kv jetstream.KeyValue,
 
 // watchWalk walks a bucket over an ordered ephemeral consumer.
 //
-// The transport for a broker that cannot answer a batched read — see the file
-// doc for the three conditions. It carries the key AND the value together, so
-// there is still no Get per name here, and its honesty rule is the one
-// [directWalk] copies: the nil entry — and ONLY the nil entry — ends the walk,
-// and a CLOSED CHANNEL is a failure named as one.
+// The only transport — the file doc says why the batched read is not one. It
+// carries the key AND the value together, so there is still no Get per name
+// here, and its honesty rule is the whole of it: the nil entry — and ONLY the
+// nil entry — ends the walk, and a CLOSED CHANNEL is a failure named as one.
 //
 // It also owns the watcher, so there is no early-return path that leaks one —
 // the abandoned-listing case the client's blocking 256-entry handoff could

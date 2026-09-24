@@ -354,7 +354,9 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
 
-	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+	})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}

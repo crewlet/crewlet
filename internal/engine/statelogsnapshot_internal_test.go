@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE REGISTER IS THE ONLY PLACE A FLEET CAN SEE ANOTHER NODE'S ARTEFACT.
@@ -393,4 +395,187 @@ func TestANodeHoldingNothingIsStillReported(t *testing.T) {
 		t.Errorf("report = %+v, want the warning: a fleet with peers and no "+
 			"donor is exactly what it is for", say)
 	}
+}
+
+// A NUDGE WAKES THE SNAPSHOT LOOP, AND NOTHING ELSE DOES BEFORE ITS WAIT IS UP.
+//
+// A reanchor, an adoption and the restore of an installed artefact each leave
+// this node holding an artefact no joiner will take, and each wakes the loop
+// rather than leaving the fleet without a donor for the length of whichever
+// wait the loop is in: the interval — a day — after a snapshot it took, and
+// the skip retry after one it declined. Both waits are exercised here with the
+// interval at a day, so a tick that comes early can only be the nudge.
+func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		take func() (statelog.Manifest, error)
+	}{
+		{"after a snapshot it took", func() (statelog.Manifest, error) {
+			return statelog.Manifest{TakenAt: time.Now().UTC(), NodeID: "node-a"}, nil
+		}},
+		{"after a tick it declined", func() (statelog.Manifest, error) {
+			return statelog.Manifest{}, &statelog.ErrSkipped{
+				Reason: statelog.SkipLagging, Detail: "behind"}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, stop := context.WithCancel(t.Context())
+			s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1)}
+			taker := &countingTaker{took: make(chan struct{}, 8), take: c.take}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				(&Engine{}).snapshotLoop(s, taker, t.TempDir(), 24*time.Hour)
+			}()
+			t.Cleanup(func() { stop(); <-done })
+
+			taker.await(t, "the boot's tick")
+			select {
+			case <-taker.took:
+				t.Fatal("the loop ticked again with nothing to wake it")
+			case <-time.After(300 * time.Millisecond):
+			}
+			s.nudgeSnapshot()
+			taker.await(t, "the nudged tick")
+			if held := s.snapshot.Load(); held == nil {
+				t.Fatal("the nudged tick published nothing to the register row")
+			}
+		})
+	}
+}
+
+// countingTaker is a snapshotter that reports every attempt.
+type countingTaker struct {
+	took chan struct{}
+	take func() (statelog.Manifest, error)
+}
+
+func (c *countingTaker) Take(context.Context) (statelog.Manifest, error) {
+	m, err := c.take()
+	c.took <- struct{}{}
+	return m, err
+}
+
+// await waits for the loop's next attempt.
+func (c *countingTaker) await(t *testing.T, what string) {
+	t.Helper()
+	select {
+	case <-c.took:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("waited 5s for %s", what)
+	}
+}
+
+// A REANCHOR, AN ADOPTION AND A RESTORE EACH WAKE THE LOOP ON A RUNNING NODE.
+//
+// Each leaves the node holding an artefact at a generation a joiner refuses —
+// or, for the restore, possibly the donor's file under an artefact of its own —
+// and until the loop takes another, the peers the event left behind have no
+// donor. The loop is first left waiting out its interval behind a snapshot it
+// took, so the only thing that can run it again inside the test is the nudge
+// the event gives it.
+func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		event func(t *testing.T) (*Engine, func())
+	}{
+		{"a reanchor", func(t *testing.T) (*Engine, func()) {
+			e, js := aRunningNode(t)
+			return e, func() {
+				running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+				spec := running.domain.Stream()
+				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
+					res.Outcome != statelog.OutcomeApplied {
+					t.Fatalf("a write before the rebuild: %+v, %v", res, err)
+				}
+				rebuildLog(t, js, spec)
+				e.native.Load().log.publishPositions(t.Context())
+				view, err := e.ReanchorStatus(t.Context(), spec.Name)
+				if err != nil {
+					t.Fatalf("ReanchorStatus: %v", err)
+				}
+				if _, err := e.Reanchor(t.Context(), ReanchorRequest{
+					Stream: spec.Name, Confirm: statelog.ConfirmationOf(view.CreatedAt),
+					By: "ops-1",
+				}); err != nil {
+					t.Fatalf("Reanchor: %v", err)
+				}
+			}
+		}},
+		{"an adoption", func(t *testing.T) (*Engine, func()) {
+			e, back, q := bootRejoinNode(t)
+			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			quietHeartbeat(e.native.Load().log)
+			return e, func() {
+				running, at, last := pushBelowTheFloor(t, e, q)
+				rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
+				copyAdvancedTo(t, back, running, at, last, rows)
+				standUpDonor(t, q, rows, statelog.Position{
+					Stream: at.Stream, Generation: at.Generation, Seq: last,
+				}, running.runner.KeyedTo())
+				if err := e.rejoin(e.native.Load().log.run, e.native.Load().log); err != nil {
+					t.Fatalf("rejoin: %v", err)
+				}
+			}
+		}},
+		{"the restore of an estate a failed adoption left closed", func(t *testing.T) (*Engine, func()) {
+			e, back, _ := bootRejoinNode(t)
+			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			quietHeartbeat(e.native.Load().log)
+			return e, func() {
+				s := e.native.Load().log
+				s.haltAppliers()
+				if err := back.Store.CloseReplicated(); err != nil {
+					t.Fatalf("close the replicated estate: %v", err)
+				}
+				if err := s.restoreEstate(s.run); err != nil {
+					t.Fatalf("restore: %v", err)
+				}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, event := c.event(t)
+			parked := parkSnapshotLoop(t, e)
+			event()
+			waitUntil(t, 10*time.Second, "the snapshot loop to wake", func() bool {
+				return e.native.Load().log.snapshot.Load() != parked
+			})
+		})
+	}
+}
+
+// parkSnapshotLoop leaves a running node's snapshot loop waiting out its
+// interval — a day — behind a snapshot it has just taken, and returns what that
+// tick published. From then on nothing but a nudge runs the loop again.
+//
+// A PEER IS COUNTED so the tick can take one: a node alone declines as
+// `sole_node` and retries every thirty seconds, which would put a tick of its
+// own inside any window a test watched. And the loop is NOT nudged here: a
+// nudge that arrived while a tick was taking would run it again at once, and
+// that tick — declining as `recent` — goes back to the thirty-second retry.
+func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
+	t.Helper()
+	s := e.native.Load().log
+	counted := time.Now().UTC()
+	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
+		NodeID: "a-counted-peer", At: counted,
+	}); err != nil {
+		t.Fatalf("publish a counted peer: %v", err)
+	}
+	var parked *snapshotHeld
+	waitUntil(t, 75*time.Second, "the snapshot loop to take one and park", func() bool {
+		held := s.snapshot.Load()
+		if held == nil || !held.Have || held.Skip != "" ||
+			held.Manifest.TakenAt.Before(counted) {
+			return false
+		}
+		parked = held
+		return true
+	})
+	return parked
 }

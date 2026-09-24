@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"regexp"
 	"strings"
@@ -47,6 +48,7 @@ func healthyDomain(name string, feed bool) statelog.DomainInputs {
 		StreamReadable: true,
 		TrimFloor:      700,
 		Decision:       statelog.Trim(in.Terms()),
+		FloorState:     statelog.TrimFloorPublished,
 	}
 }
 
@@ -64,9 +66,9 @@ func term(t *testing.T, d statelog.DomainReport, name statelog.TermName) statelo
 
 // A TERM A DOMAIN DOES NOT HAVE IS `n/a`, NEVER ZERO AND NEVER UNKNOWN.
 //
-// A compacted domain has no wake feed. Rendering that as `0` claims the feed
-// has scanned nothing, and rendering it as unreadable puts a block on the
-// screen of a fleet where nothing is wrong.
+// A domain that declares no wake feed has none. Rendering that as `0` claims
+// the feed has scanned nothing, and rendering it as unreadable puts a block on
+// the screen of a fleet where nothing is wrong.
 func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 	t.Parallel()
 	rep := statelog.NewReport(statelog.ReportInputs{
@@ -77,7 +79,7 @@ func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 	})
 	got := term(t, rep.Domains[0], statelog.TermFeedAckFloor)
 	if got.State != statelog.TermAbsent {
-		t.Errorf("a compacted domain's wake feed reports %q; a domain that has no "+
+		t.Errorf("a domain with no declared wake feed reports %q; a domain that has no "+
 			"feed at all is n/a, and both of the other two states put a fault "+
 			"on the screen", got.State)
 	}
@@ -188,6 +190,59 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	if !strings.HasPrefix(fired[0].Detail, "vectors: ") {
 		t.Errorf("the headroom alarm reads %q and does not name the log that is "+
 			"filling", fired[0].Detail)
+	}
+}
+
+// A RESERVED LOG'S HEADROOM IS OF THE CEILING ITS ORDINARY WRITES MEET.
+//
+// On a log that keeps a gate reserve ordinary writes are refused at the ceiling
+// less the reserve, so that is where "full" is for everything the headroom
+// alarm warns about: measured against the broker's ceiling, the alarm fired a
+// sixteenth late and a log at 0% of its ordinary ceiling read as having room.
+// A log that keeps none is still measured against its whole ceiling, and the
+// reserve itself is reported beside the ceiling it is kept under.
+func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
+	t.Parallel()
+	// 12% of the broker's ceiling is left, and 6% of the 1500 bytes
+	// ordinary writes are held to.
+	reserved := healthyDomain("tracker", true)
+	reserved.Bytes, reserved.MaxBytes, reserved.Reserved = 1408, 1600, true
+	plain := healthyDomain("vectors", false)
+	plain.Bytes, plain.MaxBytes = 1408, 1600
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{reserved, plain},
+	})
+	byName := map[string]statelog.DomainReport{}
+	for _, d := range rep.Domains {
+		byName[d.Domain] = d
+	}
+	for name, want := range map[string]struct {
+		headroom float64
+		reserve  uint64
+	}{
+		"tracker": {headroom: 92.0 / 1500, reserve: 100},
+		"vectors": {headroom: 192.0 / 1600, reserve: 0},
+	} {
+		d := byName[name]
+		if d.HeadroomFraction == nil || *d.HeadroomFraction != want.headroom {
+			t.Errorf("%s reports a headroom of %v, want %v", name,
+				d.HeadroomFraction, want.headroom)
+		}
+		if d.ReserveBytes != want.reserve {
+			t.Errorf("%s reports a reserve of %d bytes, want %d", name,
+				d.ReserveBytes, want.reserve)
+		}
+	}
+	var fired []string
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogHeadroom {
+			fired = append(fired, a.Detail)
+		}
+	}
+	if len(fired) != 1 || !strings.HasPrefix(fired[0], "tracker: ") {
+		t.Fatalf("the headroom alarm fired %q, want it on tracker alone — the "+
+			"one within a tenth of the ceiling its writes are refused at", fired)
 	}
 }
 
@@ -463,7 +518,8 @@ func TestEveryFieldOfTheRetentionDocumentIsSnakeCase(t *testing.T) {
 	// stopping at Report's own fields. Without this a tagless field on
 	// any child would pass.
 	for _, want := range []any{statelog.Alarm{}, statelog.DomainReport{}, statelog.TermReport{}, statelog.NodeReport{},
-		statelog.NodeDomainReport{}, statelog.EvictionReport{}, statelog.SnapshotReport{}, statelog.ReplicaReport{}} {
+		statelog.NodeDomainReport{}, statelog.EvictionReport{}, statelog.SnapshotReport{}, statelog.ReplicaReport{},
+		statelog.DomainRefusal{}} {
 		if !seen[reflect.TypeOf(want)] {
 			t.Errorf("the walk never reached %T, so its fields are unchecked", want)
 		}
@@ -677,5 +733,154 @@ func TestASequenceOfZeroSurvivesTheWire(t *testing.T) {
 		t.Errorf("a term permitting nothing yet serialises as %s, with no `seq` "+
 			"in it: absent and zero are different answers and the reader cannot "+
 			"tell them apart", blob)
+	}
+}
+
+// A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT SAYS SO, AND ITS TERMS ARE AN
+// EMPTY LIST.
+//
+// After every reanchor the domain's floor row is the old generation's, so the
+// report fills nothing from it until the trim's first tick on the adopted
+// stream. The row went out as `"terms": null` — which crashed the Fleet screen
+// and the domain page, the two things an operator opens to watch a reanchor
+// recover — and with no blocking term, which both screens drew as "advancing".
+func TestADomainWithNoConclusionSaysSoAndCarriesNoNullTerms(t *testing.T) {
+	t.Parallel()
+	d := healthyDomain("pages", false)
+	d.TrimFloor, d.Decision = 0, statelog.TrimDecision{}
+	d.FloorState = statelog.TrimFloorNoneAtGeneration
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		Domains: []statelog.DomainInputs{d},
+	})
+	row := rep.Domains[0]
+	if row.TrimFloorState != statelog.TrimFloorNoneAtGeneration {
+		t.Errorf("trim_floor_state = %q, want none_at_generation", row.TrimFloorState)
+	}
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"terms":[]`, `"trim_floor_state":"none_at_generation"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("the row encodes %s, want %s in it", encoded, want)
+		}
+	}
+
+	// A CALLER THAT SAID NOTHING HAS NOTHING TO SHOW: its zeros are not
+	// a published floor of zero.
+	d.FloorState = ""
+	rep = statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, Domains: []statelog.DomainInputs{d},
+	})
+	if got := rep.Domains[0].TrimFloorState; got != statelog.TrimFloorNoneAtGeneration {
+		t.Errorf("an unset floor state reported %q, want none_at_generation", got)
+	}
+	for _, s := range statelog.TrimFloorStates() {
+		if !s.Valid() {
+			t.Errorf("%q is not Valid()", s)
+		}
+	}
+}
+
+// A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT COMPARED.
+//
+// Its sequence is in a number space the log has left, and subtracting it from
+// the adopted stream's last read lag 0 whenever the old number was the larger —
+// so an operator told to readmit "at the log's current generation" saw a node
+// caught up that the readmission then refused.
+func TestAPositionFromAnotherGenerationIsLabelledRatherThanCompared(t *testing.T) {
+	t.Parallel()
+	d := healthyDomain("tracker", true)
+	d.Generation, d.LastSeq = 1, 40
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		Domains: []statelog.DomainInputs{d},
+		Register: []coord.NodePositions{
+			{NodeID: "node-1", At: reportAt, Domains: map[string]coord.DomainPosition{
+				"tracker": {Generation: 1, Seq: 30, AppliedThrough: 30}}},
+			{NodeID: "node-2", At: reportAt, Domains: map[string]coord.DomainPosition{
+				"tracker": {Generation: 0, Seq: 918_000_000, AppliedThrough: 918_000_000,
+					LogDiverged: true}}},
+			{NodeID: "node-3", At: reportAt, Domains: map[string]coord.DomainPosition{
+				"tracker": {Generation: 2, Seq: 5, AppliedThrough: 5},
+				"vectors": {Generation: 0, Seq: 9, AppliedThrough: 9}}},
+		},
+	})
+	nodes := map[string]statelog.NodeReport{}
+	for _, n := range rep.Nodes {
+		nodes[n.NodeID] = n
+	}
+	current := nodes["node-1"].Domains["tracker"]
+	if current.GenerationState != statelog.GenerationCurrent || current.Lag == nil ||
+		*current.Lag != 10 {
+		t.Errorf("the current node reads %+v, want current and lag 10", current)
+	}
+	left := nodes["node-2"].Domains["tracker"]
+	if left.GenerationState != statelog.GenerationLeft {
+		t.Errorf("a generation-0 position under a generation-1 log reads %q, want left",
+			left.GenerationState)
+	}
+	if left.Lag != nil {
+		t.Errorf("a position from a generation the log left carries lag %d — a "+
+			"difference between two number spaces", *left.Lag)
+	}
+	if !left.LogDiverged {
+		t.Error("the node's own log_diverged report was dropped")
+	}
+	ahead := nodes["node-3"].Domains["tracker"]
+	if ahead.GenerationState != statelog.GenerationAhead || ahead.Lag != nil {
+		t.Errorf("a generation-2 position under a generation-1 log reads %+v, want "+
+			"ahead with no lag", ahead)
+	}
+	if got := nodes["node-3"].Domains["vectors"].GenerationState; got != statelog.GenerationUnknown {
+		t.Errorf("a domain this node does not run reads %q, want unknown", got)
+	}
+	for _, s := range statelog.GenerationStates() {
+		if !s.Valid() {
+			t.Errorf("%q is not Valid()", s)
+		}
+	}
+}
+
+// A REFUSED DOMAIN NAMES THE REFUSAL AND WHICH FINDING IS BEHIND IT.
+//
+// `wrong_stream` is one word for four facts, each with its own remedy, and the
+// guides send an operator to the status to find out which one this is.
+func TestANotReadyDomainNamesTheFindingBehindIt(t *testing.T) {
+	t.Parallel()
+	now := reportAt
+	fresh := statelog.Floor{State: statelog.FloorOK, ReadAt: now}
+	last := uint64(40)
+	ahead := statelog.Health{
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 90},
+		LastSeq:  &last, Floor: fresh,
+	}
+	got := ahead.NotReady(now, "S", nil)
+	if got == nil || got.Code != string(statelog.RefuseWrongStream) ||
+		len(got.Causes) != 1 || got.Causes[0] != statelog.CauseAheadOfLog {
+		t.Fatalf("a checkpoint past the end reads %+v, want wrong_stream from ahead_of_log", got)
+	}
+	if !strings.Contains(got.Detail, "sequence 90") || !strings.Contains(got.Detail, "ends at 40") {
+		t.Errorf("the sentence does not name both numbers: %s", got.Detail)
+	}
+
+	both := statelog.Health{Position: statelog.Position{Seq: 30}, LastSeq: &last,
+		Floor: fresh, StreamRecreated: true, LogDiverged: true}
+	identity := errors.New("the stream was created at a later instant")
+	got = both.NotReady(now, "S", identity)
+	if got == nil || len(got.Causes) != 2 || got.Causes[0] != statelog.CauseRecreated ||
+		got.Causes[1] != statelog.CauseLogDiverged || got.Detail != identity.Error() {
+		t.Errorf("two findings read %+v, want both causes and the applier's own sentence", got)
+	}
+
+	if ready := (statelog.Health{Position: statelog.Position{Seq: 30}, LastSeq: &last,
+		Floor: fresh}).NotReady(now, "S", nil); ready != nil {
+		t.Errorf("a healthy domain reads not ready: %+v", ready)
+	}
+	for _, c := range statelog.IdentityCauses() {
+		if !c.Valid() {
+			t.Errorf("%q is not Valid()", c)
+		}
 	}
 }

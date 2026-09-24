@@ -402,14 +402,14 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	queue := &publishRecorder{}
 	// The engine's own resumer, as buildSandboxRuntime hands it over: the
 	// coordinator refuses to be built without one.
-	e := &Engine{sandboxPending: store}
+	e := &Engine{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	e.sandboxCoordinator = coordinator
+	e.useSandbox(store, coordinator)
 	box, err := provider.Create(t.Context(), sandbox.Spec{})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -424,7 +424,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 
-	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
+	e.failSuspension(t.Context(), e.sandbox.Load(), "t1", "sandbox_suspension_missing",
 		"the turn suspended but recorded no conversation", nil)
 
 	if got, found, err := store.Get(t.Context(), "t1"); err != nil || found {
@@ -792,7 +792,7 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	equipped.sandboxCoordinator = coordinator
+	equipped.useSandbox(store, coordinator)
 	if err := equipped.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err != nil {
 		t.Fatalf("retireSeatRuns: %v", err)
 	}
@@ -841,4 +841,13 @@ func TestAResumedRunCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 	if len(got.History) != 1 || got.History[0].Intent != "before the box" {
 		t.Errorf("History = %+v, want the ledger the suspend handed out", got.History)
 	}
+}
+
+// useSandbox installs a runtime a case assembled itself, as [Engine.startSandbox]
+// publishes the one it builds.
+func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.Coordinator) {
+	if e.sandboxSeats == nil {
+		e.sandboxSeats = map[string]bool{}
+	}
+	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
 }

@@ -105,11 +105,17 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
 	}
-	// The mux's own 404 is text/plain; the query layer's carries a JSON
-	// error code. That is how a caller tells them apart.
-	if ct := res.Header.Get("Content-Type"); ct != "application/json" {
-		t.Errorf("content-type = %q; a bare mux 404 means the route is not "+
-			"registered at all, which is the bug this covers", ct)
+	// The mux's own 404 says `no_route`; the query layer's says the
+	// question is unknown. That is how a caller tells them apart — both are
+	// JSON now, so the content type no longer does.
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("GET /pages answered no JSON: %v", err)
+	}
+	if body["error"] != "unknown_query" {
+		t.Errorf("GET /pages answered %v; the mux's own no_route means the "+
+			"route is not registered at all, which is the bug this covers",
+			body["error"])
 	}
 }
 

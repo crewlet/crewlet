@@ -94,7 +94,7 @@ type Deps struct {
 	// tools, which is what a company running Confluence has.
 	Pages PageDeps
 
-	// Work is the native tracker. Both halves nil omits all five tools,
+	// Work is the native tracker. Both halves nil omits every one of its tools,
 	// which is what a company running Jira has — and omitting them is the
 	// point: a seat offered a tracker tool against a tracker this company
 	// does not run would reach for it and fail at the call.
@@ -166,6 +166,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// already cancel and link by hand, which is the same gesture
 		// without the children. See workmerge.go.
 		{&mergeWorkItem{deps: deps.Work}, deps.Work.Merges != nil && deps.Work.Reader != nil},
+		// AND THE MOVE, which is a seat's behind the gate a re-route has:
+		// the lead of the item's project decides where its work lives.
+		// See workmove.go.
+		{&moveWorkItem{deps: deps.Work, leads: deps.LeadsProject},
+			deps.Work.Moves != nil && deps.Work.Reader != nil},
 		// AND THE RANKED SEARCH, which is the only way to reach what an
 		// item's DESCRIPTION says — see worksearch.go.
 		{&searchWorkItems{deps: deps.Work}, deps.Work.Search != nil},
@@ -370,6 +375,21 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
+	case tracker.MoveWorkItemTool:
+		// A WRITE EVERYBODY SEES — an item and its subtree leave one
+		// project's board for another's and every key in it changes — so
+		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true,
+		// which keeps it away from a sub-agent acting under its parent's
+		// name.
+		//
+		// NOT DESTRUCTIVE: nothing is lost, every former key still
+		// resolves, and a move back undoes it. NOT idempotent: the same
+		// move made again as a new operation is refused — the item is
+		// already there, and something else put it there as far as that
+		// operation can tell.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
+		}
 	case tracker.WriteProjectTool:
 		// A WRITE EVERYBODY SEES — a declared tag is a filter on
 		// everybody's board and an archived project takes no work from
@@ -399,9 +419,11 @@ func annotationsFor(name string) tools.Annotations {
 		// from a sub-agent acting under its parent's name. Not
 		// destructive: a removal is reversible at any age and destroys
 		// nothing, which is exactly what separates it from a purge. And
-		// each is IDEMPOTENT: a task already in the trash is left there
-		// and reported as success, because a half-finished subtree
-		// removal has to be able to be re-run.
+		// each is IDEMPOTENT: a task already where the gesture leaves it
+		// is nothing to do, because a subtree removal or restore that
+		// stopped part of the way through has to be able to be made
+		// again. (A restore with nothing left to bring back says so, and
+		// changes nothing either.)
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,

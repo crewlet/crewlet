@@ -52,7 +52,7 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 	// gate deciding whether this node may donate a snapshot, go back to
 	// reading a zero value.
 	want := []string{"Err", "Stalled", "Evicted", "Floor", "Drained", "Deferred",
-		"LastSeq", "StreamRecreated"}
+		"LastSeq", "StreamRecreated", "GenerationPassed"}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "statelog.go", nil, 0)

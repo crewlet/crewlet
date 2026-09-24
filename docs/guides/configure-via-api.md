@@ -266,6 +266,8 @@ classified, beside the `detail` that renders them.
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
+| `404` | `no_route` | A path under `/config` this surface does not serve |
+| `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |

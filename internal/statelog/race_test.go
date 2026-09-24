@@ -1,10 +1,12 @@
 package statelog_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -164,6 +166,188 @@ func TestABelowFloorNodeIsRefusedRatherThanRetryingAtZero(t *testing.T) {
 	}
 }
 
+// THE ZERO FENCE IS ASKED ABOUT THE CHECKPOINT THE DECISION WAS MADE AT, on
+// both roads to an expectation of zero.
+//
+// The floor theorem concludes that a trimmed record on this subject is already
+// reflected in the rows the write decided from, so the C it verifies F <= C+1
+// against has to be the position THOSE rows were at. This node's applier keeps
+// moving while a write runs, and only forward, so its live position is the
+// permissive answer: a record applied after the snapshot and trimmed before the
+// check passes against it, and the decision published at zero — which never
+// saw that record — overwrites it. The staging lands a record on the applier
+// between the snapshot and the check, and the fence must be asked about the
+// snapshot's position rather than the one the applier moved to.
+func TestTheZeroFenceIsAskedAboutTheCheckpointTheDecisionRead(t *testing.T) {
+	t.Parallel()
+	for name, stage := range map[string]func(h *harness) statelog.Subject{
+		// No anchor and nothing on the broker: the expectation itself is
+		// zero, formed and fenced before the first append.
+		"a subject nobody has written": func(h *harness) statelog.Subject {
+			if _, err := h.write(probeSubject("busy"), "op-busy", "x"); err != nil {
+				h.t.Fatalf("a write elsewhere: %v", err)
+			}
+			return probeSubject("fresh")
+		},
+		// An anchor the trim removed: the append at it is refused, and
+		// the retry at zero publishes the same snapshot's decision.
+		"an anchor the trim removed": func(h *harness) statelog.Subject {
+			quiet, err := h.write(probeSubject("quiet"), "op-quiet", "once")
+			if err != nil {
+				h.t.Fatalf("the quiet object's only write: %v", err)
+			}
+			for i := range 3 {
+				if _, err := h.write(probeSubject("busy"), fmt.Sprintf("op-busy-%d", i), "x"); err != nil {
+					h.t.Fatalf("busy write %d: %v", i, err)
+				}
+			}
+			h.purgeBelow(quiet.Position.Seq + 2)
+			h.anchorAt(probeSubject("quiet"), quiet.Position.Seq)
+			return probeSubject("quiet")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			subject := stage(h)
+
+			decided := h.applier.Committed()
+			moved := statelog.Position{
+				Stream: probeStream, Generation: decided.Generation, Seq: decided.Seq + 7,
+			}
+			var once sync.Once
+			h.rows.mu.Lock()
+			h.rows.afterSnapshot = func() { once.Do(func() { h.applier.advance(moved) }) }
+			h.rows.mu.Unlock()
+
+			before := len(h.fence.asked())
+			if _, err := h.write(subject, "op-after", "again"); err != nil {
+				t.Fatalf("the write: %v", err)
+			}
+			asked := h.fence.asked()[before:]
+			if len(asked) == 0 {
+				t.Fatal("the write never reached the expectation-zero fence, so this " +
+					"case stages nothing")
+			}
+			if asked[0] != decided {
+				t.Fatalf("the fence was asked about %s, want %s — the checkpoint the "+
+					"decision's rows were at; %s is where the applier moved after "+
+					"the snapshot, and a record in between is one the decision "+
+					"published at zero never saw", asked[0], decided, moved)
+			}
+		})
+	}
+}
+
+// THE ZERO FENCE READS ITS BOUNDS ONLY AFTER THE LOG HAS SAID THE SUBJECT IS
+// EMPTY, on both roads to an expectation of zero — which is what excludes the
+// purge of a record the decision never read.
+//
+// The applied term bounds a purge by what this node had APPLIED, and a node
+// applies past its own snapshot while a write runs. So a peer's record R on
+// this subject, above the snapshot's checkpoint, can be applied here, licensed
+// and purged before the write learns the subject is empty — and the decision
+// published at zero never saw R. What refuses it is the order of the write's
+// own reads: the floor that licensed the purge was published before it, and
+// the fence reads that floor, and the log's first sequence, only after LastSeq
+// has answered. Read the other way round, the fence clears against bounds from
+// before the purge, LastSeq then finds nothing, and the write lands at zero over
+// R. Each case purges R at the one instant that tells the two orders apart: as
+// the publisher asks the broker for the subject's last message.
+func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testing.T) {
+	t.Parallel()
+	subject := probeSubject("contended")
+	wire := probePrefix + "." + subject.String()
+	for name, stage := range map[string]func(t *testing.T, h *harness){
+		// This node has applied nothing on the subject: the expectation
+		// itself is zero, and LastSeq is what forms it.
+		"a subject this node has never written": func(*testing.T, *harness) {},
+		// This node's row names its own record, the peer's record R sits
+		// above it, so the append at the anchor is refused and LastSeq is
+		// what tells a trimmed anchor from a lost race.
+		"an anchor the broker refuses": func(t *testing.T, h *harness) {
+			own, err := h.write(subject, "op-own", "mine")
+			if err != nil {
+				t.Fatalf("this node's own write: %v", err)
+			}
+			h.anchorAt(subject, own.Position.Seq)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			stage(t, h)
+			decided := h.applier.Committed()
+
+			// A PEER'S RECORD this node has not applied when it decides.
+			r, _, err := h.log.Append(t.Context(), wire, "peer-op", nil, []byte("peer"))
+			if err != nil {
+				t.Fatalf("the peer's write: %v", err)
+			}
+			if r <= decided.Seq {
+				t.Fatalf("the peer's record landed at %d, not above the decision's "+
+					"checkpoint %d", r, decided.Seq)
+			}
+
+			// THE REAL ZERO FENCE, over a published floor and the log's own
+			// ends as they stand when it reads them.
+			var floor atomic.Uint64
+			h.fence.zero = &statelog.ZeroFence{
+				Evicted: func(context.Context) (bool, error) { return false, nil },
+				Floor: func(context.Context, uint32) (uint64, error) {
+					return floor.Load(), nil
+				},
+				Ends: func(ctx context.Context) (statelog.LogEnds, error) {
+					first, last, err := h.log.Bounds(ctx)
+					return statelog.LogEnds{First: first, Last: last}, err
+				},
+				Committed: h.applier.Committed,
+			}
+
+			// AND THE TRIM, as the write asks what the subject holds: this
+			// node applies R and reports it, a tick publishes a floor past
+			// R, and then purges below it.
+			var once sync.Once
+			h.appends.mu.Lock()
+			h.appends.beforeLastSeq = func() {
+				once.Do(func() {
+					h.applier.advance(statelog.Position{
+						Stream: probeStream, Generation: decided.Generation, Seq: r,
+					})
+					floor.Store(r + 1)
+					h.purgeBelow(r + 1)
+				})
+			}
+			h.appends.mu.Unlock()
+
+			before := len(h.appends.expectations())
+			_, err = h.write(subject, "op-after", "decided without R")
+			if !errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, statelog.ErrConflict) {
+				t.Fatalf("write = %v, want the zero fence's refusal — R was purged "+
+					"after this node's snapshot, and the floor that licensed it "+
+					"was published first", err)
+			}
+			for _, expect := range h.appends.expectations()[before:] {
+				if expect != nil && *expect == 0 {
+					t.Fatalf("appended at an expectation of zero over R at %d, which "+
+						"the decision never read", r)
+				}
+			}
+			first, last, err := h.log.Bounds(t.Context())
+			if err != nil {
+				t.Fatalf("read the log's bounds: %v", err)
+			}
+			if first != r+1 {
+				t.Fatalf("the log starts at %d, want %d — the trim never ran as the "+
+					"write asked for the subject, so this case staged nothing", first, r+1)
+			}
+			if last != r {
+				t.Fatalf("the log ends at %d, want %d — a record landed over R", last, r)
+			}
+		})
+	}
+}
+
 // AN OLD GENERATION'S ANCHOR CANNOT EXIST ON A RECREATED STREAM, and the
 // probe is what says so rather than a cheap pre-filter.
 //
@@ -267,7 +451,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 	})
 
-	t.Run("an operation minted before this node adopted answers unknown", func(t *testing.T) {
+	t.Run("an operation minted before an adoption from a scrubbing donor during its own write answers unknown", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		first, err := h.write(probeSubject("a"), "op-0", "one")
@@ -275,19 +459,25 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 			t.Fatalf("the first write: %v", err)
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		decided := h.rows.snapshots()
 
 		// The record lands, the acknowledgement is lost, this node
 		// applies past it — and its operation ledger is EMPTY, because
-		// it adopted a donated snapshot after this operation was
-		// minted and the ledger is scrubbed out of every one.
+		// it adopted a snapshot from a donor that scrubbed its ledger
+		// DURING this write, after the operation was minted and after
+		// its decision was checked.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
-		h.gates.adopted = time.Now().Add(time.Hour)
 		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
 		h.appends.fail(errors.New("no response from stream"), false)
+		minted := time.Now()
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() { h.adoptFromAScrubbingDonor(minted.Add(time.Hour)) }
+		h.appends.mu.Unlock()
 
-		res, err := h.write(probeSubject("a"), "op-1", "two")
+		op := statelog.NewOpID(minted, "write-a")
+		res, err := h.write(probeSubject("a"), op, "two")
 		if err != nil {
 			t.Fatalf("write across an adoption: %v", err)
 		}
@@ -296,8 +486,50 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 				"as \"somebody else won\" would re-decide against a row that "+
 				"moved because of this very write", res.Outcome)
 		}
-		if res.OpID != "op-1" {
+		if got := h.rows.snapshots() - decided; got != 1 {
+			t.Fatalf("the write decided %d time(s), want once — the resolution "+
+				"of the landed record is what must answer, and a second decision "+
+				"is the re-decide the unknown exists to prevent", got)
+		}
+		if res.Position != (statelog.Position{}) {
+			t.Errorf("unknown named position %s — the newest record on the "+
+				"subject is not known to be this write's, so an unknown names "+
+				"none", res.Position)
+		}
+		if res.OpID != op {
 			t.Error("unknown must carry the op id to retry under")
+		}
+	})
+
+	t.Run("an acknowledged record whose ledger row was lost is applied", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		// The decision is checked before any loss; the loss is reported
+		// from the SECOND read of the watermark on — the resolution's —
+		// which is an adoption from a donor that scrubbed its ledger
+		// landing between this write's append and the answer to it.
+		h.applier.mu.Lock()
+		h.applier.lost = time.Now().Add(time.Hour)
+		h.applier.lostFrom = 2
+		h.applier.mu.Unlock()
+		// This node's rows are past the record, and its own applier
+		// never wrote a row for it: the adopted artefact did the
+		// applying, which is what an adoption covering the record is.
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+
+		res, err := h.write(probeSubject("a"), statelog.NewOpID(time.Now(), "write-a"), "one")
+		if err != nil {
+			t.Fatalf("an acknowledged write whose row the ledger lost: %v — "+
+				"the broker named this operation's own record and no gate dropped "+
+				"it, so the missing row is the loss's doing and not an applier "+
+				"that broke its contract", err)
+		}
+		if res.Outcome != statelog.OutcomeApplied || res.Position.Seq == 0 {
+			t.Fatalf("outcome = %q at %s, want applied at the acknowledged position",
+				res.Outcome, res.Position)
 		}
 	})
 }

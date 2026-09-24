@@ -40,16 +40,21 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/static"
 )
 
-// Paths, relative to this package's directory, which is where `go test` runs.
-const (
-	// The directory package static embeds, on disk.
-	staticDir = "../../static"
-	// The built dashboard the binary serves.
-	servedTree = staticDir + "/dashboard"
-)
+// staticDir is the directory package static embeds, on disk.
+func staticDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(sourcetree.Root(t), "static")
+}
+
+// servedTree is the built dashboard the binary serves.
+func servedTree(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(staticDir(t), "dashboard")
+}
 
 // TestTheBuiltDashboardIsWhole checks the committed tree is an application
 // rather than a half-finished build.
@@ -61,9 +66,10 @@ const (
 // page.
 func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	t.Parallel()
-	shell, err := os.ReadFile(filepath.Join(servedTree, "index.html"))
+	served := servedTree(t)
+	shell, err := os.ReadFile(filepath.Join(served, "index.html"))
 	if err != nil {
-		t.Fatalf("no built shell at %s — run `make dashboard`: %v", servedTree, err)
+		t.Fatalf("no built shell at %s — run `make dashboard`: %v", served, err)
 	}
 
 	// The shell must name an entry script and a stylesheet under assets/. A
@@ -96,7 +102,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// The protocol bundle is a SEPARATE build target and is easy to forget:
 	// internal/e2e replays a real company's socket frames through it under
 	// plain node, and without it that gate silently has nothing to run.
-	if _, err := os.Stat(filepath.Join(servedTree, "protocol.js")); err != nil {
+	if _, err := os.Stat(filepath.Join(served, "protocol.js")); err != nil {
 		t.Errorf("no protocol.js — internal/e2e's client replay has nothing to "+
 			"run against; `npm run build` in dashboard/ emits it: %v", err)
 	}
@@ -122,7 +128,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// depended on the wrong half, because this reads whatever path the
 	// stylesheet names — which is why it went unnoticed.
 	sheetPath := string(sheet.FindSubmatch(shell)[1])
-	css, err := os.ReadFile(filepath.Join(servedTree, strings.TrimPrefix(sheetPath, "/static/dashboard/")))
+	css, err := os.ReadFile(filepath.Join(served, strings.TrimPrefix(sheetPath, "/static/dashboard/")))
 	if err != nil {
 		t.Fatalf("the shell names %s and the tree does not have it: %v", sheetPath, err)
 	}
@@ -136,7 +142,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	for _, face := range faces {
 		ref := strings.Trim(string(face[1]), `"'`)
 		rel := strings.TrimPrefix(ref, "/static/dashboard/")
-		if _, err := os.Stat(filepath.Join(servedTree, rel)); err != nil {
+		if _, err := os.Stat(filepath.Join(served, rel)); err != nil {
 			t.Errorf("the stylesheet asks for %s and the built tree has no such file: %v", ref, err)
 		}
 		// AND UNDER fonts/, which nothing asserted. The .woff2 exception in
@@ -159,7 +165,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// build emits it from `@crewlethq/tokens`' own `fonts/OFL.txt`, beside the
 	// faces that package ships, so a font bump cannot leave the notice and the
 	// files it covers describing different things.
-	if _, err := os.Stat(filepath.Join(servedTree, "fonts", "OFL.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(served, "fonts", "OFL.txt")); err != nil {
 		t.Errorf("the built tree carries embedded typefaces and no OFL notice: %v", err)
 	}
 
@@ -170,7 +176,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// (vite.config.ts), so a build that lost `build.license` or the step
 	// appending the fonts and the symbols leaves a tree that serves perfectly
 	// and owes notices it no longer carries.
-	notices, err := os.ReadFile(filepath.Join(servedTree, "THIRD_PARTY_NOTICES.txt"))
+	notices, err := os.ReadFile(filepath.Join(served, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
 			"dashboard/ writes it through build.license: %v", err)
@@ -433,12 +439,13 @@ func TestTheNoticesAreServedAsText(t *testing.T) {
 // page just had no logo.
 func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 	t.Parallel()
+	static := staticDir(t)
 	embedded := embeddedTree(t)
-	err := filepath.WalkDir(staticDir, func(p string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(static, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasSuffix(p, ".go") {
 			return err
 		}
-		rel, err := filepath.Rel(staticDir, p)
+		rel, err := filepath.Rel(static, p)
 		if err != nil {
 			return err
 		}
@@ -450,7 +457,7 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 		got, ok := embedded[rel]
 		if !ok {
 			t.Errorf("%s is in %s but not in the binary; add it to the embed "+
-				"pattern in static/static.go", rel, staticDir)
+				"pattern in static/static.go", rel, static)
 			return nil
 		}
 		if !bytes.Equal(got, want) {
@@ -459,7 +466,7 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking %s: %v", staticDir, err)
+		t.Fatalf("walking %s: %v", static, err)
 	}
 }
 
