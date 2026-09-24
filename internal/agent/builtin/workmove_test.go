@@ -118,3 +118,45 @@ func TestAStoppedMoveIsNotReportedAsNotMade(t *testing.T) {
 		t.Errorf("a stopped move gave %q", got.Output)
 	}
 }
+
+// A MOVE REFUSED OVER A TAG NAMES THE TAG AND THE WAY PAST IT. The target may
+// already have a different tag under the same label, or no room for another,
+// and the answer was the generic "the change was NOT made" — nothing a seat
+// could act on, so the move was simply abandoned.
+func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err  error
+		want []string
+	}{
+		"a label the target already uses": {
+			err: fmt.Errorf("tracker: declare the moving subtree's tags in OPS: %w",
+				&tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
+					Other: tracker.Tag{Slug: "backend-api", Label: "API"}}),
+			want: []string{"nothing was written", "backend-api", "write_project on OPS",
+				`"slug": "api"`, "update_work_item", "make this call again"},
+		},
+		"a target with no room for another tag": {
+			err: fmt.Errorf("tracker: declare the moving subtree's tags in OPS: %w",
+				&tracker.TagsFull{Project: "OPS", Slug: "api"}),
+			want: []string{"nothing was written", "tags_archive", "take api off",
+				"make this call again"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.writeErr = tc.err
+			got := callWork(t, moveRegistry(t, trk, true), tracker.MoveWorkItemTool,
+				map[string]any{"item": "ENG-1", "project": "OPS"})
+			if !got.Failed || strings.Contains(got.Output, "NOT made") {
+				t.Fatalf("the refused move answered %q", got.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the answer lacks %q: %s", want, got.Output)
+				}
+			}
+		})
+	}
+}

@@ -2826,7 +2826,42 @@ func readFailure(name string, err error) string {
 // the `op_id`, and a caller holding neither has no repeat that is the same
 // operation — telling it to repeat one filed a second item.
 func writeFailure(actor Actor, name string, err error) string {
+	var clash *tracker.TagClash
+	var full *tracker.TagsFull
 	switch {
+	case errors.As(err, &clash) && name == tracker.WriteProjectTool:
+		// THE DECLARATION ITSELF, so the remedy is this call with another
+		// label, or the tag that already has this one.
+		return fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+			"has a tag %s labelled %q, and %s (%q) would be a second tag nobody "+
+			"could tell apart from it. Use %s if it means the same thing, or "+
+			"declare %s under a label of its own.", name, clash.Project,
+			clash.Other.Slug, clash.Other.Label, clash.Slug, clash.Label,
+			clash.Other.Slug, clash.Slug)
+	case errors.As(err, &clash):
+		// A LABEL TWO PROJECTS USE FOR DIFFERENT TAGS, which a move meets
+		// when it declares its subtree's tags in the target — its first
+		// append, so nothing was written — and a write declaring its own
+		// labels meets in its own project. Named with the two ways past
+		// it, because the generic "NOT made" gave a seat nothing to do but
+		// give up on the move.
+		return fmt.Sprintf("%s was refused, and nothing was written: it has to "+
+			"declare the tag %s (%q) in %s, where the tag %s is already labelled "+
+			"%q — two tags nobody could tell apart. If they mean the same thing, "+
+			"put the items under %s instead (update_work_item's `labels`); if "+
+			"not, declare %s in %s yourself under a label of its own "+
+			"(write_project on %s with tags_add: [{\"slug\": %q, \"label\": "+
+			"\"<a label %s does not use>\"}]). Then make this call again.",
+			name, clash.Slug, clash.Label, clash.Project, clash.Other.Slug,
+			clash.Other.Label, clash.Other.Slug, clash.Slug, clash.Project,
+			clash.Project, clash.Slug, clash.Project)
+	case errors.As(err, &full):
+		return fmt.Sprintf("%s was refused, and nothing was written: %s already "+
+			"keeps %d tags, the most a project may, and %s is not among them. "+
+			"Archive tags %s no longer files under (write_project's "+
+			"tags_archive — its lead's decision), or take %s off the items with "+
+			"update_work_item, then make this call again.", name, full.Project,
+			tracker.MaxTagsPerProject, full.Slug, full.Project, full.Slug)
 	case errors.Is(err, tracker.ErrNoTask):
 		return fmt.Sprintf("%s: %v", name, err)
 	case errors.Is(err, statelog.ErrConflict):
