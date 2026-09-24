@@ -44,12 +44,14 @@ export interface ToolCall {
   /** How long the call took. A reader inside a transcript asking why a phase
    *  took four minutes is asking this. 0 when the producer did not record it. */
   durationMs: number;
-  /** WHERE THE TOOL CAME FROM, recorded at registration and the one frame that
-   *  knows: `builtin`, `mcp:<server>`, or `a2a`. Without it a reader cannot
-   *  tell an engine builtin from somebody else's MCP server inside the round
-   *  that called it. */
+  /** WHERE THE TOOL THAT ANSWERED CAME FROM, recorded at registration and the
+   *  one frame that knows: `builtin` or `mcp:<server>` (the agent-to-agent
+   *  tools are builtins). Without it a reader cannot tell an engine builtin
+   *  from somebody else's MCP server inside the round that called it. "" on a
+   *  call no tool answered — an unknown name, one not offered, one a guard
+   *  refused — and on a row the engine did not attribute. */
   origin: string;
-  /** Which MCP server answered, for an `mcp:` origin. */
+  /** Which MCP server answered, for an `mcp:` origin; "" otherwise. */
   server: string;
 }
 
@@ -222,10 +224,11 @@ export function toolCalls(raw: unknown): ToolCall[] {
       args: str(rec.arguments ?? rec.args),
       result: str(rec.result ?? rec.output ?? rec.error),
       failed: rec.success === false || rec.failed === true || Boolean(rec.error),
-      // THREE FIELDS THE WIRE CARRIES AND THIS DROPPED. They are on
-      // `ToolExecution` in the protocol types and were discarded here, so a
-      // transcript could not say how long a call took, whether it was a
-      // builtin or somebody's MCP server, or which server answered.
+      // How long the call took, and who answered it: the tool loop times
+      // every call and the surface names the origin that served it. Absent
+      // on a row nothing timed (an older engine's, an agent-mode run's
+      // bridged call), which reads as 0 / "" — "not recorded", never
+      // "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",

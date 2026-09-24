@@ -2103,7 +2103,7 @@ rescued a lot.
 
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and
-`agents` is pushed twice per round.
+`agents` is pushed twice per round and once more before every tool call.
 
 **A control state is the other half of that rule, and it DOES ease.** The
 distinction is what the pointer did: a fill that changes because somebody moved
@@ -3298,7 +3298,7 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
   forward a kind — the hook's own body and the builder test kit's stub socket
   — are named there with their reasons.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
-  round; a store that woke every listener on every envelope would re-render the
+  round and once before each of its calls; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.
 - **A query WAITS for the socket rather than failing.** Screens issue their
   first query as the page boots, so rejecting when not-yet-connected made every

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
@@ -110,8 +111,14 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// about which thread a turn is in.
 		Thread: threadOf(req.Ask()),
 	}
+	// TIMED where it runs: the context assembly is the stretch between a
+	// turn announcing itself and its first phase opening, and nothing else
+	// on the record can say how long it was.
+	began := time.Now()
 	blocks := e.prefetcher(company).Fetch(ctx, r)
-	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks)
+	took := time.Since(began)
+	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks,
+		began.UTC(), took)
 	return blocks
 }
 
@@ -128,6 +135,7 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 // fail because its telemetry could not be published.
 func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 	agentID, runID, workKey string, r prefetch.Request, b prefetch.Blocks,
+	startedAt time.Time, took time.Duration,
 ) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -136,6 +144,8 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		Agent: agentID, AgentHandle: seat.Handle(), RoleName: seat.Name,
 		TurnID:                 runID,
 		WorkKey:                workKey,
+		StartedAt:              startedAt,
+		DurationMS:             int(took / time.Millisecond),
 		CounterpartyHit:        b.CounterpartyProfile != "",
 		CounterpartyBytes:      len(b.CounterpartyProfile),
 		SynthesizedSkillsHit:   b.SynthesizedSkills != "",

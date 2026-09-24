@@ -64,6 +64,12 @@ type Record struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
+	// provider's prompt cache served and stored on this phase — see
+	// [Bucket.CacheReadTokens] for the contract a reader divides by.
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+
 	// CostUSD is what the phase's own provider billed, in dollars, and it
 	// is set on a MINORITY of records: only a subscription coding CLI
 	// reports a price, so every native-provider phase carries zero.
@@ -85,6 +91,19 @@ type Bucket struct {
 	TotalTokens  int `json:"total_tokens"`
 	Calls        int `json:"calls"`
 
+	// CacheReadTokens and CacheWriteTokens sum the prompt cache's share of
+	// the calls in this bucket.
+	//
+	// THE CONTRACT A READER DIVIDES BY: input_tokens ALREADY INCLUDES the
+	// cached prefix — every backend reports it that way (the Anthropic one
+	// adds its cache counts back into the input total, OpenAI's prompt count
+	// never excluded them) — so these are a BREAKDOWN of InputTokens and
+	// never an addition to it. The cache's share of a bucket's input is
+	// cache_read_tokens / input_tokens, and adding the two double-counts the
+	// prefix. TotalTokens is input plus output, as it always was.
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+
 	// CostUSD sums what the calls in this bucket were billed, and
 	// PricedCalls counts how many of them said anything at all.
 	//
@@ -100,6 +119,8 @@ func (b *Bucket) add(r Record) {
 	b.InputTokens += r.InputTokens
 	b.OutputTokens += r.OutputTokens
 	b.TotalTokens += r.TotalTokens
+	b.CacheReadTokens += r.CacheReadTokens
+	b.CacheWriteTokens += r.CacheWriteTokens
 	b.Calls++
 	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
 	// would silently reduce a company's reported spend. Only a positive one

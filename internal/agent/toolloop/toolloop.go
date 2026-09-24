@@ -12,12 +12,23 @@
 //     names its own scope. Re-reading the caps afterwards to work out which
 //     one said no is a read a peer's spend can invalidate between the refusal
 //     and the report.
-//   - PROGRESS IS PUBLISHED TWICE PER ROUND — once the model has spoken,
-//     before its tools run, and again once they return — and both the live
-//     update and the durable record are built by ONE function over one message
-//     list. They used to be assembled separately, so a reasoning model streamed
-//     its tool calls against an empty response and its thinking appeared only
-//     when the phase ended.
+//   - PROGRESS IS PUBLISHED TWICE PER ROUND AND ONCE PER CALL — once the
+//     model has spoken, before its tools run, again BEFORE EACH CALL naming
+//     the call that is about to run, and once they all return — and both the
+//     live update and the durable record are built by ONE function over one
+//     message list. They used to be assembled separately, so a reasoning model
+//     streamed its tool calls against an empty response and its thinking
+//     appeared only when the phase ended. The per-call frame is what makes a
+//     round's calls visible WHILE they run: they are serial, a sandbox launch
+//     or a slow MCP server takes minutes, and a live view that learned of a
+//     call only once the whole round returned showed a seat doing nothing
+//     for exactly the stretch somebody was watching it.
+//   - THE LOOP IS THE CLOCK. Every round's provider call and every tool call
+//     is timed here, where the call is made, and carried on the record as a
+//     start and a duration. A reader that reconstructs timing from event
+//     arrival subtracts two publishers' clocks and a queue's latency, and a
+//     round's cache tokens exist nowhere else: the completion reports them
+//     and this is the one frame that sees every completion.
 //   - THE SEAT FENCE RUNS AT THE TOP OF EVERY ROUND, before any tokens are
 //     spent and before anything fires, AND BEFORE EACH OF THE ROUND'S TOOL
 //     CALLS, because a round is one model turn but many calls and the calls
@@ -135,6 +146,20 @@ type ToolResult struct {
 
 	// SuspendPayload is handed back to the caller to persist.
 	SuspendPayload map[string]any
+
+	// Origin is where the tool that ANSWERED came from — the registry's
+	// grammar, `builtin` or `mcp:<server>` — and Server the bare MCP server
+	// name for an `mcp:` origin. Set by the surface, which is the one frame
+	// that resolved the name to a registered tool; this loop only carries
+	// them onto the [Execution].
+	//
+	// EMPTY ON A CALL NO TOOL ANSWERED: an unknown name, one not offered to
+	// this surface, or one a guard refused. The origin names who served the
+	// call, and on those paths nobody did — the surface refused it before
+	// any tool ran — so an origin there would attribute the refusal to a
+	// server that never saw the request.
+	Origin string
+	Server string
 }
 
 // Execution records one tool call for the prior-work ledger and the phase
@@ -148,6 +173,129 @@ type Execution struct {
 	// Output is the tool's own output, already redacted by the surface.
 	Output string
 	Failed bool
+
+	// StartedAt is when the call was handed to the surface, in UTC, and
+	// Duration how long the surface took to answer — measured on the
+	// monotonic clock, so a wall-clock correction mid-call cannot report a
+	// negative or inflated one.
+	//
+	// Measured HERE, around [Surface.Execute], because a round's calls are
+	// SERIAL and the question a reader asks of a slow round is which call
+	// held it: the round's own span covers the provider call only, and the
+	// phase's covers everything. Both are zero on an execution this build
+	// did not time — a resumed phase's pre-suspend rows written by an older
+	// build, an agent-mode run's bridged calls — and zero means "not
+	// measured", never "instant".
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// Origin and Server are [ToolResult.Origin] and [ToolResult.Server]:
+	// who answered the call, empty when nobody did.
+	Origin string
+	Server string
+}
+
+// Round is one provider call of the loop: when it was made, how long the model
+// took to answer, who answered and what it cost.
+//
+// THE MODEL'S HALF OF A ROUND ONLY. The round's tool calls are timed on their
+// own [Execution] rows, because they are serial and each is its own question
+// ("which call held this round?"); folding them into the round's duration would
+// make a slow model and a slow tool the same number. A round's wall clock is
+// therefore its StartedAt to the end of its last call, and a reader has both
+// halves to hand.
+//
+// Recorded for every round whose completion arrived, including the rounds a
+// corrective re-prompt follows: each is a priced provider call and a reader
+// adding up where the time went needs all of them.
+type Round struct {
+	// Round is one-based, on the same scale as [Execution.Round] and
+	// [Narration.Round], so the three lists join on it.
+	Round int
+
+	// StartedAt is when the provider call was made, in UTC, and Duration
+	// how long it took to answer, on the monotonic clock.
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// Model is the model the completion says served this round — the
+	// billable fact, which a fallback chain makes differ between rounds.
+	Model string
+
+	// InputTokens and OutputTokens are this round's own spend, and
+	// CacheRead and CacheWrite the share of InputTokens the provider's
+	// prompt cache served or stored (see [llm.Completion]). A breakdown of
+	// InputTokens, never an addition to it.
+	InputTokens  int
+	OutputTokens int
+	CacheRead    int
+	CacheWrite   int
+
+	// ToolCalls is how many calls the model asked for this round — the
+	// count of [Execution] rows on this round, unless the loop stopped
+	// before running them all (a suspend, a closed fence).
+	ToolCalls int
+}
+
+// RunningCall is the tool call in flight: named on the live view BEFORE the
+// surface runs it and cleared once it returns.
+//
+// It is the one thing a round's records cannot say, because an [Execution] is
+// appended only once its call has answered. Without it, a seat whose round
+// launched a coding run or queried a slow MCP server showed its model's last
+// words and nothing after them for as long as the call took — indistinguishable
+// from a seat that had stalled.
+type RunningCall struct {
+	// Round is the round the call belongs to, on the [Execution.Round]
+	// scale.
+	Round int
+	Name  string
+	Args  map[string]any
+	// StartedAt is when it was handed to the surface, in UTC — what a
+	// reader subtracts from now to say "running for 2m 41s".
+	StartedAt time.Time
+}
+
+// roundKey carries the round a tool call runs in on the context the surface is
+// handed; see [CallRound].
+type roundKey struct{}
+
+// roundOffsetKey carries the rounds a caller's phase already ran before this
+// invocation of the loop; see [WithRoundOffset].
+type roundOffsetKey struct{}
+
+// WithRoundOffset declares that the phase this loop runs for has already run
+// `prior` rounds before this invocation, so the round [CallRound] reports to a
+// tool is on the PHASE's scale rather than the invocation's.
+//
+// It exists because a phase can run the loop more than once — an extension
+// continues it, a resumed executor re-enters it — and the loop numbers its own
+// rounds from 1 every time. The records it returns are renumbered by the
+// caller afterwards ([Result] is a value it can shift), but a tool that asks
+// its round mid-call cannot wait for that: a worker spawned in extension round
+// 1 of a twenty-round phase would otherwise nest itself under round 1.
+func WithRoundOffset(ctx context.Context, prior int) context.Context {
+	if prior <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, roundOffsetKey{}, prior)
+}
+
+// CallRound is the round the calling tool runs in, on the phase's scale, and
+// false outside a tool call this loop made.
+//
+// Read by a tool whose own record has to say which round asked for it — a
+// delegate call's workers nest under the round that spawned them — and never
+// by the loop itself, which knows its round without asking.
+func CallRound(ctx context.Context) (int, bool) {
+	round, ok := ctx.Value(roundKey{}).(int)
+	return round, ok
+}
+
+// withCallRound stamps the round a call runs in, offset onto the phase's scale.
+func withCallRound(ctx context.Context, round int) context.Context {
+	prior, _ := ctx.Value(roundOffsetKey{}).(int)
+	return context.WithValue(ctx, roundKey{}, prior+round)
 }
 
 // Narration is one round's model turn — what it reasoned and what it said —
@@ -259,9 +407,13 @@ type Progress struct {
 	messages     []llm.Message
 	executions   []Execution
 	narration    []Narration
+	rounds       []Round
 	inputTokens  int
 	outputTokens int
+	cacheRead    int
+	cacheWrite   int
 	roundsUsed   int
+	maxRounds    int
 	model        string
 }
 
@@ -277,22 +429,31 @@ func (p *Progress) Snapshot() Result {
 		Text:         assistantText(p.messages),
 		InputTokens:  p.inputTokens,
 		OutputTokens: p.outputTokens,
+		CacheRead:    p.cacheRead,
+		CacheWrite:   p.cacheWrite,
 		Executions:   append([]Execution(nil), p.executions...),
 		Narration:    append([]Narration(nil), p.narration...),
+		Rounds:       append([]Round(nil), p.rounds...),
 		RoundsUsed:   p.roundsUsed,
+		MaxRounds:    p.maxRounds,
 		Model:        p.model,
 		Messages:     append([]llm.Message(nil), p.messages...),
 	}
 }
 
-func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
+// record replaces the partial state with the loop's view as it stands. Handed
+// a [Result] rather than a positional list, because the list had grown to
+// eleven values of four types and a transposition compiles.
+func (p *Progress) record(res Result) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.messages = append([]llm.Message(nil), msgs...)
-	p.executions = append([]Execution(nil), execs...)
-	p.narration = append([]Narration(nil), narr...)
-	p.inputTokens, p.outputTokens = in, out
-	p.roundsUsed, p.model = rounds, model
+	p.messages = append([]llm.Message(nil), res.Messages...)
+	p.executions = append([]Execution(nil), res.Executions...)
+	p.narration = append([]Narration(nil), res.Narration...)
+	p.rounds = append([]Round(nil), res.Rounds...)
+	p.inputTokens, p.outputTokens = res.InputTokens, res.OutputTokens
+	p.cacheRead, p.cacheWrite = res.CacheRead, res.CacheWrite
+	p.roundsUsed, p.maxRounds, p.model = res.RoundsUsed, res.MaxRounds, res.Model
 }
 
 // Result is one loop invocation's outcome.
@@ -303,6 +464,39 @@ type Result struct {
 	Executions   []Execution
 	RoundsUsed   int
 	Model        string
+
+	// CacheRead and CacheWrite total the rounds' own ([Round.CacheRead]):
+	// how much of InputTokens a provider's prompt cache served, and how
+	// much it stored. A breakdown of InputTokens, never an addition to it.
+	//
+	// THE ONE PRODUCER of these numbers in the engine. Every backend reports
+	// them on its completion and nothing kept them past the round's span
+	// attribute, so "how much of this seat's spend did the cache answer"
+	// had no answer anywhere a person could read one.
+	CacheRead  int
+	CacheWrite int
+
+	// Rounds is one entry per provider call, in order: when it was made,
+	// how long it took, who answered and what it cost. See [Round].
+	Rounds []Round
+
+	// MaxRounds echoes the cap this invocation ran under, so a caller that
+	// renders "round 3 of 8" reads the cap the loop actually enforced
+	// rather than a second copy of the config beside it.
+	MaxRounds int
+
+	// Running is the tool call in flight, present only on a live snapshot
+	// published while a call runs — see [RunningCall]. Never on a finished
+	// Result or a failure snapshot: a call that has returned is an
+	// Execution, and one that never returned is the failure.
+	Running *RunningCall
+
+	// RoundStartedAt is when the latest round's provider call was made, in
+	// UTC, on a live snapshot: the round in flight while the model is still
+	// answering, and the round whose tools are running after it has. What a
+	// live view counts "this round has taken 40s" from. Zero on a finished
+	// Result, whose [Result.Rounds] carry every start.
+	RoundStartedAt time.Time
 
 	// Narration is per-round what Text is in aggregate. Both are published:
 	// Text is what every existing consumer and every already-stored event
@@ -443,8 +637,10 @@ type Config struct {
 	// authoritative narration still comes from the completed round.
 	StreamPartials bool
 
-	// OnProgress receives the live view twice per round: once the model
-	// has spoken and again once its tools have returned. Failures are the
+	// OnProgress receives the live view twice per round and once per call:
+	// once the model has spoken, immediately before each tool call with
+	// that call as [Result.Running], and again once its tools have
+	// returned. Failures are the
 	// caller's business — telemetry must never fail a phase — so this
 	// returns nothing.
 	OnProgress func(Result)
@@ -484,8 +680,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	msgs := append([]llm.Message(nil), cfg.Messages...)
 	var execs []Execution
 	var narration []Narration
-	var inTokens, outTokens int
+	var rounds []Round
+	var inTokens, outTokens, cacheRead, cacheWrite int
 	var model string
+	// The latest round's start, for the live view; see Result.RoundStartedAt.
+	var roundStarted time.Time
 	// served distinguishes the model a COMPLETION named from the configured
 	// placeholder a streamed round shows before one exists.
 	var served bool
@@ -498,22 +697,41 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	emptyAnswers := 0
 
 	var partial *Partial
-	publish := func(rounds int) {
+	// state is the loop's record as it stands, the one shape every exit and
+	// every publish is built from — so a field added to the Result cannot
+	// reach the finished record and miss the live one, or the reverse.
+	state := func(used int) Result {
+		return Result{
+			Text:         assistantText(msgs),
+			InputTokens:  inTokens,
+			OutputTokens: outTokens,
+			CacheRead:    cacheRead,
+			CacheWrite:   cacheWrite,
+			Executions:   append([]Execution(nil), execs...),
+			Narration:    append([]Narration(nil), narration...),
+			Rounds:       append([]Round(nil), rounds...),
+			RoundsUsed:   used,
+			MaxRounds:    cfg.MaxRounds,
+			Model:        model,
+			Messages:     append([]llm.Message(nil), msgs...),
+		}
+	}
+	// publish hands the live view the state, with the call in flight when
+	// one is — see [RunningCall]. Nil clears it, which is what every frame
+	// but the one published immediately before a call does.
+	publish := func(used int, running *RunningCall) {
+		if cfg.Progress == nil && cfg.OnProgress == nil {
+			return
+		}
+		live := state(used)
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(live)
 		}
 		if cfg.OnProgress != nil {
-			cfg.OnProgress(Result{
-				Text:         assistantText(msgs),
-				InputTokens:  inTokens,
-				OutputTokens: outTokens,
-				Executions:   append([]Execution(nil), execs...),
-				Narration:    append([]Narration(nil), narration...),
-				Partial:      partial.clone(),
-				RoundsUsed:   rounds,
-				Model:        model,
-				Messages:     append([]llm.Message(nil), msgs...),
-			})
+			live.Partial = partial.clone()
+			live.Running = running
+			live.RoundStartedAt = roundStarted
+			cfg.OnProgress(live)
 		}
 	}
 
@@ -592,7 +810,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 						})
 					}
 					partial.Reasoning, partial.Content = "", ""
-					publish(roundsUsed)
+					publish(roundsUsed, nil)
 					last = time.Now()
 					return
 				}
@@ -611,16 +829,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 					return
 				}
 				last = time.Now()
-				publish(roundsUsed)
+				publish(roundsUsed, nil)
 			}
 		}
 
+		// THE ROUND'S CLOCK, around the provider call and nothing else —
+		// the same bracket as its span. Stamped before the call so a
+		// streamed round's frames can say how long it has been writing.
+		began := time.Now()
+		roundStarted = began.UTC()
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,
 			Tools:      tools,
 			ToolChoice: choice,
 			OnDelta:    onDelta,
 		})
+		took := time.Since(began)
 		if err != nil {
 			tracing.Fail(roundSpan, err)
 			roundSpan.End()
@@ -631,6 +855,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			attribute.Int("crewlet.input_tokens", completion.InputTokens),
 			attribute.Int("crewlet.output_tokens", completion.OutputTokens),
 			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
+			attribute.Int("crewlet.cache_write_tokens", completion.CacheWrite),
 			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
 		roundSpan.End()
 		if !served && completion.Model != "" {
@@ -650,12 +875,40 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		inTokens += completion.InputTokens
 		outTokens += completion.OutputTokens
+		cacheRead += completion.CacheRead
+		cacheWrite += completion.CacheWrite
+		// Recorded BEFORE the charge below, because the round happened
+		// and was billed by the provider whether or not the company's
+		// meter then admits it — and a refused charge ends the loop, so a
+		// round recorded after it would be the one round missing from the
+		// failure record that explains why it failed.
+		//
+		// The completion's model where it names one, the configured
+		// identity where the backend filled nothing in — the same
+		// precedence the phase's own model follows, per round.
+		roundModel := completion.Model
+		if roundModel == "" {
+			roundModel = cfg.Provider.Model()
+		}
+		rounds = append(rounds, Round{
+			Round: roundsUsed, StartedAt: roundStarted, Duration: took,
+			Model:        roundModel,
+			InputTokens:  completion.InputTokens,
+			OutputTokens: completion.OutputTokens,
+			CacheRead:    completion.CacheRead,
+			CacheWrite:   completion.CacheWrite,
+			ToolCalls:    len(completion.ToolCalls),
+		})
 
 		// Charge BEFORE running the tools this round asked for. A round
 		// whose spend is refused must not also have fired its side
 		// effects — the refusal is the whole point, and tools are where
 		// the irreversible things happen.
 		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
+			// The round is on the failure record: publish it to the
+			// Progress the caller reads on this path, since it is the
+			// round that was refused.
+			publish(roundsUsed, nil)
 			return nil, err
 		}
 
@@ -690,7 +943,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// The model has spoken: publish before the tools run, so its
 		// reasoning and prose reach the live view now rather than after
 		// the slowest tool returns.
-		publish(roundsUsed)
+		publish(roundsUsed, nil)
 
 		if len(completion.ToolCalls) == 0 {
 			// Counted whichever corrective follows, and counted for
@@ -765,31 +1018,24 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		forcedRetries, emptyRetries = 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
-			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs)
+			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs,
+			func(running RunningCall) { publish(roundsUsed, &running) })
 		if err != nil {
 			return nil, err
 		}
 
 		// The round's tools have returned: publish again so the live row
-		// fills in rather than waiting for the next model turn.
-		publish(roundsUsed)
+		// fills in rather than waiting for the next model turn. The call
+		// in flight is cleared here, by a frame naming none.
+		publish(roundsUsed, nil)
 
 		if suspended {
-			return &Result{
-				Text:              assistantText(msgs),
-				InputTokens:       inTokens,
-				OutputTokens:      outTokens,
-				Executions:        execs,
-				Narration:         narration,
-				RoundsUsed:        roundsUsed,
-				Model:             model,
-				Messages:          msgs,
-				EmptyAnswers:      emptyAnswers,
-				Suspended:         true,
-				PendingToolCallID: pendingID,
-				PendingToolName:   pendingName,
-				SuspendPayload:    payload,
-			}, nil
+			out := state(roundsUsed)
+			out.EmptyAnswers = emptyAnswers
+			out.Suspended = true
+			out.PendingToolCallID, out.PendingToolName = pendingID, pendingName
+			out.SuspendPayload = payload
+			return &out, nil
 		}
 
 		if ranTerminator(execs, terminators, roundsUsed) {
@@ -797,19 +1043,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 	}
 
-	exhausted := roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs)
-	return &Result{
-		Text:            assistantText(msgs),
-		InputTokens:     inTokens,
-		OutputTokens:    outTokens,
-		Executions:      execs,
-		Narration:       narration,
-		RoundsUsed:      roundsUsed,
-		Model:           model,
-		Messages:        msgs,
-		ExhaustedRounds: exhausted,
-		EmptyAnswers:    emptyAnswers,
-	}, nil
+	out := state(roundsUsed)
+	out.ExhaustedRounds = roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs)
+	out.EmptyAnswers = emptyAnswers
+	return &out, nil
 }
 
 // runCalls executes one round's tool calls in order, appending a tool message
@@ -822,7 +1059,11 @@ func runCalls(
 	round int,
 	msgs *[]llm.Message,
 	execs *[]Execution,
+	announce func(RunningCall),
 ) (suspended bool, pendingID, pendingName string, payload map[string]any, err error) {
+	// Every call this round makes is told which round it is in, on the
+	// phase's scale — see [CallRound].
+	callCtx := withCallRound(ctx, round)
 	for _, call := range calls {
 		// THE FENCE AGAIN, PER CALL. The round check is one per model
 		// turn, and a round is every tool the model asked for in it — a
@@ -841,7 +1082,15 @@ func runCalls(
 				return false, "", "", nil, err
 			}
 		}
-		res, execErr := cfg.Surface.Execute(ctx, call)
+		// Timed on the monotonic clock and stamped in UTC, and ANNOUNCED
+		// first — after the fence, so a call the fence stops is never
+		// shown as running — because an Execution exists only once the
+		// call has answered, and a serial round's calls take minutes.
+		began := time.Now()
+		startedAt := began.UTC()
+		announce(RunningCall{Round: round, Name: call.Name, Args: call.Arguments, StartedAt: startedAt})
+		res, execErr := cfg.Surface.Execute(callCtx, call)
+		took := time.Since(began)
 		if execErr != nil {
 			return false, "", "", nil, fmt.Errorf(
 				"toolloop: surface failed on %q: %w", call.Name, execErr)
@@ -867,6 +1116,8 @@ func runCalls(
 		*execs = append(*execs, Execution{
 			Round: round, Name: call.Name, Args: call.Arguments,
 			Output: res.Output, Failed: res.Failed,
+			StartedAt: startedAt, Duration: took,
+			Origin: res.Origin, Server: res.Server,
 		})
 		*msgs = append(*msgs, llm.Message{
 			Role:       llm.RoleTool,

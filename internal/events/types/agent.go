@@ -89,7 +89,14 @@ type PromptMessage struct {
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
-// string), result and success.
+// string), result and success, the round that asked for it, and — from a build
+// that timed it — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
+// (`builtin` or `mcp:<server>`) with `server` (the bare MCP server name) for
+// the tool that answered. The last four are ABSENT on a row nothing timed —
+// an older peer's, an agent-mode run's bridged call — and `origin`/`server`
+// are absent on a call no tool answered (an unknown name, one not offered, one
+// a guard refused): absent means "not recorded", never "instant" or "the
+// engine's own".
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
@@ -117,6 +124,58 @@ type ToolExecution = map[string]any
 // An open map for the same reason [ToolExecution] is one — a producer that
 // starts recording one more thing must not need every reader recompiled.
 type RoundNarration = map[string]any
+
+// PhaseRound is one provider call of a phase's tool loop — the MODEL's half of
+// a round: when it was asked, how long it took to answer, who answered, and
+// what it cost. The round's tool calls are timed on their own
+// [ToolExecution] rows, which carry the same `round`, so a slow model and a
+// slow tool are never one number.
+//
+// Typed rather than an open map like its two neighbours, because nothing about
+// it is a producer's to extend per call: it is the loop's own measurement, and
+// every field is one the loop always has.
+type PhaseRound struct {
+	// Round is one-based, on the scale `tool_executions[].round` and
+	// `round_narration[].round` share — the key the three lists join on.
+	Round int `json:"round"`
+	// StartedAt is when the provider call was made, UTC.
+	StartedAt time.Time `json:"started_at"`
+	// DurationMS is how long the model took to answer, on the publishing
+	// node's monotonic clock.
+	DurationMS int `json:"duration_ms"`
+	// Model is the model that served THIS round, which a fallback chain
+	// can make differ from the phase's.
+	Model        string `json:"model,omitempty"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens a
+	// provider's prompt cache served and stored — a breakdown of it, never
+	// an addition to it.
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	// ToolCalls is how many calls the model asked for this round.
+	ToolCalls int `json:"tool_calls"`
+}
+
+// RunningCall is the tool call a phase is running RIGHT NOW, on the live
+// progress frame only: published immediately before the call is handed to the
+// tool and cleared by the frame after it returns.
+//
+// Its own field rather than a row in `tool_executions`, for the reason
+// PartialRound is not merged into `round_narration`: a row there is a call that
+// has answered, and a reader must be able to tell a call in flight from one
+// that returned nothing.
+type RunningCall struct {
+	// Round is the round the call belongs to, on the `tool_executions`
+	// scale.
+	Round int    `json:"round"`
+	Name  string `json:"name"`
+	// Arguments is the call's arguments as a JSON string — the same
+	// encoding `tool_executions[].arguments` uses, for the same reason.
+	Arguments string `json:"arguments"`
+	// StartedAt is when the call was handed to the tool, UTC.
+	StartedAt time.Time `json:"started_at"`
+}
 
 // AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
 // run is resumed — before its context is assembled and before its first phase.
@@ -382,6 +441,10 @@ type AgentPhaseStarted struct {
 	// Trigger rides on every phase event so a live row that has no completed
 	// phase yet can still show the turn's source.
 	Trigger Trigger `json:"trigger"`
+	// WorkItem is the item the turn is charged to, as the turn knew it when
+	// the phase opened — see [AgentTurnStarted.WorkItem]. Absent, never
+	// null, on an unattributed turn.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 }
 
 // EventType is the "agent_phase_started" wire type.
@@ -429,11 +492,20 @@ type AgentPhaseCompleted struct {
 	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 	Phase     Phase  `json:"phase"`
-	// HostPhase / HostIteration are set only on a judge event: the phase that
-	// triggered the judge, so dashboards group it under that phase instead of
-	// rendering a standalone sibling.
+	// HostPhase / HostIteration are set only on a NESTED phase — a judge or
+	// a delegated worker: the phase that fired it, so dashboards group it
+	// under that phase instead of rendering a standalone sibling.
 	HostPhase     Phase `json:"host_phase"`
 	HostIteration int   `json:"host_iteration"`
+	// HostRound is the ROUND of the host phase a nested phase belongs to,
+	// on the host's `tool_executions[].round` scale: for a worker, the
+	// round whose `delegate` call spawned it; for a judge, the last round
+	// the host ran before it asked for more. HostIteration names the turn
+	// iteration, which a phase of forty rounds spans whole, so it could
+	// place a worker under its phase but not under the call that made it.
+	// Absent on every other phase, and on a nested phase an older peer
+	// published.
+	HostRound int `json:"host_round,omitempty"`
 	// Worker names the worker behind this call: the learning worker on a
 	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
 	// Empty on every other phase, and on an ad-hoc delegation that named
@@ -456,12 +528,48 @@ type AgentPhaseCompleted struct {
 	// RoundNarration is Response split back into the rounds that produced
 	// it, so a reader can put a round's thinking beside the calls it asked
 	// for. See [RoundNarration].
-	RoundNarration  []RoundNarration `json:"round_narration,omitempty"`
-	InputTokens     int              `json:"input_tokens"`
-	OutputTokens    int              `json:"output_tokens"`
-	TotalTokens     int              `json:"total_tokens"`
-	RoundsUsed      int              `json:"rounds_used"`
-	ExhaustedRounds bool             `json:"exhausted_rounds"`
+	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
+	// Rounds is one entry per provider call the phase made, keyed on the
+	// round number the two lists above share — see [PhaseRound]. Absent on
+	// a phase that ran no loop in this process, and on an older peer's.
+	Rounds       []PhaseRound `json:"rounds,omitempty"`
+	InputTokens  int          `json:"input_tokens"`
+	OutputTokens int          `json:"output_tokens"`
+	TotalTokens  int          `json:"total_tokens"`
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
+	// provider's prompt cache served and stored, summed over Rounds. A
+	// BREAKDOWN of InputTokens, never an addition to it: TotalTokens is
+	// still input plus output, and the cache's share of the input is
+	// cache_read_tokens / input_tokens.
+	CacheReadTokens  int  `json:"cache_read_tokens"`
+	CacheWriteTokens int  `json:"cache_write_tokens"`
+	RoundsUsed       int  `json:"rounds_used"`
+	ExhaustedRounds  bool `json:"exhausted_rounds"`
+	// MaxRounds is the round cap the phase ENDED under — its base budget
+	// plus every extension the judge granted — and RoundCeiling the most
+	// it could ever have been granted. RoundsUsed against MaxRounds is
+	// "how far into its allowance", and MaxRounds against RoundCeiling is
+	// "how much more it could have asked for". Zero on a phase that runs
+	// no loop of its own (a judge) and on an older peer's.
+	MaxRounds    int `json:"max_rounds,omitempty"`
+	RoundCeiling int `json:"round_ceiling,omitempty"`
+	// StartedAt is when THIS SEGMENT of the phase began, on the publishing
+	// node's clock. A resumed executor is one phase in two segments, and
+	// DurationMS below covers both — so StartedAt is deliberately NOT
+	// "published minus duration": that instant is when the first segment
+	// began, possibly days earlier and on another node, and the gap
+	// between the two segments was a coding run rather than this phase.
+	// Absent on an older peer's record.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	// WorkItem is the item the turn is charged to, as the turn knew it
+	// when this record was published — see [AgentTurnStarted.WorkItem].
+	WorkItem *WorkItem `json:"work_item,omitempty"`
+	// LaunchID names the detached coding run a resumed phase collected —
+	// the job [SandboxRunCompleted.LaunchID] names, which the pending-run
+	// row held when the resume claimed it. A turn can launch more than
+	// once, so one segment of a phase is (turn_id, phase, iteration,
+	// launch_id). Empty on every phase that collected no run.
+	LaunchID string `json:"launch_id,omitempty"`
 	// DurationMS is how long the work this record reports actually took,
 	// measured by the process that published it.
 	//
@@ -612,6 +720,28 @@ type AgentTurnProgress struct {
 	InputTokens    int             `json:"input_tokens"`
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
+	// CacheReadTokens and CacheWriteTokens are the prompt cache's share of
+	// InputTokens so far — see [AgentPhaseCompleted.CacheReadTokens].
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	// Rounds is every provider call so far — see [PhaseRound].
+	Rounds []PhaseRound `json:"rounds,omitempty"`
+	// MaxRounds is the cap the phase is running under NOW, which an
+	// extension raises mid-phase, and RoundCeiling the most it can be
+	// raised to. What "round 3 of 8" is rendered from, off the loop's own
+	// cap rather than a copy of the config.
+	MaxRounds    int `json:"max_rounds,omitempty"`
+	RoundCeiling int `json:"round_ceiling,omitempty"`
+	// RoundStartedAt is when the latest round's provider call was made:
+	// the round being written while the model answers, and the round whose
+	// tools are running after it has. Absent on the opening frame.
+	RoundStartedAt time.Time `json:"round_started_at,omitzero"`
+	// RunningCall is the tool call in flight — see [RunningCall]. Absent
+	// whenever no call is running.
+	RunningCall *RunningCall `json:"running_call,omitempty"`
+	// WorkItem is the item the turn is charged to, as the turn knows it
+	// now — see [AgentTurnStarted.WorkItem].
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 	// RoundNum is zero-based, or -1 for the opening update a phase publishes
 	// before its first provider call — the one carrying PromptMessages so the
 	// live view can show what the agent was asked while it is still answering.
@@ -687,6 +817,16 @@ type SubagentBatched struct {
 	Successes   int    `json:"successes"`
 	Failures    int    `json:"failures"`
 	TotalTokens int    `json:"total_tokens"`
+
+	// StartedAt is when the delegate call began, UTC, and Round the round
+	// of the parent's phase that made it, on that phase's
+	// `tool_executions[].round` scale. Together with each worker record's
+	// `host_round` they place a fan-out under the call that spawned it,
+	// which the turn iteration alone cannot: one Execute phase spans every
+	// round of the iteration. Absent on an older peer's event, and Round
+	// on a call made outside a tool loop.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	Round     int       `json:"round,omitempty"`
 
 	// Graph is the shape the call ran: every task, the worker it used, its
 	// topological wave and what it waited for.

@@ -267,3 +267,30 @@ func TestAWiredJudgeGrantsRoundsThroughThePolicy(t *testing.T) {
 
 // EACH PHASE IS TOLD ITS OWN WAY OUT.
 //
+
+// cachedModel answers with a verdict — or with prose — and a prompt-cache share.
+type cachedModel struct{ answer string }
+
+func (c cachedModel) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{
+		Content: c.answer, Model: "cheap-model",
+		InputTokens: 900, OutputTokens: 12, CacheRead: 700, CacheWrite: 150,
+	}, nil
+}
+
+// THE JUDGE'S CACHE SHARE TRAVELS WITH ITS SPEND, on every path — including
+// the one where its answer was not a verdict and the policy rescues. Its record
+// is a phase record like any other, and a figure the completion reported and
+// nothing kept is one no reader can see.
+func TestTheJudgeReportsItsCacheShare(t *testing.T) {
+	t.Parallel()
+	for _, answer := range []string{"EXTEND 3\nfetching distinct pages", "I think it is doing fine"} {
+		j := extension.NewLLMJudge(cachedModel{answer: answer}, "cheap")
+		_, d := extension.Consider(t.Context(), j, extension.Policy{
+			Enabled: true, RoundStep: 4, Ceiling: 40,
+		}, judgeReq())
+		if d.CacheRead != 700 || d.CacheWrite != 150 || d.InputTokens != 900 || d.Model != "cheap-model" {
+			t.Errorf("answer %q: the decision carries %+v, want the call's spend with its cache share", answer, d)
+		}
+	}
+}

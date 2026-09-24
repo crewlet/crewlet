@@ -224,6 +224,12 @@ type RunRecord struct {
 
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
+
+	// LaunchID is the job this resume collected — the pending-run row's
+	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
+	// more than once, so it is what tells one collected run's record from
+	// the next.
+	LaunchID string
 }
 
 // Sandboxed reports whether this resume is collecting a detached coding run,
@@ -454,6 +460,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
 		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
+		StartedAt: w.res.StartedAt, Caps: w.res.Caps,
 		Decision: payload.Outcome, Rescued: !submitted,
 		Notes:     missingNote(missing),
 		Run:       w.run,
@@ -589,6 +596,7 @@ func reviewRecord(round int, system, user string, res phaseResult,
 	return phaseRecord{
 		Phase: phase.Review, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
+		StartedAt: res.StartedAt, Caps: res.Caps,
 		Decision: decision, Notes: notes, Rescued: rescued,
 		Available: surface.Active(),
 	}
@@ -726,6 +734,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// than either being absent. A monotonic reading, so a clock correction
 	// mid-phase cannot report a negative duration.
 	began := time.Now().Add(-in.priorElapsed)
+	// THIS SEGMENT's start, which is not `began`: that one is shifted back
+	// by the pre-suspend half so the duration covers the whole phase, and
+	// stamping it as a start would put a resumed phase's opening at an
+	// instant it was not running — often another node, often days earlier.
+	segment := time.Now().UTC()
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
@@ -745,6 +758,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	var out phaseResult
 	out.Result = in.prior
 	out.Rounds = in.prior.RoundsUsed
+	// The extension policy, up here because every record this phase
+	// publishes — the failure record included — states the ceiling it set.
+	policy := extension.Policy{
+		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
+	}
 	// The phase's own wall clock, stamped onto the record on the way out.
 	// A closure rather than a line at each `return`, because there are two
 	// success returns inside the loop below and a measurement that is
@@ -753,6 +771,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// somebody is timing — come back without a duration.
 	done := func() (context.Context, phaseResult, error) {
 		out.Elapsed = time.Since(began)
+		out.StartedAt = segment
+		out.Caps = capsOf(policy, out.Result.MaxRounds)
 		return ctx, out, nil
 	}
 	// Returns the phase context too, so `return fail(err)` stays a single
@@ -779,8 +799,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// the number that says so: a phase whose provider hung for
 			// four minutes and one refused in fifty milliseconds are the
 			// same record without it.
-			Elapsed: time.Since(began),
-			Failed:  true, Err: err,
+			Elapsed:   time.Since(began),
+			StartedAt: segment,
+			Caps:      capsOf(policy, maxRounds(out, in.rounds)),
+			Failed:    true, Err: err,
 		})
 		return ctx, phaseResult{}, err
 	}
@@ -814,7 +836,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// the strings, and every round of either carries the tool-definition
 	// array, which both HTTP vendors bill as input and the cli-agent text
 	// backend writes into the prompt literally.
-	emit.started(ctx, ph, iteration, system, user, in.seed, surface)
+	emit.started(ctx, ph, iteration, system, user, in.seed, surface,
+		capsOf(policy, out.Rounds+in.rounds))
 
 	messages := in.seed
 	if messages == nil {
@@ -823,10 +846,6 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			{Role: llm.RoleUser, Content: user},
 		}
 	}
-	policy := extension.Policy{
-		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
-	}
-
 	budget := in.rounds
 	for {
 		// What the phase holds BEFORE this invocation, captured by value:
@@ -847,7 +866,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// everything above the insertion point, which is the one property
 		// the round ledger exists to guarantee.
 		prior := out
-		res, err := toolloop.Run(ctx, toolloop.Config{
+		// The rounds already behind this invocation, declared so a tool
+		// that asks which round it is in hears the PHASE's number — the
+		// same number the records below are renumbered onto.
+		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
+		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
 			Fence:        r.cfg.Fence,
@@ -867,7 +890,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// exactly when something is listening.
 			StreamPartials: true,
 			OnProgress: func(live toolloop.Result) {
-				emit.progress(ctx, ph, iteration, foldOnto(prior, live))
+				folded := foldOnto(prior, live)
+				emit.progress(ctx, ph, iteration, folded, capsOf(policy, folded.MaxRounds))
 			},
 		})
 		if err != nil {
@@ -891,7 +915,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 				attribute.Bool("crewlet.suspended", out.Suspended))
 			return done()
 		}
-		granted, decision := r.consider(ctx, ph, iteration, policy, extension.Request{
+		granted, decision := r.consider(ctx, ph, iteration, out.Rounds, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
 		})
@@ -933,6 +957,19 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		narration[i] = n
 	}
 	res.Narration = narration
+	timed := make([]toolloop.Round, len(res.Rounds))
+	for i, r := range res.Rounds {
+		r.Round += prior
+		timed[i] = r
+	}
+	res.Rounds = timed
+	// The call in flight is on the same scale, or a live row names a call
+	// in round 1 of a phase that is twenty rounds in.
+	if res.Running != nil {
+		running := *res.Running
+		running.Round += prior
+		res.Running = &running
+	}
 	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
 	// COLLIDES with one of them. A consumer keys the ledger on the round
 	// number — the dashboard's `rounds()` builds one block per number and the
@@ -968,7 +1005,7 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 // on a phase that has already run out of rounds, and a seat at its cap should
 // stop extending, not die: an over-budget judgement is recorded and treated as
 // "no extension", which is the same outcome as the judge saying no.
-func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
+func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
 	// The span the turn-engine doc has always promised: one per judge call,
@@ -1010,7 +1047,7 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 			"iteration", iteration, "tokens", decision.Tokens(), "error", err.Error())
 		granted = 0
 	}
-	r.emitter().judged(ctx, ph, iteration, granted, decision, judged)
+	r.emitter().judged(ctx, ph, iteration, hostRound, granted, decision, began, judged)
 	return granted, decision
 }
 
@@ -1039,6 +1076,15 @@ func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
 		scope, tokens, outcome.Used, outcome.Limit)
 }
 
+// maxRounds is the cap a phase is under when it has no invocation of its own to
+// read it from — the failure path, which can die before the loop echoed one.
+func maxRounds(out phaseResult, base int) int {
+	if out.Result.MaxRounds > 0 {
+		return out.Result.MaxRounds
+	}
+	return out.Rounds + base
+}
+
 // foldOnto merges one loop invocation's record onto the rounds already behind
 // it, producing the record of the PHASE rather than of the invocation.
 //
@@ -1056,9 +1102,18 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Execution(nil), done.Result.Executions...), res.Executions...)
 	res.Narration = append(
 		append([]toolloop.Narration(nil), done.Result.Narration...), res.Narration...)
+	res.Rounds = append(
+		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
+	// The cap the PHASE is under: every round already behind it plus what
+	// this invocation was granted — which is exactly how an extension
+	// moves it, and how a resumed executor's fresh budget sits on top of
+	// its pre-suspend rounds.
+	res.MaxRounds = done.Rounds + live.MaxRounds
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
+	res.CacheRead += done.Result.CacheRead
+	res.CacheWrite += done.Result.CacheWrite
 	// Accumulated for the same reason the token counts are: an EXTENDED
 	// phase runs the loop again and the second invocation counts only its
 	// own rounds, so a phase that answered nothing twice under two
@@ -1089,6 +1144,12 @@ type phaseResult struct {
 	// and a clock read there would fold the decode into the measurement
 	// differently on every path.
 	Elapsed time.Duration
+
+	// StartedAt is when this segment of the phase began, and Caps the round
+	// allowance it ended under — both stamped by the frame that brackets
+	// the phase, for the reason Elapsed is.
+	StartedAt time.Time
+	Caps      roundCaps
 
 	// Result is the loop's own outcome, kept whole so the phase can report
 	// what it spent and what it called. The fields above are the ones the
