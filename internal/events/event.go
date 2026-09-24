@@ -3,7 +3,8 @@
 //
 // Every inter-component message in Crewlet is an Event. The envelope carries
 // identity (id, type, timestamp, source), trace context captured where the
-// event is created, and the turn engine's delegation bookkeeping. Typed
+// event is created, the turn engine's delegation bookkeeping, and the node that
+// first published it — which the queue stamps, not the publisher. Typed
 // per-event fields live in a Payload value registered under the event's type
 // string.
 //
@@ -95,6 +96,26 @@ type Event struct {
 	ParentTurnID    string   `json:"parent_turn_id"`
 	DelegationChain []string `json:"delegation_chain,omitempty"`
 
+	// Node is the node that first published this event — its ORIGIN.
+	//
+	// Stamped by the queue, never by a publisher: every backend fills it in
+	// Publish from the node its client was built for (queue.WithNode),
+	// before any publish listener runs, and ONLY WHEN IT IS EMPTY. So a
+	// node that re-publishes an event it received — a parked delivery
+	// handed back, a dead letter — carries the origin forward rather than
+	// claiming the event as its own.
+	//
+	// It is the STORE-ROUTING FACT, which is why it is on the envelope
+	// rather than on the payloads that happened to need it. The event
+	// store is written by a publish listener inline on the publishing node,
+	// so each node's database holds what that node published and nothing
+	// else; a reader holding a row — or a live frame — has only this to
+	// say which node's store holds the rest of that node's record, and
+	// where the work it describes ran. Empty on an event a build predating
+	// the field published, and on one published through a queue client
+	// built with no node, which only a test harness builds.
+	Node string `json:"node,omitempty"`
+
 	// Data is the typed body, non-nil when Type is registered in this
 	// build. Marshalled flat into the same JSON object as the envelope.
 	Data Payload `json:"-"`
@@ -117,6 +138,7 @@ var envelopeKeys = map[string]struct{}{
 	"id": {}, "type": {}, "timestamp": {}, "source": {}, "payload": {},
 	"trace_id": {}, "span_id": {}, "parent_span_id": {},
 	"delegation_depth": {}, "parent_turn_id": {}, "delegation_chain": {},
+	"node": {},
 }
 
 // New builds an event of the given type carrying data, stamping a fresh id,
@@ -325,6 +347,7 @@ type envelope struct {
 	DelegationDepth int            `json:"delegation_depth"`
 	ParentTurnID    string         `json:"parent_turn_id"`
 	DelegationChain []string       `json:"delegation_chain,omitempty"`
+	Node            string         `json:"node,omitempty"`
 }
 
 // MarshalJSON emits the envelope and the typed body as ONE flat object.
@@ -339,6 +362,7 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 		Payload: e.Payload, TraceID: e.TraceID, SpanID: e.SpanID,
 		ParentSpanID: e.ParentSpanID, DelegationDepth: e.DelegationDepth,
 		ParentTurnID: e.ParentTurnID, DelegationChain: e.DelegationChain,
+		Node: e.Node,
 	}
 	raw, err := json.Marshal(env)
 	if err != nil {
@@ -390,6 +414,7 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	e.Payload, e.TraceID, e.SpanID = env.Payload, env.TraceID, env.SpanID
 	e.ParentSpanID, e.DelegationDepth = env.ParentSpanID, env.DelegationDepth
 	e.ParentTurnID, e.DelegationChain = env.ParentTurnID, env.DelegationChain
+	e.Node = env.Node
 
 	all := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &all); err != nil {

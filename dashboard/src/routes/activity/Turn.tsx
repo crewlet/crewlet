@@ -440,6 +440,21 @@ export function useTurnView(turnId: string): TurnView {
   const workerCount = phases.filter((p) => p.hostPhase).length;
 
   const running = phases.some((p) => p.live);
+  // THE TURN'S OPENING RECORD, which the engine publishes BEFORE the turn
+  // gathers its context — so on a turn deep-linked while it does, or one
+  // that died doing it, this is the only row the answer holds. The header
+  // read its seat and what woke it off the phases alone, and with none
+  // landed it headed that turn "Turn", run by "the engine": the one turn a
+  // reader opens this page to find out about, described as nobody's.
+  //
+  // THE DISPATCH'S, where the answer holds it. A parked coding run publishes
+  // one start per resumed segment under the same id, and a segment's trigger
+  // is the box's completion rather than what asked for the work; one is read
+  // only where the store's window dropped the first.
+  const opened = useMemo(() => {
+    const starts = events.filter((e) => e.type === "agent_turn_started");
+    return starts.find((e) => field(e, "resumed") !== true) ?? starts[0];
+  }, [events]);
   const rec: TurnRecord = useMemo(
     () => ({
       summary: events.find((e) => e.type === "agent_turn_completed"),
@@ -472,8 +487,14 @@ export function useTurnView(turnId: string): TurnView {
     own,
     nested,
     rec,
-    role: phases[0]?.role ?? (rec.summary?.actor || ""),
-    trigger: phases.find((p) => p.trigger)?.trigger ?? null,
+    // THE PHASES FIRST, the opening record where none has landed — see
+    // `opened` above. The two name the same seat and the same wake, so which
+    // one answers changes nothing on a turn that has both.
+    role: phases[0]?.role ?? (rec.summary?.actor || str(opened, "role")),
+    trigger:
+      phases.find((p) => p.trigger)?.trigger ??
+      (field(opened, "trigger") as PhaseRecord["trigger"] | undefined) ??
+      null,
     outcome: outcomeOf(rec),
     running,
     durationMs: typeof measured === "number" ? measured : null,

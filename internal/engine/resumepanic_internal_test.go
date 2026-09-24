@@ -25,7 +25,7 @@ func TestAResumeThatPanicsIsAbandonedAndPutsTheSeatAFK(t *testing.T) {
 	p := &pub{}
 	e := &Engine{backends: &Backends{Queue: p}}
 	run := sandbox.PendingRun{
-		TurnID: "t-9", AgentHandle: "ceo", Role: "CEO", AgentID: "a-1",
+		TurnID: "t-9", WorkKey: "wk-9", AgentHandle: "ceo", Role: "CEO", AgentID: "a-1",
 		TraceID: "0af7651916cd43dd8448eb211c80319c",
 	}
 
@@ -46,8 +46,9 @@ func TestAResumeThatPanicsIsAbandonedAndPutsTheSeatAFK(t *testing.T) {
 		t.Errorf("kind = %q, want %q", breach.Kind, types.GuardUnhandledException)
 	}
 	// Off the run's own row, since this engine has no company to ask.
-	if breach.RoleName != "CEO" || breach.Agent != "a-1" || breach.TurnID != "t-9" {
-		t.Errorf("breach = %+v, want it addressed to the run's seat and turn", breach)
+	if breach.RoleName != "CEO" || breach.Agent != "a-1" || breach.TurnID != "t-9" ||
+		breach.WorkKey != "wk-9" {
+		t.Errorf("breach = %+v, want it addressed to the run's seat, turn and unit of work", breach)
 	}
 	if strings.Contains(breach.Detail, "goroutine") {
 		t.Errorf("the published detail carries a stack: %q", breach.Detail)

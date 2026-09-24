@@ -687,6 +687,81 @@ test("the rows it does not list are accounted for, by where each went", async ()
   expect(screen.getByText(ABSORBED.turn_completed!)).toBeTruthy();
 });
 
+/**
+ * A TURN WITH NO PHASE YET IS STILL SOMEBODY'S.
+ *
+ * The engine publishes `agent_turn_started` before the turn gathers its
+ * context, so on a turn deep-linked while it does — or one that died doing it
+ * — the opening record is the only row the answer holds. The header read its
+ * seat and what woke it off the phases alone, and headed that turn "Turn", run
+ * by "the engine". `ABSORBED` files the record into the header, and this is
+ * the header keeping that claim.
+ */
+test("a turn with only its opening record is headed by its seat and its wake", async () => {
+  mount({
+    events: [
+      event({
+        type: "agent_turn_started",
+        // Not the phases' `actor` fallback: the seat is read off the record.
+        actor: "",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          agent_handle: "ceo",
+          trigger: { type: "external_notification", summary: "Ana asked for the numbers" },
+          started_at: "2026-09-13T10:00:00Z",
+          resumed: false,
+        },
+      }),
+    ],
+  });
+  await waitFor(() =>
+    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+  );
+  const head = document.querySelector(".object-head")?.textContent ?? "";
+  expect(head, "the header named no seat for a turn whose record names one").toContain("CEO");
+  expect(head).not.toContain("the engine");
+  // AND THE ROW IS ACCOUNTED FOR where the map says it went.
+  fireEvent.click(await screen.findByRole("button", { name: /Already on this page/ }));
+  expect(screen.getByText(ABSORBED.agent_turn_started!)).toBeTruthy();
+});
+
+/**
+ * A RESUMED SEGMENT DOES NOT RENAME THE TURN. A parked coding run publishes a
+ * start per segment under one id, and a segment's wake is the box's completion
+ * rather than what asked for the work — so where both are held, the header is
+ * the dispatch's.
+ */
+test("the dispatch's opening record heads the turn over a resumed segment's", async () => {
+  mount({
+    events: [
+      event({
+        type: "agent_turn_started",
+        timestamp: "2026-09-13T10:00:00Z",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          trigger: { type: "external_notification", summary: "Ana asked for the numbers" },
+          resumed: false,
+        },
+      }),
+      event({
+        type: "agent_turn_started",
+        timestamp: "2026-09-13T10:05:00Z",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          trigger: { type: "sandbox_run_completed", summary: "the box finished" },
+          resumed: true,
+        },
+      }),
+    ],
+  });
+  await waitFor(() =>
+    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+  );
+});
+
 /** A turn whose every row is a row of its own has nothing to account for, and
  *  a panel that is always present is a panel nobody reads — the same reason
  *  "What went wrong" is absent on a healthy turn. */

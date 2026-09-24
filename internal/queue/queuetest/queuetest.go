@@ -390,13 +390,20 @@ type Capabilities struct {
 //
 // newQueue must return a FRESH, UNSTARTED queue on every call: the suite owns
 // the lifecycle, because start/stop ordering is itself part of the contract.
-func Run(t *testing.T, newQueue func(t *testing.T) queue.EventQueue) {
+// It must honour the [queue.Option]s it is handed — they are the settings the
+// CONTRACT defines, so a backend cannot answer them as a capability, and the
+// suite certifies what every backend does with them.
+func Run(t *testing.T, newQueue Factory) {
 	RunWith(t, newQueue, Capabilities{})
 }
 
+// Factory builds a fresh, unstarted queue with the contract-level options
+// given — see [Run].
+type Factory func(t *testing.T, opts ...queue.Option) queue.EventQueue
+
 // RunWith is Run with the backend's capabilities filled in. A backend that can
 // answer more gets certified on more; nothing it cannot answer fails.
-func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Capabilities) {
+func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	t.Helper()
 	s := &suite{newQueue: newQueue, caps: caps}
 	t.Run("EventQueue", s.runCore)
@@ -424,14 +431,14 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 }
 
 type suite struct {
-	newQueue func(t *testing.T) queue.EventQueue
+	newQueue Factory
 	caps     Capabilities
 }
 
 // start returns a started queue whose Stop is already registered as cleanup.
-func (s *suite) start(ctx context.Context, t *testing.T) queue.EventQueue {
+func (s *suite) start(ctx context.Context, t *testing.T, opts ...queue.Option) queue.EventQueue {
 	t.Helper()
-	return startQueue(ctx, t, s.newQueue(t))
+	return startQueue(ctx, t, s.newQueue(t, opts...))
 }
 
 func startQueue(ctx context.Context, t *testing.T, q queue.EventQueue) queue.EventQueue {

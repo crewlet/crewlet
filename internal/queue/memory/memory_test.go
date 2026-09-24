@@ -37,7 +37,9 @@ import (
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t,
-		func(*testing.T) queue.EventQueue { return memory.New() },
+		func(_ *testing.T, opts ...queue.Option) queue.EventQueue {
+			return memory.New(memory.Contract(opts...))
+		},
 		queuetest.Capabilities{
 			Peer: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
 				return q.(*memory.Queue).Client()

@@ -278,6 +278,19 @@ type Publisher interface {
 type EventQueue interface {
 	// Publish sends an event to a topic. It must not return until the
 	// event is persisted: callers rely on "published means durable".
+	//
+	// It names the event's ORIGIN. An event whose Node is empty leaves
+	// carrying the node this client was built for ([WithNode]), stamped
+	// before any publish listener or consumer can see it; one that already
+	// names a node — an event this node received and is handing on — keeps
+	// it. The caller's own event is never written to: see [Options.Stamp].
+	//
+	// A nil event is REFUSED, and reaches no listener and no consumer.
+	// There is nothing to send, and the encoding of nothing is not
+	// nothing: a backend that published it delivered an event with no id
+	// and no type to every consumer on the topic, where the memory twin
+	// refused the same call — the one divergence a caller can never see
+	// from its own side of the contract.
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 
 	// Subscribe attaches a competing-consumer handler to topic/group.

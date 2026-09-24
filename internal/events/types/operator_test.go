@@ -30,13 +30,13 @@ func TestARuntimeAuditRecordIsTheCredentialsAndNamesThePerson(t *testing.T) {
 	}, {
 		name: "a backup that was taken",
 		payload: NewBackupRequested(BackupRequested{OperatorID: "founder", ActorSeat: "jane-founder",
-			Node: "node-a", Dir: "/var/backups/one", Outcome: AuditApplied, Streams: 12}),
-		summary: "founder (jane-founder) backed up node-a to /var/backups/one (12 streams)",
+			Dir: "/var/backups/one", Outcome: AuditApplied, Streams: 12}),
+		summary: "founder (jane-founder) backed up to /var/backups/one (12 streams)",
 	}, {
 		name: "a backup that failed",
 		payload: NewBackupRequested(BackupRequested{OperatorID: "founder",
-			Node: "node-a", Dir: "/var/backups/two", Outcome: AuditFailed}),
-		summary: "founder backup of node-a to /var/backups/two failed",
+			Dir: "/var/backups/two", Outcome: AuditFailed}),
+		summary: "founder backup to /var/backups/two failed",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

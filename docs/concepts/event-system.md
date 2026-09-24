@@ -219,8 +219,9 @@ operator_acted             # an operator tool call that is not a proven read,
                            # from the dashboard (/operator/act) or a person's
                            # assistant (/operator/mcp): tool, transport,
                            # request id, outcome, position or refusal
-backup_requested           # a POST /backup that began copying: node, dir,
-                           # whether it finished, and how many streams
+backup_requested           # a POST /backup that began copying: dir, whether
+                           # it finished, and how many streams. Which node's
+                           # disk holds it is the envelope's `node`
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection
@@ -263,6 +264,21 @@ prefetch_summary
 compaction_requested, compaction_completed
 
 # system: the engine talking about itself
+agent_turn_started         # a turn, or a resumed segment of one, beginning —
+                           # before its context is assembled, so a turn that
+                           # died gathering it still left a row. Names the
+                           # work item the turn is charged to (`work_item`
+                           # {backend, id, key, project}, absent when nothing
+                           # named one) and the rule that named it
+                           # (`work_item_basis`: trigger, asked_by, resume,
+                           # sole_write), what woke it, and `resumed` — a
+                           # parked coding run's resumed segment publishes
+                           # its own under the same turn_id. Its depth is
+                           # the envelope's delegation_depth. Every start is
+                           # paired with the turn's agent_turn_completed,
+                           # unless the turn died in its own frames — then a
+                           # turn.guard_breach under its turn_id says so, or
+                           # its process died under it
 agent_turn_completed       # full LLM reasoning cycle with tokens and tools
 agent_phase_started, agent_phase_completed
 budget_exhausted           # a charge the token budget refused ended a turn;
@@ -331,7 +347,7 @@ exclusions table in the Deployment page above.
 
 ## Event Schema
 
-Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, and a free-form `payload` map. A registered event type (for example `types.TaskAssigned`) adds its own fields, marshalled flat beside the envelope's.
+Every event carries a common set of fields: a unique ID (UUID), a type string, a UTC timestamp, an optional source identifier, the node that first published it, and a free-form `payload` map. A registered event type (for example `types.TaskAssigned`) adds its own fields, marshalled flat beside the envelope's.
 
 Events also carry **OpenTelemetry trace context** and self-describing properties:
 
@@ -355,11 +371,41 @@ type Event struct {
     ParentTurnID    string
     DelegationChain []string
 
+    // The node that first published the event, stamped by the queue.
+    Node string
+
     // Data is the typed body, non-nil when Type is registered in this
     // build. Marshalled flat into the same JSON object as the envelope.
     Data Payload
 }
 ```
+
+**`node` is the event's origin, and the queue writes it — never the
+publisher.** Every node's queue client is built with the node's resolved id
+(`node.id`, then `CREWLET_NODE_ID`, then the default — the same name its
+presence, leases and broker identity carry), and `Publish` stamps it on any
+event that names no node yet, before a publish listener or a consumer sees it.
+An event that already names one keeps it: a node handing another node's event
+back to the broker — a delivery it parked, a dead letter — relays the origin
+rather than claiming the event. The caller's own event is never written to;
+the queue stamps a copy.
+
+It is on the envelope because it is the **store-routing fact**. The event store
+is written by a publish listener inline on the publishing node (see
+[Publish Listeners](#publish-listeners)), so each node's database holds what
+that node published and nothing else — and a reader holding one row or one live
+frame has only `node` to find the node whose store holds the rest of that
+node's record, and to say where the work it describes ran. That is also why the
+backup audit record names no node of its own: the route publishes from the node
+that took the copy, so the envelope already says whose disk it is on.
+
+`node` is absent on an event from a build predating the field, and on one
+published through a queue client built without a node, which only a test
+harness builds. Like every envelope field it is additive:
+an older node decodes it as an unknown key, keeps it verbatim and writes it back
+out, so the origin survives a round trip through the half of a rolling upgrade
+that has never heard of it. No payload may declare a field named `node` — the
+envelope owns the key and drops a colliding one.
 
 `Data` is the typed half: each registered event type is a Go type with its
 own fields and its own `Summary()` ("who did what", in a person's words) and
@@ -425,7 +471,7 @@ The dashboard groups events by `trace_id` into collapsible trace trees. See [Dep
 
 The `EventQueue` supports **publish listeners** — callbacks `AddPublishListener` registers, invoked inline during every `Publish`. Listeners receive the topic and the event and run on the publishing goroutine, after the broker has acknowledged the message. A listener that fails, or panics, is logged and never propagates: telemetry must not be able to fail a publish.
 
-This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
+This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. A listener is handed the event as the queue stamped it, so the row carries the same `node` the wire copy does. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
 
 ---
 

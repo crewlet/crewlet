@@ -112,15 +112,17 @@ func backupStatus(err error) int {
 }
 
 // auditBackup publishes the backup's runtime audit record: who asked, the
-// person their token is bound to, which node's disk it was written to, where,
-// and whether it finished.
+// person their token is bound to, where, and whether it finished.
+//
+// WHICH NODE'S DISK is the envelope's `node`, which the queue stamps on the
+// way out — and the queue this publishes through is this node's own, the node
+// that just took the copy. Naming it here as well would state one fact twice.
 func (a *App) auditBackup(r *http.Request, operatorID, dir string,
 	manifest backup.Manifest, err error) {
 
 	record := types.BackupRequested{
 		OperatorID: operatorID,
 		ActorSeat:  apiOperator.BoundSeat(a.chart, operatorID),
-		Node:       a.nodeID,
 		Dir:        dir,
 		Outcome:    types.AuditApplied,
 		Streams:    len(manifest.Streams),

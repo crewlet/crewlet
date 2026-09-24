@@ -85,9 +85,13 @@ var categories = map[string]string{
 	"notifications_coalesced": "notification",
 	"turn_trigger_skipped":    "notification",
 
-	// System: the engine talking about itself.
+	// System: the engine talking about itself. A turn's start is stored
+	// beside its completion, because the pair is what bounds a turn in
+	// history: a turn that began and never finished is a start with no
+	// completion, and a reader can only see that if both are rows.
 	"budget_exhausted":             "system",
 	"llm_unavailable":              "system",
+	"agent_turn_started":           "system",
 	"agent_turn_completed":         "system",
 	"agent_phase_started":          "system",
 	"agent_phase_completed":        "system",

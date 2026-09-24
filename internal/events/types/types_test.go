@@ -41,7 +41,7 @@ func catalogue() []events.Payload {
 		// provider.go
 		LLMUnavailable{}, ProviderFallback{},
 		// agent.go
-		AgentTurnCompleted{}, TurnCompleted{}, AgentPhaseStarted{},
+		AgentTurnStarted{}, AgentTurnCompleted{}, TurnCompleted{}, AgentPhaseStarted{},
 		AgentPhaseCompleted{}, AgentTurnProgress{}, SubagentBatched{},
 		// learning.go
 		EpisodeWritten{}, PersistDeciderCompleted{}, SkillUsed{},
@@ -79,6 +79,7 @@ var wireTypes = []string{
 	"agent_terminated",
 	"agent_turn_completed",
 	"agent_turn_progress",
+	"agent_turn_started",
 	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
@@ -166,6 +167,7 @@ var envelopeOwnedKeys = map[string]struct{}{
 	"id": {}, "type": {}, "timestamp": {}, "source": {}, "payload": {},
 	"trace_id": {}, "span_id": {}, "parent_span_id": {},
 	"delegation_depth": {}, "parent_turn_id": {}, "delegation_chain": {},
+	"node": {},
 }
 
 var snakeCase = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -277,7 +279,7 @@ var wireTags = map[string][]string{
 	"config_revision_activated": {"created_by", "revision_id", "revision_summary"},
 	"operator_acted": {"actor_seat", "failed", "operator_id", "outcome", "position",
 		"refusal", "request_id", "tool", "transport"},
-	"backup_requested": {"actor_seat", "dir", "failed", "node", "operator_id",
+	"backup_requested": {"actor_seat", "dir", "failed", "operator_id",
 		"outcome", "streams"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
@@ -295,6 +297,7 @@ var wireTags = map[string][]string{
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
+	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_turn_completed":            {"a2a_context", "agent_id", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "subagent_count", "subagent_tokens", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_decision", "plan_summary", "plan_tool_sequence", "review_outcome", "role", "skills_used", "started_at", "task_id", "task_summary", "tool_sequence", "turn_id", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_key"},
