@@ -109,12 +109,15 @@ test("a settled row's measurement wins over the phase window", () => {
     ended_at: "2026-09-13T10:04:35Z",
     duration_ms: 275_000,
     complete: true,
+    parked: false,
     phases: 2,
     iterations: 1,
     failed: false,
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
   } satisfies TurnRow;
   draw(<TurnCard group={turn()} row={row} />);
   expect(screen.getByText("4m 35s")).toBeTruthy();
@@ -135,12 +138,15 @@ test("a live turn counts from the start the turns table prints", () => {
     ended_at: "",
     duration_ms: 0,
     complete: false,
+    parked: false,
     phases: 1,
     iterations: 1,
     failed: false,
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
   } satisfies TurnRow;
   const { container } = draw(<TurnCard group={live} row={row} />);
   expect(container.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-13T10:00:00Z");

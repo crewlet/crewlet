@@ -105,8 +105,9 @@ type EventRecord struct {
 	ParentSpanID string    `json:"parent_span_id"`
 
 	// Tags are the filterable dimensions the writer extracted. The
-	// promoted columns (agent_id, agent_role, task_id, channel_id, sender)
-	// are copies of five of these; the rest exist only here.
+	// promoted columns (agent_id, agent_role, task_id, channel_id, sender,
+	// and since schema/0031 work_item) are copies of six of these; the rest
+	// exist only here.
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// WorkKey is the unit of work this row's run was an attempt at — see
@@ -227,6 +228,17 @@ type ListQuery struct {
 	// history answers this filter too. See ADR-0017.
 	WorkKey string
 
+	// WorkItem selects every event on one work item, by its identity
+	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — and never by
+	// its key, which a move rewrites. Every turn-level record carries the
+	// item it was charged to, so this is "everything that happened on this
+	// item": each turn's start, its phases, its completion, a coding run it
+	// launched. Backed by the partial index schema/0031 ships, whose
+	// backfill gives the rows already stored their column; their stored
+	// tags blob is not rewritten, so the filter — which reads the column —
+	// is the authority and a `tags.work_item` read is not.
+	WorkItem string
+
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
 	// whose tags name it as agent_role / target / recipient / sender, plus
 	// every event sharing a trace with one of those — so the inbound
@@ -281,9 +293,9 @@ INSERT INTO crewlet_events (
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
-	cache_read_tokens, cache_write_tokens, provider_key
+	cache_read_tokens, cache_write_tokens, provider_key, work_item
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -396,6 +408,11 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			spend.TurnID, spend.WorkKey, spend.Iteration,
 			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
 			spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
+			// THE ITEM THE ROW IS ON, off the tag [ExtractTags] composes
+			// from the nested `work_item` object — a copy of a tag, like
+			// agent_id's beside it, so the column and the tag can never
+			// name two different items. See schema/0031.
+			tags["work_item"],
 		); err != nil {
 			return err
 		}
@@ -512,6 +529,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
 	addEq("work_key", q.WorkKey)
+	addEq("work_item", q.WorkItem)
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.

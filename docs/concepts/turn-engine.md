@@ -713,7 +713,21 @@ One `turn_id` moves through four stages, and the records say which it is in:
 | **done** | a completion **without** `suspended` |
 
 A reader that took any completion for the end listed a parked turn as finished,
-with its first segment's duration.
+with its first segment's duration. The turns list (`GET /turns`) reads the
+stages this way: the newest completion makes a turn `complete` or `parked`,
+never both, and its `duration_ms` is the sum of every segment's own measurement
+— the time the turn worked, not the time its coding run took between segments.
+
+### Finding everything on one item
+
+The event log promotes the item into a column (`work_item`, node migration
+`0031`) holding `<backend>:<id>`, so `GET /events?work_item=` and
+`GET /turns?work_item=` answer "everything that happened on this item" with an
+index seek rather than a read of every payload in the window. It is a column
+of the node's own audit log, derived by the writer from each event it stores
+exactly as `turn_id` and `work_key` are, and the migration backfills it from
+the rows already stored. The episode memory files a turn under the same
+identity, in a column of the same name.
 
 ---
 

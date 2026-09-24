@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // Category reports the dashboard category an event type is filed under, and
@@ -217,6 +218,32 @@ func ExtractTags(payload []byte) map[string]string {
 	}
 	if failed {
 		tags["failed"] = "true"
+	}
+	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read and the
+	// only other one. Every turn-level record carries it as an object,
+	// `work_item{backend, id, key, project}`, and the tag is its identity
+	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
+	// that is the one of the four that a move or a rename leaves alone and
+	// that two trackers cannot both mint. [EventLog.Append] reads it back out
+	// of here for the work_item column (schema/0031), which is what makes
+	// "everything that happened on this item" an index seek.
+	//
+	// BOTH HALVES OR NOTHING: a backend with no id names no item, and a tag
+	// of `native:` would make every such row the same one. The backend is
+	// taken as a string rather than tested for [types.WorkBackend.Valid], so
+	// a newer peer's record naming a tracker this build does not know is
+	// indexed exactly as a known one is — the rule this whole extractor
+	// follows by reading the JSON rather than the decoded payload.
+	if raw, ok := flat["work_item"]; ok {
+		var item struct {
+			Backend string `json:"backend"`
+			ID      string `json:"id"`
+		}
+		if json.Unmarshal(raw, &item) == nil && item.Backend != "" && item.ID != "" {
+			tags["work_item"] = types.WorkItem{
+				Backend: types.WorkBackend(item.Backend), ID: item.ID,
+			}.Ref()
+		}
 	}
 	// Turns triggered by A2A carry their channel one level down, so the
 	// cross-reference from a turn back to the conversation that caused it

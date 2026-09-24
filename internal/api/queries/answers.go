@@ -874,6 +874,11 @@ func eventFilters(p Params) (store.ListQuery, error) {
 		// records, one migration later. See ADR-0017.
 		WorkKey: p.String("work_key"),
 	}
+	item, err := workItemParam(p)
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.WorkItem = item
 	// THE WINDOW, which is what a reader scrubbing a time range means and
 	// is NOT the cursor: a cursor is where a page resumes and moves with
 	// every page, while these are what was asked for and do not.
@@ -892,6 +897,30 @@ func eventFilters(p Params) (store.ListQuery, error) {
 			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	}
 	return q, nil
+}
+
+// workItemParam reads `work_item=`, a work item's identity across trackers:
+// `<backend>:<id>`, the value [types.WorkItem.Ref] writes and schema/0031's
+// column holds. Empty when absent.
+//
+// REFUSED RATHER THAN MATCHED when it is not that shape, because a malformed
+// ref matches nothing and an empty answer to it reads as "nothing happened on
+// this item" — the one conclusion a caller who pasted a key ("ENG-412") or a
+// bare id instead must not draw. The backend is NOT tested against this build's
+// set: a newer peer's tracker is stored under its own name, and a filter
+// refusing it would hide rows this node holds.
+func workItemParam(p Params) (string, error) {
+	raw := strings.TrimSpace(p.String("work_item"))
+	if raw == "" {
+		return "", nil
+	}
+	backend, id, ok := strings.Cut(raw, ":")
+	if !ok || backend == "" || id == "" {
+		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity — "+
+			"want `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
+			"never its key", ErrBadParams, raw)
+	}
+	return raw, nil
 }
 
 // instantParam reads an RFC 3339 instant, or the zero time when absent.

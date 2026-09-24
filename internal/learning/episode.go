@@ -42,9 +42,10 @@ type Episode struct {
 	// that is unique across trackers — and empty for a turn on nothing and
 	// for a compacted row, whose cluster spans items by construction.
 	//
-	// STORED IN THE task_id COLUMN until node migration 0031 renames it, and
-	// the Go name moved first because the column never held anything: the
-	// turn event it was copied from declared a task id and never set one.
+	// The `work_item` column since node migration 0031, which renamed the
+	// `task_id` it had been declared as: that column never held anything,
+	// because the turn event it was copied from declared a task id and never
+	// set one — and `task_id` means a delegated worker's task elsewhere.
 	WorkItem  string
 	TurnID    string
 	StartedAt time.Time
@@ -96,7 +97,7 @@ func NewEpisodes(db *store.DB) *Episodes { return &Episodes{db: db} }
 
 const episodeInsertSQL = `
 INSERT INTO episodes (
-	id, agent_handle, agent_role, task_id, turn_id, started_at, ended_at,
+	id, agent_handle, agent_role, work_item, turn_id, started_at, ended_at,
 	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
 	duration_ms, embedding, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
@@ -192,7 +193,7 @@ func (e *Episodes) encodeEmbedding(v []float32) (any, error) {
 	return blob, nil
 }
 
-const episodeColumns = `id, agent_handle, agent_role, task_id, turn_id,
+const episodeColumns = `id, agent_handle, agent_role, work_item, turn_id,
 	started_at, ended_at, plan_summary, task_summary, tool_sequence,
 	skills_used, review_outcome, duration_ms, embedding, kind, count,
 	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,

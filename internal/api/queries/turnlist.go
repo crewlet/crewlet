@@ -52,6 +52,13 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			return nil, badParams("failed", raw, []string{"true", "false"})
 		}
 	}
+	// THE TURNS ON ONE WORK ITEM, by its identity across trackers — see
+	// workItemParam for why a malformed one is refused rather than matched.
+	item, err := workItemParam(p)
+	if err != nil {
+		return nil, err
+	}
+	q.WorkItem = item
 	before, err := instantParam(p, "before")
 	if err != nil {
 		return nil, err

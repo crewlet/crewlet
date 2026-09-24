@@ -3157,12 +3157,19 @@ export interface TurnRow {
    *  covers the reflection pass that publishes after the turn ends. */
   started_at: string;
   ended_at: string;
-  /** The turn's OWN measurement, and zero for one that has not finished —
-   *  which `complete` is what tells apart. */
+  /** The turn's OWN measurement: the sum of every completed segment's, so a
+   *  turn that parked and resumed counts both and not the wait between them.
+   *  Zero for one that has completed no segment — `complete` and `parked` say
+   *  which. */
   duration_ms: number;
-  /** Whether a completion record exists. A turn with none is either running
-   *  or died mid-flight, and those look identical from a list. */
+  /** Whether the turn ENDED: its newest completion record is not a
+   *  suspension. A turn with no completion is either running or died
+   *  mid-flight, and those look identical from a list. */
   complete: boolean;
+  /** Whether the turn is waiting on a detached coding run: its newest
+   *  completion is a suspension, and it completes again when the run is
+   *  collected. Never true beside `complete`. */
+  parked: boolean;
   phases: number;
   /** SELF-ITERATE rounds — the highest iteration any phase reached. A phase's
    *  TOOL rounds are `rounds_used` on its own record; the two are different
@@ -3176,6 +3183,10 @@ export interface TurnRow {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** The share of `input_tokens` the provider's prompt cache served and
+   *  stored — a BREAKDOWN of the input, never an addition to it. */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   /** Every distinct model the turn used, comma-joined — a turn routinely uses
    *  two, a cheap one for the extension judge and the seat's own. */
   models?: string;

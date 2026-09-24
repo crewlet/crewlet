@@ -24,10 +24,13 @@
  *
  * # A turn that has not finished is not a turn that finished instantly
  *
- * `complete` says whether a completion record exists, and the duration is the
- * turn's OWN measurement rather than the span of its events — the span covers
- * the reflection pass that publishes afterwards. Rendering a running turn's
- * zero as a duration would make the busiest turns look like the cheapest.
+ * `complete` says whether the turn ended, and the duration is the turn's OWN
+ * measurement rather than the span of its events — the span covers the
+ * reflection pass that publishes afterwards. Rendering a running turn's zero
+ * as a duration would make the busiest turns look like the cheapest. A turn
+ * waiting on a coding run it launched is `parked`, which is neither: it has
+ * completed a segment and will complete again, so it is marked as such rather
+ * than as running or as finished.
  *
  * # A log needs a time axis, and this one had none
  *
@@ -448,7 +451,15 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
                       re-run
                     </Tag>
                   )}
-                  {!t.complete && (
+                  {t.parked && (
+                    <Tag
+                      appearance="outline"
+                      title="waiting on a coding run it launched — it completes again when the run is collected"
+                    >
+                      parked
+                    </Tag>
+                  )}
+                  {!t.complete && !t.parked && (
                     <Tag
                       variant="info"
                       title="no completion record — running, or it died mid-flight"

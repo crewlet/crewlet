@@ -1570,8 +1570,15 @@ export function SeatScreen({ handle }: { handle: string }) {
                           {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE.
                               `duration_ms` is 0 until a completion record
                               exists, and `complete` is what tells a turn in
-                              flight from one that died mid-flight. */}
-                          {!t.complete && (
+                              flight from one that died mid-flight. A turn
+                              waiting on its coding run is `parked`, neither
+                              running nor finished. */}
+                          {t.parked && (
+                            <Tag appearance="outline" title="waiting on a coding run it launched">
+                              parked
+                            </Tag>
+                          )}
+                          {!t.complete && !t.parked && (
                             <Tag variant="info" title="no completion record — running, or it died">
                               running
                             </Tag>

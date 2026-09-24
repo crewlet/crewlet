@@ -32,11 +32,27 @@ import (
 // 0018 indexed `turn_id`. So one row per turn is a GROUP BY over narrow
 // values, not a fold over documents.
 //
-// The exception is the three facts that only the COMPLETION event knows: how
-// long the turn took, what it concluded, and what it set out to do. Those are
-// read with `json_extract` from the one row per turn that carries them, which
-// is why the CASE is gated on the event type rather than applied to every row
-// — a turn has one completion and sixty phases.
+// The exception is the facts that only the COMPLETION event knows: how long
+// the turn took, what it set out to do, the item it was charged to, and
+// whether it ENDED. Those are read with `json_extract` from the completion
+// rows, which is why every such CASE is gated on the event type rather than
+// applied to every row — a turn has a completion per segment and sixty
+// phases.
+//
+// # A completion is not always an end
+//
+// A turn whose executor launches a detached coding run PARKS: the segment
+// that launched it publishes `turn_completed` with `suspended: true`, and the
+// same turn id completes again — possibly on another node, possibly after a
+// restart — when the run is collected and the loop resumes. So one turn can
+// hold several completion records, and "a completion exists" is not "the turn
+// finished". Read that way, this list called a parked turn complete the
+// moment it parked and reported the first segment's duration as the whole
+// turn's. The NEWEST completion decides what the turn is now — finished, or
+// parked waiting for its run — and the duration is the sum of every segment's
+// own measurement, which is the time the turn spent working rather than the
+// time it spent waiting. A completion that predates the flag names no
+// `suspended` and folds as it always did: an end.
 
 // The two event types this fold is keyed on, taken from the payload types
 // themselves rather than spelled here: a literal would be the one place the
@@ -79,6 +95,27 @@ func failedRow() (string, []any) {
 		holders + "))", args
 }
 
+// suspendedExpr is 1 for a completion record that PARKED its turn and 0 for
+// every other row, a completion that predates the flag included — the flag is
+// `omitempty` on the wire, so its absence is the ordinary end.
+const suspendedExpr = "COALESCE(json_extract(payload, '$.suspended'), 0)"
+
+// segmentState is what a turn is now, from the time of its newest completion
+// that ENDED it and of its newest one that PARKED it (either absent).
+//
+// THE NEWEST DECIDES, so the two answers are exclusive: a turn that parked and
+// then finished is complete, and one that parked again after a resume is
+// parked. A turn with neither record is neither — running, or died mid-flight.
+func segmentState(ended, parked sql.NullInt64) (complete, isParked bool) {
+	switch {
+	case ended.Valid && (!parked.Valid || ended.Int64 >= parked.Int64):
+		return true, false
+	case parked.Valid:
+		return false, true
+	}
+	return false, false
+}
+
 // Turn is one unit of agent work, as a list row.
 type Turn struct {
 	// TurnID is ONE RUN of a turn. Two attempts at one trigger are two
@@ -105,16 +142,24 @@ type Turn struct {
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
 
-	// DurationMS is the turn's OWN measurement, from its completion
-	// record, and zero for a turn that has not finished — which is a
-	// meaningful zero here, because `Complete` says which.
+	// DurationMS is the turn's OWN measurement: the sum of what every one
+	// of its completion records measured, so a turn that parked and resumed
+	// counts both segments and not the wait between them. Zero for a turn
+	// that has completed no segment — a meaningful zero here, because
+	// `Complete` and `Parked` say which.
 	DurationMS int `json:"duration_ms"`
 
-	// Complete is whether a completion record exists. A turn with none is
-	// either still running or died mid-flight, and those look identical
-	// from here: the span's end says which is more likely, and the event
-	// list says for certain.
+	// Complete is whether the turn ENDED: its newest completion record is
+	// not a suspension. A turn with no completion is either still running
+	// or died mid-flight, and those look identical from here: the span's
+	// end says which is more likely, and the event list says for certain.
 	Complete bool `json:"complete"`
+
+	// Parked is whether the turn is waiting on a detached coding run: its
+	// newest completion record is a suspension, so it will complete again
+	// when the run is collected. Never true beside Complete — the newest
+	// completion is one or the other.
+	Parked bool `json:"parked"`
 
 	// Phases counts the phase completions, and Iterations is the highest
 	// iteration any of them reached: SELF-ITERATE rounds, the executor →
@@ -137,6 +182,14 @@ type Turn struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+
+	// CacheRead and CacheWrite are the share of InputTokens the provider's
+	// prompt cache served and stored, summed over the turn's phases off the
+	// columns schema/0030 promoted — a BREAKDOWN of the input, never an
+	// addition to it (see tokens.Bucket), so TotalTokens is unchanged by
+	// them.
+	CacheRead  int `json:"cache_read_tokens"`
+	CacheWrite int `json:"cache_write_tokens"`
 
 	// Models is every distinct model the turn used, comma-joined by the
 	// read because a turn routinely uses two — a cheap one for the
@@ -179,6 +232,13 @@ type TurnQuery struct {
 	// could not ask while a turn id WAS the work key, because then the two
 	// were the same query. See ADR-0017.
 	WorkKey string
+
+	// WorkItem narrows to the turns on one work item, by its identity
+	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref]. ON THE TURN,
+	// like Model: a turn is selected when any of its records names the item,
+	// and every record it has is folded, so the row is the same row the
+	// unfiltered list shows. See schema/0031 for the column and its index.
+	WorkItem string
 
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
@@ -261,6 +321,16 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
 	}
+	if q.WorkItem != "" {
+		// ON THE TURN, not on the row, for Model's reason and one more:
+		// filtering rows would fold only the records that carry the item,
+		// and a parked segment resolved before its sole write — or any
+		// record that names no item — would drop out of the sums.
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_events "+
+				"WHERE work_item = ? AND event_time >= ? AND turn_id != '')")
+		args = append(args, q.WorkItem, EncodeTime(floor))
+	}
 
 	having := []string{}
 	if q.Before.IsZero() {
@@ -304,9 +374,13 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		       MAX(iteration),
 		       `+failedAgg+`,
 		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
+		       SUM(cache_read_tokens), SUM(cache_write_tokens),
 		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
-		       MAX(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
-		       MAX(CASE WHEN event_type = ?
+		       MAX(CASE WHEN event_type = ? AND `+suspendedExpr+` = 0
+		                THEN event_time END),
+		       MAX(CASE WHEN event_type = ? AND `+suspendedExpr+` = 1
+		                THEN event_time END),
+		       SUM(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
 		       MAX(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
@@ -320,9 +394,10 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		 LIMIT ?`,
 		// The SELECT list's own placeholders, in the order they appear
 		// in it: the phase count, then the failure predicate, then the
-		// four reads off the completion row.
+		// five reads off the completion rows.
 		slices.Concat([]any{phaseCompleted}, failedArgs,
-			[]any{turnCompleted, turnCompleted, turnCompleted, turnCompleted},
+			[]any{turnCompleted, turnCompleted, turnCompleted, turnCompleted,
+				turnCompleted},
 			args)...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
@@ -336,15 +411,18 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			workKey           sql.NullString
 			agentID, role     sql.NullString
 			started, ended    int64
-			failed, complete  int
+			failed            int
 			models, summary   sql.NullString
 			item, trigger     sql.NullString
 			in, outTok, total sql.NullInt64
+			cacheR, cacheW    sql.NullInt64
+			ended1, parked1   sql.NullInt64
 			duration          sql.NullInt64
 		)
 		if err := rows.Scan(&t.TurnID, &workKey, &agentID, &role, &started, &ended,
-			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
-			&complete, &duration, &summary, &item, &trigger); err != nil {
+			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total,
+			&cacheR, &cacheW, &models,
+			&ended1, &parked1, &duration, &summary, &item, &trigger); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
@@ -352,11 +430,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		t.AgentID, t.AgentRole = agentID.String, role.String
 		t.StartedAt, t.EndedAt = DecodeTime(started), DecodeTime(ended)
 		t.Failed = failed != 0
-		t.Complete = complete != 0
+		t.Complete, t.Parked = segmentState(ended1, parked1)
 		t.DurationMS = int(duration.Int64)
 		t.InputTokens = int(in.Int64)
 		t.OutputTokens = int(outTok.Int64)
 		t.TotalTokens = int(total.Int64)
+		t.CacheRead, t.CacheWrite = int(cacheR.Int64), int(cacheW.Int64)
 		t.Models, t.Summary = models.String, summary.String
 		t.Trigger = trigger.String
 		if item.Valid && item.String != "" {
