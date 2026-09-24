@@ -177,7 +177,7 @@ func Corpus(o *org.Organization) []colleague.Seat {
 //
 // # It is the other direction of the same lookup, and cannot disagree with it
 //
-// `opsmcp.WorkActor` walks credential → seat and this walks seat → credential
+// `operator.WorkActor` walks credential → seat and this walks seat → credential
 // — as does the dashboard's own `queries.Sources.partyOf` — and all of them go
 // through the one resolution in `org`: see [org.Organization.SeatByOperatorID],
 // whose own doc says why a `${VAR}` has to be resolved rather than compared. A

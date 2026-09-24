@@ -50,7 +50,7 @@ import (
 
 // operatorActor is a write with no turn: a token acting for the company.
 //
-// It is what `opsmcp.WorkActor` builds — the operator's own name as the
+// It is what `operator.WorkActor` builds — the operator's own name as the
 // handle, the kind saying it is not a seat, and NO TURN ID, which is the whole
 // point of the case.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -226,4 +226,38 @@ func opName(id string) string {
 		return id[i+1:]
 	}
 	return ""
+}
+
+// AND A REDELIVERED TURN FILES ITS WORK ONCE, which is the same defect reached
+// from inside a turn: the create's operation id is over the new item's id, and
+// that id was minted fresh on every attempt — so the work key that collapses a
+// redelivered update, comment or status move never collapsed a create, and a
+// turn that failed after filing its work filed it again on the retry.
+func TestARedeliveredTurnFilesOneItem(t *testing.T) {
+	t.Parallel()
+	filed := map[string]string{}
+	for _, run := range []string{"run-1", "run-2"} {
+		turn := workTurn(t)
+		turn.RunID, turn.WorkKey = run, "wk-1"
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		entry, ok := reg.Lookup(builtin.CreateWorkItemTool)
+		if !ok {
+			t.Fatal("create_work_item is not registered")
+		}
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(t.Context(), turn,
+			map[string]any{"title": "Ship the thing", "project": "ENG"})
+		if err != nil || got.Failed {
+			t.Fatalf("%s: err=%v result=%+v", run, err, got)
+		}
+		if len(trk.created) != 1 {
+			t.Fatalf("%s filed %d items", run, len(trk.created))
+		}
+		filed[run] = trk.created[0].ID
+	}
+	if filed["run-1"] != filed["run-2"] {
+		t.Errorf("the attempts filed %s and %s — a redelivery the engine "+
+			"guarantees is a second item on somebody's board",
+			filed["run-1"], filed["run-2"])
+	}
 }

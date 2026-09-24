@@ -111,15 +111,19 @@ The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat, and ten more
 beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, and the trash. There, each tracker write's answer
-also carries the **`op_id`** of the operation the call was, and the write tools
-take it back as an argument: an assistant has no turn to repeat, so sending the
-same call with that `op_id` is how it finishes a write that came back
-`unknown` or stopped part of the way through, instead of filing it twice. An
-`op_id` is that one call and no other: it carries a digest of the call's
-arguments, and brought back with any other argument, or to another tool, it is
-refused before anything is written. A seat is never offered the argument — its
-turn is its identity — and a seat's call that sends one is refused.
+person's own queue and inbox, and the trash. That set is built once per company
+as ONE operator catalogue, and every operator transport serves it, so what a
+person can do is the same whichever way they reach the company.
+
+Over MCP, each tracker write's answer also carries the **`op_id`** of the
+operation the call was, and the write tools take it back as an argument: an
+assistant has no turn to repeat, so sending the same call with that `op_id` is
+how it finishes a write that came back `unknown` or stopped part of the way
+through, instead of filing it twice. An `op_id` is that one call and no other:
+it carries a digest of the call's arguments, and brought back with any other
+argument, or to another tool, it is refused before anything is written. A seat
+is never offered the argument — its turn is its identity — and a seat's call
+that sends one is refused.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 

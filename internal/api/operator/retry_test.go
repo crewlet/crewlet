@@ -1,10 +1,8 @@
-package opsmcp_test
+package operator_test
 
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -13,9 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
-	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -34,17 +30,17 @@ import (
 func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.T) {
 	t.Parallel()
 	writer := &recordingWriter{}
-	s := opsmcp.New(opsmcp.Options{
+	s := operator.New(operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Merges: stubWorkMerger,
 			Writer: func(builtin.Actor) builtin.WorkWriter { return writer },
-			Actor:  opsmcp.WorkActor(nil),
+			Actor:  operator.WorkActor(nil),
 		},
 	})
 	if s == nil {
 		t.Fatal("a company on the native tracker got no surface")
 	}
-	sess := dialOperator(t, s)
+	sess := dialOperator(t, s, "founder")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -89,29 +85,6 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 		t.Errorf("the create brought back was operation %s filing task %s, the "+
 			"first %s filing %s — a second item", ops[1], ids[1], ops[0], ids[0])
 	}
-}
-
-// dialOperator connects an MCP client to the surface's own handler, with the
-// operator the auth guard would have put on every request.
-func dialOperator(t *testing.T, s *opsmcp.Server) *mcp.ClientSession {
-	t.Helper()
-	handler := s.Handler()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "founder")))
-	}))
-	t.Cleanup(server.Close)
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "assistant", Version: "1"}, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: server.URL, HTTPClient: httpxtest.Pool(t),
-	}, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-	return sess
 }
 
 // answered calls one tool and decodes its JSON answer, failing on a refusal.

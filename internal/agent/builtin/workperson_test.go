@@ -321,7 +321,7 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 	return reg
 }
 
-// boundOperator is what `opsmcp.WorkActor` builds for a token a company bound
+// boundOperator is what `operator.WorkActor` builds for a token a company bound
 // to a human seat with `contact.crewlet_operator_id`: the credential in the
 // author field, the kind saying it is not a seat, and the PERSON it names in
 // [builtin.Actor.Seat].
