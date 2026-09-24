@@ -136,7 +136,7 @@ func (h *Hasher) Hash(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: read a salt: %w", err)
 	}
-	return h.encode(salt, h.derive(password, salt)), nil
+	return h.encode(salt, h.derive(password, salt, h.params)), nil
 }
 
 // Verify reports whether a password matches a verifier, and whether the
@@ -152,13 +152,19 @@ func (h *Hasher) Hash(password string) (string, error) {
 // AN UNPARSEABLE VERIFIER IS A REFUSAL AND NOT AN ERROR PATH THE CALLER
 // BRANCHES ON: a row somebody corrupted must not be distinguishable, from
 // outside, from a wrong password.
+//
+// UNDER THE SAME CAP AS A HASH ([VerifyCap]). A verification holds the stored
+// verifier's memory cost for as long as it runs, and it is the half an
+// UNAUTHENTICATED caller reaches — every sign-in, every step-up, every retry
+// of a held redemption — so it is the half the cap exists for. It used to call
+// argon2 directly: only setting a password queued, and the sign-in endpoint
+// ran one 64 MiB derivation per concurrent request, however many arrived.
 func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
 	params, salt, want, err := decode(verifier)
 	if err != nil {
 		return false, false
 	}
-	got := argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
-		params.Threads, params.KeyLen)
+	got := h.derive(password, salt, params)
 	// CONSTANT TIME. A byte-by-byte compare over a digest leaks it one
 	// byte at a time to anybody who can time the endpoint — and this
 	// endpoint is deliberately reachable with no other credential.
@@ -168,16 +174,18 @@ func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
 	return true, params != h.params
 }
 
-// derive runs the cost, under the concurrency cap.
-func (h *Hasher) derive(password string, salt []byte) []byte {
+// derive runs the cost at params, under the concurrency cap: this hasher's own
+// for a new verifier, the stored verifier's for a verification — ONE path, so
+// no derivation this package runs can skip the cap.
+func (h *Hasher) derive(password string, salt []byte, params Params) []byte {
 	// THE CAP IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
 	// across a store read as well would make one slow database turn the
 	// password cost into a queue, which is the shape that takes a node
 	// down under exactly the load the cap exists for.
 	h.admit <- struct{}{}
 	defer func() { <-h.admit }()
-	return argon2.IDKey([]byte(password), salt, h.params.Time, h.params.Memory,
-		h.params.Threads, h.params.KeyLen)
+	return argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
+		params.Threads, params.KeyLen)
 }
 
 // encode writes the PHC string this engine stores.

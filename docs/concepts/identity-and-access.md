@@ -716,6 +716,13 @@ The rule is not "hash secrets with argon2id", it is **spend cost where an
 attacker has a shortcut** — and against a 32-byte value this engine minted,
 there is none.
 
+**A node runs at most one password derivation per core at once**, hashing and
+verifying alike, and the rest queue. Each one holds 64 MiB for as long as it
+runs, and verifying is what every sign-in does before anybody is authenticated
+— so without the cap a burst of sign-in attempts is 64 MiB per request in
+flight, an out-of-memory kill rather than a slow login. Under the cap the same
+burst is a queue: sign-in slows down under attack, and the node stays up.
+
 ### Twelve characters, and no other rule
 
 No required digit, no required symbol, no forbidden repeat, no expiry.
