@@ -38,6 +38,88 @@ func TestEveryRowStatesHowRecentAProofItAsksFor(t *testing.T) {
 	}
 }
 
+// A SELF ARM'S OWN WINDOW NAMES A REAL ONE, ON A ROW THAT HAS A SELF ARM.
+//
+// The second window is read off the decision's reason, so one stated on a row
+// whose class never admits anybody as themselves is a window no request can
+// ever be asked — a rule somebody believes in and nothing enforces. Held
+// BEHAVIOURALLY rather than against a list of classes: the row must admit
+// somebody as themselves, over an object naming them by id or by login.
+func TestASelfArmsOwnWindowIsARealOneOnARowThatHasOne(t *testing.T) {
+	t.Parallel()
+	for _, a := range authz.Actions() {
+		own, _ := authz.SelfRecencyOf(a)
+		if own == "" {
+			continue
+		}
+		if !own.Valid() {
+			t.Errorf("%s states the self arm's window %q, which is not one of "+
+				"%v", a, own, iam.Recencies)
+		}
+		p := person("jane.doe", iam.AllGrants...)
+		self := false
+		for _, owner := range []string{p.ID.String(), p.Login} {
+			d := authz.Decide(t.Context(), p, a, authz.Object{
+				Kind: authz.KindPerson, Owner: owner, Author: owner,
+			}, nimbus(), decidedAt)
+			self = self || d.Allowed && d.Reason == authz.ReasonSelf
+		}
+		if !self {
+			t.Errorf("%s states a window for its self arm and admits nobody "+
+				"as themselves, so the window is asked of no request", a)
+		}
+	}
+}
+
+// ENDING SOMEBODY ELSE'S SESSIONS ASKS FOR THE ADMINISTRATOR'S PROOF, AND
+// ENDING YOUR OWN ASKS FOR NONE.
+//
+// One verb, two arms: a person who finds an intruder in their account signs
+// out everywhere at once, whatever their proof's age, and an administrator
+// ending a colleague's sessions — and every machine token the colleague holds
+// — is asked the ordinary window every other directory write asks. A proof two
+// hours old is outside it; the controls are the same administrator a minute
+// after proving, and the colleague ending their own on a week-old cookie.
+//
+// Mutation: read the row's one window for both arms and the week-old cookie
+// is refused; ask the self window of both and the stale administrator is
+// admitted.
+func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) {
+	t.Parallel()
+	stale := func(p iam.Principal, age time.Duration) iam.Principal {
+		at := decidedAt.Add(-age)
+		p.ReauthAt, p.SensitiveReauthAt = at.Add(time.Hour), at.Add(15*time.Minute)
+		return p
+	}
+	colleague := person("bob.second")
+	about := func(p iam.Principal) authz.Object {
+		return authz.Object{Kind: authz.KindPerson, Owner: p.ID.String()}
+	}
+
+	admin := stale(person("ana.admin", iam.GrantPeopleManage), 2*time.Hour)
+	d := authz.Decide(t.Context(), admin, authz.ActionSessionEnd, about(colleague),
+		authz.NoChart{}, decidedAt)
+	if d.Allowed || d.Reason != authz.ReasonStepUp || d.Recency != iam.RecencyStepUp {
+		t.Errorf("an administrator whose proof is two hours old ending a "+
+			"colleague's sessions decided %+v, want a step-up refusal naming %s",
+			d, iam.RecencyStepUp)
+	}
+	fresh := stale(person("ana.admin", iam.GrantPeopleManage), time.Minute)
+	if d := authz.Decide(t.Context(), fresh, authz.ActionSessionEnd,
+		about(colleague), authz.NoChart{}, decidedAt); !d.Allowed ||
+		d.Reason != authz.ReasonGrant {
+		t.Errorf("the same administrator a minute after proving decided %+v, "+
+			"want admitted on the grant", d)
+	}
+	weekOld := stale(colleague, 7*24*time.Hour)
+	if d := authz.Decide(t.Context(), weekOld, authz.ActionSessionEnd,
+		about(weekOld), authz.NoChart{}, decidedAt); !d.Allowed ||
+		d.Reason != authz.ReasonSelf {
+		t.Errorf("a person ending their own sessions on a week-old cookie "+
+			"decided %+v, want admitted as themselves with no proof asked", d)
+	}
+}
+
 // NO TOOL ASKS FOR A PROOF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no

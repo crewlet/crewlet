@@ -64,6 +64,12 @@
 // answer, and a walk holds every row to having decided — a zero recency is
 // refused, because read as "none" it is a sensitive verb that shipped open.
 //
+// A ROW MAY ASK ITS SELF ARM A DIFFERENT WINDOW from every other arm, read off
+// the reason the class admitted on: ending every session somebody holds asks
+// nothing of the person themselves — the first thing they do on finding an
+// intruder — and the ordinary window of an administrator ending somebody
+// else's, which stops every pipeline that colleague runs as well.
+//
 // THE PROOF IS ASKED AFTER THE RULE ADMITS, so a caller who could never take
 // the verb is told what they lack rather than sent to confirm their identity
 // first, and the refusal ([ReasonStepUp]) names the window it needs so a

@@ -56,6 +56,15 @@ func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
 // spoken to. Ending them individually would be N records, would race with a
 // session opening during the sweep, and would leave whatever was minted
 // between the first delete and the last.
+//
+// # Two arms, two proofs — decided by the table, not here
+//
+// The person themselves is asked for no recent proof, because this is the first
+// thing they do on finding an intruder in their account; an administrator
+// ending somebody else's is asked the ordinary step-up window, because it
+// signs a colleague out of everything and stops every pipeline they run. Both
+// are one verb's row (internal/authz, `selfRecency`), so the route states
+// nothing about either.
 func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {

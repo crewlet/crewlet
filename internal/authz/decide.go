@@ -216,10 +216,28 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
 	// package doc and [rule.recency].
-	if d.Unknown() || !d.Allowed || p.Proved(r.recency, now) {
+	if d.Unknown() || !d.Allowed {
 		return d
 	}
-	return Decision{Reason: ReasonStepUp, Recency: r.recency, Grants: d.Grants}
+	need := recencyFor(r, d)
+	if p.Proved(need, now) {
+		return d
+	}
+	return Decision{Reason: ReasonStepUp, Recency: need, Grants: d.Grants}
+}
+
+// recencyFor is the proof a row asks of the arm that admitted d: the row's own
+// window, or its self arm's where the row states one ([rule.selfRecency]).
+//
+// THE ARM IS READ OFF THE DECISION'S REASON, which is what the class
+// concluded — never off the object, which says what was named and not which
+// rule let the caller through: an administrator naming themselves is admitted
+// as themselves, and asked what anybody is asked about their own record.
+func recencyFor(r rule, d Decision) iam.Recency {
+	if d.Reason == ReasonSelf && r.selfRecency != "" {
+		return r.selfRecency
+	}
+	return r.recency
 }
 
 // decideClass is the class half of [Decide]: the one rule a row names, asked

@@ -233,6 +233,27 @@ type rule struct {
 	// they are first would send them through a step-up only to be refused
 	// by the rule it was never going to change.
 	recency iam.Recency
+
+	// selfRecency is the proof the SELF arm asks for — the person the
+	// object IS, admitted as themselves ([ReasonSelf]) — where that differs
+	// from what every other arm of the row asks.
+	//
+	// IT EXISTS BECAUSE ONE GESTURE HAS TWO RISKS depending on who makes
+	// it. Ending every session somebody holds is the first thing they do
+	// on finding an intruder in their account, and making them re-prove a
+	// password the intruder may also hold turns the fastest response to a
+	// compromise into the slowest — while the SAME verb made by an
+	// administrator ends another person's sessions and every machine token
+	// they hold, and a loop over the directory does it to the whole
+	// company. One recency on the row could only be right for one of them.
+	// ON THE ROW rather than in the handler, so a REST route and a socket
+	// question about the verb still get one answer.
+	//
+	// ITS ZERO MEANS "WHAT THE ROW ASKS", which is the safe direction for
+	// an unset value: a row nobody gave a second window to asks its one
+	// window of everybody. A walk holds a set one to naming a real window
+	// on a class that has a self arm at all.
+	selfRecency iam.Recency
 }
 
 // rules is THE authority table: every verb this engine knows, and how it is
@@ -452,14 +473,21 @@ var rules = map[Action]rule{
 	// owner with nobody present, and a revocation can take away the
 	// password or second factor somebody proves themselves with — which is
 	// the second-factor reset's reason, and `api.auth.session`'s own
-	// description of the window. Ending sessions asks for NONE: it is the
-	// first thing a person does on finding somebody else in their account
-	// — and it ends every machine token they hold as well — and a gesture
-	// that makes them re-prove a password the intruder may also hold makes
-	// the fastest response to a compromise the slowest, which is the
-	// reason internal/iamdomain's own revocation takes no grant at all.
+	// description of the window.
 	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencySensitive},
-	ActionSessionEnd:      {class: ClassDirectorySelf, recency: iam.RecencyAny},
+	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS ([rule.selfRecency]).
+	// The person themselves asks for NONE: it is the first thing somebody
+	// does on finding somebody else in their account — and it ends every
+	// machine token they hold as well — and a gesture that makes them
+	// re-prove a password the intruder may also hold makes the fastest
+	// response to a compromise the slowest, which is the reason
+	// internal/iamdomain's own revocation takes no grant at all. An
+	// administrator ending SOMEBODY ELSE's asks the ordinary window, as
+	// every other directory write does: it signs a colleague out of
+	// everything and stops every pipeline they run, and a week-old cookie
+	// looping over the directory would do it to the whole company.
+	ActionSessionEnd: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+		selfRecency: iam.RecencyAny},
 	// ENDING EVERY SESSION IN THE COMPANY is the deployment's grant — a
 	// restore is run by whoever runs the deployment — at the SENSITIVE
 	// window: it is irreversible for everybody at once. A Tier A token is
@@ -478,6 +506,16 @@ var rules = map[Action]rule{
 func RecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.recency, ok
+}
+
+// SelfRecencyOf reports the proof a verb asks of its SELF arm where that
+// differs from [RecencyOf]'s, and empty where the row asks one window of
+// everybody — see [rule.selfRecency].
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SelfRecencyOf(a Action) (iam.Recency, bool) {
+	r, ok := rules[a]
+	return r.selfRecency, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

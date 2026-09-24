@@ -401,7 +401,7 @@ is told what they lack, not sent to confirm who they are first.
 |---|---|---|
 | `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and the deployment's own controls: `POST /budgets/reset`, `POST /backup` and every `POST /work/retention*` |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a value (`GET /secrets/{name}?reveal=true`), every `/iam` write that changes who holds authority or how they prove it — creating, editing or removing a person, an invitation, a second-factor reset, the bootstrap code, minting or revoking a credential — and `POST /iam/invalidate-all` |
-| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions`), which is the first thing to do on finding somebody else in your account; and every work and knowledge verb — the tools, `/operator/mcp` and the human write surface |
+| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -685,9 +685,11 @@ list and nothing ever will be.
 fifteen minutes by default; see
 [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
 Each one changes who holds authority or how they prove it, hands over a bearer
-value, or cannot be taken back. The one that asks for none is ending your own
-sessions, which is the first thing somebody does on finding an intruder in
-their account — and which ends every machine token they hold too.
+value, or cannot be taken back. The one that does not is ending sessions, whose
+two arms ask two windows: ending your own asks for none, because it is the
+first thing somebody does on finding an intruder in their account — and it ends
+every machine token they hold too — while an administrator ending somebody
+else's asks `step_up`, since it signs a colleague out of everything.
 
 **The object a route names is a person ID, never a login.** The identity
 estate keys on an id precisely because a person changes their login, so a self

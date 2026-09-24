@@ -152,3 +152,50 @@ func TestAProofFortyMinutesOldMayNotChangeAnybodysGrants(t *testing.T) {
 			got.body, calls)
 	}
 }
+
+// ENDING A COLLEAGUE'S SESSIONS ASKS THE ADMINISTRATOR FOR A RECENT PROOF, AND
+// ENDING YOUR OWN ASKS FOR NONE — through the route, on one verb.
+//
+// The walk above names the caller's own id in every path, so it sees only the
+// self arm of `DELETE /iam/people/{id}/sessions`; this is the other arm. An
+// administrator whose proof is two hours old is refused `step_up_required`
+// naming the ordinary window, and the revocation — which would end every
+// session and every machine token the colleague holds — never reaches the
+// writer. The controls: the same administrator a minute after proving, and
+// the colleague ending their own sessions on a week-old cookie.
+func TestEndingAColleaguesSessionsAsksTheAdministratorForAProof(t *testing.T) {
+	t.Parallel()
+	aged := func(p iam.Principal, age time.Duration) iam.Principal {
+		proof := time.Now().Add(-age)
+		p.ReauthAt, p.SensitiveReauthAt = proof.Add(time.Hour),
+			proof.Add(15*time.Minute)
+		return p
+	}
+	end := func(p iam.Principal, whose string) (answered, []string) {
+		r := newRig(t)
+		got := r.as(p, http.MethodDelete, "/iam/people/"+whose+"/sessions", nil)
+		return got, r.writer.calls
+	}
+	got, calls := end(aged(administrator(), 2*time.Hour), bob.String())
+	if got.status != http.StatusForbidden ||
+		got.body["error"] != string(httpjson.CodeStepUpRequired) ||
+		got.body[authz.DetailWindow] != string(iam.RecencyStepUp) {
+		t.Errorf("a stale administrator ending a colleague's sessions answered "+
+			"%d %v, want 403 step_up_required naming step_up", got.status, got.body)
+	}
+	if len(calls) != 0 {
+		t.Errorf("the refused revocation reached the writer: %v", calls)
+	}
+	if got, calls := end(administrator(), bob.String()); got.status != http.StatusOK ||
+		!slices.Contains(calls, "revoke") {
+		t.Errorf("the same administrator a minute after proving answered %d %v "+
+			"with writes %v, so the refusal above says nothing", got.status,
+			got.body, calls)
+	}
+	if got, calls := end(aged(ordinary(), 7*24*time.Hour), bob.String()); got.status != http.StatusOK ||
+		!slices.Contains(calls, "revoke") {
+		t.Errorf("a person ending their own sessions on a week-old cookie "+
+			"answered %d %v with writes %v, want it served with no proof asked",
+			got.status, got.body, calls)
+	}
+}

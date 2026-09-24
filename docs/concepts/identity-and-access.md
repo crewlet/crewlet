@@ -1567,12 +1567,18 @@ proof its verb asks for, and there are three answers:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work and knowledge verb; ending your own sessions |
+| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
 | `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, and the deployment's own controls — a budget reset, a backup, the retention and capacity gestures |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; every identity-directory write that changes who holds authority or how they prove it, hands over a bearer value or cannot be taken back — enrolling, editing or removing somebody, an invitation, a second-factor reset, the bootstrap code, minting or revoking a credential; and ending every session in the company |
 
 It is decided **on the row**, beside the grant, for the same reason the grant
-is: a REST route and a tool asking about one verb get one answer. It used to be
+is: a REST route and a tool asking about one verb get one answer. A row may ask
+its **self arm** a different window from its capability arm, and one does:
+ending every session somebody holds asks nothing of the person themselves —
+it is the first thing they do on finding an intruder in their account, and a
+re-proof of a password the intruder may also hold would make the fastest
+response the slowest — while an administrator ending a colleague's, which
+stops every pipeline they run too, asks the ordinary window. It used to be
 a setting nothing read — the sign-in surface recorded when a session proved
 who its holder was, and no surface outside it ever asked — so a cookie from last
 week reached every one of these. Every row states its window, and a row that
