@@ -38,9 +38,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
 	e.tuneBatching(c)
-	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults. Each of these
-	// was validated, schema'd and documented and read by nobody, so setting
-	// one produced a revision and changed nothing an operator could observe.
+	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults: each is a
+	// validated, documented setting, and a builtin left on its own default
+	// would make setting one a revision that changes nothing an operator
+	// can observe.
 	refinement := c.Config.Learning.SkillRefinement
 	deps := builtin.Deps{
 		A2A:               e.a2aFor(c),
@@ -78,13 +79,24 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
-	deps.Work = e.workDeps(c)
+	// THE NATIVE TOOLS FOLLOW THE BACKENDS THIS EPOCH NAMES, not the ones
+	// this node holds. Both native backends start with the node and keep
+	// running through a revision that moves the company off them, so a
+	// registry equipped from what the node holds would go on offering
+	// write_page to a company whose knowledge base is now Confluence — pages
+	// written where no search of this company reads ([Engine.Knowledge]
+	// answers by the same field), which is the second home the one-backend
+	// rule exists to prevent. The tracker's tools follow its backend for the
+	// same reason.
+	if c.Config.TrackerBackendFor() == config.TrackerNative {
+		deps.Work = e.workDeps(c)
+	}
 	// THE PROJECT-LEAD SEAM, read PER CALL against the epoch current when
-	// the tool runs rather than against this one: a seat's tools are
-	// cloned into its lease, an apply does not rebuild the clone, and a
-	// captured chart would grant or refuse against an org that has moved.
+	// the tool runs rather than against this one.
 	deps.LeadsProject = LeadsProjectOf(e)
-	deps.Pages = e.pageDeps(c)
+	if c.Config.KnowledgeBackendFor() == config.KnowledgeNative {
+		deps.Pages = e.pageDeps(c)
+	}
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
@@ -146,8 +158,8 @@ func (e *Engine) sandboxLauncher() builtin.SandboxLauncher {
 //
 // Nil when the node has no FLEET store: a channel is the authorization record
 // the ANSWERING seat's node reads, so it has to be somewhere both nodes can
-// see. It used to be the node's own database, which is why a cross-node ask
-// woke its target and then dropped the reply as "no such channel".
+// see. Kept in one node's own database, a cross-node ask would wake its target
+// and then drop the reply as "no such channel".
 func (e *Engine) a2aFor(c *Company) builtin.Asker {
 	svc := e.a2aService(c)
 	if svc == nil {
@@ -223,11 +235,9 @@ func (e *Engine) telemetry() builtin.Telemetry {
 // claimed before the apply reading the old window for as long as it held its
 // seat.
 //
-// Same history as the numbers above it: notification_coalesce_window_seconds
-// and notification_coalesce_max_batch were declared, defaulted, schema'd,
-// validated and documented, and node.Config.BatchOptions was never set — so
-// every seat took queue.DefaultBatchOptions and setting either knob produced a
-// revision that changed nothing an operator could observe.
+// Without it every seat attachment takes queue.DefaultBatchOptions, and setting
+// notification_coalesce_window_seconds or notification_coalesce_max_batch
+// would be a revision that changes nothing an operator can observe.
 func (e *Engine) tuneBatching(c *Company) {
 	if e.batch == nil || c == nil || c.Config == nil {
 		return

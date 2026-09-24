@@ -842,16 +842,10 @@ func (x *Indexer) newlyBuilt(announced map[string]bool) []string {
 
 // indexIdle is how long the indexer waits when it found nothing to do.
 //
-// Two seconds, and "nothing to do" now means a whole LAP found nothing — so
-// the index is behind this node's own rows by at most this plus one lap,
-// which is a handful of two-column scans plus whatever actually moved.
-//
-// That was not true while the lap was paced at [IndexBatch] per idle tick: a
-// ten-thousand-document company took about seventeen minutes to come round,
-// so a page saved just behind the cursor was unfindable for that long and
-// every empty search on the node reported itself as still building. The
-// constant did not change; what changed is that a lap no longer reads bodies
-// to establish that nothing moved.
+// Two seconds, and "nothing to do" means a whole LAP found nothing — so the
+// index is behind this node's own rows by at most this plus one lap. A lap
+// reads no bodies to establish that nothing moved, so a quiet one is a handful
+// of two-column scans plus whatever actually moved.
 const indexIdle = 2 * time.Second
 
 // Sweep does ONE unit of index work, reporting whether it found any.

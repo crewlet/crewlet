@@ -50,7 +50,8 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 	// cause of it that this node can know in advance — its own index still
 	// on its first build, which counts its own buckets missing — the
 	// tracker's searcher refuses on through [itemRanker.Building]; what
-	// remains is a peer that did not answer in time.
+	// remains is a peer that did not answer in time, or answered that its
+	// own index is still building.
 	if answer.Partial() {
 		log.WarnContext(ctx, "work_search_scoped",
 			"buckets_answered", answer.BucketsAnswered,

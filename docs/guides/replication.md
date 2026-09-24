@@ -47,7 +47,10 @@ different with each.
   a second record. What is not yet true is that you can read it back here.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
-  retry carries the same operation id so the ledger collapses a duplicate.
+  retry carries the same operation id: inside the log's two-minute duplicate
+  window the broker answers it with the record the first attempt landed, if it
+  landed. A retry later than that is decided again from the rows as they are
+  then, so retry promptly.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait
@@ -203,12 +206,17 @@ it, at most one per other writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight, the default
-five seconds is close to the three transactions a fourth writer can
-legitimately wait behind — so that log line on a node doing bulk work is the
-signal to raise it rather than a fault. Raise the knob before you widen
-anything else: a longer per-waiter bound lets one stuck holder block the line
-for longer, and this way the line still drains in order.
+knob. The default five seconds is half the dashboard's ten-second query
+timeout, which is what it is measured against: a lock wait longer than the
+request above it fails that request with nothing to show for it. The apply
+does not approach it on its own: each apply transaction a writer can wait
+behind ends at the first record boundary past either budget above, so on a
+node doing bulk work the line means some transaction in front of it ran long —
+which an apply transaction does only on a record whose own rows are expensive,
+since a transaction never splits a record. It is the signal to raise the knob
+rather than a fault. Raise the knob before you widen anything else: a longer
+per-waiter bound lets one stuck holder block the line for longer, and this way
+the line still drains in order.
 
 **No apply transaction is ever aborted by a commit elsewhere in the database,
 and none is ever re-run because of one.** Every write transaction takes the

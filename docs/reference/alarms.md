@@ -6,8 +6,8 @@ about it.
 An alarm reaches you two ways, and they are the same table evaluated once: a
 `crewlet.alarm.active{kind}` gauge your collector scrapes, and a named
 `WARN` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — alarms are evaluated on ticks
-the engine already runs.
+was up. Nothing has to be polled for either — every node evaluates its own
+table every fifteen seconds, whether or not it holds any fleet duty.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
@@ -15,14 +15,16 @@ below.
 
 | Alarm | What it means | What to do |
 |---|---|---|
-| `apply_lag` | This node is more than a minute behind the log. Its seats move if it stays behind for thirty. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that stays behind past the deferral grace loses its seats to a peer. |
-| `read_refusals` | Reads are being refused for something other than ordinary lag, and have been for longer than a heartbeat. | Read the refusal code in the logs. Anything other than `behind` or `too_stale` is a fault rather than a wait. |
+| `apply_lag` | The oldest record this node has not applied is more than a minute old. A node whose applied prefix stands still that long with records waiting refuses reads as `stalled` and gives its seats to a peer; one that is still applying keeps them. | Check this node's applier: `crewlet retention status` names the domain and this node's position in it, and a `statelog_apply_faulted` or `statelog_applier_stopped` line in its log names any error holding it. A node whose applied prefix stands still for a minute with records waiting refuses reads as `stalled` and gives its seats to a peer until it moves again. |
+| `read_refusals` | Reads at one level have been refused for something other than ordinary lag, with none served at that level, for longer than fifteen seconds. | The `code` attribute on `crewlet.statelog.read.refusals` names what is refusing them. Anything other than `behind` or `too_stale` is a fault rather than a wait, and each refusal's own detail says what it needs. |
 | `barrier_slow` | The read barrier — the append every linearizable read waits on — is spending a quarter of the whole read budget. | The barrier is an append and a wait: check the broker's own latency and this node's apply drain before looking anywhere else. |
 | `log_headroom` | The log is within a tenth of its byte ceiling. A full log refuses writes rather than dropping records. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing. A full log refuses writes; it does not drop records. |
 | `backup_age` | The newest verified backup is older than the policy asks for. The trim will not advance past it. | Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it. The trim will not advance past a backup this old. |
 | `trim_blocked` | The trim has a term it cannot satisfy, so the log is growing toward its ceiling. | The blocking term names what to fix. Until it is fixed the log grows toward its ceiling. |
 | `deferred_old` | This node has been holding records it cannot apply for longer than the deferral grace. Its seats have moved. | This node is running a build that cannot decode records its peers are writing. Upgrade it; its seats have already moved. |
-| `floor_unknown` | The trim floor has been unreadable for four heartbeats, so every read on this node refuses. | Coordination cannot be reached from this node. Every read is refused until it can be. |
+| `deferred_coverage` | This node has been holding records it cannot apply for longer than the deferral grace, in a domain whose gaps cost coverage rather than seats. Its seats stay; that domain's answers on it are missing what those records carry. | This node is running a build that cannot decode records its peers are writing to a domain whose gaps cost coverage rather than seats. Upgrade it: nothing moves on its own, and until then that domain's answers on this node lack what those records carry. |
+| `floor_unknown` | The trim floor has been unreadable from this node for longer than a minute. Every read that checks this node's health refuses while it is. | Coordination cannot be reached from this node. Its reads refuse until it can be. |
+| `generation_left` | The trim floor is published at a generation this node's rows are not on: the fleet re-anchored the domain and this node did not follow. Every read that checks this node's health refuses, and a domain that gates seats gives them to a peer. | The fleet re-anchored this domain and this node did not follow, so its rows are keyed to the generation before. Restart it: its boot asks the fleet for a snapshot of the current generation and adopts it. |
 | `prefetch_slow` | Turn-start context assembly is over its budget. Every turn on this node pays it before its first token. | Every turn on this node pays this before its first token. Check the store's own latency and the knowledge backend's. |
 | `search_slow` | Interactive search is over its target. The corpus has outgrown what one node's share of it can scan in the budget. | The corpus has outgrown what one node's share can scan in the budget. Adding a node divides the buckets again, with no configuration and no rebuild. See docs/guides/search.md. |
 | `search_degraded` | Searches are being answered without their semantic half — the embeddings provider or the vector domain is failing. | The embeddings provider or the vector domain is failing. Search still answers; it answers less well, and silently. |

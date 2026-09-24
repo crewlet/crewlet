@@ -1425,6 +1425,50 @@ func TestASuspensionNoPartCanHoldIsRefusedNamingTheLimit(t *testing.T) {
 	}
 }
 
+// A REFUSED PART IS SPLIT DOWN TO THE FLOOR AND NO FURTHER.
+//
+// A refused part larger than 64 KiB is retried at half its size, or at 64 KiB
+// when half would be smaller, and only a refused part of 64 KiB or less ends
+// the split — the rule a bridged call's whole is split by too. Halving 300 KiB
+// passes over the floor, so against a server that takes exactly the floor
+// every part but the last is the floor's size; and a server below the floor is
+// offered no smaller part, even where two halves would fit it, because its
+// max_payload is the setting to change and the refusal names the part it
+// refused.
+func TestARefusedPartIsSplitToTheFloorAndNoFurther(t *testing.T) {
+	t.Parallel()
+	const floor = 64 << 10
+
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(lowRunServer{Fleet: fleet, limit: floor})
+	state := map[string]any{"version": float64(2), "messages": []any{strings.Repeat("w", 300<<10)}}
+	run := suspendedInParts(t, store, "t-floor", state)
+	parts, err := fleet.SuspensionParts(t.Context(), run.TurnID, run.LaunchID)
+	if err != nil || len(parts) < 2 {
+		t.Fatalf("the conversation is in %d parts, %v; want it split", len(parts), err)
+	}
+	for _, part := range parts[:len(parts)-1] {
+		if len(part.Value) != floor {
+			t.Errorf("part %d is %d bytes; want every part but the last at the %d-byte floor",
+				part.Part, len(part.Value), floor)
+		}
+	}
+	if got, err := store.Suspension(t.Context(), run); err != nil || !sameJSON(t, got, state) {
+		t.Errorf("the conversation read back = %d keys, %v; want the whole one suspended", len(got), err)
+	}
+
+	below := sandbox.NewCoordStore(lowRunServer{Fleet: memory.NewFleet(), limit: 60 << 10})
+	begun(t, below, "t-below")
+	ok, err := below.MarkSuspended(t.Context(), "t-below",
+		map[string]any{"version": float64(2), "messages": []any{strings.Repeat("w", 100<<10)}})
+	if err == nil || ok {
+		t.Fatalf("MarkSuspended = %v, %v; want the split to stop at the floor", ok, err)
+	}
+	if !errors.Is(err, coord.ErrTooLarge) || !strings.Contains(err.Error(), "a part of 65536 bytes was refused") {
+		t.Errorf("the refusal = %v; want it to name the refused part at the floor", err)
+	}
+}
+
 // partLost answers a launch's suspension one part short: a part purged under
 // the read, or lost.
 type partLost struct{ *memory.Fleet }
@@ -1450,14 +1494,30 @@ func TestASuspensionWhosePartsDoNotReassembleIsUnreadable(t *testing.T) {
 	}
 }
 
+// A REFERENCE NAMING NO LAUNCH IS UNREADABLE, NOT A FAILED READ. No write files
+// one, and the store would refuse the address its parts would need; read as a
+// store failure, the resume would hand the run back for a retry that meets the
+// same refusal every time.
+func TestASuspensionReferenceWithNoLaunchIsUnreadable(t *testing.T) {
+	t.Parallel()
+	run := sandbox.PendingRun{TurnID: "t-no-launch", ExecuteState: map[string]any{
+		"suspension_in_parts": map[string]any{"bytes": 10, "parts": 1},
+	}}
+	_, err := sandbox.NewCoordStore(memory.NewFleet()).Suspension(t.Context(), run)
+	if !errors.Is(err, sandbox.ErrSuspensionUnreadable) {
+		t.Errorf("a reference naming no launch = %v, want ErrSuspensionUnreadable", err)
+	}
+}
+
 // A WRITE BY A BUILD THAT PREDATES THE PARTS KEEPS THE REFERENCE.
 //
 // A rolling upgrade puts such a build on the run's row, and it writes the row
 // whole on every step of the lifecycle it takes — a claim of ownership during
-// recovery, a box attached. Its row type has every field this one has, since
-// the reference adds none: it lives in execute_state, a map every build
-// decodes and encodes whole. So what that build writes back still names the
-// parts, and the resume that follows reads the conversation whole.
+// recovery, a box attached. The reference adds no field for it to drop: it
+// lives in execute_state, a map that build decodes and encodes whole. So what
+// that build writes back still names the parts, and the resume that follows
+// reads the conversation whole. Its write is a decode of the row and an encode
+// of what it decoded, which is what its store does on every step.
 func TestAWriteByABuildThatPredatesThePartsKeepsTheReference(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

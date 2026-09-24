@@ -22,9 +22,9 @@ const alarmGauge = metrics.AlarmActive
 //
 // # Why a transition and not a level
 //
-// An alarm evaluated on a fifteen-second heartbeat is true for as long as the
-// condition is, which is minutes or days. Logging the level would write the
-// same line four times a minute for a week and make the log useless for
+// An alarm evaluated every [coord.ReconcileInterval] is true for as long as
+// the condition is, which is minutes or days. Logging the level would write
+// the same line four times a minute for a week and make the log useless for
 // finding when it STARTED — which is the one thing an operator needs and the
 // one thing a level cannot say. So entry and exit are each logged once,
 // carrying how long the alarm was up.
@@ -36,8 +36,8 @@ const alarmGauge = metrics.AlarmActive
 // dashboard, and "no data" is indistinguishable from a node that stopped
 // reporting.
 //
-// A Tracker is safe for concurrent use: the trim tick and the heartbeat both
-// evaluate, on different goroutines and different cadences.
+// A Tracker is safe for concurrent use: [Tracker.Firing] may be read from any
+// goroutine while the loop that observes goes on observing.
 type Tracker struct {
 	rec *metrics.Recorder
 	now func() time.Time
@@ -113,11 +113,8 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	return alarms
 }
 
-// Firing reports how long each alarm currently up has been up.
-//
-// For the third surface — the operator's screen — which renders an alarm's
-// AGE beside it: "this started four minutes ago" and "this started on Tuesday"
-// are different problems, and the alarm itself carries neither.
+// Firing reports how long each alarm currently up has been up: the duration
+// its `alarm_cleared` line will carry, readable before it clears.
 func (t *Tracker) Firing() map[Kind]time.Duration {
 	now := t.now()
 	t.mu.Lock()

@@ -157,20 +157,20 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 // is, or nothing at all when there is no address to point them at.
 //
 // A FUNCTION RATHER THAN A BLOCK INSIDE [Reconcile], and the reason is the
-// no-base exit below. It used to `return res, nil` straight out of Reconcile,
-// which made it the ONE path that never reached the ctx.Err() fold every
-// other exit goes through — so a pass that had run out of context still
-// answered (no findings, no error), which is the loop's word for "this
-// integration is ready".
+// no-base exit below. Returned straight out of Reconcile, that exit would be
+// the ONE path that never reaches the ctx.Err() fold every other exit goes
+// through — so a pass that had run out of context would still answer (no
+// findings, no error), which is the loop's word for "this integration is
+// ready".
 //
-// It was argued unreachable because [Client.Me] runs first and a dead context
-// fails it. That is true of a CANCELLATION and false of a DEADLINE: the pass
+// [Client.Me] running first does not make that unreachable. It fails a context
+// that is already dead, and a deadline can expire after it answered: the pass
 // runs on a context bounded by the lease that protects it, so an expiry
 // landing between Me answering and this line is ordinary rather than exotic,
 // and a company with no public base URL is exactly where it costs the most —
 // there is no listing and no registration afterwards for anything else to
-// notice on. With the work in here, every exit folds, and the asymmetry
-// cannot come back by someone adding a sixth early return.
+// notice on. With the work in here, every exit folds, and another early return
+// added here cannot skip the fold.
 func converge(ctx context.Context, opts Options, res *Result) error {
 	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
 	if base == "" {
@@ -261,19 +261,16 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 
 	// ONE EVENT'S REFUSAL IS NOT THE PASS'S.
 	//
-	// It was: the first event Confluence refused returned an error, every
-	// event after it was skipped, and the error propagated out of Reconcile
-	// so Findings() was never called at all. That made [HookState.Detail]
-	// dead — nothing ever assigned it, so Hooked() was true for every state
-	// that reached res.Hooks and the FindingIngressBlocked branch below was
-	// unreachable code. And the two answers are opposite to the loop: an
-	// error is a FAULT, which Observe reports as the engine working on it
-	// and retries on the waiting backoff for ever, where an ingress block
-	// is degraded and owed by the admin who can grant the permission.
+	// Returned as an error, the first event Confluence refused would skip
+	// every event after it and propagate out of Reconcile, so Findings()
+	// would never run and no refused hook's [HookState.Detail] would reach
+	// anybody. And the two answers are opposite to the loop: an error is a
+	// FAULT, which Observe reports as the engine working on it and retries on
+	// the waiting backoff for ever, where an ingress block is degraded and
+	// owed by the admin who can grant the permission.
 	//
 	// So a refusal is recorded per event and the walk continues, which is
-	// what the sibling github.ensureRepoWebhook does and what this file's
-	// own field doc already promised.
+	// what the sibling github.ensureRepoWebhook does.
 	for _, event := range WebhookEvents {
 		// STOP WORKING ON A DEAD CONTEXT rather than firing seven more
 		// doomed registrations at the instance and recording each refusal
@@ -394,19 +391,17 @@ const dataCenterHookEvent = "all"
 // reconcileDataCenter converges the single signed hook Data Center wants.
 //
 // A REFUSAL FROM THE INSTANCE IS THIS HOOK'S, NOT THE PASS'S — the same rule
-// the Cloud half above states at length, and this branch was the half that
-// did not follow it.
+// the Cloud half above states at length.
 //
-// Every write here returned an error, so a Data Center instance that refused
-// the registration — a 403, which is what an org account without the
-// Confluence Administrator global permission gets from this endpoint — came
-// out of [Reconcile] as a FAULT. The two answers are opposite to the loop:
-// integration.Classify reads a fault as the engine still working on it and
-// retries it on the waiting backoff for ever, where FindingIngressBlocked is
-// degraded and owed by the ADMINISTRATOR who can grant that permission. So
-// the one person who could fix it was never told, on the deployment where it
-// is most likely — a self-hosted instance whose admin rights are somebody
-// else's to give.
+// A Data Center instance refuses the registration with a 403 when the org
+// account lacks the Confluence Administrator global permission. Returned as an
+// error, that would come out of [Reconcile] as a FAULT, and the two answers
+// are opposite to the loop: integration.Classify reads a fault as the engine
+// still working on it and retries it on the waiting backoff for ever, where
+// FindingIngressBlocked is degraded and owed by the ADMINISTRATOR who can
+// grant that permission — the one person who can fix it, on the deployment
+// where it is most likely: a self-hosted instance whose admin rights are
+// somebody else's to give.
 //
 // It is also worse here than on Cloud, and the finding says so: Cloud
 // registers one hook per event, so a refusal costs that event class alone,
@@ -554,11 +549,11 @@ func dataCenterSecret(ctx context.Context, opts Options, res *Result) (string, b
 // cannot observe for itself. Confluence never gives a secret back, so nothing
 // can compare the instance's key with the fleet's; the only fact that settles
 // it is whether THIS run replaced the value, and it is known here and nowhere
-// else. See [reconcileDataCenter], where a hook was called converged on its
-// address and events alone and the new key was never sent — leaving the
-// instance signing with the old one, the engine verifying with the new one,
-// and every delivery refused by a surface reporting ready. The Jira sibling
-// threads the same flag for the same reason ([jira.converged]).
+// else. See [reconcileDataCenter]: a hook judged converged on its address and
+// events alone would never be sent the new key — leaving the instance signing
+// with the old one, the engine verifying with the new one, and every delivery
+// refused by a surface reporting ready. The Jira sibling threads the same flag
+// for the same reason ([jira.converged]).
 func mintInto(
 	ctx context.Context, opts Options, res *Result, ref, field, role string,
 ) (string, bool, error) {

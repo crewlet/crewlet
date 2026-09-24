@@ -62,9 +62,10 @@ const (
 	// needs. It clears on its own, and the hint says roughly when.
 	RefuseBehind ReadRefusal = "behind"
 
-	// RefuseDeferred — this node holds a record it cannot decode covering
-	// what this read is about. Another node can answer; this one cannot,
-	// and no amount of waiting changes that.
+	// RefuseDeferred — this node retains a record covering what this read
+	// is about: one it cannot decode, or one held back behind such a record.
+	// Another node can answer; this one cannot, and no amount of waiting
+	// changes that.
 	RefuseDeferred ReadRefusal = "deferred"
 
 	// RefuseDeferredScopeUnknown — the deferred record's own scope could
@@ -97,17 +98,24 @@ const (
 	// unreachable: the broker answered, and a majority did not agree.
 	RefuseNoQuorum ReadRefusal = "no_quorum"
 
+	// RefuseBrokerBusy — the stream's ingest queue was full, so the broker
+	// stored nothing and said so. Like `no_quorum` the broker answered, and
+	// unlike it no majority was asked: the queue in front of the log is
+	// what refused, and it clears as the queue drains. It costs only the
+	// levels that append.
+	RefuseBrokerBusy ReadRefusal = "broker_busy"
+
 	// RefuseLogFull — the log is at its byte ceiling and refuses appends,
 	// so a barrier cannot be written. A full log therefore costs the
 	// levels that append; the ones that do not keep answering.
 	RefuseLogFull ReadRefusal = "log_full"
 
 	// RefuseBarrierRefused — the broker refused the barrier for a reason
-	// other than a full log: a size limit set on the stream below a
-	// barrier's own size, a sealed stream, a server at its storage limit.
-	// The broker's words are the detail. Like a full log it costs only the
-	// levels that append, and waiting on this node does not change a
-	// broker's setting.
+	// other than a full log or a full ingest queue: a size limit set on the
+	// stream below a barrier's own size, a sealed stream, a server at its
+	// storage limit. The broker's words are the detail. Like a full log it
+	// costs only the levels that append, and waiting on this node does not
+	// change a broker's setting.
 	RefuseBarrierRefused ReadRefusal = "barrier_refused"
 
 	// RefuseWrongStream — the position this read was asked to reach is on
@@ -125,8 +133,8 @@ const (
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseLogFull, RefuseBarrierRefused, RefuseWrongStream,
-	RefuseTooStale,
+	RefuseNoQuorum, RefuseBrokerBusy, RefuseLogFull, RefuseBarrierRefused,
+	RefuseWrongStream, RefuseTooStale,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -141,7 +149,8 @@ func (r ReadRefusal) Valid() bool { return slices.Contains(ReadRefusals, r) }
 // cannot terminate.
 func (r ReadRefusal) Retryable() bool {
 	switch r {
-	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled:
+	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseBrokerBusy,
+		RefuseStalled:
 		return true
 	}
 	return false
@@ -172,6 +181,16 @@ func (r ReadRefusal) OrdinaryLag() bool {
 // than the election itself sends every reader back before anything can have
 // changed.
 const ElectionRetryHint = 4 * time.Second
+
+// BusyRetryHint is what a caller is told to wait after a barrier the broker's
+// full ingest queue refused.
+//
+// ONE SECOND. Nothing on this node measures how fast the broker drains that
+// queue, so the hint is not derived; it is the write path's own first pause
+// after the same refusal ([ApplyRetryBeat]) rounded up to the whole second a
+// hint is stated in, so a reader and a writer meeting one full queue come back
+// to it on the same scale.
+const BusyRetryHint = time.Second
 
 // Refused is a read that was not served.
 type Refused struct {
@@ -218,6 +237,8 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 	switch code {
 	case RefuseNoQuorum, RefuseBrokerUnreachable:
 		return ElectionRetryHint
+	case RefuseBrokerBusy:
+		return BusyRetryHint
 	}
 	if lag == 0 {
 		// NO BACKLOG TO DIVIDE. What the caller is waiting for is not a
@@ -320,27 +341,25 @@ type Answer struct {
 // truncates. What a caller can act on is that there IS a gap, where it starts,
 // and which scope it is in.
 type Incomplete struct {
-	// Records is how many deferred records could intersect this read.
+	// Records is how many retained records have a declared scope that
+	// meets this read — each one this build cannot decode, or one held back
+	// behind such a record.
 	Records uint64
 
 	// From is the lowest of their positions.
 	From Position
 
-	// Scope is what they declared they touch.
+	// Scope is what the earliest of them declared it touches.
 	Scope ScopeSet
 
 	// Direction is always "unknown", and it is a field rather than an
 	// omission so a reader meets the fact rather than inferring it.
 	Direction string
 
-	// Version is the record version this node could not read, which is
-	// the ONE number an operator needs to pick a build that can.
-	//
-	// It is already what the REFUSAL says on a point read — "a record at
-	// version %d it cannot decode" — and it was dropped on the set-read
-	// path, where the answer continues and the gap travels to a caller
-	// instead. Every surface rendering it therefore showed version 0,
-	// which is not a version any build ever wrote.
+	// Version is the record version the earliest of them was written at —
+	// the same record a point read's refusal names. Above this build's own,
+	// it is the number an operator picks a build by; at or below it, that
+	// record is held back behind one this build cannot decode.
 	Version int
 }
 
@@ -354,6 +373,11 @@ type Reader struct {
 	health  func() Health
 	drain   func() float64
 	metrics *metrics.Recorder
+	now     func() time.Time
+
+	// watch is the current run of fault-class refusals at each level, for
+	// [Reader.FaultRefusingSince].
+	watch refusalWatch
 }
 
 // readStore is the database, as narrowly as a read needs it.
@@ -379,6 +403,11 @@ type ReaderDeps struct {
 	Drain func() float64
 
 	Metrics *metrics.Recorder
+
+	// Now is the clock the local refusals and the refusal watch read. Nil
+	// is the wall clock; a case that is about how long a state has held
+	// sets it rather than sleeping through the state.
+	Now func() time.Time
 }
 
 // NewReader builds a domain's read path.
@@ -401,6 +430,10 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	if drain == nil {
 		drain = func() float64 { return 0 }
 	}
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Reader{
 		domain:  d.Domain,
 		tables:  t,
@@ -410,6 +443,7 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 		health:  d.Health,
 		drain:   drain,
 		metrics: d.Metrics,
+		now:     now,
 	}, nil
 }
 
@@ -441,7 +475,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	h := r.health()
 
 	// 1. THE LOCAL REFUSALS, in order.
-	now := time.Now()
+	now := r.now()
 	if code := h.Refusal(now); code != "" {
 		// A CONSISTENT-PREFIX READ SURVIVES A STALL and nothing else
 		// does: it asks only for a coherent point in the log's order,
@@ -462,9 +496,8 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		if gap != nil {
 			if !q.Set {
 				return r.refuse(h, q, RefuseDeferred,
-					fmt.Sprintf("this node holds a record at version %d it cannot "+
-						"decode, at %s, covering what this read is about",
-						gap.version, gap.from), started)
+					fmt.Sprintf("this node retains %s, covering what this read "+
+						"is about", gap.found.Describe(r.domain.RecordVersion())), started)
 			}
 			// A SET READ CONTINUES AND CLAIMS NOTHING. It cannot
 			// enumerate what would have entered the set, so the
@@ -473,10 +506,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			answer.Complete = false
 			answer.Incomplete = &Incomplete{
 				Records:   gap.records,
-				From:      gap.from,
-				Scope:     gap.scope,
+				From:      gap.found.Position,
+				Scope:     gap.found.Scope,
 				Direction: "unknown",
-				Version:   gap.version,
+				Version:   gap.found.Version,
 			}
 		}
 	}
@@ -540,9 +573,8 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			} else if hit {
 				return &Refused{
 					Code: RefuseDeferred, Level: q.Level,
-					Detail: fmt.Sprintf("a record at version %d this node cannot "+
-						"decode, at %s, landed while this read was waiting",
-						d.Version, d.Position),
+					Detail: fmt.Sprintf("%s landed while this read was waiting",
+						d.Describe(r.domain.RecordVersion())),
 				}
 			}
 		}
@@ -559,12 +591,11 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	return answer, nil
 }
 
-// gap is what a coverage probe found.
+// gap is what a coverage probe found: how many retained records could
+// intersect the read, and the earliest of them.
 type gap struct {
 	records uint64
-	from    Position
-	version int
-	scope   ScopeSet
+	found   Deferral
 }
 
 // coverage probes this node's deferred scope index for anything covering what
@@ -579,12 +610,17 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 	var found *gap
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		d, hit, err := r.tables.deferredIn(ctx, tx, s)
+		if err != nil || !hit {
+			return err
+		}
+		// THE COUNT IN THE SAME TRANSACTION as the earliest, so a record
+		// retained between the two cannot make the block name one record
+		// and count another.
+		n, err := r.tables.retainedCount(ctx, tx, s)
 		if err != nil {
 			return err
 		}
-		if hit {
-			found = &gap{records: 1, from: d.Position, version: d.Version, scope: d.Scope}
-		}
+		found = &gap{records: n, found: d}
 		return nil
 	})
 	if err != nil {
@@ -721,18 +757,21 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 
 // barrierRefusal maps the read index's own failures onto refusal codes.
 //
-// They are genuinely different: a barrier no majority committed, a log that is
-// full, and a broker that refused the append for a reason of its own. Only the
-// first is worth coming back for, and the other two name a setting an operator
-// has to change — so each is read from the refusal [ReadIndex] made out of the
-// broker's answer, and anything that is not one is the barrier that did not
-// commit within its budget.
+// They are genuinely different: a barrier no majority committed, an ingest
+// queue that was full, a log that is full, and a broker that refused the
+// append for a reason of its own. The first two are worth coming back for, and
+// the other two name a setting an operator has to change — so each is read
+// from the refusal [ReadIndex] made out of the broker's answer, and anything
+// that is not one is the barrier that did not commit within its budget.
 func barrierRefusal(level ReadLevel, err error) error {
 	const answering = " — it costs every level that appends, while `stale` and " +
 		"`session` keep answering"
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
+		case ReasonBusy:
+			return &Refused{Code: RefuseBrokerBusy, Level: level,
+				Detail: unavailable.Detail + answering}
 		case ReasonLogFull:
 			return &Refused{Code: RefuseLogFull, Level: level,
 				Detail: unavailable.Detail + answering}
@@ -755,6 +794,7 @@ func (r *Reader) refuse(h Health, q Query, code ReadRefusal, detail string, star
 	if h.Lag != nil {
 		lag = *h.Lag
 	}
+	r.watch.refused(q.Level, code, r.now())
 	if r.metrics != nil {
 		r.metrics.Add(metrics.StatelogReadRefusals, 1, metrics.Attrs{
 			"domain": r.domain.Name(), "level": string(q.Level), "code": string(code),
@@ -776,8 +816,18 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 	switch code {
 	case RefuseEvicted:
 		return "this node has been removed from the fleet; an operator readmits it"
+	case RefuseBrokerUnreachable:
+		return "the broker did not answer this node's read of the log's bounds, " +
+			"which every freshness term is measured against: " + h.BrokerErr
 	case RefuseFloorUnknown:
 		if h.Floor.ReadAt.IsZero() {
+			if h.Err != "" {
+				// THE HEALTH READ ITSELF FAILED before it established the
+				// floor, and its error is the one statement of why: an
+				// unanswered coordination read, or a floor at a generation
+				// this node has left, which need different remedies.
+				return h.Err
+			}
 			return "the published trim floor has never been read on this node, " +
 				"which is UNKNOWN rather than satisfied"
 		}
@@ -799,6 +849,7 @@ func (r *Reader) refusalDetail(h Health, code ReadRefusal, now time.Time) string
 }
 
 func (r *Reader) observeServed(level ReadLevel, started time.Time) {
+	r.watch.served(level)
 	if r.metrics == nil {
 		return
 	}

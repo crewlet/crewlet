@@ -295,12 +295,12 @@ func TestASeatMayNotWriteIntoAReservedContainer(t *testing.T) {
 	}
 }
 
-// THE RESERVATION IS READ AT THE CALL, not when the surface was built.
+// THE RESERVATION IS ASKED AT THE WRITE, not cached when the tool was built.
 //
-// Both containers are Tier B config, and a seat's tools are cloned into its
-// lease and not rebuilt by an apply: a list captured at registration would go
-// on closing the container a revision freed and opening the one it moved the
-// skills into.
+// Both containers are Tier B config that an apply can move, so the tools hold
+// the question rather than an answer: a list cached inside a tool would go on
+// closing the container a revision freed and opening the one it moved the
+// skills into, for as long as that tool lived.
 func TestTheReservationIsReadAtTheCall(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()

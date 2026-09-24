@@ -36,13 +36,14 @@ import (
 // phase's record carries what the box was handed rather than the record's cut
 // of it — and that record is what outlives the run, whose end purges the log,
 // parts and all, once a resume has returned. A call whose whole was not kept,
-// or whose parts do not reassemble, comes back as its record's fitted form and
-// says so where it was cut ([sandbox.BridgeLog.Calls]). The one log that can
-// be missing calls is a launch an older build recorded, which kept only the
-// ends of a long run; that stretch is carried to the resume as a count and a
-// place (see [runner.DroppedCalls]) and logged here, because it is missing for
-// good. A native resume replays its own conversation instead and reads nothing
-// here, so a store it cannot reach does not stop it.
+// or whose parts do not reassemble, comes back as the form its record was cut
+// to — fitted, or least when a server below the ceiling refused the record —
+// and says so where it was cut ([sandbox.BridgeLog.Calls]). The one log that
+// can be missing calls is a launch an older build recorded, which kept only
+// the ends of a long run; that stretch is carried to the resume as a count and
+// a place (see [runner.DroppedCalls]) and logged here, because it is missing
+// for good. A native resume replays its own conversation instead and reads
+// nothing here, so a store it cannot reach does not stop it.
 //
 // A READ THAT FAILS FAILS THE RESUME, which the coordinator hands back for a
 // retry. Resuming on an empty log instead would have the delivery check read a
@@ -78,12 +79,15 @@ func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Ca
 // read the result, so it keeps every field they read. A call whose arguments
 // cannot be decoded keeps its name and loses its arguments, which renders one
 // ledger line worse; failing the resume over it would lose the whole turn. A
-// call the log hands back in its record's fitted form — its whole not kept, or
-// not readable back — is not that case: its arguments, when they did not fit,
-// are a marker that decodes — [sandbox.ArgsNotKept] for a whole that was not
-// kept, [sandbox.ArgsUnreadable] for one whose parts did not reassemble — and
-// its texts say what became of the rest ([sandbox.BridgeLog.Calls]), so every
-// reader of the call shows the cut as a cut.
+// call the log hands back in the form its record was cut to — its whole not
+// kept, or not readable back — is not that case: its arguments, when the record
+// set them aside, are a marker that decodes. For a whole that was not kept
+// that is [sandbox.ArgsNotKept] in the fitted form and
+// [sandbox.RefusedArgsNotKept] in the least form a server below the ceiling
+// leaves; for one whose parts did not reassemble, [sandbox.ArgsUnreadable] and
+// [sandbox.RefusedArgsUnreadable]. Its texts say what became of the rest
+// ([sandbox.BridgeLog.Calls]), so every reader of the call shows the cut as a
+// cut.
 func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 	out := make([]ledger.Call, 0, len(logged))
 	for _, call := range logged {

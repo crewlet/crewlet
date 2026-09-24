@@ -16,23 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The two operator commands that read and write the store directly.
-//
-// Both exist because a node does these things implicitly and a deployment
-// sometimes needs them explicitly: migrations run at every open, and budget
-// counters are written by every turn — so neither is a gap in the engine.
-// What they are is a way to do them WITHOUT starting one.
+// Two operator commands for state a node also keeps on its own: `migrate`,
+// which applies the store's schema without starting a node, and `budgets`,
+// which reads and resets the fleet's token counter through a running one.
 
 // runMigrate is `crewlet migrate`.
 //
 // # A node migrates on its own, so why this exists
 //
-// Rolling out N nodes at once means N processes opening the same database
-// and racing to apply the same files. That race is safe — one transaction
-// per file, the version row written inside it — but it is not what an
-// operator wants to watch during a deploy, and a failure mid-rollout is a
-// fleet in two schema states. Migrating once, deliberately, before anything
-// starts, makes the outcome one thing that either worked or did not.
+// Every process that opens a node's store migrates both of its files, so this
+// is never required. What it adds is the migration as a step of its own,
+// before the node starts and with its own exit status, and `-check`: the
+// deploy gate that reports what this binary would apply, and applies nothing.
 func runMigrate(args []string, stdout, stderr io.Writer) error {
 	bootstrapPath, args := splitSubject(args)
 
@@ -45,13 +40,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// THE SAME SHAPE AS `run`, because the failure is the same and worse
-	// here. The refusal used to be conjoined with `bootstrapPath != ""`,
-	// which made it unreachable on the exact input it was written for:
-	// `crewlet migrate a.yaml b.yaml` puts both names in the tail with no
-	// subject, so neither branch fired and the command silently migrated
-	// the database named by ./crewlet.yaml — a database the operator never
-	// named, and without -check it migrates it for real.
+	// THE SAME SHAPE AS `run`: the document is named once. `crewlet
+	// migrate a.yaml b.yaml` puts both names in the tail with no subject,
+	// and resolving that to either of them — or to neither, and so to
+	// ./crewlet.yaml — would migrate a store the operator did not mean,
+	// for real unless -check was given. So a count past one is refused.
 	bootstrapPath, given := onePositional(fs, bootstrapPath)
 	if given > 1 {
 		fmt.Fprintln(stderr, "usage: crewlet migrate [<config.yaml>] [-check]")

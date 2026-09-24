@@ -260,23 +260,9 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
-		// THE WORST OF THE DOMAINS throughout, because the reading
-		// describes one NODE: a two-domain node whose second applier is
-		// wedged is a node that is behind, and averaging would hide it.
-		//
-		// THE TWO SERIES FIRST, and whatever the health read below says,
-		// because each is how long a state has held — observed on the
-		// position heartbeat, since no single read can say it — and the
-		// floor's is exactly the state in which the health read fails.
-		// Both are the real age, so each alarm fires at the grace it names
-		// and not at a stand-in pinned to the grace itself, which a
-		// strictly-past comparison never passes.
-		if held := running.progress.deferredSinceValue(); held.Held && !held.Since.IsZero() {
-			out.DeferredAge = max(out.DeferredAge, now.Sub(held.Since))
-		}
-		if lost, unreadable := running.floor.unreadableFor(now); unreadable {
-			out.FloorUnknownFor = max(out.FloorUnknownFor, lost)
-		}
+		// THE SERIES FIRST, and whatever the health read below says: the
+		// floor's are exactly the states in which the health read fails.
+		series(running, now, &out)
 		health, err := r.state.health(ctx, running)
 		if err != nil {
 			continue
@@ -294,6 +280,41 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
 	return out
+}
+
+// series adds one domain's contribution to the reading of how long a state has
+// held — observed on the position heartbeat or by the reads themselves, since
+// no single health read can say it.
+//
+// THE WORST OF THE DOMAINS throughout, because the reading describes one NODE:
+// a two-domain node whose second applier is wedged is a node that is behind,
+// and averaging would hide it. Each is the real age, so each alarm fires at the
+// grace it names and not at a stand-in pinned to the grace itself, which a
+// strictly-past comparison never passes.
+func series(running *runningDomain, now time.Time, out *statelog.Reading) {
+	if held := running.progress.deferredSinceValue(); held.Held && !held.Since.IsZero() {
+		// BY WHAT THE DEFERRAL COSTS. A domain whose health gates the
+		// seats sheds them past the grace, and its alarm says so; one
+		// whose gaps are coverage sheds nothing, and an age from it
+		// reported as the first would tell an operator the seats had
+		// moved when none will.
+		if running.domain.ReadinessInput() {
+			out.DeferredAge = max(out.DeferredAge, now.Sub(held.Since))
+		} else {
+			out.CoverageDeferredAge = max(out.CoverageDeferredAge, now.Sub(held.Since))
+		}
+	}
+	if lost, unreadable := running.floor.unreadableFor(now); unreadable {
+		out.FloorUnknownFor = max(out.FloorUnknownFor, lost)
+	}
+	if left, behind := running.floor.leftFor(now); behind {
+		out.GenerationLeftFor = max(out.GenerationLeftFor, left)
+	}
+	if running.reader != nil {
+		if refusing, current := running.reader.FaultRefusingSince(now); current {
+			out.RefusalsSince = max(out.RefusalsSince, refusing)
+		}
+	}
 }
 
 // maintenance is the oldest open capacity operation on any of this node's
@@ -394,15 +415,6 @@ func (r *retention) observed(out *statelog.Reading) {
 			// counter and the census input are the same quantity —
 			// which is exactly why the drift is checkable at all.
 			out.LinearizableReads += int(snapshot.Total)
-		case metrics.StatelogReadRefusals:
-			// ANY REFUSAL AT ALL IS ONE, and the alarm's own
-			// condition is a DURATION rather than a count — so what
-			// this contributes is "there are refusals", and the
-			// tracker beside it is what turns that into how long
-			// they have been going on.
-			if snapshot.Total > 0 && !refusalIsOrdinaryLag(snapshot) {
-				out.RefusalsSince = max(out.RefusalsSince, statelog.RefusalAlarmFloor)
-			}
 		}
 	}
 }
@@ -411,16 +423,4 @@ func (r *retention) observed(out *statelog.Reading) {
 // says it is.
 func quantileDuration(s metrics.Snapshot, q float64) time.Duration {
 	return time.Duration(s.Quantile(q) * float64(time.Millisecond))
-}
-
-// refusalIsOrdinaryLag reports whether a refusal series is one a caller only
-// has to wait out.
-//
-// FROM THE CODE'S OWN CLASSIFICATION ([statelog.ReadRefusal.OrdinaryLag])
-// rather than from a list written here: the alarm exists to separate a fault
-// from a wait, and its remedy names the waits from that same method, so a
-// second list here would be a second answer that drifts from the first. The
-// names come off the series' own attribute, which is what the recorder wrote.
-func refusalIsOrdinaryLag(s metrics.Snapshot) bool {
-	return statelog.ReadRefusal(s.Attrs["code"]).OrdinaryLag()
 }

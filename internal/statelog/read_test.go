@@ -112,6 +112,9 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 	for name, tc := range map[string]struct {
 		health func() statelog.Health
 		want   statelog.ReadRefusal
+		// says is what the detail must carry, where the refusal code alone
+		// does not say what to do.
+		says string
 	}{
 		"an evicted node": {
 			health: func() statelog.Health {
@@ -136,6 +139,27 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 				return h
 			},
 			want: statelog.RefuseFloorUnknown,
+		},
+		// A HEALTH READ THAT FAILED BEFORE IT REACHED THE FLOOR says why in
+		// its own words: an unanswered coordination read and a floor at a
+		// generation this node has left refuse alike and are fixed apart.
+		"a health read that failed before it established the floor": {
+			health: func() statelog.Health {
+				return statelog.Health{Err: "the published floor for probe is at " +
+					"generation 3 and this node is on 1"}
+			},
+			want: statelog.RefuseFloorUnknown,
+			says: "generation 3",
+		},
+		// A BROKER THAT DID NOT ANSWER THE HEALTH READ is named as the
+		// broker, not as the floor that went unread behind it: the one is
+		// retried and the other is not.
+		"a health read the broker did not answer": {
+			health: func() statelog.Health {
+				return statelog.Health{BrokerErr: "nats: timeout"}
+			},
+			want: statelog.RefuseBrokerUnreachable,
+			says: "nats: timeout",
 		},
 		"a stalled applier": {
 			health: func() statelog.Health {
@@ -178,6 +202,9 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			// AND IT REFUSES WITH A REASON A PERSON CAN ACT ON.
 			if refusal.Detail == "" {
 				t.Error("the refusal names nothing to do about it")
+			}
+			if !strings.Contains(refusal.Detail, tc.says) {
+				t.Errorf("the detail %q does not say %q", refusal.Detail, tc.says)
 			}
 		})
 	}
@@ -292,6 +319,50 @@ func TestABarrierTheBrokerRefusesIsRefusedInItsWords(t *testing.T) {
 	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadStale),
 		func(*sql.Tx) error { return nil }); err != nil {
 		t.Errorf("a stale read on a sealed log = %v, want it served", err)
+	}
+}
+
+// A BARRIER A FULL INGEST QUEUE REFUSED IS WORTH COMING BACK FOR, AND SAYS WHEN.
+//
+// The queue stored nothing and drains on its own, so this is the one broker
+// refusal of a barrier that waiting clears. Filed with the refusals that name a
+// setting it carries no hint and sends somebody to change a stream nothing is
+// wrong with; filed with a quorum that did not agree it sends them to look for
+// an election.
+//
+// Mutation: map the queue's answer to barrier_refused and the refusal carries
+// no hint.
+func TestABarrierAFullQueueRefusedIsRetryableWithAHint(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	index, err := statelog.NewReadIndex(probeDomain{}, &scripted{log: h.log,
+		always: tooManyRequests}, probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+
+	_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+		func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerBusy {
+		t.Fatalf("a linearizable read the queue refused = %v, want %s", err,
+			statelog.RefuseBrokerBusy)
+	}
+	if !refusal.Code.Retryable() {
+		t.Errorf("%s is not retryable, and a drained queue takes the same barrier",
+			refusal.Code)
+	}
+	if refusal.RetryAfter != statelog.BusyRetryHint {
+		t.Errorf("the refusal's hint is %s, want %s", refusal.RetryAfter,
+			statelog.BusyRetryHint)
+	}
+	if !strings.Contains(refusal.Detail, "ingest queue") {
+		t.Errorf("the refusal does not name the full queue: %v", err)
+	}
+	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadStale),
+		func(*sql.Tx) error { return nil }); err != nil {
+		t.Errorf("a stale read while the queue is full = %v, want it served", err)
 	}
 }
 
@@ -625,6 +696,80 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	if err != nil || !answer.Complete {
 		t.Fatalf("a read outside every deferred scope = (%+v, %v), want a "+
 			"complete answer", answer, err)
+	}
+}
+
+// A RECORD HELD BACK BEHIND ONE THIS BUILD CANNOT DECODE IS NAMED AS HELD BACK,
+// AND A SET READ COUNTS EVERY RETAINED RECORD IT MEETS.
+//
+// The apply loop retains a record it could decode when its scope meets one it
+// cannot, so the retained set is not the undecodable set. A refusal calling the
+// held-back record "a record at version 1 this build cannot decode" sends an
+// operator looking for a build that reads a version this one already reads,
+// and an incomplete block that counts one record where two meet the read
+// understates the gap it exists to state.
+//
+// Mutation: name every retained record by its version and the refusal claims
+// version 1 is undecodable; count the earliest alone and the block says 1.
+func TestARetainedRecordIsNamedForWhyItIsHeldAndCounted(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	// VERSION 9 THIS BUILD CANNOT DECODE, and version 1 it can — retained
+	// all the same, because its scope meets the first one's.
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 9, "project/ENG/object/a"))
+	h.fetch.offer(2, env(2, "edit", "c", "op-2", 1,
+		"project/ENG/object/a", "project/ENG/object/c"))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, held := h.runner.Deferred(); held != 2 {
+		t.Fatalf("the runner retains %d record(s), want both — the second is held "+
+			"back behind the first, so this case is not the shape it names", held)
+	}
+	retaining := func() statelog.Health {
+		s := healthy()
+		s.Deferred, s.DeferredFrom = 2, 1
+		return s
+	}
+	r := newReader(t, h.db.Replicated(), retaining, &stubWaiter{at: healthy().Position}, nil)
+
+	// A POINT READ THAT ONLY THE HELD-BACK RECORD MEETS.
+	_, err := r.Read(t.Context(), statelog.Query{
+		Level: statelog.ReadStale,
+		Scope: statelog.ScopeSet{Paths: []string{"project/ENG/object/c"}},
+	}, func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferred {
+		t.Fatalf("a point read the held-back record meets = %v, want deferred", err)
+	}
+	if !strings.Contains(refusal.Detail, "held back") {
+		t.Errorf("the refusal does not say the record is held back: %q", refusal.Detail)
+	}
+	if strings.Contains(refusal.Detail, "version 1") {
+		t.Errorf("the refusal names version 1 as undecodable, and this build reads "+
+			"it: %q", refusal.Detail)
+	}
+
+	// A SET READ OVER THE CONTAINER BOTH OF THEM ARE IN.
+	answer, err := r.Read(t.Context(), statelog.Query{
+		Level: statelog.ReadStale, Set: true,
+		Scope: statelog.ScopeSet{Paths: []string{"project/ENG"}},
+	}, func(*sql.Tx) error { return nil })
+	if err != nil {
+		t.Fatalf("a set read over the container = %v, want it served", err)
+	}
+	if answer.Incomplete == nil {
+		t.Fatal("a set read two retained records meet claimed completeness")
+	}
+	if got := answer.Incomplete.Records; got != 2 {
+		t.Errorf("the incomplete block counts %d record(s), want 2", got)
+	}
+	if got := answer.Incomplete.From.Seq; got != 1 {
+		t.Errorf("the incomplete block starts at %d, want the earliest, 1", got)
+	}
+	if got := answer.Incomplete.Version; got != 9 {
+		t.Errorf("the incomplete block names version %d, want the earliest "+
+			"record's 9", got)
 	}
 }
 

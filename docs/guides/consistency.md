@@ -188,22 +188,35 @@ rather than downgraded. Each code names a different thing to do.
 |---|---|---|
 | `behind` | This node has not reached the position the read needs. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
 | `too_stale` | This node's lag is past what the read said it would accept. | Accept more staleness, or read from a node nearer the log's head. The answer carries no retry hint: this is not one of the codes worth coming back to **this** node for. |
-| `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. |
+| `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget, or has stood still for a minute with records waiting. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — the refusal's detail names the error when there is one, as does the applier's `statelog_apply_faulted` or `statelog_applier_stopped` log line, and `crewlet retention status` shows this node's position in each domain. A retried failure clears on its own the moment an attempt succeeds. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
+| `broker_busy` | The stream's ingest queue was full, so the broker stored nothing and said so. The broker answered, and no majority was asked. | Retry after the hint (1 s). It clears as the queue drains; if it persists, something is publishing to the stream faster than the stream stores. Like `log_full`, it costs `linearizable` reads alone. |
 | `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
-| `barrier_refused` | The broker refused the barrier for a reason other than a full log — a message-size limit set on the stream below a barrier's own size, a sealed stream, a server at its storage limit. The broker's own words are the detail. | Change the setting the detail names; waiting on this node changes nothing. Like `log_full`, it costs `linearizable` reads alone — `session`, `stale` and `consistent_prefix` append no barrier and keep answering. |
+| `barrier_refused` | The broker refused the barrier for a reason other than a full log or a full ingest queue — a message-size limit set on the stream below a barrier's own size, a sealed stream, a server at its storage limit. The broker's own words are the detail. | Change the setting the detail names; waiting on this node changes nothing. Like `log_full`, it costs `linearizable` reads alone — `session`, `stale` and `consistent_prefix` append no barrier and keep answering. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
-| `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
+| `floor_unknown` | The published trim floor could not be established: coordination did not answer, or the floor it holds is at a generation this node's rows are not on — the fleet re-anchored the domain and this node did not follow — or this node could not read its own store before it got as far as the floor. The detail says which. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. For an unanswered read, check coordination. For a generation this node has left, restart it: its boot asks the fleet for a snapshot of the current generation and adopts it, and until then its seats are with a peer. For the store, the detail names the error. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
 | `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
-Four of them are worth coming back to **this** node for — `behind`,
-`no_quorum`, `broker_unreachable` and `stalled`. The rest are not, and the
-distinction is in the code rather than in a retry loop's guesswork: a caller
-that retried `deferred` would loop forever.
+Five of them are worth coming back to **this** node for — `behind`,
+`no_quorum`, `broker_unreachable`, `broker_busy` and `stalled`. The rest are
+not, and the distinction is in the code rather than in a retry loop's
+guesswork: a caller that retried `deferred` would loop forever.
+
+A **write** meets the same full queue differently, because it is holding
+nothing a caller has to see: it pauses and decides again from a fresh
+snapshot, a pause that starts at a quarter of a second and doubles, inside the
+same five-second budget its other waits take. Past it the write is refused
+`busy` with nothing stored — or, if one of its attempts went unanswered
+before the queue filled, it answers `unknown`, because that attempt's record
+may still arrive. A clustered broker still proposing a record under the
+write's own operation id is the other answer that is not a refusal: the write
+resolves it from its ledger or from the duplicate acknowledgement its next
+attempt gets, and answers `unknown` if the proposal is still pending when the
+budget runs out.
 
 ## Completeness is a different fact from freshness
 

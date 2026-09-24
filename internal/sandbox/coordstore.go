@@ -415,15 +415,6 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 	if err != nil || !found {
 		return false, err
 	}
-	if run.LaunchID == "" {
-		// Every launch this build begins names itself, and only the
-		// build that began a launch serves its bridge — so a row with no
-		// launch is one this build did not launch and has no key to file
-		// a call under. Said rather than filed somewhere a resume would
-		// never look.
-		return false, fmt.Errorf("sandbox: run %s names no launch, so its bridged call %q has "+
-			"no log to be recorded in", turnID, call.Name)
-	}
 	recorded, seq, err := s.record(ctx, run, call)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: record bridged call %q of run %s: %w", call.Name, turnID, err)
@@ -828,10 +819,10 @@ func fitBridgeCall(call BridgeCall, whole wholeRef) (BridgeCall, []byte, bridgeC
 // leastBridgeCall is the smallest record a call is kept as, filed once a
 // server has refused a record the contract's ceiling admits: its name and its
 // outcome, beside whole's reference when the parts hold it, and each text
-// LONGER THAN ITS MARK set aside for that mark — the arguments for their
-// marker, the output for the cut's "…" and, when the whole was not kept, the
-// note after it — each the refusal's own mark, since a least form is filed
-// for nothing else.
+// LONGER THAN ITS MARK set aside for that mark. The arguments' mark is the
+// refusal's own marker — [RefusedArgsInParts], or [RefusedArgsNotKept] when
+// the whole was not kept. The output's is the cut's "…", followed, when the
+// whole was not kept, by the refusal's own note ([RefusedWholeNotKept]).
 //
 // A TEXT NO LONGER THAN ITS MARK IS KEPT AS IT IS. Its mark would weigh as
 // much and say less, and would claim it was set aside; arguments of a few
@@ -1354,12 +1345,6 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map
 // failure are named by nothing, and go with the purge of the launch when the
 // run ends.
 func (s *CoordStore) suspendInParts(ctx context.Context, turnID, launch string, state map[string]any, why string) (bool, error) {
-	if launch == "" {
-		// Every launch this build begins names itself, and only the build
-		// that began a launch suspends it.
-		return false, fmt.Errorf("sandbox: run %s names no launch, so its suspended conversation, "+
-			"which its record cannot hold, has no address to be kept under", turnID)
-	}
 	whole, err := json.Marshal(state)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: encode the suspended conversation of run %s: %w", turnID, err)
@@ -1449,6 +1434,12 @@ func (s *CoordStore) Suspension(ctx context.Context, run PendingRun) (map[string
 		return run.ExecuteState, nil
 	}
 	if run.LaunchID == "" {
+		// A reference with no launch names parts no address can hold: no
+		// write files a reference without the launch its parts are under.
+		// Refused here as the permanent fault it is, because asked of the
+		// store it would be refused as an address and read as a failed
+		// read, which the resume hands back for a retry that meets the
+		// same refusal every time.
 		return nil, fmt.Errorf("%w: run %s names no launch its parts could be filed under",
 			ErrSuspensionUnreadable, run.TurnID)
 	}

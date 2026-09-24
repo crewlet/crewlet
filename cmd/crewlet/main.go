@@ -2572,20 +2572,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Await:    e.WaitCommitted,
 		}
 	}
-	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
-		opts.Pages = builtin.PageDeps{
-			Reader: reader, Writer: writer,
-			Actor:    opsmcp.PageActor,
-			Mentions: engine.LiveMentions(e),
-			// NO RESERVED CONTAINERS. A seat's surface closes the
-			// tool-skills container and the org root to its own writes;
-			// this one is a person's own assistant, which is how a
-			// company on the native knowledge base publishes both —
-			// write_page is the only thing that creates a native page.
-			// See [builtin.PageDeps.Reserved].
-			Await: e.WaitCommitted,
-		}
-	}
+	opts.Pages = operatorPages(e)
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
@@ -2610,6 +2597,27 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// about a person's line, the other about who plans a container's work.
 	opts.LeadsProject = engine.LeadsProjectOf(e)
 	return opsmcp.New(opts)
+}
+
+// operatorPages is the knowledge base's half of the operator surface, or the
+// zero deps on a node that does not run the native knowledge base.
+//
+// NO RESERVED CONTAINERS. A seat's surface closes the tool-skills container
+// and the org root to its own writes; this one is a person's own assistant,
+// which is how a company on the native knowledge base publishes both —
+// write_page is the only thing that creates a native page. See
+// [builtin.PageDeps.Reserved].
+func operatorPages(e *engine.Engine) builtin.PageDeps {
+	reader, writer := e.Pages(), e.PagesStore()
+	if reader == nil || writer == nil {
+		return builtin.PageDeps{}
+	}
+	return builtin.PageDeps{
+		Reader: reader, Writer: writer,
+		Actor:    opsmcp.PageActor,
+		Mentions: engine.LiveMentions(e),
+		Await:    e.WaitCommitted,
+	}
 }
 
 // leadsOf answers whether one handle leads another, walking the chart's own

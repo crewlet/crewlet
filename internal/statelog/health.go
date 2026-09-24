@@ -130,15 +130,24 @@ type Health struct {
 	// appended above it.
 	AppliedThrough uint64
 
-	// Deferred is how many records this node holds and cannot decode.
+	// Deferred is how many records this node has RETAINED rather than
+	// applied: each record its build cannot decode, and each record it could
+	// decode that is held back behind one of those because their scopes meet
+	// — applying that one would write rows on state the undecodable record
+	// never wrote.
 	Deferred uint64
 
-	// DeferredFrom is the lowest of their sequences, which is where a
-	// build that can read them would resume.
+	// DeferredFrom is the lowest retained sequence, which is where a build
+	// that can read the undecodable records would resume.
 	DeferredFrom uint64
 
-	// CaughtUp reports having drained to nothing pending at least once,
-	// and not being stalled since.
+	// CaughtUp reports having drained to nothing pending at least once
+	// since this node's applier last started, and not being stalled since.
+	//
+	// A LATCH, not the instant's lag: every node is a record or two behind
+	// for a moment after every write, and what reads this — admission, the
+	// snapshot gate, a replication row — asks whether the node keeps up
+	// rather than whether a write landed a millisecond before the look.
 	CaughtUp bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
@@ -153,14 +162,11 @@ type Health struct {
 	// into an assertion.
 	Floor Floor
 
-	// Evicted reports an eviction tombstone for this node.
-	//
-	// COORDINATION-DERIVED: it is this process's copy of the cached
-	// tombstone, refreshed on the same loop, so it is NOT an independent
-	// input. That is exactly why the write path's fence checks a third
-	// source — this node's own applied eviction rows, fresh to its
-	// applied prefix and the only one still fresh when coordination is
-	// wedged, which is a precondition of an eviction being permitted.
+	// Evicted reports this node's own eviction, as the domain's write fence
+	// reads it ([Fence.Evicted]): the eviction this node has APPLIED, fresh
+	// to its applied prefix and read without a coordination round trip — so
+	// it is still fresh when the coordination path is wedged, which is a
+	// precondition of an eviction being permitted at all.
 	Evicted bool
 
 	// Lag is the stream's last sequence minus this node's position, and
@@ -217,6 +223,17 @@ type Health struct {
 	// operator's re-anchor.
 	StreamRecreated bool
 
+	// BrokerErr is the broker's failure to answer this health read's
+	// question about the stream's bounds, and empty when it answered.
+	//
+	// ITS OWN FIELD, because the read that failed says where to look and
+	// whether to come back. Every freshness term is measured against the
+	// bounds, so nothing after them was read — the published floor
+	// included. A refusal decided from what was left would name the floor,
+	// which did not fail, with a code that says coming back will not help;
+	// the broker usually answers the next read.
+	BrokerErr string
+
 	// Coverage is COMPACTED domains only: the fraction of rows present
 	// against rows expected. A gap here is the compaction policy working
 	// rather than a fault, which is why it is a number and not a bool.
@@ -247,6 +264,8 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 	switch {
 	case h.Evicted:
 		return RefuseEvicted
+	case h.BrokerErr != "":
+		return RefuseBrokerUnreachable
 	case h.Floor.Effective(now) == FloorUnknown:
 		return RefuseFloorUnknown
 	case h.Floor.Effective(now) == FloorBelow:

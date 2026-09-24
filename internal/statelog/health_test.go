@@ -229,7 +229,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 	}
 }
 
-// HEALTH IS FIFTEEN FIELDS, DECLARED ONCE.
+// HEALTH IS SIXTEEN FIELDS, DECLARED ONCE.
 //
 // The count is asserted because the failure is a copy: written out per reader
 // it becomes three lists that disagree, and the fields most likely to be
@@ -239,8 +239,8 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[statelog.Health]()
-	if got := typ.NumField(); got != 15 {
-		t.Fatalf("Health has %d fields, want 15 — this struct is cited from the "+
+	if got := typ.NumField(); got != 16 {
+		t.Fatalf("Health has %d fields, want 16 — this struct is cited from the "+
 			"framework's contracts, the readiness gate, the operator surface and "+
 			"the register's heartbeat, and a field added here without a reason "+
 			"is a field one of them will not know about", got)
@@ -326,6 +326,19 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			t.Errorf("%s set: still Healthy, so a node in this state keeps its seats",
 				tc.field)
 		}
+	}
+
+	// A BROKER THAT DID NOT ANSWER REFUSES THE READ AND KEEPS THE SEATS: its
+	// failure is named as its own, so a caller comes back, and the outage in
+	// which a company most needs its seats is not one that moves them.
+	unanswered := serving()
+	unanswered.BrokerErr = "nats: timeout"
+	if got := unanswered.Refusal(now); got != statelog.RefuseBrokerUnreachable {
+		t.Errorf("BrokerErr set: Refusal = %q, want %q", got,
+			statelog.RefuseBrokerUnreachable)
+	}
+	if !unanswered.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("BrokerErr set: unhealthy, so a broker blip moves every seat on the node")
 	}
 
 	// The deferral shed is the one condition that needs a SERIES, so it is

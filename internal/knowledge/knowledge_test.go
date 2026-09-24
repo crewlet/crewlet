@@ -23,8 +23,9 @@ func TestScopeNormalisesAndKeepsTheOperatorsOrder(t *testing.T) {
 	}
 }
 
-// An empty scope is not "search everything": it is "search everything THIS
-// SEAT's own account can read", which is only meaningful when the seat has an
+// ON A BACKEND WHOSE SEATS CAN AUTHENTICATE AS THEMSELVES — Confluence — an
+// empty scope is not "search everything": it is "search everything THIS SEAT's
+// own account can read", which is only meaningful when the seat has an
 // account. A seat on the shared engine credential reads nothing.
 func TestUnscopedIsNotUnbounded(t *testing.T) {
 	cases := []struct {
@@ -147,10 +148,9 @@ func TestSnippetCutsAtASentence(t *testing.T) {
 		t.Fatalf("Snippet(\"\") = %q", got)
 	}
 
-	// LENGTH ONLY. A copy of this in the Confluence parser also cut at the
-	// first newline or ". ", so it decapitated a page to its opening
-	// sentence whatever the budget — and at limit 0, where the caller asked
-	// for no cut at all.
+	// LENGTH ONLY. A cut at the first newline or ". " would decapitate a page
+	// to its opening sentence whatever the budget — and at limit 0, where the
+	// caller asked for no cut at all.
 	multi := "First line. Second sentence follows.\nAnd a third."
 	if got := knowledge.Snippet(multi, 0); got != "First line. Second sentence follows. And a third." {
 		t.Fatalf("an unbounded snippet was still cut: %q", got)

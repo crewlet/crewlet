@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file).
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store's two files (`store.path` and `store.replicated_path`), the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file).
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -608,8 +608,10 @@ store:
   path: "./crewlet-data/company.db"   # the NODE estate — the audit log, memory,
                                     #   config revisions, the secret bootstrap.
                                     #   Owned exclusively by this process. Not a
-                                    #   shared database, and no DSN: two engines
-                                    #   on one file corrupt it
+                                    #   shared database, and no DSN: a second
+                                    #   engine on either file is refused by the
+                                    #   store's lock, naming the pid and host
+                                    #   that hold it
   # snapshot_dir: "./crewlet-data/snapshots"
                                     #   where this node keeps its own snapshots
                                     #   of the replicated estate — the file a
@@ -1029,7 +1031,8 @@ knowledge:
   backend: confluence                    # native (default) | confluence | none
   scope: ["ENG", "HANDBOOK"]             # org-wide containers every agent can search (optional)
   skills_container: TS                   # tool-skill pages; excluded from routing and search
-  root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page
+  root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page;
+                                         #   searched and routed like any other container
   vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
 ```
 
@@ -1037,9 +1040,9 @@ knowledge:
 
 `knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
 
-`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved**: excluded from knowledge search and from routing, and refused as a unit's own `space`. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
+`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved**: refused as a unit's or a seat's own `space`, and closed to a seat's own writes — on the native knowledge base a seat's `write_page` and `save_page` refuse both, because a seat writing into the skills container would be rewriting the guidance injected into its own phases, and the root holds what the company publishes rather than what one seat decides. An operator's own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant) writes both: `write_page` is the only thing that creates a native page, so that is how a native company publishes its tool skills and its root Onboarding page. The skills container is also excluded from knowledge search and from routing, because its pages are machinery; the root container is searched and routed like any other. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
 
-`knowledge.vectors` fuses semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured — a company already paying for embeddings for its diary gets the better search — and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with.
+`knowledge.vectors` is the switch for fusing semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured, and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with. **Nothing reads the switch yet.** The embedding duty embeds the company's pages and work items whenever `providers.embeddings` is configured, whatever `vectors` says, and no search computes a query embedding, so every knowledge search is keyword-only today — see [Knowledge System § Native backend](../concepts/knowledge-system.md#native-backend--the-engines-own-pages).
 
 ---
 

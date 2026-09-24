@@ -269,8 +269,9 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool
 	}, true, nil
 }
 
-// retain stores a record this build cannot decode, byte for byte, with every
-// term of its scope.
+// retain stores a record this node holds back rather than applies — one this
+// build cannot decode, or one whose scope meets a record already retained —
+// byte for byte, with every term of its scope.
 //
 // ONE TRANSACTION for the record and its scope, and the rule is not tidiness:
 // a deferral recorded without its scope is a record that makes rows stale with
@@ -389,8 +390,9 @@ func (t tables) release(ctx context.Context, tx *sql.Tx, p Position) error {
 	return nil
 }
 
-// deferredIn answers whether this node holds a record it cannot decode whose
-// declared scope intersects s.
+// deferredIn answers the earliest record this node retains whose declared scope
+// intersects s — one this build cannot decode, or one held back behind such a
+// record, and [Deferral.Describe] says which.
 //
 // TWO CLAUSES, because containment runs both ways and neither finds the
 // other's case. A stored path in the query's CLOSURE is one that covers
@@ -413,24 +415,11 @@ func (t tables) deferredIn(ctx context.Context, tx *sql.Tx, s ScopeSet) (Deferra
 // table would let a later retained record hold an earlier one back for ever.
 // nil is the whole table.
 func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below *Position) (Deferral, bool, error) {
-	closure := s.Closure()
-	roots := s.Roots()
-	if len(closure) == 0 {
+	from, args, ok := t.retainedMeeting(s)
+	if !ok {
 		return Deferral{}, false, nil
 	}
-
-	args := make([]any, 0, len(closure)+len(roots)*2+1)
-	for _, p := range closure {
-		args = append(args, p)
-	}
-	q := `SELECT d.position, d.version FROM ` + t.scope + ` s
-	      JOIN ` + t.deferred + ` d ON d.position = s.position
-	      WHERE (s.path IN (` + placeholders(len(closure)) + `)`
-	for _, r := range roots {
-		q += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
-		args = append(args, r, store.LikePrefix(r+ScopeSeparator))
-	}
-	q += `)`
+	q := `SELECT d.position, d.version ` + from
 	if below != nil {
 		q += ` AND d.position < ?`
 		args = append(args, below.Packed())
@@ -458,6 +447,47 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 	return Deferral{Position: at, Version: int(version), Scope: scope}, true, nil
 }
 
+// retainedMeeting is the FROM and WHERE of every probe over the retained
+// records whose declared scope meets s, with its arguments — false when s names
+// nothing, which meets nothing. ONE PREDICATE for the probe that finds the
+// earliest and the count beside it, so the two cannot disagree about which
+// records they are about.
+func (t tables) retainedMeeting(s ScopeSet) (string, []any, bool) {
+	closure := s.Closure()
+	roots := s.Roots()
+	if len(closure) == 0 {
+		return "", nil, false
+	}
+	args := make([]any, 0, len(closure)+len(roots)*2+1)
+	for _, p := range closure {
+		args = append(args, p)
+	}
+	q := `FROM ` + t.scope + ` s
+	      JOIN ` + t.deferred + ` d ON d.position = s.position
+	      WHERE (s.path IN (` + placeholders(len(closure)) + `)`
+	for _, r := range roots {
+		q += ` OR s.path = ? OR s.path LIKE ? ESCAPE '\'`
+		args = append(args, r, store.LikePrefix(r+ScopeSeparator))
+	}
+	q += `)`
+	return q, args, true
+}
+
+// retainedCount is how many retained records have a declared scope that meets
+// s. A record several of whose scope terms meet s is one record.
+func (t tables) retainedCount(ctx context.Context, tx *sql.Tx, s ScopeSet) (uint64, error) {
+	from, args, ok := t.retainedMeeting(s)
+	if !ok {
+		return 0, nil
+	}
+	var n int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT d.position) `+from,
+		args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("statelog: count the retained records meeting a scope: %w", err)
+	}
+	return uint64(n), nil
+}
+
 // scopeOf reads a deferred record's declared scope, so a refusal can name what
 // is actually stale rather than the whole domain.
 func (t tables) scopeOf(ctx context.Context, tx *sql.Tx, packed int64) (ScopeSet, error) {
@@ -481,9 +511,8 @@ func (t tables) scopeOf(ctx context.Context, tx *sql.Tx, packed int64) (ScopeSet
 	return ScopeSet{Paths: out}, nil
 }
 
-// oldestDeferred is the earliest record this node could not decode, which is
-// what the node's own applied-through position is derived from and what an
-// operator's "which build do I need" question is answered with.
+// oldestDeferred is the earliest record this node retains, which is what the
+// node's own applied-through position is derived from.
 func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool, error) {
 	var packed int64
 	var version int64
@@ -506,9 +535,10 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 	}, true, nil
 }
 
-// retainedState is the earliest record this node could not decode and how
-// many it holds, read in the caller's one transaction so the two describe the
-// same table.
+// retainedState is the earliest record this node has retained and how many it
+// retains — the records its build could not decode, and those held back behind
+// one — read in the caller's one transaction so the two describe the same
+// table.
 func (t tables) retainedState(ctx context.Context, tx *sql.Tx) (Deferral, uint64, error) {
 	var held int64
 	if err := tx.QueryRowContext(ctx,

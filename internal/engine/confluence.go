@@ -32,9 +32,10 @@ type confluenceParts struct {
 	parser   *confluence.Parser
 	searcher *confluence.Searcher
 
-	// pages reads the skills space. Nil with no org credential, which is
-	// the same degradation the searcher takes: a company whose read token
-	// lapsed keeps routing and stops learning.
+	// pages reads the skills space, and is what a promotion draft is
+	// written through. Nil wherever the searcher is — with no org
+	// credential, and for a company whose knowledge base is not Confluence —
+	// so a company whose read token lapsed keeps routing and stops learning.
 	pages *confluence.Client
 
 	// base and skillsSpace are the instance and the skills space this
@@ -46,7 +47,8 @@ type confluenceParts struct {
 	base, skillsSpace string
 }
 
-// startConfluence builds the knowledge base's parser and searcher.
+// startConfluence builds the parser for a company that declares the block,
+// and the searcher and the org client for one whose knowledge base it is.
 func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluenceParts, error) {
 	if cfg == nil {
 		return confluenceParts{}, nil
@@ -69,13 +71,30 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	site := resolved.ShareableBaseURL()
 	skillsSpace := c.Config.SkillsContainerKey()
 
+	// THE READING HALF IS BUILT ONLY FOR A COMPANY WHOSE KNOWLEDGE BASE THIS
+	// IS. A company on `backend: none` may declare the block for its page
+	// routing alone, and a searcher or a promotion writer built for it would
+	// read or write a wiki the company says it does not run. [Engine.Knowledge]
+	// answers by the same field, so it would never ask such a searcher — this
+	// is what keeps one from existing, and the promotion pass, which asks
+	// only whether an org client is wired, from drafting into it.
+	reads := c.Config.KnowledgeBackendFor() == config.KnowledgeConfluence
+
 	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON, as the file head says:
 	// without it no searcher is built, so no seat searches — not even one
 	// holding a credential of its own — and the tool-skill walk cannot run.
 	// Routing is unaffected either way, which is why this warns rather than
 	// refusing.
 	var orgClient *confluence.Client
-	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	switch {
+	case !reads:
+	case token == "":
+		log.Warn("confluence_has_no_org_token",
+			"detail", "no knowledge search runs, for any seat, and the "+
+				"tool-skill walk cannot run; page activity still routes. "+
+				"Set integrations.confluence.token")
+	default:
 		client, err := confluence.NewClient(confluence.ClientOptions{
 			URL: base, Email: env.Value(cfg.Email), Token: token,
 		})
@@ -83,11 +102,6 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 			return confluenceParts{}, fmt.Errorf("engine: confluence: %w", err)
 		}
 		orgClient = client
-	} else {
-		log.Warn("confluence_has_no_org_token",
-			"detail", "no knowledge search runs, for any seat, and the "+
-				"tool-skill walk cannot run; page activity still routes. "+
-				"Set integrations.confluence.token")
 	}
 
 	leads := confluence.LeadsFrom(c.Org)
@@ -116,7 +130,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	}
 	log.Info("confluence_wired", "url", base, "site", site,
 		"spaces_with_leads", len(leads), "skills_space", skillsSpace,
-		"org_token", orgClient != nil)
+		"knowledge_base", reads, "searches", parts.searcher != nil)
 	return parts, nil
 }
 
@@ -250,18 +264,20 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 //
 // This node can hold both at once. The native searcher belongs to the NODE:
 // it starts with the node's native backends and lives as long as they do,
-// whatever a later revision says. The Confluence one is built whenever a
-// revision declares `integrations.confluence`, and a company on
-// `backend: none` may declare the block for its page routing alone. Answered
-// by which searcher exists instead, a company that moved off the native
-// knowledge base by a live apply would go on searching its pages until the
-// node restarted, and a company that turned its knowledge base off would be
-// searched on Confluence all the same.
+// whatever a later revision says. The Confluence one is built for a revision
+// on `backend: confluence` ([Engine.startConfluence]), and a later revision
+// whose Confluence block fails to build leaves it running
+// ([Engine.reconcileConfluence]). Answered by which searcher exists instead, a
+// company that moved off the native knowledge base by a live apply would go
+// on searching its pages until the node restarted, and one that moved off
+// Confluence onto a block that did not build would go on searching the wiki
+// it left.
 //
-// The other direction cannot be answered at once: a company moved ONTO the
-// native knowledge base gets nil here until the node restarts, because the
-// native backends start with the node. Nil is honest there — the node holds
-// no copy of the pages to search.
+// A company moved ONTO the native knowledge base is answered natively only by
+// a node whose boot revision ran it, which is the node that still holds the
+// searcher; a node that booted on another backend gets nil here until it
+// restarts, because the native backends start with the node. Nil is honest
+// there — that node holds no copy of the pages to search.
 //
 // Nil means no backend is wired, and every consumer treats that as "search
 // nothing" rather than as an error — a turn must not die because a company

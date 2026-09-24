@@ -177,7 +177,7 @@ The dispatcher is a queue consumer, so it usually runs on a node that never saw 
 
 ## Prompt scaffolding
 
-Short, conditional guidance fragments are appended to the executor's system prompt, injected **only when the matching tool is registered for the role**. This scaffolding is sourced from the [Tool Skills](tool-skills.md) registry — knowledge-base pages (Confluence) operators can edit at runtime — rather than being hardcoded in engine prose. The bundled `examples/tool-skills/` files ship ready-made versions:
+Short, conditional guidance fragments are appended to the executor's system prompt, injected **only when the matching tool is registered for the role**. This scaffolding is sourced from the [Tool Skills](tool-skills.md) registry — knowledge-base pages (the engine's own, or Confluence's) operators can edit at runtime — rather than being hardcoded in engine prose. The bundled `examples/tool-skills/` files ship ready-made versions:
 
 | Bundled skill | Trigger | What it teaches |
 |---|---|---|
@@ -240,7 +240,7 @@ The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` 
 
 ## Relevant-knowledge prefetch
 
-The `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the seat to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs a live knowledge-base search once per turn through the [`knowledge.Searcher` seam](knowledge-system.md#the-knowledgesearcher-seam) (Confluence CQL — one backend per org); the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
+The `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the seat to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs one knowledge-base search per turn through the [`knowledge.Searcher` seam](knowledge-system.md#the-knowledgesearcher-seam) — BM25 over this node's own index on the native backend, a live CQL query on Confluence, and exactly one backend per company; the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
 
 ### Why "knowledge" and not "skills"
 
@@ -252,29 +252,33 @@ The shipped design takes the opposite stance: **a knowledge-base page is a knowl
 
 For each turn:
 
-1. The searcher gate runs: `Searcher.CanSearch(seat, org)`, a cheap, no-I/O check that a search could return anything (the role has accessible containers, or its own backend credentials for an unscoped search). When it says no, the aux-LLM query-generation call is skipped entirely.
-2. The role's auxiliary model (`role.llm_auxiliary`) turns the task description into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [accessible containers](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `space` is integration identity (webhook routing + write home), not read scope.
-3. The searcher runs the query as the agent's own backend user (the seat's own Confluence credential from its `mcp_env`, falling back to the org-level token) as a CQL `text ~ "..."` clause narrowed by `space IN (...)`. The backend enforces page permissions natively, so restricted pages the agent cannot see never appear; unreviewed [auto-drafts](#5-synthesizer-skill-induction) are excluded by the query's default ancestor exclusion (`knowledge.AutoDraftedParent`, "Auto-Drafted Skills").
+1. The searcher gate runs: `Searcher.CanSearch(seat, org)`, a cheap, no-I/O check that a search could return anything. Natively it always can — every seat reads every page. On Confluence it can when `knowledge.scope` names containers, or when the seat holds its own Confluence credential for an unscoped search. When it says no, the block is left out and the aux-LLM query-generation call is skipped entirely.
+2. A node whose native index has not finished its first build (`Searcher.Building`, also no I/O) renders the [building sentence](knowledge-system.md#native-backend--the-engines-own-pages) instead of searching, and skips the aux call too: a search there can miss any page, and the block could not vouch for what it found. Confluence keeps no index and is never building.
+3. The role's auxiliary model (`role.llm_auxiliary`) turns the task description into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [accessible containers](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `space` is integration identity (webhook routing + write home), not read scope.
+4. The searcher runs the query. **Natively**, it is ranked by BM25 over this node's own index, narrowed to `knowledge.scope` when one is set, and every seat reads every page. **On Confluence**, it runs as the agent's own Confluence user (the seat's own credential from its `mcp_env`, falling back to the org-level token) as a CQL `text ~ "..."` clause, narrowed by `space IN (...)` when a scope is set, and Confluence enforces page permissions natively, so restricted pages the agent cannot see never appear. On both, the tool-skills container is left out and unreviewed [auto-drafts](#5-synthesizer-skill-induction) are excluded by the query's default ancestor exclusion (`knowledge.AutoDraftedParent`, "Auto-Drafted Skills").
 
 ### Flow
 
 ```mermaid
 flowchart TD
     A["turn start"] --> B{"Searcher.CanSearch(seat, org)?"}
-    B -->|no| SKIP["skip — no aux call"]
-    B -->|yes| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: task text · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
-    C --> D["Searcher.Search(knowledge.Query)<br/>scope derived internally: Confluence CQL,<br/>read scope from the org, agent's own backend auth"]
-    D --> E["render bullets: one per hit, title + snippet"]
+    B -->|no| SKIP["skip — no block, no aux call"]
+    B -->|yes| BLD{"Searcher.Building?"}
+    BLD -->|yes| HINT["render the building sentence — no aux call"]
+    BLD -->|no| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: task text · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
+    C --> D["Searcher.Search(knowledge.Query)<br/>native: BM25 over this node's index<br/>Confluence: CQL as the seat's own user<br/>read scope from the org on both"]
+    D --> E["render bullets: one per hit —<br/>title, container and page id, snippet"]
     E --> F["bake into the executor prompt's '## Relevant knowledge' block<br/>(frozen at turn start)"]
 ```
 
 ### Loading full bodies
 
-The bullets render title + snippet — enough for the executor to decide which pages to open. To pull a full body or run a fresh search, it calls `search_knowledge` or the backend's own MCP tools — `confluence_get_page` / `confluence_search`. The block prose describes the capability, never a hardcoded tool name.
+Each bullet renders a hit's title, its container and page id, and a snippet — enough for the executor to decide which pages to open. To read one in full it opens it by that page id with its knowledge base's page-read tool: `get_page` on the native backend (which also takes `CONTAINER/Title`), the Confluence MCP server's `confluence_get_page` on Confluence. A fresh search is `search_knowledge` on either backend, or `confluence_search` on Confluence for a query the seat writes in CQL itself. The block's closing line names the capability — open a page by its id — rather than a tool, because the tool differs by backend.
 
 ### Hardening
 
-- **Show-nothing on search unavailability / failure.** When the backend is unreachable or query generation fails, the block renders nothing rather than erroring the turn: `Search` is best-effort by the seam's contract.
+- **Never an error for the turn.** With no searcher wired, a gate that says no, or a query-generation call that fails, the block is left out; a search that fails (an unreachable backend) returns no hits and renders the gate-path hint below. `Search` is best-effort by the seam's contract.
+- **A building index says so.** A native node whose index is still on its first build renders the building sentence instead of searching, rather than an empty result a seat would read as "nothing has been written down".
 - **The gate-path hint** rendered when the block would otherwise go silently empty — either the thin-trigger gate skipped the search, or the search ran and returned nothing. Mirrors `personal_memory`'s hint; points the agent at `search_knowledge` as the mid-turn escape hatch.
 - **Frozen at turn start.** The block is part of the system-prompt prefix, so a `self_iterate` round reuses the same prefix and the LLM provider's prompt cache stays valid.
 - **Once per turn.** The query is generated and the search runs once; anything more the agent needs it asks for.
@@ -287,16 +291,16 @@ The **`search_knowledge` builtin** closes it. The gated block renders a hint say
 
 The three-phase engine had a *push* here instead: a second search the engine ran between the phases, keyed on the plan summary, because the actor could not ask for itself — it was a different conversation. With one loop there is nothing between the phases to hang a push on, and there no longer needs to be: the frame that just did the recon is the frame that searches.
 
-Being a tool rather than a seam, it is also cheap to be honest about. A backend that is unreachable, unconfigured, or scoped to nothing answers with a sentence saying which of those it is, rather than an empty block the agent has to interpret.
+Being a tool rather than a seam, it is also cheap to be honest about. A seat the backend cannot serve — no backend wired, or on Confluence no read scope and no credential of its own — is told so in a sentence rather than handed an empty block to interpret; a node whose index is still building says that, and adds it to an answer that did find pages; and a search that came back empty, a failed one included, answers that nothing matched and to try other keywords.
 
 ### Telemetry
 
-The turn-start `prefetch_summary` event's `relevant_knowledge_hit`, `relevant_knowledge_bytes` and `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two paths where the hit is true: a non-zero count means real pages were rendered; zero with a true hit means the gate-path hint was rendered: the thin-trigger gate skipped the search, or the search ran and returned nothing. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
+The turn-start `prefetch_summary` event's `relevant_knowledge_hit`, `relevant_knowledge_bytes` and `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two paths where the hit is true: a non-zero count means real pages were rendered; zero with a true hit means a hint was rendered in place of pages: the thin-trigger gate skipped the search, the search ran and returned nothing, or this node's index was still on its first build. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
 
 A block stuck at 0% hit rate over a representative window is almost always one of:
 
 - No `knowledge.scope` configured **and** the agent has no per-agent backend credentials, so it can't search unscoped (a credential-less / fallback-token agent with no containers searches nothing, and `CanSearch` gates the whole prefetch off).
-- No `integrations.confluence` configured, so no searcher is wired, or no pages in the read scope match. Also check the seat's own **page permissions**: the search runs as that account, so a space it cannot read silently contributes nothing (see [Confluence § Knowledge search](../integrations/confluence.md)).
+- Nothing answers searches for this company on this node: `knowledge.backend: none`, a Confluence company whose org token did not resolve, or a native company on a node that booted on another knowledge backend (its native searcher starts with the node — see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). On Confluence, also check the seat's own **page permissions**: the search runs as that account, so a space it cannot read silently contributes nothing (see [Confluence § Knowledge search](../integrations/confluence.md)).
 - Aux LLM unavailable (`llm_auxiliary` not configured and the role's primary `llm` doesn't resolve as an aux provider), so query generation cannot run.
 
 ---
@@ -509,7 +513,7 @@ Every telemetry write (`Skills.MarkUsed`, the `skill_used` publish, the `prefetc
 |---|---|
 | `internal/engine` (the turn's telemetry) | Emits `turn_completed` when a turn closes, carrying everything the reflection gates read: what the turn set out to do, its outcome, the final round's tool sequence and every tool name the turn called, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
 | `internal/agent/prompts` | The executor's prompt builder injects conditional guidance blocks gated on tool availability. |
-| `internal/knowledge`, `internal/confluence` | The knowledge-search seam and its one backend, the Confluence searcher (CQL), backing the `## Relevant knowledge` prefetch and `search_knowledge`; the org-wide read scope narrows it by space. See [Knowledge System](knowledge-system.md). |
+| `internal/knowledge`, `internal/pages`, `internal/confluence` | The knowledge-search seam and its two backends — the native searcher over this node's own index, and the Confluence searcher (CQL) — backing the `## Relevant knowledge` prefetch and `search_knowledge`; the org-wide read scope narrows either by container. See [Knowledge System](knowledge-system.md). |
 | `internal/agent/builtin` | Builtins, registered into `internal/tools`: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
 | `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `prefetch_summary`, `compaction_requested`, `compaction_completed`. |
 | `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |

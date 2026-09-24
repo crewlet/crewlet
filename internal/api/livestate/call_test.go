@@ -268,10 +268,12 @@ func TestAProgressRoundDoesNotOverwriteAFrozenFailedCall(t *testing.T) {
 // arriving.
 //
 // The last frame before a provider dies carries a partial for a round that
-// will never commit, and the failure payload cannot displace it — a snapshot
-// holds committed rounds only. Left on the frozen call it never goes away, so
-// a phase that died an hour ago keeps rendering that round as streaming, with
-// the running ring and a blinking caret, on a card that also says it failed.
+// will never commit, and the failure payload cannot displace it — the record
+// carries no round in flight, and what that round had written is among its
+// abandoned attempts, a finished fact. Left on the frozen call the partial
+// never goes away, so a phase that died an hour ago keeps rendering that round
+// as streaming, with the running ring and a blinking caret, on a card that
+// also says it failed.
 func TestAFrozenFailedCallKeepsNoRoundInFlight(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()

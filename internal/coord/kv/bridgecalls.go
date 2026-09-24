@@ -42,32 +42,26 @@ import (
 //
 // A PART IS ONE SEGMENT DEEPER THAN ITS CALL, and every reader here tells the
 // two apart by that depth alone ([bridgeCallSeq] reads a call at exactly four
-// segments, [bridgePartAddress] a part at exactly five). The same filter that
-// selects a launch's calls selects their parts, so the purge that removes a
-// launch's calls removes every part beneath them, on every build. And the
-// depth is what makes a newer build's parts safe to put in front of a build
-// that predates them: that build decodes calls with this same [bridgeCallSeq],
-// which answers false for a five-segment key, so it lists, counts and pages a
-// newer build's log without ever taking a part for a call, and its purge of a
-// launch removes the parts with the calls. What such a build cannot do is list
-// a launch that holds nothing BUT parts ([FleetStore.BridgeLaunches] here
-// does), so a part filed after its launch was purged waits for a sweep run by
-// a build that knows parts.
+// segments, [bridgePartAddress] a part at exactly five), so a listing, a count
+// or a page of a launch's calls never takes a part for one. The same filter
+// that selects a launch's calls selects their parts, so the purge that removes
+// a launch's calls removes every part beneath them.
 //
 // A SUSPENSION PART IS FILED UNDER THE SAME FILTER, at a call part's depth,
-// behind [suspensionSegment] where a call part has its call's number. Both
-// decoders read that fourth segment as a call's number, and it is not one, so
-// neither this build nor one that predates suspension parts takes one for a
-// call or for a part of one — while the launch's filter still selects it, so
-// every build's purge of the launch removes it with the calls.
+// with [suspensionSegment] where a call part has its call's number.
+// [bridgeCallSeq] refuses it by its depth, and [bridgePartAddress], which
+// reads a key of that depth, refuses the word where it parses a call's number,
+// so neither takes a suspension part for a call or for a part of one — while
+// the launch's filter still selects it, so the purge of the launch removes it
+// with the calls.
 
 const (
 	bridgeCallClass = "call"
 	bridgeNextClass = "next"
 
 	// suspensionSegment is the fourth segment of a suspension part's key,
-	// where a call part carries its call's number: a word, so that no
-	// decoder of call numbers ever reads one.
+	// where a call part carries its call's number: a word, so that the
+	// decoder of a call's number refuses it.
 	suspensionSegment = "suspension"
 
 	// kvStreamPrefix is what the NATS key-value protocol names a bucket's

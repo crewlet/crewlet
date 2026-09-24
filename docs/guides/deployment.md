@@ -348,8 +348,10 @@ coordination:
 > form the phase has no record at all (`phase_record_not_published`). A coding
 > run's bridged call whose record that server refuses has its whole kept in
 > parts split the same way, and its record filed in its least form: its name
-> and outcome, with each text longer than its mark set aside, and marked as set
-> aside because a server refused the record.
+> and outcome, its arguments replaced by a marker saying they were set aside
+> because a server refused the record and whether their whole is in parts, and
+> its output by `…` — followed, when the whole could not be kept in parts, by a
+> note saying so. A text no longer than what would replace it is kept as it is.
 > `sandbox_bridge_call_refused_within_ceiling` says the server refused it —
 > once for the call — `sandbox_bridge_call_least_form_filed` that the least
 > form landed, naming the whole's length and its parts, and

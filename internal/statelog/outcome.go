@@ -152,6 +152,13 @@ const (
 	// retried: nothing a new round decides changes the broker's answer.
 	ReasonRefused Reason = "refused"
 
+	// ReasonBusy — the stream's ingest queue stayed full for the whole of
+	// the write path's budget. Nothing was stored. The write retook its
+	// snapshot after a widening pause each time the broker refused it, so a
+	// caller told this is told the backpressure outlasted that budget: it
+	// retries later, under the same op id.
+	ReasonBusy Reason = "busy"
+
 	// ReasonSkew — the broker answered a last sequence BELOW an
 	// expectation this node formed, which cannot happen on a healthy
 	// stream and means a store or stream was restored out of step.

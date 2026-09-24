@@ -1117,7 +1117,7 @@ func testASuspensionTheRowCannotHoldIsReadBackWhole(t *testing.T, s sandbox.Pend
 	if !sameState(t, mustSuspension(t, s, got), state) {
 		t.Fatal("the conversation read back is not the whole one suspended")
 	}
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+	if err = s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Question: strings.Repeat("q", 3<<20), Audience: "requester",
 	}); err != nil {
 		t.Fatalf("the row left no room for the question the run parks on: %v", err)

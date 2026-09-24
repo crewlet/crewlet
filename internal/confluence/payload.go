@@ -84,15 +84,13 @@ func EscapeCQL(value string) string {
 
 // BuildCQL renders one search.
 //
-// THE QUERY IS NOT SHORTENED. A 200-character cap used to sit here, justified
-// as turning "the server refused a 4KB query" into "the search used the first
-// 200 characters" — but those are not comparable outcomes. A refusal is an
-// error the caller sees, and the knowledge block reports it as empty; a
-// silently shortened query is a DIFFERENT SEARCH, returning plausible pages
-// for terms the seat never asked about, with nothing anywhere saying so. The
-// cut was mid-rune too, so a non-ASCII query could end in half a character
-// inside a quoted CQL literal. What bounds this text is the aux model's own
-// output-token cap, upstream, where a bound belongs.
+// THE QUERY IS NOT SHORTENED. A query the server refuses is an error the
+// searcher logs, and the caller sees no hits; a silently shortened query is a
+// DIFFERENT SEARCH, returning plausible pages for terms the seat never asked
+// about, with nothing anywhere saying so. Each caller bounds its own text
+// before it reaches here instead: the `search_knowledge` tool refuses one past
+// its limit, naming it, and the prefetch's query is one line of the auxiliary
+// model's output.
 //
 // Shape: `space IN ("ENG","HANDBOOK") AND type = page AND text ~ "…"`.
 //

@@ -43,15 +43,17 @@ import (
 //     are already durable.
 //   - THE RECORD, in the largest form the transport accepts. First its longest
 //     texts cut to a common level — the tool results, because they are what a
-//     record's size is made of, then the tool arguments, then the prose and
-//     the prompts — each cut text ending in "…" and, on a tool call or a
-//     round, with its whole length beside it as `<field>_bytes`. A text no
-//     longer than that mark is never cut: the mark would weigh what the text
-//     does and say less. Failing that, the LEAST form: every one of those
-//     texts longer than its mark reduced to it, and every row carried.
-//     Failing that, the least form carrying its first rows, tool calls given
-//     up before rounds, and counting the rest in tool_executions_omitted and
-//     round_narration_omitted. THE PHASE'S OWN ERROR IS WHOLE IN EVERY ONE OF
+//     record's size is made of, then the tool arguments, then the prose (the
+//     rounds' narration, the attempts no round kept, the response) and the
+//     prompts — each cut text ending in "…" and, on a tool call, a round or an
+//     abandoned attempt, with its whole length beside it as `<field>_bytes`. A
+//     text no longer than that mark is never cut: the mark would weigh what
+//     the text does and say less. Failing that, the LEAST form: every one of
+//     those texts longer than its mark reduced to it, and every row carried.
+//     Failing that, the least form carrying its first rows — the abandoned
+//     attempts given up first, then the tool calls, then the rounds — and
+//     counting the rest in abandoned_attempts_omitted, tool_executions_omitted
+//     and round_narration_omitted. THE PHASE'S OWN ERROR IS WHOLE IN EVERY ONE OF
 //     THOSE FORMS, because it is what says why a failed phase failed: it is
 //     cut — on a character boundary, ending in "…" — only in a form with no
 //     row left that is still too large. Every form carries the scalars whole
@@ -183,7 +185,15 @@ type phaseAccount struct {
 // publishPhase publishes a completed phase record — whole when the transport
 // carries it, and otherwise its whole in parts followed by the record cut to
 // the largest form the transport accepts — and reports what became of it.
+//
+// WITHOUT ctx's CANCELLATION, as a delegated worker's record is published: the
+// record reports work that already happened — tokens billed, calls made, text
+// written — and the phases most worth one are the ones whose context ended
+// under them, while a broker client refuses a publish under a context that is
+// already done. The span ctx carries is kept, so the record still belongs to
+// its phase in the trace.
 func (e emitter) publishPhase(ctx context.Context, rec types.AgentPhaseCompleted) phaseAccount {
+	ctx = context.WithoutCancel(ctx)
 	env := events.New(rec, e.traceFor(ctx))
 	env.Source = e.role
 	err := e.pub.Publish(ctx, topics.Event(env.Type), env)
@@ -346,6 +356,7 @@ func (e emitter) publishCut(ctx context.Context, cut *phaseCutter, refusal error
 				"phase", cut.original.Phase, "iteration", cut.original.Iteration,
 				"form", form.form, "record_bytes", cut.whole, "published_bytes", form.bytes,
 				"ceiling_bytes", phaseRecordCeiling, "texts_cut", form.texts,
+				"abandoned_attempts_omitted", form.attempts,
 				"tool_executions_omitted", form.calls, "round_narration_omitted", form.rounds,
 				"whole_parts", cut.kept.parts,
 				"detail", "the record was too large to publish whole and was published cut, "+
@@ -433,9 +444,9 @@ type phaseShape struct {
 	form phaseForm
 	// bytes is the form's encoded size, measured as the publisher encodes it.
 	bytes int
-	// texts is how many texts were cut; calls and rounds how many rows of
-	// each list are not carried.
-	texts, calls, rounds int
+	// texts is how many texts were cut; attempts, calls and rounds how many
+	// rows of each list are not carried.
+	texts, attempts, calls, rounds int
 }
 
 // shapeBelow is the largest form of the record the transport may still accept,
@@ -487,6 +498,7 @@ func (c *phaseCutter) copy() (*events.Event, *types.AgentPhaseCompleted) {
 	rec := *c.original
 	rec.ToolExecutions = cloneRows(c.original.ToolExecutions)
 	rec.RoundNarration = cloneRows(c.original.RoundNarration)
+	rec.AbandonedAttempts = cloneRows(c.original.AbandonedAttempts)
 	rec.WholeBytes = c.whole
 	rec.WholeParts = c.kept.parts
 	env := *c.env
@@ -528,7 +540,7 @@ func (c *phaseCutter) fitted(target int) (phaseShape, error) {
 	env, rec := c.copy()
 	shape := phaseShape{env: env, rec: rec, form: phaseFitted}
 	remeasure := func() (err error) {
-		rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0))
+		rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0, 0))
 		shape.bytes, err = measure(env)
 		return err
 	}
@@ -596,7 +608,7 @@ func (c *phaseCutter) leastForm() (phaseShape, error) {
 			shape.texts++
 		}
 	}
-	rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0))
+	rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, 0, 0, 0))
 	var err error
 	if shape.bytes, err = measure(env); err != nil {
 		return shape, err
@@ -606,9 +618,10 @@ func (c *phaseCutter) leastForm() (phaseShape, error) {
 }
 
 // rowsFitting is the least form carrying the FIRST rows of each list that fit
-// target and counting the rest — the tool calls given up first, from the end,
-// because they are the bulk of a record, and the rounds only once no call is
-// left.
+// target and counting the rest. The lists are given up in turn, each from the
+// end and only once the one before it is gone: the abandoned attempts first,
+// because they are what the phase did not keep; then the tool calls, because
+// they are the bulk of a record; and the rounds last.
 //
 // THE ERROR ONLY THEN. With no row left and the record still over target, the
 // phase's error is cut to fit, the last text any form cuts: rune-safe, ending
@@ -624,30 +637,44 @@ func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
 	// reduced to their marks.
 	env, rec := *least.env, *least.rec
 	env.Data = &rec
-	calls, rounds := least.rec.ToolExecutions, least.rec.RoundNarration
+	attempts, calls, rounds := least.rec.AbandonedAttempts, least.rec.ToolExecutions, least.rec.RoundNarration
 	shape := phaseShape{env: &env, rec: &rec, form: phaseRowsOmitted, texts: least.texts}
-	carry := func(k, m int) (int, error) {
-		rec.ToolExecutions, rec.RoundNarration = calls[:k], rounds[:m]
+	carry := func(a, k, m int) (int, error) {
+		rec.AbandonedAttempts, rec.ToolExecutions, rec.RoundNarration = attempts[:a], calls[:k], rounds[:m]
+		rec.AbandonedAttemptsOmitted = len(attempts) - a
 		rec.ToolExecutionsOmitted, rec.RoundNarrationOmitted = len(calls)-k, len(rounds)-m
-		rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, len(calls)-k, len(rounds)-m))
+		rec.Notes = joinNotes(c.original.Notes,
+			c.note(shape.texts, len(attempts)-a, len(calls)-k, len(rounds)-m))
 		return measure(&env)
 	}
-	k, err := mostThatFit(len(calls), target, func(k int) (int, error) { return carry(k, len(rounds)) })
+	a, err := mostThatFit(len(attempts), target, func(a int) (int, error) {
+		return carry(a, len(calls), len(rounds))
+	})
 	if err != nil {
 		return shape, err
 	}
-	m := len(rounds)
+	k, m := len(calls), len(rounds)
+	if a < 0 {
+		a = 0
+		if k, err = mostThatFit(len(calls), target, func(k int) (int, error) {
+			return carry(0, k, len(rounds))
+		}); err != nil {
+			return shape, err
+		}
+	}
 	if k < 0 {
 		k = 0
-		if m, err = mostThatFit(len(rounds), target, func(m int) (int, error) { return carry(0, m) }); err != nil {
+		if m, err = mostThatFit(len(rounds), target, func(m int) (int, error) {
+			return carry(0, 0, m)
+		}); err != nil {
 			return shape, err
 		}
 		m = max(m, 0)
 	}
-	if shape.bytes, err = carry(k, m); err != nil {
+	if shape.bytes, err = carry(a, k, m); err != nil {
 		return shape, err
 	}
-	shape.calls, shape.rounds = len(calls)-k, len(rounds)-m
+	shape.attempts, shape.calls, shape.rounds = len(attempts)-a, len(calls)-k, len(rounds)-m
 	// Over target only with no row left: any row carried was carried
 	// because the form fit with it.
 	if shape.bytes <= target {
@@ -655,7 +682,7 @@ func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
 	}
 	failure := []*textSlot{{text: rec.Error, set: func(cut string, _ int) { rec.Error = cut }}}
 	return shape, fitTiers(&shape, [][]*textSlot{failure}, target, func() (err error) {
-		shape.bytes, err = carry(0, 0)
+		shape.bytes, err = carry(0, 0, 0)
 		return err
 	})
 }
@@ -682,15 +709,17 @@ func mostThatFit(most, target int, size func(n int) (int, error)) (int, error) {
 }
 
 // note is what a cut record's notes say about the cut and about its whole.
-func (c *phaseCutter) note(texts, calls, rounds int) string {
+func (c *phaseCutter) note(texts, attempts, calls, rounds int) string {
 	var clauses []string
 	if texts > 0 {
 		clauses = append(clauses, fmt.Sprintf("%d texts shortened, each ending in …; on a tool "+
-			"call or a round, <field>_bytes beside a cut text is its whole length", texts))
+			"call, a round or an abandoned attempt, <field>_bytes beside a cut text is its whole "+
+			"length", texts))
 	}
-	if calls > 0 || rounds > 0 {
-		clauses = append(clauses, fmt.Sprintf("%d tool calls and %d rounds after the first are "+
-			"not carried (tool_executions_omitted, round_narration_omitted)", calls, rounds))
+	if attempts > 0 || calls > 0 || rounds > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d abandoned attempts, %d tool calls and %d rounds "+
+			"after the first of each are not carried (abandoned_attempts_omitted, "+
+			"tool_executions_omitted, round_narration_omitted)", attempts, calls, rounds))
 	}
 	clauses = append(clauses, c.wholeWhere())
 	return "record cut to fit one event: " + strings.Join(clauses, "; ")
@@ -796,9 +825,13 @@ func phaseRecordTiers(rec *types.AgentPhaseCompleted) [][]*textSlot {
 		results = appendRowSlot(results, row, "error")
 		arguments = appendRowSlot(arguments, row, "arguments")
 	}
-	for _, row := range rec.RoundNarration {
-		prose = appendRowSlot(prose, row, "content")
-		prose = appendRowSlot(prose, row, "reasoning")
+	// The attempts no round kept are prose like the rounds' own, and cut
+	// with them: a cut one carries its whole length the way a round does.
+	for _, rows := range [][]types.RoundNarration{rec.RoundNarration, rec.AbandonedAttempts} {
+		for _, row := range rows {
+			prose = appendRowSlot(prose, row, "content")
+			prose = appendRowSlot(prose, row, "reasoning")
+		}
 	}
 	prose = append(prose,
 		&textSlot{text: rec.Response, set: func(cut string, _ int) { rec.Response = cut }},

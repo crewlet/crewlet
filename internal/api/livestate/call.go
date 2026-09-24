@@ -291,10 +291,12 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	// The round in flight is NOT frozen — it is over. A partial says "this
 	// text is still arriving", and the last progress frame before a provider
 	// died carries one for a round that will never commit. Left on the frozen
-	// call it never goes away: the failure payload cannot displace it (a
-	// snapshot holds committed rounds only), so a phase that died an hour ago
-	// keeps rendering that round as streaming, with the running ring and a
-	// blinking caret, on a card that also says it failed.
+	// call it never goes away: the failure payload cannot displace it (the
+	// record carries no round in flight; what that round had written is
+	// among its `abandoned_attempts`, which is a finished fact rather than
+	// arriving text), so a phase that died an hour ago keeps rendering that
+	// round as streaming, with the running ring and a blinking caret, on a
+	// card that also says it failed.
 	call.PartialRound = nil
 }
 

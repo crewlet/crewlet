@@ -396,14 +396,16 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How old the oldest record this node has not applied is: " +
 				"now less the broker's own timestamp on the first record past " +
-				"its checkpoint, and zero when it is caught up. An AGE rather " +
-				"than the backlog over the drain, because an applier that has " +
-				"stopped keeps its last drain — its projection stays as small " +
-				"as its backlog on a quiet log — while the records it owes go " +
-				"on growing old. It is what the `apply_lag` alarm fires on, at " +
-				"a minute. Exact on a strict log; on the compacted vector log, " +
-				"where that record may have been superseded, it is the age of " +
-				"the newest one instead, which never overstates.",
+				"its checkpoint that the log still holds, and zero when it is " +
+				"caught up. An AGE rather than the backlog over the drain, " +
+				"because an applier that has stopped keeps its last drain — its " +
+				"projection stays as small as its backlog on a quiet log — while " +
+				"the records it owes go on growing old. It is what the " +
+				"`apply_lag` alarm fires on, at a minute. Exact on the compacted " +
+				"vector log too: a record superseded on its subject before this " +
+				"node reached it is gone from the log and is never applied here, " +
+				"so the first survivor past the checkpoint is the oldest record " +
+				"this node still owes.",
 		},
 		{
 			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitSequence,
@@ -414,9 +416,11 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogDeferredCount, Kind: KindGauge, Unit: UnitRecords,
 			Attributes: []string{"domain"},
-			Shows: "How many records this node holds that its build could not " +
-				"read. Non-zero is a rolling upgrade in progress; the oldest " +
-				"one's age beside it says whether the upgrade has stopped.",
+			Shows: "How many records this node has retained rather than " +
+				"applied: those its build could not read, and those held back " +
+				"behind one because their scopes meet. Non-zero is a rolling " +
+				"upgrade in progress; the oldest one's age beside it says " +
+				"whether the upgrade has stopped.",
 		},
 		{
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,

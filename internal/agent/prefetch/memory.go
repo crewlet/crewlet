@@ -34,10 +34,9 @@ import (
 
 const (
 	// memoryVectorLimit and memoryRecencyLimit are the two halves of the
-	// candidate pool, UNIONED. Their sum is what bounds the pool — there is
-	// no third cap over the union, and the one that used to sit there was
-	// unreachable arithmetic: a dedup of two 50-row halves cannot exceed
-	// 100, so a `> 100` trim never fired.
+	// candidate pool, UNIONED. Their sum is what bounds the pool, and there
+	// is no third cap over the union: a dedup of two 50-row halves cannot
+	// exceed 100, so a trim above it would be a guard that never fires.
 	//
 	// Similarity finds what the task is about; recency finds the
 	// broadly-applicable rules that match no particular task and apply to

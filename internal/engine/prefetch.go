@@ -213,10 +213,9 @@ func sendersOf(registry *notify.Registry, evs []*events.Event) []learning.Subjec
 // the last speaker and forget the other three.
 //
 // EITHER the constituents OR the flat fields, never both, which is the rule
-// [Engine.interactionsOf] already states: the flat fields ARE the latest
-// constituent, so taking them as well put the last speaker at the head of a
-// list whose whole contract is "in the order they spoke". Latent while nothing
-// populated Messages, and wrong the moment something did.
+// [Engine.interactionsOf] states: the flat fields ARE the latest constituent,
+// so taking them as well would put the last speaker at the head of a list
+// whose whole contract is "in the order they spoke".
 func subjectsOf(registry *notify.Registry, ev *types.ExternalNotification) []learning.Subject {
 	if len(ev.Messages) > 0 {
 		out := make([]learning.Subject, 0, len(ev.Messages))

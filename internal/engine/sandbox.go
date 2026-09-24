@@ -636,8 +636,10 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	return reply, nil
 }
 
-// persistSuspension writes a turn's suspended conversation to its row, which
-// is also what OPENS the run to the completion poll.
+// persistSuspension writes a turn's suspended conversation to its run's
+// record — onto the row, or, when the row cannot hold it, into parts the row
+// then names ([sandbox.PendingStore.MarkSuspended]) — which is also what OPENS
+// the run to the completion poll.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
 // conversation only until its frame unwinds. Until this lands the run sits in
@@ -685,10 +687,10 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 // failSuspension settles a run whose suspension has nowhere to go, and says
 // why, in the one voice all four failure paths share.
 //
-// SETTLED, NOT MARKED. The job is already executing in its box, and writing a
-// failed status onto the record stranded that box: a record that is not
-// active is read by no recovery pass and polled by no waiter, so the box ran
-// to its provider's TTL, billed, with nothing left to reclaim it. The
+// SETTLED, NOT MARKED. The job is already executing in its box, and a failed
+// status written onto the record would strand that box: a record that is not
+// active is read by no recovery pass and polled by no waiter, so the box would
+// run to its provider's TTL, billed, with nothing left to reclaim it. The
 // coordinator settles it like every other lost turn, while this node still
 // owns the seat, and the loss is announced rather than left as silence. It
 // settles only a run still launching (see [sandbox.Coordinator.FailRun]): a

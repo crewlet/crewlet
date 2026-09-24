@@ -41,14 +41,13 @@ func TestAFleetStoreRefusesAServerBelowTheRecordCeiling(t *testing.T) {
 	}
 }
 
-// A BUILD THAT PREDATES PARTS NEVER TAKES ONE FOR A CALL.
+// A PART'S KEY IS NEVER DECODED AS A CALL, AND GOES WITH ITS LAUNCH.
 //
-// A rolling upgrade puts such a build on this bucket, reading launches a newer
-// build wrote. It walks a launch by the launch's filter, which selects the
-// parts too, and decodes each key with bridgeCallSeq — the same decode this
-// build reads calls with — so the part's key must fail that decode, and must
-// sit under the filter its purge removes. Checked on the keys themselves,
-// because that older build is not here to ask: what it runs is this decode.
+// Every read of a launch's calls walks the launch's filter, which selects the
+// parts too, and tells a call from a part by the depth of its key alone — so a
+// part's key must fail the call decode and pass the part decode, and must sit
+// under the filter the purge removes. Checked on the keys themselves, over ids
+// with dots and spaces in them.
 func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
 	t.Parallel()
 	for _, ids := range [][2]string{{"turn-1", "launch-1"}, {"run.a", "launch.b"}, {"t:é", "l 1"}} {
@@ -76,15 +75,13 @@ func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
 	}
 }
 
-// A SUSPENSION PART IS NEVER DECODED AS A CALL OR AS A CALL'S PART, BY THIS
-// BUILD OR ONE THAT PREDATES SUSPENSION PARTS — AND IT GOES WITH ITS LAUNCH.
+// A SUSPENSION PART IS NEVER DECODED AS A CALL OR AS A CALL'S PART, AND IT
+// GOES WITH ITS LAUNCH.
 //
-// The parts sit under the launch's filter, which every build's purge removes,
-// and at a call part's depth; what keeps them from being read as either is the
-// word where a call part carries its call's number. The decoders checked are
-// this build's, which an older build that has the log runs byte for byte, and
-// the suspension's own filter must select none of the launch's calls, or its
-// read would move them.
+// The parts sit under the launch's filter, which the purge removes, and at a
+// call part's depth; what keeps them from being read as either is the word
+// where a call part carries its call's number. And the suspension's own filter
+// must select none of the launch's calls, or its read would move them.
 func TestASuspensionPartsKeyIsNeverACallsAndGoesWithItsLaunch(t *testing.T) {
 	t.Parallel()
 	for _, ids := range [][2]string{{"turn-1", "launch-1"}, {"run.a", "launch.b"}, {"t:é", "l 1"}} {

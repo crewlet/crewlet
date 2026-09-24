@@ -41,12 +41,10 @@ func LocalReader(domain statelog.Domain, db DB, at statelog.Position) (*statelog
 // reader that dropped the caller's bound on the floor looks exactly like one
 // that carried it.
 //
-// That is not hypothetical. `max_lag_seconds` was validated against the level
-// and then never carried, so a tile polling every twenty seconds and declaring
-// a twenty-second bound was served an answer of any age and rendered it live;
-// `max_lag_seq` was fixed for one question and left in for nine more, because
-// nothing on either side of the call could tell. A test that sets a lag and a
-// tighter bound is what makes the last hop — the domain's query into
+// A bound validated against the level and then never carried into the query is
+// invisible from both sides of the call: a tile declaring a twenty-second
+// bound is served an answer of any age and renders it live. A test that sets a
+// lag and a tighter bound is what makes the last hop — the domain's query into
 // [statelog.Query] — observable at all.
 //
 // The node is still CAUGHT UP in every other sense: the floor reads, the
@@ -61,8 +59,11 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 		Waiter: localWaiter{at: at},
 		Health: func() statelog.Health {
 			behind, first, floor := lag, uint64(1), uint64(0)
+			// CAUGHT UP WHATEVER THE LAG, because the field is a latch
+			// ([statelog.Health.CaughtUp]) and this node has drained
+			// before: the lag is the one thing this constructor varies.
 			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, CaughtUp: lag == 0,
+				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
 				Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 				Lag:       &behind,
 				FirstSeq:  &first,

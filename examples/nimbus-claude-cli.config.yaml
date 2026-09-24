@@ -100,12 +100,18 @@ stream:
   replicas: 1                     # 1 solo; 3 in a fleet, where it is what
                                   #   makes a publish quorum-durable
 
-# ── This node's local database ────────────────────────────────────────
+# ── This node's local databases ───────────────────────────────────────
 #
-# One FILE, owned exclusively by this process for the life of the
-# process.  It is not a shared database and there is no DSN: two engines
-# pointed at one file corrupt it.  A fleet's nodes each keep their own
-# rebuildable copy — the stream is the truth, this is the cache.
+# TWO FILES, each owned exclusively by this process for as long as it
+# runs: the node estate at `path`, and the replicated estate beside it
+# (`crewlet-replicated.db`, unless `replicated_path` names another
+# file).  Neither is a shared database and there is no DSN: a second
+# engine pointed at either is refused by the store's lock, which names
+# the process that holds it.  The replicated estate is derived from the
+# stream's logs, and every node of a fleet holds its own copy of it.
+# The node estate is this node's alone: its audit log exists nowhere
+# else, and a backup of this node (`crewlet backup`) is its one other
+# copy.
 store:
   path: "./nimbus-data/nimbus.db"
   # There is no `driver:` here and no CREWLET_STORE_DRIVER either — Turso

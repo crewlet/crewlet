@@ -174,10 +174,10 @@ crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
 
-**It reaches a running node.** The store is exclusive to one process, so
-against a live engine this cannot open the database — and it no longer needs
-to: it detects the held store and goes through that node's `PUT /config`
-instead, which stores the revision **and activates it fleet-wide**, so every
+**It reaches a running node.** Each store file is exclusive to one process, so
+against a live engine this cannot open the store — and it does not need to: it
+detects the held store and goes through that node's `PUT /config` instead,
+which stores the revision **and activates it fleet-wide**, so every
 node converges with no restart. `-api URL` names a node explicitly, which is
 also how this works from a machine that is not the node at all. This is the
 same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
@@ -492,21 +492,21 @@ crewlet migrate -check                   # report pending work, apply nothing
 | `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`). Name it **once**: a second positional, or a positional alongside `-config`, is refused rather than resolved — the two would have to agree and nothing checks that they do. |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
-Rolling out N nodes at once means N processes opening the same database and
-racing to apply the same files. That race is safe — one transaction per
-file, with the version row written inside it, so a file is either fully
-applied and recorded or neither — but it is not what an operator wants to
-watch during a deploy, and a failure mid-rollout is a fleet in two schema
-states. Migrating once, deliberately, before anything starts makes the
-outcome one thing that either worked or did not.
+A node's store is two files — its own estate at `store.path` and the
+replicated estate at `store.replicated_path` or beside it — each with its own
+migration sequence, and both are migrated here, as they are by every open. Each
+node owns its files, so there is nothing fleet-wide to coordinate: what this
+adds is the migration as a step of its own, before the node starts and with
+its own exit status.
 
 Applying is done by **opening the store**, not by a second code path: a
 migrator the engine does not use is one that can disagree with it about what
 "applied" means. `-check` is the exception and has to be — it reads
-`schema_migrations` and creates nothing, because a command that migrated
+`schema_migrations` and applies nothing, because a command that migrated
 while answering "what would you migrate" could never answer it. A database
 with no `schema_migrations` table has applied nothing, which is what a fresh
-install looks like rather than an error.
+install looks like rather than an error; on one, `-check` leaves each database
+as an empty file, with an empty `-wal` and its `.lock` sidecar beside it.
 
 ---
 
@@ -602,15 +602,15 @@ opening files, and here the reason is doubled. Each store file is locked to
 the engine's process for the life of the handle and the driver does not
 support a second process on a database file — so no outside tool can read
 one, and copying it anyway is a torn copy, because committed data lives in the
-file and its `-wal` together. The stream estate is worse: on the default topology the
-broker is embedded in the engine and **binds no socket**, so there is no
-address to give the `nats` CLI. The one process that can reach both is the
-engine, and this asks it to.
+file and its `-wal` together. The stream estate is worse: on the default
+topology the broker is embedded in the engine and **binds no socket**, so
+there is no address to give the `nats` CLI. The one process that can reach
+both is the engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
 whatever its `node.roles`, and on the embedded topology its own broker too; a
-node that dialled an external NATS cluster copies its store files alone and says so,
-naming the cluster as where the stream half is backed up, rather than
+node that dialled an external NATS cluster copies its store files alone and
+says so, naming the cluster as where the stream half is backed up, rather than
 presenting a partial copy as a backup.
 
 `-wait` (default 30 minutes) bounds how long the command waits for the answer,

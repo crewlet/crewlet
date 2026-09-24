@@ -616,7 +616,8 @@ func assertTheWalkHalves(t *testing.T, pub *transport) {
 			continue
 		}
 		rec, _ := next.ev.Data.(*types.AgentPhaseCompleted)
-		least := rec != nil && rec.ToolExecutionsOmitted == 0
+		least := rec != nil && rec.ToolExecutionsOmitted == 0 && rec.RoundNarrationOmitted == 0 &&
+			rec.AbandonedAttemptsOmitted == 0
 		for _, row := range rec.ToolExecutions {
 			// At its least a result is its mark, or whole and unmarked
 			// because it is no longer than its mark: never a head.
@@ -624,7 +625,8 @@ func assertTheWalkHalves(t *testing.T, pub *transport) {
 				least = false
 			}
 		}
-		rowless := rec != nil && len(rec.ToolExecutions) == 0 && len(rec.RoundNarration) == 0
+		rowless := rec != nil && len(rec.ToolExecutions) == 0 && len(rec.RoundNarration) == 0 &&
+			len(rec.AbandonedAttempts) == 0
 		if (!least && !rowless) || next.bytes >= prev.bytes {
 			t.Fatalf("attempt %d weighs %d bytes after one of %d was refused: past the %d-byte "+
 				"target, and neither the least form nor the smallest", i, next.bytes, prev.bytes, target)
@@ -1298,5 +1300,178 @@ func TestAWholeTooLargeForOneEventReadsBackWholeFromTheStore(t *testing.T) {
 	}
 	if full.ToolExecutions[0]["result"] != res.Executions[0].Output {
 		t.Error("the whole read back from the store carries a cut result")
+	}
+}
+
+// abandonedRecord is a phase record whose bulk is attempts a provider gave up
+// on: n of them, each with a short reasoning of its own and content of about
+// `each` bytes of three-byte characters, so a cut through one would show.
+func abandonedRecord(n, each int) types.AgentPhaseCompleted {
+	rec := phaseEvent(toolloop.Result{RoundsUsed: 1, Model: "claude-sonnet-5",
+		InputTokens: 9100, OutputTokens: 420, Executions: []toolloop.Execution{
+			{Round: 1, Name: "slack_post", Args: map[string]any{"channel": "C1"}, Output: "posted"},
+		}})
+	for i := range n {
+		rec.AbandonedAttempts = append(rec.AbandonedAttempts, types.RoundNarration{
+			"round": 1, "reasoning": fmt.Sprintf("attempt %d", i),
+			"content": strings.Repeat("あ", each/3),
+		})
+	}
+	return rec
+}
+
+// A RECORD PAST ONE EVENT CUTS ITS ABANDONED ATTEMPTS LIKE ITS ROUNDS.
+//
+// What the model wrote and no round kept is prose on the record, and a phase
+// whose provider kept failing late in its answers holds enough of it to put
+// the record past what one event carries. The fit cuts those texts with the
+// rest of the prose — each ending in "…", with its whole length beside it —
+// rather than giving up a row or the record, and the whole in parts holds
+// every one of them whole.
+func TestARecordPastOneEventCutsItsAbandonedAttemptsLikeItsRounds(t *testing.T) {
+	t.Parallel()
+	const attempts = 250
+	rec := abandonedRecord(attempts, 42_000)
+	whole, _ := rec.AbandonedAttempts[0]["content"].(string)
+	// The premise: whole, this record is past the ceiling.
+	if attempts*len(whole) <= queue.MaxPayloadBytes {
+		t.Fatalf("the fixture's attempts total %d bytes, not past the %d-byte ceiling",
+			attempts*len(whole), queue.MaxPayloadBytes)
+	}
+	pub := &transport{refuse: tooLargeAbove(queue.MaxPayloadBytes)}
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, parts := pub.accepted()
+	if len(records) != 1 || account.Form != phaseFitted {
+		t.Fatalf("%d records published in form %q; want the record fitted", len(records), account.Form)
+	}
+	got := records[0]
+	if len(got.AbandonedAttempts) != attempts || got.AbandonedAttemptsOmitted != 0 {
+		t.Fatalf("the record carries %d abandoned attempts and counts %d omitted; want every one "+
+			"of the %d", len(got.AbandonedAttempts), got.AbandonedAttemptsOmitted, attempts)
+	}
+	for i, row := range got.AbandonedAttempts {
+		content, _ := row["content"].(string)
+		if !strings.HasSuffix(content, "…") || !utf8.ValidString(content) ||
+			!strings.HasPrefix(whole, strings.TrimSuffix(content, "…")) {
+			t.Fatalf("attempt %d's cut content is unmarked, broken or not a head of the whole", i)
+		}
+		// A number read back off the wire into a map is a float64.
+		if row["content_bytes"] != float64(len(whole)) {
+			t.Fatalf("attempt %d: content_bytes = %v, want the whole content's %d",
+				i, row["content_bytes"], len(whole))
+		}
+		if row["reasoning"] != fmt.Sprintf("attempt %d", i) {
+			t.Fatalf("attempt %d's reasoning, far under the level, was cut: %v", i, row["reasoning"])
+		}
+	}
+	if !strings.Contains(got.Notes, "abandoned attempt") {
+		t.Errorf("notes = %q, want them to say a cut text on an abandoned attempt carries its "+
+			"whole length", got.Notes)
+	}
+	if got.WholeParts == 0 || got.WholeParts != len(parts) {
+		t.Fatalf("the record names %d parts of the %d published", got.WholeParts, len(parts))
+	}
+	var back events.Event
+	if err := json.Unmarshal(reassemble(t, parts), &back); err != nil {
+		t.Fatalf("the reassembled whole is not an event: %v", err)
+	}
+	full, _ := back.Data.(*types.AgentPhaseCompleted)
+	if full == nil || len(full.AbandonedAttempts) != attempts {
+		t.Fatalf("the whole is a %T; want the record with all %d abandoned attempts", back.Data, attempts)
+	}
+	for i, row := range full.AbandonedAttempts {
+		if row["content"] != whole {
+			t.Fatalf("attempt %d in the whole is %d bytes; want its content whole (%d)",
+				i, len(fmt.Sprint(row["content"])), len(whole))
+		}
+	}
+}
+
+// CUTTING A RECORD LEAVES THE CALLER'S ATTEMPTS AS THEY WERE.
+//
+// A row is a map, and the record a caller hands in shares its rows with
+// whoever built it. Every form is cut from a copy with rows of its own: a cut
+// written into a shared row would change the caller's record under it, and
+// every form after the first would be cut from texts already cut.
+func TestCuttingARecordLeavesTheCallersAttemptsAsTheyWere(t *testing.T) {
+	t.Parallel()
+	rec := abandonedRecord(20, 42_000)
+	whole, _ := rec.AbandonedAttempts[0]["content"].(string)
+	// A server far below the contract, so the record goes out cut.
+	pub := &transport{refuse: tooLargeAbove(200 << 10)}
+	if account := emitterOver(pub).publishPhase(t.Context(), rec); account.Form == phaseWhole ||
+		account.Form == "" {
+		t.Fatalf("the record went out in form %q (%v); the case needs it cut", account.Form, account.Err)
+	}
+	for i, row := range rec.AbandonedAttempts {
+		if row["content"] != whole || row["content_bytes"] != nil {
+			t.Fatalf("the caller's attempt %d holds %d bytes of content and content_bytes %v: "+
+				"the cut wrote into it", i, len(fmt.Sprint(row["content"])), row["content_bytes"])
+		}
+	}
+}
+
+// PAST THE LEAST FORM, THE ABANDONED ATTEMPTS GO FIRST.
+//
+// When a record at its least — every text at its mark — is still too large,
+// its later rows are counted rather than carried, one list at a time. The
+// attempts no round kept go before the tool calls and the rounds, which are
+// what the phase did: the form keeps every call and every round, and the
+// first attempts that still fit.
+func TestPastTheLeastFormTheAbandonedAttemptsGoFirst(t *testing.T) {
+	t.Parallel()
+	const attempts = 400
+	rec := phaseEvent(heavyResult(400, 2_000))
+	rec.RoundNarration = []types.RoundNarration{
+		{"round": 1, "reasoning": strings.Repeat("r", 500), "content": "posted it"},
+	}
+	for i := range attempts {
+		rec.AbandonedAttempts = append(rec.AbandonedAttempts, types.RoundNarration{
+			"round": i + 1, "reasoning": strings.Repeat("t", 500), "content": strings.Repeat("c", 500),
+		})
+	}
+	env := events.New(rec, events.TraceContext{})
+	cut := &phaseCutter{env: env, original: env.Data.(*types.AgentPhaseCompleted), whole: 1 << 20,
+		kept: wholeKept{parts: 1}}
+	least, err := cut.leastForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A target half way between the least form and the least form with no
+	// attempt at all: some attempts fit, and nothing else has to go.
+	bare := *least.rec
+	bare.AbandonedAttempts = nil
+	bareEnv := *least.env
+	bareEnv.Data = &bare
+	without, err := measure(&bareEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := (least.bytes + without) / 2
+
+	shape, err := cut.rowsFitting(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shape.bytes > target || shape.calls != 0 || shape.rounds != 0 {
+		t.Fatalf("the form weighs %d of a %d-byte target and gives up %d calls and %d rounds; want "+
+			"every call and round carried", shape.bytes, target, shape.calls, shape.rounds)
+	}
+	carried := shape.rec.AbandonedAttempts
+	if shape.attempts == 0 || len(carried) == 0 || shape.attempts+len(carried) != attempts ||
+		shape.rec.AbandonedAttemptsOmitted != shape.attempts {
+		t.Fatalf("the form carries %d attempts and counts %d omitted (%d on the record), of %d; "+
+			"want the first that fit carried and the rest counted", len(carried), shape.attempts,
+			shape.rec.AbandonedAttemptsOmitted, attempts)
+	}
+	for i, row := range carried {
+		if row["round"] != i+1 {
+			t.Fatalf("carried attempt %d is round %v: the attempts kept are not the first ones",
+				i, row["round"])
+		}
+	}
+	if !strings.Contains(shape.rec.Notes, fmt.Sprintf("%d abandoned attempts", shape.attempts)) {
+		t.Errorf("notes = %q, want them to count the attempts not carried", shape.rec.Notes)
 	}
 }

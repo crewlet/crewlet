@@ -540,6 +540,42 @@ func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 	}
 }
 
+// A REFUSED ROUND'S ANSWER AND COST REACH THE SNAPSHOT.
+//
+// The provider answered and billed the round before the counter refused it,
+// and the loop returns on the refusal with no publish after it — so the
+// snapshot the caller publishes is the only record of what the round said and
+// cost. Its answer is an attempt the loop did not commit, and its tokens,
+// served by the model the completion names, are the phase's spend.
+func TestARefusedRoundsAnswerAndCostReachTheSnapshot(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{{
+		Model: "served-model", InputTokens: 60, OutputTokens: 60,
+		ReasoningContent: "the email is ready", Content: "Sending it now.",
+		ToolCalls: []llm.ToolCall{toolCall("1", "send_email")},
+	}}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("send_email")}}
+	progress := &toolloop.Progress{}
+
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Budget: &meter{refuseAt: 100}, Progress: progress,
+	}); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want ErrBudgetExhausted", err)
+	}
+	got := progress.Snapshot()
+	want := toolloop.Narration{Round: 1, Reasoning: "the email is ready", Content: "Sending it now."}
+	if len(got.Abandoned) != 1 || got.Abandoned[0] != want {
+		t.Errorf("abandoned = %+v, want the refused round's answer %+v", got.Abandoned, want)
+	}
+	if got.InputTokens != 60 || got.OutputTokens != 60 || got.Model != "served-model" || got.RoundsUsed != 1 {
+		t.Errorf("the snapshot reports %d/%d tokens on %q over %d rounds; want the refused round's "+
+			"60/60 on served-model over 1", got.InputTokens, got.OutputTokens, got.Model, got.RoundsUsed)
+	}
+	if len(got.Narration) != 0 || got.Text != "" {
+		t.Errorf("the refused round was committed: narration %+v, text %q", got.Narration, got.Text)
+	}
+}
+
 func TestAnUnreachableCounterIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	// Different answers with opposite consequences: treating unreachable

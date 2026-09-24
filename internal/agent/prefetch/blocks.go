@@ -191,11 +191,9 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 	}
 	// "\n\n", not "\n": each element is a MULTI-LINE block, and a single
 	// newline runs the second sender's opening line straight onto the end of
-	// the first sender's. The char budget used to hide that by rendering only
-	// one profile — it admitted the first block and dropped the rest — which
-	// silently negated this function's whole reason to exist: ONE BLOCK PER
-	// DISTINCT SENDER, so a turn woken by four people is not a turn about
-	// whichever of them spoke last.
+	// the first sender's. Every block is kept, because ONE BLOCK PER DISTINCT
+	// SENDER is this function's whole reason to exist: a turn woken by four
+	// people is not a turn about whichever of them spoke last.
 	return strings.Join(blocks, "\n\n")
 }
 
@@ -277,12 +275,11 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 	}
 	// EVERY SKILL, no list cap. The block is a MENU — a name and a
 	// description per line, and the seat loads the one it wants — so its
-	// cost is a line each, not a body each. The cap that used to sit here
-	// kept the first twelve in whatever order the store returned, and the
-	// ids this function reports back are what resets a skill's staleness
-	// clock: a skill past the cut was never offered, so it was never used,
-	// so it went stale and archived. That is the starvation the branch
-	// above refuses to do to stale skills, done instead by position.
+	// cost is a line each, not a body each. And the ids this function
+	// reports back are what resets a skill's staleness clock: a list cut at
+	// a count would never offer the skills past the cut, so they would never
+	// be used, go stale and be archived — the starvation the branch above
+	// refuses to do to stale skills, done instead by position.
 	bullets := make([]string, 0, len(skills)+1)
 	ids := make([]string, 0, len(skills))
 	for _, skill := range skills {

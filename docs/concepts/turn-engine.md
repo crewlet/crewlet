@@ -252,7 +252,7 @@ The failure texts these events carry — the summary's `error`, the breach's `de
 
 A panic is the one cause that is both an error and a breach: the error says what broke and names the phase and round, the breach names the guard. The summary carries both, keeping the error's own text and taking the guard as its `error_kind`.
 
-**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on, folded onto the rounds of any earlier extension. It then returns the original error unchanged, so the failure classification above is unaffected.
+**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on and what that round had written (among its `abandoned_attempts`, see [What streams during a turn](#what-streams-during-a-turn)), folded onto the rounds of any earlier extension. The record is published without the phase's cancellation, as a delegated worker's is: a phase whose context was cancelled under it is one that most needs its record, and a broker client refuses a publish under a context that is already done. It then returns the original error unchanged, so the failure classification above is unaffected.
 
 **A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
 
@@ -741,10 +741,21 @@ asks a backend to stream; the tool loop accumulates the fragments into the
 round in flight and republishes at most five times a second, which is below
 the rate at which appearing text stops reading as live and well inside what
 the socket hub can carry. The fragment rides `partial_round` on
-`agent_turn_progress` — live-only, so nothing persists a half-written
-sentence — and is cleared the instant the round commits, because from then on
-its narration is authoritative. Streaming is opt-in per CALL, not a property
-of a backend: only the tool loop sets `OnDelta`, because every other provider
+`agent_turn_progress`, and is cleared the instant the round commits, because
+from then on its narration is authoritative. An attempt a provider gives up on
+partway through — a fallback to the chain's next member, or a rotation to the
+next key — is not erased: the retry starts from empty beside it, and the frame
+carries it in `partial_round`'s `abandoned` while the round is open. The
+phase's completed record keeps every such attempt whole, as
+`abandoned_attempts` — one `{round, reasoning, content}` each, the shape of a
+round's narration — and, when the phase fails during a round, that round's
+last attempt too: as far as it had streamed when the provider call failed, or
+its whole answer when the answer arrived and its token charge failed. An
+executor that suspends on a coding run carries these only from its last entry:
+the pending-run row that carries its earlier rounds into the resumed record has
+no field for one, so each attempt before the suspension is logged whole, once,
+as `abandoned_attempt_suspended` at WARN. Streaming is opt-in per CALL, not a
+property of a backend: only the tool loop sets `OnDelta`, because every other provider
 call in the engine (reflection, summaries, the extension judge) wants an
 answer rather than a running commentary. An endpoint that accepts a streaming
 request and answers without streaming is negotiated down to the unary call,
@@ -757,13 +768,16 @@ nothing on screen to say why. So a frame carries the phase's **latest 48 tool
 calls** and its **latest 48 narrated rounds**, and counts how many came before
 the first of each in `tool_executions_earlier` and `round_narration_earlier`.
 Every text on it — a call's result and error, a round's reasoning and content,
-the round in flight, the joined `response` — is at most its last 4,000 bytes,
-behind a leading `…` when it was cut, and a call's arguments past 4,000 bytes
-are a one-member object keyed `…` saying how long they are and that they are
-whole on the phase's completed record. 48 is the executor's default round
-ceiling, so an executor phase within its default budget has every narrated
-round on the frame. The completed record carries every call and every round
-whole.
+the round in flight and each abandoned attempt at it, the joined `response` —
+is at most its last 4,000 bytes, behind a leading `…` when it was cut, and a
+call's arguments past 4,000 bytes are a one-member object keyed `…` saying how
+long they are and that they are whole on the phase's completed record. 48 is
+the executor's default round ceiling, so an executor phase within its default
+budget has every narrated round on the frame. The completed record carries
+every call, every round and every abandoned attempt whole, save an executor's
+attempts before a suspension, as above — or, on a record published cut, in the
+whole that `GET /phases/{id}` reassembles from its parts, unless a part could
+not be published, which the record's `notes` then say.
 
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot

@@ -121,7 +121,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	}
 
 	if res.Suspended {
-		r.recordSuspension(state.Round, surface, res.Result, history, res.Elapsed)
+		r.recordSuspension(phaseCtx, state.Round, surface, res.Result, history, res.Elapsed)
 		return turn.Work{
 			Text: res.Text, Calls: resumedCalls(surface, state), Suspended: true,
 		}, describe(surface), nil
@@ -255,9 +255,29 @@ func intField(v any) (int, bool) {
 // the engine reports: a run whose conversation could not be serialized is one
 // nothing can resume, and it must fail while the box is still in the engine's
 // hands rather than at a resume days later.
-func (r *Runner) recordSuspension(round int, surface *tools.Surface,
+//
+// THE ATTEMPTS THE ROW CANNOT HOLD ARE LOGGED, each once and whole, first, so
+// a state that fails its invariants does not skip them. The row carries this
+// phase's rounds into the record the resumed phase publishes, and it has no
+// field for an attempt a provider abandoned — so this line is the only place
+// such an attempt's whole is kept once the live frames that showed its tail
+// are gone. At WARN, so a node logging at warn keeps it too. Each is logged
+// once because the resumed phase starts from the row, which holds none of
+// them, so its next suspension logs only the attempts made after this one.
+func (r *Runner) recordSuspension(ctx context.Context, round int, surface *tools.Surface,
 	res toolloop.Result, history []ledger.Iteration, elapsed time.Duration,
 ) {
+	for _, attempt := range res.Abandoned {
+		log.WarnContext(ctx, "abandoned_attempt_suspended",
+			"turn_id", r.cfg.Turn.RunID, "work_key", r.cfg.Turn.WorkKey,
+			"phase", phase.Execute, "iteration", round, "round", attempt.Round,
+			"reasoning", attempt.Reasoning, "reasoning_bytes", len(attempt.Reasoning),
+			"content", attempt.Content, "content_bytes", len(attempt.Content),
+			"detail", "an attempt at this round that a provider gave up on partway "+
+				"through, before the executor suspended; the pending-run row that "+
+				"carries the executor's rounds into its resumed record has no field "+
+				"for it, so this line is where it is whole")
+	}
 	state := execstate.State{
 		Version:         execstate.Version,
 		Messages:        res.Messages,
@@ -290,7 +310,7 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		LoadedSkills: r.loadedSkills(),
 	}
 	if err := state.Validate(); err != nil {
-		log.Error("execute_suspension_invalid", "round", round, "error", err.Error())
+		log.ErrorContext(ctx, "execute_suspension_invalid", "round", round, "error", err.Error())
 		return
 	}
 	r.mu.Lock()

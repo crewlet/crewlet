@@ -377,7 +377,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 
 	if res.Suspended {
-		r.recordSuspension(round, surface, res.Result, history, res.Elapsed)
+		r.recordSuspension(phaseCtx, round, surface, res.Result, history, res.Elapsed)
 		// A suspended phase submitted nothing and is not finished. It
 		// returns with the ledger intact; the resumed turn comes back
 		// through Resume and submits then.
@@ -1006,12 +1006,10 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		execs[i] = ex
 	}
 	res.Executions = execs
-	narration := make([]toolloop.Narration, len(res.Narration))
-	for i, n := range res.Narration {
-		n.Round += prior
-		narration[i] = n
-	}
-	res.Narration = narration
+	res.Narration = shiftedNarration(res.Narration, prior)
+	// The attempts no round kept are numbered with the round they were
+	// attempts at, so they move with the narration they sit beside.
+	res.Abandoned = shiftedNarration(res.Abandoned, prior)
 	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
 	// COLLIDES with one of them. A consumer keys the ledger on the round
 	// number — the dashboard's `rounds()` builds one block per number and the
@@ -1024,15 +1022,21 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 	if res.Partial != nil {
 		shifted := *res.Partial
 		shifted.Round += prior
-		abandoned := make([]toolloop.Narration, len(res.Partial.Abandoned))
-		for i, a := range res.Partial.Abandoned {
-			a.Round += prior
-			abandoned[i] = a
-		}
-		shifted.Abandoned = abandoned
+		shifted.Abandoned = shiftedNarration(res.Partial.Abandoned, prior)
 		res.Partial = &shifted
 	}
 	return res
+}
+
+// shiftedNarration is a copy of narr with every round moved on by prior. A
+// copy for the reason [offsetRounds] gives.
+func shiftedNarration(narr []toolloop.Narration, prior int) []toolloop.Narration {
+	out := make([]toolloop.Narration, len(narr))
+	for i, n := range narr {
+		n.Round += prior
+		out[i] = n
+	}
+	return out
 }
 
 // consider asks the round-cap judge, and makes the call visible.
@@ -1135,6 +1139,8 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Execution(nil), done.Result.Executions...), res.Executions...)
 	res.Narration = append(
 		append([]toolloop.Narration(nil), done.Result.Narration...), res.Narration...)
+	res.Abandoned = append(
+		append([]toolloop.Narration(nil), done.Result.Abandoned...), res.Abandoned...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
