@@ -364,9 +364,12 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
 	}
+	// AN UNREAD LOG'S TOMBSTONES ARE NONE HERE, which is the conservative
+	// direction for the trim: a node it could not establish was gone stays
+	// counted. The report is the one reader that has to say so as well.
+	tombs, _ := r.tombstones(ctx, running, generation)
 	in.Counted = statelog.CountedSet(shared.at,
-		reportedPositions(shared.positions, name),
-		shared.live, r.tombstones(ctx, running, generation))
+		reportedPositions(shared.positions, name), shared.live, tombs)
 	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
 		r.backupTerm(shared.backups, running.domain.Stream().Name)
@@ -696,14 +699,23 @@ var (
 // A read failure yields NO tombstones, which is the conservative direction: an
 // evicted node stays counted and pins the floor, rather than the trim
 // advancing past a node it could not establish was gone.
+//
+// AND IT SAYS SO: read is false wherever the rows were not read. No tombstone
+// is then not an answer about any node — the report prints every node as not
+// evicted on that log, and a reader that took that for a readmission released
+// an eviction it had just made. A domain that claims no identity carries no
+// evictions and was read in full, trivially.
 func (r *retention) tombstones(ctx context.Context, running *runningDomain,
-	generation uint32) []statelog.Tombstone {
+	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
-	if r.db == nil || !running.domain.ClaimsIdentity() {
+	if !running.domain.ClaimsIdentity() {
 		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
 		// that does not claim identity has no say in who the fleet
 		// counts on its log.
-		return nil
+		return nil, true
+	}
+	if r.db == nil {
+		return nil, false
 	}
 	lister, ok := running.domain.(evictionLister)
 	if !ok {
@@ -712,7 +724,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// conservative side: nobody is uncounted.
 		log.ErrorContext(ctx, "retention_evictions_unlisted",
 			"domain", running.domain.Name())
-		return nil
+		return nil, false
 	}
 	rows, err := lister.Evictions(ctx, r.db)
 	switch {
@@ -721,12 +733,13 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// replicated estate closes during shutdown and during an
 		// adoption's rename, and a tick already in flight reaches it —
 		// which is the honest answer rather than a fault, and logging
-		// it at WARN would put a line in every clean shutdown.
-		return nil
+		// it at WARN would put a line in every clean shutdown. It is
+		// still not a read.
+		return nil, false
 	case err != nil:
 		log.WarnContext(ctx, "retention_evictions_unreadable",
 			"domain", running.domain.Name(), "err", err)
-		return nil
+		return nil, false
 	}
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
@@ -740,7 +753,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 			NodeID: row.NodeID, At: row.At, By: row.By, Generation: generation,
 		})
 	}
-	return out
+	return out, true
 }
 
 // ageFloor is the first sequence the age term will keep.

@@ -225,6 +225,23 @@ type DomainReport struct {
 	// problems with two different remedies, and the second one is silent
 	// until a node tries to join.
 	SnapshotBlockedBy SkipReason `json:"snapshot_blocked_by,omitempty"`
+
+	// EvictionsUnreadable says this node could not read the evictions its
+	// own rows hold for this log when it assembled the report — the store
+	// read failed, or the replicated estate was closed for an adoption's
+	// rename or a shutdown. Set only on a log that claims identity, since
+	// no other log carries evictions.
+	//
+	// THE NODE BLOCK CANNOT SAY SO ON ITS OWN. An unread log contributes no
+	// tombstone, which keeps the COUNTED column on the conservative side —
+	// a node nobody could establish was gone stays counted, as the trim
+	// itself keeps it — but it also shows EVERY node as not evicted, and
+	// "not evicted" is then a guess the reader cannot tell from a fact. A
+	// screen that reads a missing tombstone as proof of a readmission
+	// released an eviction it had just made and offered to make it again,
+	// re-dating it. ABSENT WHEN READ, so a node from a build before the
+	// field is read as it always was.
+	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
 }
 
 // TrimFloorState says what a domain's trim floor, conclusion and terms are.
@@ -632,6 +649,10 @@ type DomainInputs struct {
 	// when it is not blocked.
 	BlockedSince time.Time
 
+	// EvictionsUnreadable is whether this node's read of the log's
+	// evictions failed — see [DomainReport.EvictionsUnreadable].
+	EvictionsUnreadable bool
+
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
@@ -750,20 +771,21 @@ func (r Report) Blocked() []string {
 // domain builds one domain's row.
 func (in ReportInputs) domain(d DomainInputs) DomainReport {
 	out := DomainReport{
-		Domain:            d.Domain,
-		Stream:            d.Stream,
-		Generation:        d.Generation,
-		Replay:            d.Replay,
-		FirstSeq:          d.FirstSeq,
-		LastSeq:           d.LastSeq,
-		Bytes:             d.Bytes,
-		TrimFloor:         d.TrimFloor,
-		TrimTo:            d.Decision.To,
-		TrimFloorState:    d.FloorState,
-		BlockedBy:         d.Decision.BlockedBy,
-		SnapshotBlockedBy: d.SnapshotSkip,
-		NotReady:          d.NotReady,
-		WritesRefused:     d.WritesRefused,
+		Domain:              d.Domain,
+		Stream:              d.Stream,
+		Generation:          d.Generation,
+		Replay:              d.Replay,
+		FirstSeq:            d.FirstSeq,
+		LastSeq:             d.LastSeq,
+		Bytes:               d.Bytes,
+		TrimFloor:           d.TrimFloor,
+		TrimTo:              d.Decision.To,
+		TrimFloorState:      d.FloorState,
+		BlockedBy:           d.Decision.BlockedBy,
+		SnapshotBlockedBy:   d.SnapshotSkip,
+		NotReady:            d.NotReady,
+		WritesRefused:       d.WritesRefused,
+		EvictionsUnreadable: d.EvictionsUnreadable,
 		// AN EMPTY LIST, NEVER NULL: a domain the trim has concluded
 		// nothing about has no terms, and `"terms": null` is what
 		// crashed both retention screens after every reanchor.

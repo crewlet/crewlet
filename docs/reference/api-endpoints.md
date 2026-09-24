@@ -2325,6 +2325,18 @@ fleet has no nodes" cannot happen, and "coordination could not be listed"
 happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
+**`evictions_unreadable`** is `true` on the tracker's or the pages log's row
+when the answering node could not read that log's evictions as it assembled
+the report — a failed store read, or its replicated estate closed for a
+snapshot adoption's rename or a shutdown — and absent otherwise. It is the
+same kind of honesty for the node block's `evicted`: an unread log contributes
+no tombstone, so every node reads as **not** evicted there and stays counted
+(the conservative side, which is the trim's own), and "not evicted" is then not
+an answer. Read it before concluding a node was readmitted; both `crewlet
+retention status` and the Fleet screen say so above the node block, and the
+Fleet screen keeps an eviction it just made on the row until a report whose
+evictions were read.
+
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
 the one alarm an operator cannot ignore fires on. It is a fraction of the

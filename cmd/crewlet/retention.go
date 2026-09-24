@@ -171,6 +171,11 @@ type retentionDomain struct {
 	// the domain, printed above every table.
 	NotReady      *retentionRefusal `json:"not_ready"`
 	WritesRefused *retentionRefusal `json:"writes_refused"`
+
+	// EvictionsUnreadable says the answering node could not read this
+	// log's evictions, so the node block's EVICTED column is not an answer
+	// for it — see [statelog.DomainReport.EvictionsUnreadable].
+	EvictionsUnreadable bool `json:"evictions_unreadable"`
 }
 
 // retentionRefusal is why the answering node refuses a domain.
@@ -377,6 +382,15 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 	if !report.RegisterReadable {
 		fmt.Fprintln(stdout, "The fleet register could not be listed, so the node "+
 			"block below is what could be read rather than the fleet.")
+	}
+	// AN EVICTION THIS NODE COULD NOT READ IS NOT A NODE THAT WAS NEVER
+	// EVICTED, and the node block alone prints the two identically.
+	for _, d := range report.Domains {
+		if d.EvictionsUnreadable && (*domain == "" || d.Domain == *domain) {
+			fmt.Fprintf(stdout, "This node could not read %s's evictions, so no "+
+				"node below shows as evicted there — an eviction may be hidden "+
+				"rather than absent. Ask again once it can.\n", d.Domain)
+		}
 	}
 	// AND WHAT THIS DOCUMENT MAY CLAIM ABOUT ITS OWN AGE, on the one
 	// answer that has to keep answering during the outage it describes.

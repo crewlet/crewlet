@@ -148,8 +148,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// evictions invisible for the first fifteen minutes of its life
 		// and for the whole life of a fleet whose duty is not running,
 		// which is exactly when somebody is reading this.
+		//
+		// AN UNREAD LOG IS NAMED ON ITS OWN ROW, because the node block
+		// cannot say it: the log contributes no tombstone, so every node
+		// reads as not evicted there — the right side for the COUNTED
+		// column and a guess for the EVICTED one.
 		if running.domain.ClaimsIdentity() {
-			perLog = append(perLog, r.tombstones(ctx, running, d.Generation))
+			tombs, read := r.tombstones(ctx, running, d.Generation)
+			perLog = append(perLog, tombs)
+			d.EvictionsUnreadable = !read
 		}
 		d.SnapshotSkip = r.skipFor(in.Register, name)
 		in.Domains = append(in.Domains, d)

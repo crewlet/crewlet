@@ -113,8 +113,12 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	counted := func(running *runningDomain, at time.Time) bool {
 		t.Helper()
 		gen := running.runner.Committed().Generation
+		tombs, read := r.tombstones(t.Context(), running, gen)
+		if !read {
+			t.Fatalf("%s's evictions could not be read", running.domain.Name())
+		}
 		set := statelog.CountedSet(at, reportedPositions(positions(), running.domain.Name()),
-			nil, r.tombstones(t.Context(), running, gen))
+			nil, tombs)
 		return slices.ContainsFunc(set, func(n statelog.NodePosition) bool {
 			return n.NodeID == away
 		})

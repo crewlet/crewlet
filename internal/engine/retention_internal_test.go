@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -1098,6 +1099,67 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"terms":[]`) {
 		t.Errorf("the reanchored pages row encodes %s, want an empty terms list", encoded)
+	}
+}
+
+// A REPORT THAT COULD NOT READ A LOG'S EVICTIONS SAYS SO ON THAT LOG'S ROW.
+//
+// An unread log contributes no tombstone, which keeps the COUNTED column on the
+// trim's own conservative side — and shows every node as not evicted there,
+// which the node block cannot tell from a fact. The dashboard read that
+// absence as a readmission: an eviction it had just made was released while
+// the replicated estate was closed for an adoption's rename, and the row
+// offered "Evict…" again — a second record on every log, re-dating the first.
+func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	s := e.native.Load().log
+	closed, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
+		store.Options{})
+	if err != nil {
+		t.Fatalf("open a second store: %v", err)
+	}
+	t.Cleanup(func() { _ = closed.Close() })
+	if err := closed.CloseReplicated(); err != nil {
+		t.Fatalf("close its replicated estate: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		db     *store.DB
+		unread bool
+	}{
+		"rows that were read":                            {e.backends.Store, false},
+		"an estate closed for an adoption or a shutdown": {closed, true},
+		"no store at all":                                {nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &retention{fleet: e.backends.Fleet, state: s, db: tc.db, nodeID: "node-a"}
+			report := r.Report(t.Context())
+			if len(report.Domains) == 0 {
+				t.Fatal("the report carries no domain rows, so this case shows nothing")
+			}
+			identity := 0
+			for _, d := range report.Domains {
+				claims := s.Domain(d.Domain).domain.ClaimsIdentity()
+				if claims {
+					identity++
+				}
+				// ONLY A LOG THAT CARRIES EVICTIONS CAN HAVE LEFT THEM UNREAD.
+				if want := tc.unread && claims; d.EvictionsUnreadable != want {
+					t.Errorf("%s's row says evictions_unreadable %v, want %v",
+						d.Domain, d.EvictionsUnreadable, want)
+				}
+				encoded, err := json.Marshal(d)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if on := strings.Contains(string(encoded), `"evictions_unreadable":true`); on != d.EvictionsUnreadable {
+					t.Errorf("%s's row encodes %s", d.Domain, encoded)
+				}
+			}
+			if identity == 0 {
+				t.Fatal("no domain claims identity, so this case shows nothing")
+			}
+		})
 	}
 }
 

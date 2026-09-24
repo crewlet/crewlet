@@ -328,6 +328,9 @@ func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
 		Generation: 0, Seq: 918000000, AppliedThrough: 918000000,
 		GenerationState: statelog.GenerationLeft, LogDiverged: true,
 	}
+	// AND A LOG WHOSE EVICTIONS IT COULD NOT READ, whose EVICTED column is
+	// then not an answer — which the node block alone cannot say.
+	report.Domains[0].EvictionsUnreadable = true
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -341,6 +344,7 @@ func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
 	}
 	for _, want := range []string{
 		"WRITES REFUSED tracker: log_truncated — peer node-4",
+		"could not read tracker's evictions",
 		"left gen 0",
 		"LOG DIVERGED",
 		"GEN",
