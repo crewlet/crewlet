@@ -150,6 +150,8 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 		Model:        completion.Model,
 		InputTokens:  completion.InputTokens,
 		OutputTokens: completion.OutputTokens,
+		CacheRead:    completion.CacheRead,
+		CacheWrite:   completion.CacheWrite,
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
@@ -158,9 +160,7 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 			"output_tokens", completion.OutputTokens)
 		return spent, err
 	}
-	decision.Asked, decision.Model = spent.Asked, spent.Model
-	decision.InputTokens, decision.OutputTokens = spent.InputTokens, spent.OutputTokens
-	return decision, nil
+	return decision.withSpend(spent), nil
 }
 
 // judgeSystemPrompt is the whole of the judge's instructions.

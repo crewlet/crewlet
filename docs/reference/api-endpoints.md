@@ -1229,6 +1229,24 @@ restart, possibly on another node — and the parked row carries the clock
 across with the rounds and the tokens, so the one record the phase publishes
 reports the run rather than the seconds spent collecting its answer.
 
+A finished row carries the phase's **timeline** too, and so does every other
+reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
+payload verbatim: `started_at` (when this segment began — not published minus
+`duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
+`{round, started_at, duration_ms, model, input_tokens, output_tokens,
+cache_read_tokens, cache_write_tokens, tool_calls}` per provider call, the
+model's half of the round only), each `tool_executions[]` row's `started_at`,
+`duration_ms`, `origin` (`builtin` or `mcp:<server>`) and `server`, the
+phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
+`input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
+worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
+turn's `work_item`. The live frame carries the same so far plus
+`round_started_at` and the `running_call` in flight. Each is **absent** on a
+record an older engine wrote, and on a figure nothing measured — a tool call
+nobody timed has no `duration_ms`, never a zero — so a reader treats absent as
+*not recorded*. The whole field list, and why each is measured where it is, is
+in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).
+
 An unreadable or absent event log costs the history and nothing else: the
 answer still carries the seat and its live state.
 
@@ -3177,7 +3195,8 @@ beside it.
   "agent_role": "",
   "totals": {
     "input_tokens": 17700, "output_tokens": 2750,
-    "total_tokens": 20450, "calls": 6
+    "total_tokens": 20450, "calls": 6,
+    "cache_read_tokens": 12100, "cache_write_tokens": 900
   },
   "by_phase": [
     { "phase": "execute", "input_tokens": 14000, "output_tokens": 2000,
@@ -3247,6 +3266,12 @@ Notes:
 - Returns the same skeleton with zero totals (and an empty
   `aggregated_through`) when the event store is unavailable rather than
   erroring.
+- Every bucket also carries `cache_read_tokens` and `cache_write_tokens`:
+  the share of `input_tokens` the providers' prompt caches served and
+  stored. A **breakdown** of the input, never an addition to it —
+  `input_tokens` already counts the cached prefix on every backend, so the
+  cache's share of a bucket is `cache_read_tokens / input_tokens`, and
+  `total_tokens` stays input plus output.
 - Every bucket — the totals, each row, and each nested `by_phase` entry —
   also carries `cost_usd` and `priced_calls`. **Two numbers, because zero
   dollars is two different facts**: only a subscription coding CLI reports

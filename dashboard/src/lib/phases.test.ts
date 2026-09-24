@@ -309,6 +309,27 @@ describe("the round ledger", () => {
     expect(toolCalls([{ name: "a", error: "boom" }])[0]?.failed).toBe(true);
     expect(toolCalls([{ name: "a", success: true }])[0]?.failed).toBe(false);
   });
+
+  test("a call the engine timed and attributed is read as it was written", () => {
+    // The row the tool loop and the surface now write: when, how long, and
+    // who answered.
+    const [timed] = toolCalls([
+      {
+        name: "create_issue",
+        round: 2,
+        started_at: "2026-09-24T10:00:01.5Z",
+        duration_ms: 2300,
+        origin: "mcp:github",
+        server: "github",
+      },
+    ]);
+    expect(timed).toMatchObject({ durationMs: 2300, origin: "mcp:github", server: "github" });
+  });
+
+  test("a row nothing timed reads as not recorded, never as instant", () => {
+    const [untimed] = toolCalls([{ name: "run_sandbox", round: 1 }]);
+    expect(untimed).toMatchObject({ durationMs: 0, origin: "", server: "" });
+  });
 });
 
 describe("a round that reached nobody", () => {

@@ -669,7 +669,7 @@ Where that shows on the screens:
 
 ## Events and tracing
 
-Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id` and its `worker` template, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
+Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id`, its `worker` template and the `host_round` whose `delegate` call spawned it, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
 
 The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the executor / review phase events, so **Turns** and the seat's own transcript render judge calls alongside the main phases without any frontend change.
 
@@ -680,7 +680,7 @@ watching the dashboard is watching that loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
-| `AgentTurnProgress` | Once before the first call, then twice per tool-call round | No — stream only |
+| `AgentTurnProgress` | Once before the first call, then twice per tool-call round and once before each tool call | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
 
 **Before the first call**, because the phase's prompt exists before its
@@ -692,17 +692,23 @@ The opening update carries `prompt_messages` and nothing else, tagged
 `round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
 the sentinel keeps it at zero rather than claiming a round).
 
-**Twice per round**, because a round has two moments worth showing. The
-first fires the instant the model has answered, before any of that
-round's tools run: the model's prose and its reasoning are what explain
-the tool call that is about to happen, and holding them back until the
-round's slowest tool returns is holding them back for exactly as long as
-they are most useful. The second fires once that round's tool results are
-in. A round that emits only a tool call and no text has nothing new to
-show at the first moment and skips it, so a tool-only round still costs
-one event. The final round — the one that ends the phase by making no
-tool call — publishes at the first moment and then ends the loop, which
-is how a phase's closing answer streams at all.
+**Twice per round, and once per call**, because a round has more than
+one moment worth showing. The first fires the instant the model has
+answered, before any of that round's tools run: the model's prose and its
+reasoning are what explain the tool call that is about to happen, and
+holding them back until the round's slowest tool returns is holding them
+back for exactly as long as they are most useful. Then one frame
+**before each call**, naming it as `running_call` — `{round, name,
+arguments, started_at}` — because a round's calls are serial and an
+execution is recorded only once its call has answered: a sandbox launch
+or a slow MCP server takes minutes, and a live view that learned of a
+call only when the whole round returned showed a seat doing nothing for
+exactly the stretch somebody was watching it. The last fires once the
+round's tool results are in, and names no running call, which is what
+clears it. A round of three calls therefore costs five frames. The final
+round — the one that ends the phase by making no tool call — publishes at
+the first moment and then ends the loop, which is how a phase's closing
+answer streams at all.
 
 **The same text either way.** Both events build their `response` with
 `internal/agent/toolloop` over the same
@@ -774,10 +780,53 @@ update, which fires before the provider is called at all: a publish error
 returned there would end a phase that had not yet run.
 
 On a **resumed** executor phase — one that suspended on `run_sandbox` and
-picked up when the detached run landed — both events are scoped to the
-post-resume slice of the conversation, because the pre-suspend segment
-was already published as its own record. The live row and the record
-therefore still agree across a suspend.
+picked up when the detached run landed — both events cover the **whole
+phase**, the pre-suspend rounds included and numbered where they were: a
+suspending phase publishes no `agent_phase_completed` of its own (it returns
+before the record is written) and its progress frames are never stored, so
+the resumed record is the only durable account those rounds will ever have.
+Their narration, their calls, their tokens, their timing and their cache
+share are carried across the suspend on the parked state, and the live row
+and the record therefore still agree across it.
+
+### What a turn records about its time
+
+Every figure below is measured by the process doing the work, at the frame
+that makes the call, and carried on the record as a start and a duration. A
+reader that reconstructed timing from when events arrived subtracted two
+publishers' clocks and a queue's latency, and a phase started on one node and
+finished on another had no honest answer at all. Starts are UTC instants;
+durations are milliseconds on the publishing node's monotonic clock, so a
+wall-clock correction mid-call cannot report a negative or inflated one.
+
+| Where | Field | What it measures |
+|---|---|---|
+| `agent_phase_completed` | `started_at` | When **this segment** of the phase began. A resumed executor is one phase in two segments and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the coding run rather than this phase |
+| | `duration_ms` | The phase's own wall clock, extensions and a suspend's pre-resume half included |
+| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
+| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off, or a resumed executor whose fresh budget sits on top of its parked rounds, the ceiling is the cap |
+| | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
+| | `host_round` | On a worker (`phase=subagent`): the round of the executor whose `delegate` call spawned it. On a judge: the round the host phase ran out on. `host_iteration` names the turn iteration, which one phase of forty rounds spans whole |
+| | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once |
+| | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
+| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — an older build's, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
+| `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
+| | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
+| | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has |
+| | `running_call` | The call in flight, published immediately before it runs and cleared by the next frame |
+| `agent_phase_started` | `work_item` | As on the record |
+| `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
+| `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
+
+Every one of these is **additive**: an older peer's record has none of them,
+decodes with none, and re-encodes with none (a zero start is omitted rather
+than written as the year 1), so a timeline reads a missing figure as "not
+recorded" on a mixed fleet. The cache counts are the one producer of that
+figure in the engine — every backend reports them on its completion, and until
+the loop kept them they reached nothing past the round's span attribute. The
+runner's own tally of a turn carries them too, beside the delegated workers'
+input and output kept apart from the turn's own totals.
 
 ### Turn source (the triggering event)
 

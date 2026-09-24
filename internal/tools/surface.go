@@ -385,9 +385,15 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	span.SetAttributes(
 		attribute.Bool("crewlet.tool_failed", res.Failed),
 		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
+	// WHO ANSWERED, stamped here because this is the one frame that
+	// resolved the name to a registered entry — the registry records the
+	// origin at registration and the loop sees only a name. Only on this
+	// path: the refusals above never reached a tool, so they name none.
+	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Refusal: res.Refusal,
 		Suspend: res.Suspend, SuspendPayload: res.Payload,
+		Origin: e.Origin, Server: server,
 	}, nil
 }
 

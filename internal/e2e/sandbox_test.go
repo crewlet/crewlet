@@ -381,6 +381,32 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if got := countOf(seen, "execute"); got != 1 {
 		t.Fatalf("the executor opened %d times; a resume must re-enter. phases = %v", got, seen)
 	}
+	// THE RESUMED RECORD NAMES THE LAUNCH IT COLLECTED. One turn can launch
+	// more than once, so a sandbox segment of a phase is identified by the
+	// job the resume claimed — copied off the run's row by the engine, which
+	// is the only frame holding both, and asserted end to end because the
+	// row and the record are written by different processes' worth of code.
+	var launch string
+	waitFor(t, "the resumed phase's record to name its launch", func() bool {
+		rows, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		if err != nil {
+			t.Fatalf("phases: %v", err)
+		}
+		for _, row := range rows {
+			var rec map[string]any
+			if json.Unmarshal(row.Payload, &rec) != nil {
+				continue
+			}
+			if rec["phase"] == "execute" && rec["backend"] == "sandbox" {
+				launch, _ = rec["launch_id"].(string)
+				return true
+			}
+		}
+		return false
+	})
+	if launch == "" {
+		t.Error("the resumed sandbox phase names no launch_id")
+	}
 	// The box is gone: the resumed Execute made no further run_sandbox call,
 	// so the phase was done with it.
 	if boxes := n.liveBoxes(t); len(boxes) != 0 {

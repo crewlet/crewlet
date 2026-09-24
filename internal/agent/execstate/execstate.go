@@ -114,6 +114,19 @@ type State struct {
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
+	// Rounds is the pre-suspend provider calls, timed — and CacheRead and
+	// CacheWrite the prompt cache's share of InputTokens across them — for
+	// the reason RoundsUsed is here: the resumed phase's record is the only
+	// durable account of this phase, and a record whose timeline began at
+	// the resume would report the rounds before it as having taken no time
+	// and the cache as having served nothing.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, and the resumed record states only what it measured.
+	Rounds           []types.PhaseRound `json:"rounds,omitempty"`
+	CacheReadTokens  int                `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int                `json:"cache_write_tokens,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.

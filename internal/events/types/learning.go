@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -244,19 +245,28 @@ type PrefetchSummary struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey                string `json:"work_key,omitempty"`
-	CounterpartyHit        bool   `json:"counterparty_hit"`
-	CounterpartyBytes      int    `json:"counterparty_bytes"`
-	SynthesizedSkillsHit   bool   `json:"synthesized_skills_hit"`
-	SynthesizedSkillsBytes int    `json:"synthesized_skills_bytes"`
-	EpisodeRecallHit       bool   `json:"episode_recall_hit"`
-	EpisodeRecallBytes     int    `json:"episode_recall_bytes"`
-	OnboardingHintHit      bool   `json:"onboarding_hint_hit"`
-	OnboardingHintBytes    int    `json:"onboarding_hint_bytes"`
-	PersonalMemoryHit      bool   `json:"personal_memory_hit"`
-	PersonalMemoryBytes    int    `json:"personal_memory_bytes"`
-	RelevantKnowledgeHit   bool   `json:"relevant_knowledge_hit"`
-	RelevantKnowledgeBytes int    `json:"relevant_knowledge_bytes"`
+	WorkKey string `json:"work_key,omitempty"`
+	// StartedAt is when the context assembly began, UTC, and DurationMS how
+	// long it took, measured where it ran. The prefetch is the stretch
+	// between a turn announcing itself and its first phase opening — it
+	// reads a diary, a thread and a knowledge base, and calls an auxiliary
+	// model for two of them — and without its own measurement a turn's
+	// timeline had a gap there nothing on the record could explain. Absent
+	// on an older peer's summary.
+	StartedAt              time.Time `json:"started_at,omitzero"`
+	DurationMS             int       `json:"duration_ms"`
+	CounterpartyHit        bool      `json:"counterparty_hit"`
+	CounterpartyBytes      int       `json:"counterparty_bytes"`
+	SynthesizedSkillsHit   bool      `json:"synthesized_skills_hit"`
+	SynthesizedSkillsBytes int       `json:"synthesized_skills_bytes"`
+	EpisodeRecallHit       bool      `json:"episode_recall_hit"`
+	EpisodeRecallBytes     int       `json:"episode_recall_bytes"`
+	OnboardingHintHit      bool      `json:"onboarding_hint_hit"`
+	OnboardingHintBytes    int       `json:"onboarding_hint_bytes"`
+	PersonalMemoryHit      bool      `json:"personal_memory_hit"`
+	PersonalMemoryBytes    int       `json:"personal_memory_bytes"`
+	RelevantKnowledgeHit   bool      `json:"relevant_knowledge_hit"`
+	RelevantKnowledgeBytes int       `json:"relevant_knowledge_bytes"`
 	// RelevantKnowledgeSelectionCount distinguishes the two hit=true paths: a
 	// non-zero count means the filter rendered real picks, while zero with
 	// hit=true means it ran, found nothing relevant, and rendered the empty

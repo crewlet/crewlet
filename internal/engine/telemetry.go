@@ -286,7 +286,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// answers "how much of this turn was fan-out" when a seat's spend
 		// jumps and its own rounds did not.
 		SubagentCount:   spend.Workers,
-		SubagentTokens:  spend.WorkerTokens,
+		SubagentTokens:  spend.WorkerTokens(),
 		Iterations:      res.Rounds,
 		Decision:        decision,
 		Failed:          failed,

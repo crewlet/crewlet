@@ -740,37 +740,49 @@ func TestTheFenceRunsBetweenARoundsCalls(t *testing.T) {
 
 // --- progress --------------------------------------------------------------
 
-func TestProgressIsPublishedTwicePerRound(t *testing.T) {
+func TestProgressIsPublishedTwicePerRoundAndOncePerCall(t *testing.T) {
 	t.Parallel()
 	// Once the model has spoken — so its reasoning reaches the live view
-	// before the round's tools run — and again once they return.
+	// before the round's tools run — once BEFORE EACH CALL, naming it, and
+	// again once they return.
 	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read"), toolCall("2", "read")}},
 		{Content: "done"},
 	}}
 	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
 
-	var seen []int // executions visible at each publish
+	var seen []int     // executions visible at each publish
+	var running []bool // whether a call was named in flight
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 5,
-		OnProgress: func(r toolloop.Result) { seen = append(seen, len(r.Executions)) },
+		OnProgress: func(r toolloop.Result) {
+			seen = append(seen, len(r.Executions))
+			running = append(running, r.Running != nil)
+		},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Round 1 publishes twice (0 executions, then 1); round 2 publishes
-	// once, since it asked for no tools.
-	if len(seen) != 3 {
-		t.Fatalf("published %d times (%v), want 3", len(seen), seen)
+	// Round 1: the model (0), before call 1 (0), before call 2 (1), the
+	// tools returned (2). Round 2 asked for nothing: the model only.
+	want := []int{0, 0, 1, 2, 2}
+	if len(seen) != len(want) {
+		t.Fatalf("published %d times (%v), want %d (%v)", len(seen), seen, len(want), want)
 	}
-	if seen[0] != 0 {
-		t.Errorf("the first publish saw %d executions, want 0 — it did not "+
-			"happen before the round's tools ran", seen[0])
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("publish %d saw %d executions, want %d (all: %v)", i, seen[i], want[i], seen)
+		}
 	}
-	if seen[1] != 1 {
-		t.Errorf("the second publish saw %d executions, want 1", seen[1])
+	wantRunning := []bool{false, true, true, false, false}
+	for i := range wantRunning {
+		if running[i] != wantRunning[i] {
+			t.Errorf("publish %d named a running call = %v, want %v", i, running[i], wantRunning[i])
+		}
 	}
-	_ = res
+	if res.Running != nil {
+		t.Errorf("a finished result names a call in flight: %+v", res.Running)
+	}
 }
 
 func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {

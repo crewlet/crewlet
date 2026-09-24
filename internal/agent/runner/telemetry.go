@@ -42,9 +42,11 @@ import (
 //   - agent_turn_progress — the round-by-round in-flight view. NOT persisted:
 //     it is superseded by the completed event, and keeping every round would
 //     make the event log mostly intermediate states of rows it also holds
-//     finished. Published TWICE per round — once the model has spoken, before
-//     its tools run, and again once they return — so the model's reasoning
-//     reaches a screen without waiting on the slowest tool.
+//     finished. Published TWICE per round and ONCE PER CALL — once the model
+//     has spoken, before its tools run; before each call, naming it as
+//     `running_call`; and once they return — so the model's reasoning reaches
+//     a screen without waiting on the slowest tool, and the slowest tool is
+//     on the screen while it is slow.
 //   - agent_phase_completed — the durable record: the prompts verbatim, the
 //     response, the tools, the tokens, the decision.
 //
@@ -166,6 +168,13 @@ type Spend struct {
 	InputTokens  int
 	OutputTokens int
 
+	// CacheRead and CacheWrite are the prompt cache's share of InputTokens
+	// across the turn's own phases — a breakdown of it, never an addition.
+	// Summed from the same phase records the token totals are, for the
+	// same reason: the turn's number and its phases' numbers are one fact.
+	CacheRead  int
+	CacheWrite int
+
 	// Response is the last phase's text — what the turn produced, for the
 	// single-phase summary a dashboard shows before anyone expands it.
 	Response string
@@ -198,8 +207,11 @@ type Spend struct {
 	// one, because a turn that looped ends on the account it stood behind.
 	Outcome string
 
-	// Workers and WorkerTokens count what this turn DELEGATED: how many
-	// tasks ran and what they cost between them.
+	// Workers, WorkerInput and WorkerOutput count what this turn
+	// DELEGATED: how many tasks ran and what they cost between them, split
+	// the way every other token figure is — because a cache's share and a
+	// provider's price both differ between input and output, and a sum
+	// cannot be split back.
 	//
 	// KEPT SEPARATE from InputTokens/OutputTokens above, and deliberately.
 	// A worker's tokens are already charged through the shared meter, so
@@ -209,7 +221,8 @@ type Spend struct {
 	// a turn's cost was fan-out, which is the first thing to look at when
 	// a seat's spend jumps and its own rounds did not.
 	Workers      int
-	WorkerTokens int
+	WorkerInput  int
+	WorkerOutput int
 
 	// Judged and JudgeTokens count the round-cap extension judge: how many
 	// times a phase ran out of rounds and asked for more, and what those
@@ -231,14 +244,18 @@ type Spend struct {
 // fields, for the reason those fields state.
 func (s Spend) Total() int { return s.InputTokens + s.OutputTokens }
 
+// WorkerTokens is what the turn's delegated workers cost between them.
+func (s Spend) WorkerTokens() int { return s.WorkerInput + s.WorkerOutput }
+
 // recordWorker folds one finished delegated task into the tally.
 //
 // UNDER THE LOCK, unlike record: workers run concurrently.
-func (s *Spend) recordWorker(mu *sync.Mutex, tokens int) {
+func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 	mu.Lock()
 	defer mu.Unlock()
 	s.Workers++
-	s.WorkerTokens += tokens
+	s.WorkerInput += res.InputTokens
+	s.WorkerOutput += res.OutputTokens
 }
 
 // recordJudge folds one extension judgement into the turn's tally.
@@ -271,6 +288,8 @@ func (s *Spend) record(rec phaseRecord) {
 	}
 	s.InputTokens += rec.Result.InputTokens
 	s.OutputTokens += rec.Result.OutputTokens
+	s.CacheRead += rec.Result.CacheRead
+	s.CacheWrite += rec.Result.CacheWrite
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}
@@ -315,7 +334,7 @@ func (e emitter) on() bool { return e.pub != nil }
 // it is still answering. Consumers read RoundNum+1 as "rounds so far", which
 // is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
 func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
-	system, user string, seed []llm.Message, surface *tools.Surface,
+	system, user string, seed []llm.Message, surface *tools.Surface, caps roundCaps,
 ) {
 	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
 	// carries. The working indicator is not telemetry: a runner whose phases
@@ -337,6 +356,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		Iteration: iteration,
 		Phase:     types.Phase(ph),
 		Trigger:   e.turn.Trigger,
+		WorkItem:  e.workItem(),
 	}, e.traceFor(ctx)))
 
 	e.publish(ctx, events.New(types.AgentTurnProgress{
@@ -353,6 +373,11 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 			{Role: string(llm.RoleUser), Content: user},
 		},
 		RoundNum: openingRound,
+		// The cap from the first frame, so a live row can say "of 8"
+		// before the model has answered once.
+		MaxRounds:    caps.max,
+		RoundCeiling: caps.ceiling,
+		WorkItem:     e.workItem(),
 	}, e.traceFor(ctx)))
 
 	e.promptSize(ctx, ph, iteration, system, user, seed, surface)
@@ -361,6 +386,41 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 // openingRound is the RoundNum of the update published before a phase's first
 // provider call. See [emitter.started].
 const openingRound = -1
+
+// roundCaps is a phase's round allowance as a live row and a record state it:
+// the cap it is running under now, and the most that cap can be raised to.
+type roundCaps struct {
+	max     int
+	ceiling int
+}
+
+// capsOf states a phase's allowance for the round cap it is running under.
+//
+// The ceiling is the extension policy's where extensions are on, and NEVER
+// below the cap itself: with extensions off the phase cannot be granted a
+// round beyond the cap, and a resumed executor re-enters with a fresh budget on
+// top of its pre-suspend rounds, which can lift its cap past a ceiling
+// configured for a phase that never parked. A ceiling below the cap would tell
+// a reader the phase had overrun a limit it never had.
+func capsOf(policy extension.Policy, maxRounds int) roundCaps {
+	ceiling := maxRounds
+	if policy.Enabled {
+		ceiling = max(ceiling, policy.Ceiling)
+	}
+	return roundCaps{max: maxRounds, ceiling: ceiling}
+}
+
+// workItem is the item the turn is charged to as the turn knows it now, or nil.
+//
+// A COPY, so an event built from it never aliases the turn's own value: the
+// turn is the one thing a phase's publishers share.
+func (e emitter) workItem() *types.WorkItem {
+	if e.turn.Context == nil || e.turn.Context.WorkItem == nil {
+		return nil
+	}
+	item := *e.turn.Context.WorkItem
+	return &item
+}
 
 // promptSize measures the prompt a phase is about to send.
 //
@@ -644,7 +704,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 }
 
 // progress publishes one in-flight round.
-func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, res toolloop.Result) {
+func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, res toolloop.Result, caps roundCaps) {
 	if !e.on() {
 		return
 	}
@@ -670,10 +730,18 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// the rest of the phase with nothing on screen to say why — which
 		// is likeliest at the tail of exactly the long phases somebody is
 		// watching.
-		Response:     tail(res.Text),
-		InputTokens:  res.InputTokens,
-		OutputTokens: res.OutputTokens,
-		TotalTokens:  res.InputTokens + res.OutputTokens,
+		Response:         tail(res.Text),
+		InputTokens:      res.InputTokens,
+		OutputTokens:     res.OutputTokens,
+		TotalTokens:      res.InputTokens + res.OutputTokens,
+		CacheReadTokens:  res.CacheRead,
+		CacheWriteTokens: res.CacheWrite,
+		Rounds:           phaseRounds(res.Rounds),
+		MaxRounds:        caps.max,
+		RoundCeiling:     caps.ceiling,
+		RoundStartedAt:   res.RoundStartedAt,
+		RunningCall:      runningCall(res.Running),
+		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
@@ -705,6 +773,14 @@ type phaseRecord struct {
 	// fold a different amount of the caller's own work into the number on
 	// every path — and the executor's decode is the largest of them.
 	Elapsed time.Duration
+
+	// StartedAt is when THIS SEGMENT of the phase began, UTC — see
+	// [types.AgentPhaseCompleted.StartedAt] for why it is not published
+	// minus Elapsed on a resumed phase.
+	StartedAt time.Time
+
+	// Caps is the allowance the phase ended under.
+	Caps roundCaps
 
 	// Decision is the phase's structured verdict: the executor's outcome,
 	// the reviewer's decision, "done" on a marked onboarding pass.
@@ -758,8 +834,8 @@ type phaseRecord struct {
 // What that cost is the question an operator actually asks: a company whose
 // judge model is misconfigured and rescues every phase looked exactly like one
 // whose phases genuinely deserved no extension. The only trace was a log line.
-func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
-	granted int, d extension.Decision, took time.Duration,
+func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRound int,
+	granted int, d extension.Decision, began time.Time, took time.Duration,
 ) {
 	// Tallied first, as everywhere here: the tally is the turn's own
 	// accounting and must not depend on whether anyone is listening.
@@ -781,12 +857,19 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 		// grouping already expects of every non-turn phase.
 		HostPhase:     types.Phase(host),
 		HostIteration: iteration,
-		Iteration:     iteration,
-		Model:         d.Model,
-		Trigger:       e.turn.Trigger,
-		InputTokens:   d.InputTokens,
-		OutputTokens:  d.OutputTokens,
-		TotalTokens:   d.Tokens(),
+		// The round the host phase had reached when it ran out: the judge
+		// sits AFTER it on a timeline, not beside the phase's first round.
+		HostRound:        hostRound,
+		Iteration:        iteration,
+		Model:            d.Model,
+		Trigger:          e.turn.Trigger,
+		InputTokens:      d.InputTokens,
+		OutputTokens:     d.OutputTokens,
+		TotalTokens:      d.Tokens(),
+		CacheReadTokens:  d.CacheRead,
+		CacheWriteTokens: d.CacheWrite,
+		StartedAt:        began.UTC(),
+		WorkItem:         e.workItem(),
 		// The verdict and the judge's own wording for it. `Notes` is the
 		// reason: it is what makes a rescue readable, and on the failure
 		// paths it is the only thing that names what went wrong.
@@ -826,11 +909,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	// timed out still ran, and a fan-out reported as three workers when
 	// four were started hides exactly the one worth looking at.
 	if e.tally != nil && e.mu != nil {
-		e.tally.recordWorker(e.mu, res.Tokens())
+		e.tally.recordWorker(e.mu, res)
 	}
 	if !e.on() {
 		return
 	}
+	hostRound, _ := toolloop.CallRound(ctx)
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
@@ -855,6 +939,10 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// standalone sibling of the turn's own phases.
 		HostPhase:     types.PhaseExecute,
 		HostIteration: e.hostIteration,
+		// And the ROUND whose delegate call spawned it, off the context
+		// the call ran under — which is how a worker is placed under its
+		// call rather than anywhere in a phase of forty rounds.
+		HostRound: hostRound,
 		// WHICH task and WHICH template. A call of eight otherwise
 		// produces eight records distinguishable only by their prompts,
 		// and the one an operator is looking for is the one that failed.
@@ -872,11 +960,19 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// and reads it the same way; without this half of the pair, every
 		// delegated worker rendered as bare tool rows with nothing that
 		// asked for them.
-		RoundNarration: roundNarration(res.Narration),
-		InputTokens:    res.InputTokens,
-		OutputTokens:   res.OutputTokens,
-		TotalTokens:    res.Tokens(),
-		RoundsUsed:     res.Rounds,
+		RoundNarration:   roundNarration(res.Narration),
+		Rounds:           phaseRounds(res.RoundRecords),
+		InputTokens:      res.InputTokens,
+		OutputTokens:     res.OutputTokens,
+		TotalTokens:      res.Tokens(),
+		CacheReadTokens:  res.CacheRead,
+		CacheWriteTokens: res.CacheWrite,
+		RoundsUsed:       res.Rounds,
+		// A worker has no extension: its cap is its ceiling.
+		MaxRounds:    res.MaxRounds,
+		RoundCeiling: res.MaxRounds,
+		StartedAt:    utcOrZero(res.StartedAt),
+		WorkItem:     e.workItem(),
 		// THE WORKER'S OWN WALL CLOCK, off the result. A fan-out of eight
 		// runs its tasks in parallel under one wall-clock cap, so "which
 		// worker was slow" is the question a delegate call raises and the
@@ -925,24 +1021,31 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		return
 	}
 	ev := types.AgentPhaseCompleted{
-		Agent:           e.turn.AgentID,
-		RoleName:        e.role,
-		TurnID:          e.turn.RunID,
-		WorkKey:         e.turn.WorkKey,
-		Iteration:       rec.Iteration,
-		Phase:           types.Phase(rec.Phase),
-		Model:           rec.Result.Model,
-		Trigger:         e.turn.Trigger,
-		SystemPrompt:    rec.System,
-		UserPrompt:      rec.User,
-		Response:        rec.Result.Text,
-		ToolExecutions:  toolExecutions(rec.Result.Executions),
-		RoundNarration:  roundNarration(rec.Result.Narration),
-		InputTokens:     rec.Result.InputTokens,
-		OutputTokens:    rec.Result.OutputTokens,
-		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
-		RoundsUsed:      rec.Result.RoundsUsed,
-		ExhaustedRounds: rec.Exhausted,
+		Agent:            e.turn.AgentID,
+		RoleName:         e.role,
+		TurnID:           e.turn.RunID,
+		WorkKey:          e.turn.WorkKey,
+		Iteration:        rec.Iteration,
+		Phase:            types.Phase(rec.Phase),
+		Model:            rec.Result.Model,
+		Trigger:          e.turn.Trigger,
+		SystemPrompt:     rec.System,
+		UserPrompt:       rec.User,
+		Response:         rec.Result.Text,
+		ToolExecutions:   toolExecutions(rec.Result.Executions),
+		RoundNarration:   roundNarration(rec.Result.Narration),
+		Rounds:           phaseRounds(rec.Result.Rounds),
+		InputTokens:      rec.Result.InputTokens,
+		OutputTokens:     rec.Result.OutputTokens,
+		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
+		CacheReadTokens:  rec.Result.CacheRead,
+		CacheWriteTokens: rec.Result.CacheWrite,
+		RoundsUsed:       rec.Result.RoundsUsed,
+		ExhaustedRounds:  rec.Exhausted,
+		MaxRounds:        rec.Caps.max,
+		RoundCeiling:     rec.Caps.ceiling,
+		StartedAt:        utcOrZero(rec.StartedAt),
+		WorkItem:         e.workItem(),
 		// WHICH ROUND WAS EXPENSIVE, which is the question the token total
 		// makes a reader ask and could not answer. Zero where the phase ran
 		// no loop in this process — see [types.AgentPhaseCompleted].
@@ -975,6 +1078,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.SandboxID = rec.Run.SandboxID
 		ev.CostUSD = rec.Run.CostUSD
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
+		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the
@@ -1061,6 +1165,22 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"success":   !ex.Failed,
 			"round":     ex.Round,
 		}
+		// ONLY WHAT WAS MEASURED. An execution nobody timed — a
+		// pre-suspend row an older build wrote, an agent-mode run's
+		// bridged call — has no start, and writing `duration_ms: 0` for
+		// it would state an instant call. Absent is the honest spelling of
+		// "not recorded", and it is the one every reader already treats
+		// that way.
+		if !ex.StartedAt.IsZero() {
+			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
+			row["duration_ms"] = int(ex.Duration / time.Millisecond)
+		}
+		if ex.Origin != "" {
+			row["origin"] = ex.Origin
+		}
+		if ex.Server != "" {
+			row["server"] = ex.Server
+		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a
 			// consumer showing `result ?? error` has something to show.
@@ -1069,6 +1189,49 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		out = append(out, row)
 	}
 	return out
+}
+
+// phaseRounds renders the loop's per-round provider calls in their wire shape.
+func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
+	if len(rounds) == 0 {
+		return nil
+	}
+	out := make([]types.PhaseRound, 0, len(rounds))
+	for _, r := range rounds {
+		out = append(out, types.PhaseRound{
+			Round:            r.Round,
+			StartedAt:        r.StartedAt.UTC(),
+			DurationMS:       int(r.Duration / time.Millisecond),
+			Model:            r.Model,
+			InputTokens:      r.InputTokens,
+			OutputTokens:     r.OutputTokens,
+			CacheReadTokens:  r.CacheRead,
+			CacheWriteTokens: r.CacheWrite,
+			ToolCalls:        r.ToolCalls,
+		})
+	}
+	return out
+}
+
+// runningCall renders the call in flight, or nil when none is — so the key is
+// absent on every frame but the one published immediately before a call.
+func runningCall(c *toolloop.RunningCall) *types.RunningCall {
+	if c == nil {
+		return nil
+	}
+	return &types.RunningCall{
+		Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
+		StartedAt: c.StartedAt.UTC(),
+	}
+}
+
+// utcOrZero is t in UTC, or the zero time left zero — which `omitzero` drops,
+// so a record that measured no start states none rather than the year 1.
+func utcOrZero(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	return t.UTC()
 }
 
 // roundNarration renders the loop's per-round model turns in the wire shape

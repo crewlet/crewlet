@@ -154,7 +154,12 @@ export interface ToolExecution {
   output?: unknown;
   error?: string;
   failed?: boolean;
+  /** When the call was handed to the tool (RFC 3339, UTC), and how long it
+   *  took. Both absent on a row nothing timed. */
+  started_at?: string;
   duration_ms?: number;
+  /** `builtin` or `mcp:<server>` for the tool that answered, and the bare
+   *  server name for an `mcp:` one. Absent on a call no tool answered. */
   origin?: string;
   server?: string;
 }

@@ -594,6 +594,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				Run: runner.RunRecord{
 					CodingAgent:   in.Run.CodingAgent,
 					SandboxID:     in.Run.SandboxID,
+					LaunchID:      in.Run.LaunchID,
 					CostUSD:       in.CostUSD,
 					DeliveredRefs: in.DeliveredRefs,
 				},

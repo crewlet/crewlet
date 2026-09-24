@@ -471,6 +471,45 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 				rec["phase"], ms)
 		}
 	}
+
+	// --- and its timeline -------------------------------------------- //
+	// Every round the phase ran and every call it made carries its OWN
+	// start and duration, measured by the tool loop — the same survival
+	// question as the phase's duration above, for the figures a waterfall
+	// is drawn from. A round list shorter than rounds_used is a timeline
+	// with a hole in it, and a call with no start cannot be placed at all.
+	for _, rec := range records {
+		used, _ := rec["rounds_used"].(float64)
+		if used == 0 {
+			continue
+		}
+		rounds, _ := rec["rounds"].([]any)
+		if len(rounds) != int(used) {
+			t.Errorf("the %v phase ran %v rounds and timed %d", rec["phase"], used, len(rounds))
+		}
+		for _, raw := range rounds {
+			round, _ := raw.(map[string]any)
+			if at, _ := round["started_at"].(string); at == "" {
+				t.Errorf("a %v round carries no start: %v", rec["phase"], round)
+			}
+			if _, ok := round["duration_ms"].(float64); !ok {
+				t.Errorf("a %v round carries no duration: %v", rec["phase"], round)
+			}
+		}
+		if limit, _ := rec["max_rounds"].(float64); limit < used {
+			t.Errorf("the %v phase ran %v rounds under a stated cap of %v", rec["phase"], used, limit)
+		}
+		calls, _ := rec["tool_executions"].([]any)
+		for _, raw := range calls {
+			call, _ := raw.(map[string]any)
+			if at, _ := call["started_at"].(string); at == "" {
+				t.Errorf("the %v call %v carries no start", rec["phase"], call["name"])
+			}
+			if origin, _ := call["origin"].(string); origin == "" {
+				t.Errorf("the %v call %v names no origin", rec["phase"], call["name"])
+			}
+		}
+	}
 }
 
 // --- the client's half ----------------------------------------------------- //
