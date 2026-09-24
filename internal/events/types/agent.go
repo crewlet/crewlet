@@ -35,7 +35,8 @@ type Phase string
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
 // are the legs of the turn itself, in the order they run; PhaseSubagent,
 // PhaseAuxiliary and PhaseJudge are nested calls made under one of those, and
-// never appear without a host phase around them.
+// never appear without a host phase around them. PhaseSandbox is a detached
+// coding run the executor launched, published once when the run is collected.
 //
 // The retired `plan` value has NO CONSTANT here, and that is not an oversight:
 // Phase is a plain string precisely so a value this build does not produce
@@ -52,6 +53,15 @@ const (
 	// phase; PhaseJudge is the round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
+	// PhaseSandbox is the coding run itself: what a detached run_sandbox
+	// job did, spent and reported, on the record its collection publishes
+	// (see [AgentPhaseCompleted.ActivityTranscript]). NOT nested — it has no
+	// host phase, because the executor that launched it was suspended for
+	// the whole of it and publishes its own record only when it resumes.
+	// Iteration is the executor iteration that launched it, and a turn can
+	// launch more than one run in one iteration, so its identity is
+	// (turn_id, phase, iteration, launch_id).
+	PhaseSandbox Phase = "sandbox"
 )
 
 // ExecuteBackend names where an Execute phase actually ran.
@@ -660,15 +670,27 @@ type AgentPhaseCompleted struct {
 	// with no schema — builtin names and MCP server names. Empty for every
 	// phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
-	// Backend is BackendSandbox only on an Execute phase that ran in one, so
-	// the dashboard renders the sandbox badge precisely where it applies. Note
+	// Backend is BackendSandbox on a PhaseSandbox record and on the resumed
+	// Execute phase that collected one, so the dashboard renders the sandbox
+	// badge precisely where it applies. Note
 	// BackendNative is the wire default and NOT the Go zero value —
 	// publishers set it explicitly.
-	Backend       ExecuteBackend `json:"backend"`
-	CodingAgent   string         `json:"coding_agent"`
-	SandboxID     string         `json:"sandbox_id"`
-	CostUSD       float64        `json:"cost_usd"`
-	DeliveredRefs []string       `json:"delivered_refs,omitempty"`
+	Backend     ExecuteBackend `json:"backend"`
+	CodingAgent string         `json:"coding_agent"`
+	SandboxID   string         `json:"sandbox_id"`
+	// CostUSD is what the coding run's own CLI said it billed, on the
+	// PhaseSandbox record only: a subscription CLI's spend never passes
+	// through the engine's token meter, so this is the one number that sees
+	// it. It used to ride the RESUMED executor's record, which a run that
+	// parked on a question never had — its cost was reported nowhere.
+	CostUSD       float64  `json:"cost_usd"`
+	DeliveredRefs []string `json:"delivered_refs,omitempty"`
+	// ActivityTranscript is a coding run's own account of what it did —
+	// its tool calls and shell commands, or its stderr where the CLI
+	// streams nothing better — on the PhaseSandbox record only. Tail-capped
+	// and secret-redacted where it is collected. It is the whole
+	// observability surface of an agent that emits no telemetry of its own.
+	ActivityTranscript string `json:"activity_transcript,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was

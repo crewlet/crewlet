@@ -375,6 +375,11 @@ export function PhaseCard({
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
   const { ledger, legacy } = ledgerOf(record);
+  // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
+  // engine drove none — the run's own loop happened in a box — so what the
+  // legacy fallback would label "recorded before rounds were kept apart" is
+  // the report the run wrote back, and it carries an activity log instead.
+  const codingRun = record.phase === "sandbox";
   const streaming = ledger.some((r) => r.streaming);
   const stale = record.live ? staleness(record.at, now) : "";
   const took = phaseDuration(record);
@@ -639,7 +644,28 @@ export function PhaseCard({
           {/* A phase recorded before the engine sent per-round narration. The
               join cannot be undone, so it is shown whole rather than guessed
               apart — see `ledgerOf`. */}
-          {legacy && (
+          {codingRun && record.response.trim() && (
+            <section className="col gap-1">
+              <div className="t-label">
+                Report
+                <span className="muted"> · what the coding run wrote back</span>
+              </div>
+              <p className="prose">{record.response.trim()}</p>
+            </section>
+          )}
+          {codingRun && record.transcript && (
+            // LAZY and closed: the engine caps it at 256 KiB, which is a
+            // long log to mount for a reader who came for the report.
+            <Disclosure
+              title="Activity"
+              count={`${record.transcript.split("\n").length} lines`}
+              lazy
+            >
+              <p className="prose mono">{record.transcript}</p>
+            </Disclosure>
+          )}
+
+          {legacy && !codingRun && (
             <>
               {legacy.thinking && (
                 <Disclosure

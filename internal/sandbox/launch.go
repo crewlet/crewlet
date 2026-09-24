@@ -159,7 +159,10 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
-		WorkItem:  req.Turn.WorkItem,
+		WorkItem: req.Turn.WorkItem,
+		// The model the run's phase record is filed under; the store keys
+		// the rest of that record on the launch it mints.
+		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -419,4 +422,14 @@ func otelTokenTTL(spec Spec) time.Duration {
 // arrive somewhere.
 func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
 	return withTelemetry(m, req)
+}
+
+// launchModel is the model a launch points its coding agent at, empty when it
+// names none and the CLI chooses its own — in which case nothing here can
+// honestly say which model ran.
+func launchModel(llm *AgentLLM) string {
+	if llm == nil {
+		return ""
+	}
+	return llm.Model
 }

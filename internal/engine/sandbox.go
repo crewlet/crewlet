@@ -365,7 +365,6 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
-		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
@@ -421,10 +420,10 @@ type resumeInput struct {
 	Success bool
 	Trigger *events.Event
 
-	// CostUSD and DeliveredRefs are what the collected run reported, for the
-	// resumed phase's own event. Zero when a person's answer resumed a
-	// parked clarification: nothing was collected.
-	CostUSD       float64
+	// DeliveredRefs are what the collected run reported, for the resumed
+	// phase's own event. Empty when a person's answer resumed a parked
+	// clarification: nothing was collected. The run's cost is on its own
+	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
 	DeliveredRefs []string
 
 	// InputTokens and OutputTokens are the resumed job's tokens, which this
@@ -603,7 +602,6 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					CodingAgent:   in.Run.CodingAgent,
 					SandboxID:     in.Run.SandboxID,
 					LaunchID:      in.Run.LaunchID,
-					CostUSD:       in.CostUSD,
 					DeliveredRefs: in.DeliveredRefs,
 				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
@@ -861,7 +859,11 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the suspended conversation could not be serialized", err)
 		return false, nil
 	}
-	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
+	// The iteration rides BESIDE the blob: the coordinator files the run's
+	// own phase record under it and never decodes the conversation.
+	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, sandbox.Suspension{
+		State: blob, Iteration: suspension.State.Round,
+	})
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
 			"the suspended conversation could not be written", err)

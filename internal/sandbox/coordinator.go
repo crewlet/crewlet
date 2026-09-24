@@ -85,23 +85,23 @@ type ResumeRequest struct {
 	// turn's telemetry names what woke it.
 	Trigger *events.Event
 
-	// CostUSD and DeliveredRefs are what the run reported, for the resumed
-	// phase's own event. The coding agents produce both and nothing carried
-	// them: the phase record's `cost_usd` and `delivered_refs` had no
-	// producer at all, so a subscription CLI's spend — which never passes
-	// through the engine's token meter — was reported nowhere.
+	// DeliveredRefs are what the run reported producing, for the resumed
+	// phase's own event — the executor's delivery is judged on them. Empty
+	// when a PERSON's answer resumes a parked clarification: no new run
+	// finished.
 	//
-	// Both are zero when a PERSON's answer resumes a parked clarification:
-	// no new run finished, and claiming a cost for one would double-count
-	// the run that is still going.
-	CostUSD       float64
+	// The run's COST is deliberately not here. It is the run's own fact and
+	// rides the run's own record ([Coordinator.OnCompleted] publishes it as
+	// the `sandbox` phase), which every collected run gets — a run that
+	// parked on a question included, whose resume is an answer and carries
+	// no run at all, so on this request its cost was reported nowhere.
 	DeliveredRefs []string
 
 	// InputTokens and OutputTokens are what the job this resume collected
 	// cost, for the resumed segment's charge to the turn's work item
 	// (ADR-0022): that segment is the job's, so it pays for it.
 	//
-	// UNLIKE the cost above, a person's answer carries them too — the
+	// UNLIKE the refs above, a person's answer carries them too — the
 	// tokens of the job that asked, recorded on the row when it parked
 	// ([PendingRun.ParkedInputTokens]). The answer's resume is the ONLY
 	// segment that job ever gets, so it is the one that pays; the
@@ -238,8 +238,9 @@ type CoordinatorOptions struct {
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
-//     reuse, tokens post-accounted once per launch however often the tail is
-//     retried, and the suspended loop re-entered with the result spliced in.
+//     reuse, tokens post-accounted and the run published as a phase of its
+//     own once per launch however often the tail is retried, and the
+//     suspended loop re-entered with the result spliced in.
 //     The seat stays held through all of it and is freed only at the last
 //     moment before the resume, because freeing it earlier lets a queued
 //     event take the slot, the resume fail, and the redelivery find the claim
@@ -561,8 +562,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
-	// hands the record back with it.
+	// hands the record back with it — both of them.
 	run.Charged = c.charge(ctx, run, result)
+	run.Launch = c.publishPhase(ctx, run, result)
 
 	if result.NeedsInput {
 		return c.park(ctx, run, result)
@@ -583,19 +585,18 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
-		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
-		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		DeliveredRefs: result.DeliveredRefs,
+		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
 	})
 	return err
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
-// phase's own record and the resumed segment's charge. The cost and the refs
-// are zero where no run finished — a person answering a parked clarification
-// resumes the turn without collecting anything — while the tokens are the
-// job's either way: see [ResumeRequest.InputTokens].
+// phase's own record and the resumed segment's charge. The refs are empty
+// where no run finished — a person answering a parked clarification resumes
+// the turn without collecting anything — while the tokens are the job's
+// either way: see [ResumeRequest.InputTokens].
 type runOutcome struct {
-	CostUSD       float64
 	DeliveredRefs []string
 	InputTokens   int
 	OutputTokens  int
@@ -680,6 +681,113 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	}
 	// RECORDED EITHER WAY, because the counters moved either way.
 	return true
+}
+
+// publishPhase publishes the collected run as a phase of its turn, ONCE per
+// launch, and returns the job's record as it now stands.
+//
+// THE RUN IS A PHASE OF ITS OWN. Until this existed a detached coding run left
+// no phase record at all: the executor that launched it publishes nothing when
+// it suspends, and its resumed record is the EXECUTOR's — its own rounds and
+// its own tokens. So every token a coding run spent was missing from the spend
+// rollup and from each node's daily usage (the budget counter was charged, and
+// nothing a person reads agreed with it), and the activity transcript the
+// runner reconstructs — the only account of what an agent with no telemetry
+// did — was collected, redacted and thrown away. It is published here, where
+// the result is in hand, for every collected run: one that finished and one
+// that stopped to ask a question alike, because both spent what they spent.
+//
+// ONCE, for the reason the charge is once, and recorded the same way: the
+// publish sits inside the part of the tail that is retried, every reader of
+// the record counts it as spend, and a second copy is a second charge on
+// every surface that shows one. The record rides the release that hands the
+// claim back ([LaunchRecord.Published]). A publish the queue refused is NOT
+// recorded, so a retry, if one comes, offers it again — the one duplicate that
+// can remain is a publish reported failed that had in fact landed, which is
+// the direction the charge also errs in.
+//
+// Telemetry never fails the tail: a record that could not be published is
+// logged, and the run is resumed exactly as it would have been.
+func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result Result) LaunchRecord {
+	facts := run.LaunchFacts()
+	if facts.Published {
+		log.InfoContext(ctx, "sandbox_phase_already_published",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID)
+		return run.Launch
+	}
+	ev := events.New(runPhase(run, facts, result, c.now()), events.TraceContext{
+		TraceID: run.TraceID, ParentSpanID: run.SpanID,
+	})
+	ev.Source = run.Role
+	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "sandbox_phase_publish_failed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
+		return run.Launch
+	}
+	facts.ID, facts.Published = run.LaunchID, true
+	return facts
+}
+
+// runPhase is a collected run's own phase record.
+//
+// Everything on it is the RUN's: its tokens and cache share, what its CLI said
+// it cost, the report it wrote, what it delivered, its transcript and, when it
+// did not finish, why. Nothing on it is the executor's — that is on the
+// resumed executor's own record, which is why the two never sum to more than
+// the turn spent.
+//
+// Its clock is the store's instant for the launch and this node's for the
+// collection, so DURATION covers launch to collection: the waiter's poll
+// interval is inside it, and the coding itself is the rest. A row an older
+// build launched carries no start, and the record then states none rather
+// than a length measured from nothing.
+func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
+	rec := types.AgentPhaseCompleted{
+		Agent: run.AgentID, RoleName: run.Role,
+		TurnID: run.TurnID, WorkKey: run.UnitOfWork(),
+		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
+		Model: facts.Model,
+		// Redacted again, at the publish, although the runner redacts at
+		// collection: this is the boundary the record leaves by, and a
+		// runner that forgot would otherwise put a box's credentials in
+		// the event store.
+		Response:           redact.Secrets(result.Text),
+		ActivityTranscript: redact.Secrets(result.Transcript),
+		InputTokens:        result.InputTokens,
+		OutputTokens:       result.OutputTokens,
+		TotalTokens:        result.InputTokens + result.OutputTokens,
+		CacheReadTokens:    result.CacheReadTokens,
+		CacheWriteTokens:   result.CacheWriteTokens,
+		WorkItem:           run.WorkItem,
+		LaunchID:           run.LaunchID,
+		Backend:            types.BackendSandbox,
+		CodingAgent:        run.CodingAgent,
+		SandboxID:          run.SandboxID,
+		CostUSD:            result.CostUSD,
+		DeliveredRefs:      result.DeliveredRefs,
+		ConversationKey:    run.Conversation(),
+	}
+	if !facts.StartedAt.IsZero() {
+		rec.StartedAt = facts.StartedAt.UTC()
+		if took := collected.Sub(facts.StartedAt); took > 0 {
+			rec.DurationMS = int(took / time.Millisecond)
+		}
+	}
+	switch {
+	case result.NeedsInput:
+		// STOPPED, NOT FAILED: the run is parked on a question and will
+		// be resumed by its answer. The question is the note a reader
+		// needs beside the record.
+		rec.Notes = "stopped to ask: " + redact.Secrets(result.Question)
+	case !result.Success:
+		rec.Failed = true
+		rec.Error = redact.Secrets(result.Error)
+		if rec.Error == "" {
+			rec.Error = "the coding run did not succeed and gave no reason"
+		}
+		rec.ErrorKind = "coding_run_failed"
+	}
+	return rec
 }
 
 // park announces the question, records it, and settles the box per the pause
@@ -987,8 +1095,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// path below like every other failed resume.
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
-		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+		DeliveredRefs: outcome.DeliveredRefs,
+		InputTokens:   outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
@@ -1262,7 +1370,8 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Charged: run.Charged, Fence: fenceOf(run),
+		Launch: run.LaunchID, To: to, Charged: run.Charged,
+		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:

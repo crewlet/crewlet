@@ -137,8 +137,8 @@ const PHASE_VARIANT: Record<string, TagVariant> = {
 /**
  * A phase mark.
  *
- * The engine emits three phases beyond the three uilet draws — `subagent`,
- * `auxiliary` and `judge` — and there is no hue for them, which is the right
+ * The engine emits four phases beyond the three uilet draws — `sandbox`,
+ * `subagent`, `auxiliary` and `judge` — and there is no hue for them, which is the right
  * answer rather than a gap: they take the neutral pill, exactly as this drew
  * them before the port, and the word beside the colour is what a reader
  * actually reads. An unknown phase off the wire lands there too, which is the

@@ -586,9 +586,9 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if suspended, err := store.MarkSuspended(ctx, "t1", map[string]any{
+	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: map[string]any{
 		"pending_tool_name": "run_sandbox",
-	}); err != nil || !suspended {
+	}}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})

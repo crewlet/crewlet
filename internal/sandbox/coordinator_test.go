@@ -440,9 +440,9 @@ func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	if len(calls) != 1 || calls[0].InputTokens != 700 || calls[0].OutputTokens != 80 {
 		t.Fatalf("the answer's resume carries %+v, want the parked job's 700/80 tokens", calls)
 	}
-	if calls[0].CostUSD != 0 {
-		t.Errorf("the answer's resume claims a cost of %v for a run that did "+
-			"not finish", calls[0].CostUSD)
+	if len(calls[0].DeliveredRefs) != 0 {
+		t.Errorf("the answer's resume claims deliveries %v for a run that did "+
+			"not finish", calls[0].DeliveredRefs)
 	}
 }
 
@@ -1546,9 +1546,9 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
-		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, map[string]any{
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: map[string]any{
 			"pending_tool_name": "run_sandbox",
-		}); err != nil || !suspended {
+		}}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
 		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})

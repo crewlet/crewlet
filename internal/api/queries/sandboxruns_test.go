@@ -119,9 +119,9 @@ func TestTheSuspendedConversationIsNotShipped(t *testing.T) {
 	// The write that carries the conversation is also the one that moves
 	// the run to running, so this leaves the row exactly as a suspended
 	// turn leaves it.
-	suspended, err := store.MarkSuspended(t.Context(), "t1", map[string]any{
+	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: map[string]any{
 		"messages": []any{map[string]any{"content": "a very long system prompt"}},
-	})
+	}})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended: suspended=%v err=%v", suspended, err)
 	}

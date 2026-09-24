@@ -97,6 +97,11 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
+	// And the job's own record starts here, keyed on that name: the
+	// instant the launch exists is the instant its phase began, and a
+	// previous job's record — its start, its iteration, whether its phase
+	// was published — is not this one's. Only the model is the caller's.
+	run.Launch = LaunchRecord{ID: run.LaunchID, StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
 		return err
@@ -118,6 +123,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
+		existing.Launch = run.Launch
 		// The previous job's suspension is not this job's. Left in place
 		// it is worse than absent: a completion claimed before the new
 		// suspension lands would resume the conversation the LAST call
@@ -196,6 +202,15 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		if release.Published {
+			// Onto THIS job's record, starting one where the row carries
+			// none of its own: a row an older build launched has no record,
+			// and one it relaunched carries the previous job's.
+			if run.Launch.ID != run.LaunchID {
+				run.Launch = LaunchRecord{ID: run.LaunchID}
+			}
+			run.Launch.Published = true
+		}
 		return true
 	})
 	return released, err
@@ -357,13 +372,18 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 
 // MarkSuspended writes the suspended Execute loop and opens the run to the
 // completion poll. See the contract on [PendingStore].
-func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusLaunching {
 			return false
 		}
-		run.ExecuteState = maps.Clone(state)
+		run.ExecuteState = maps.Clone(suspension.State)
 		run.Status = StatusRunning
+		// Keyed on the job like the rest of its record — see ReleaseClaim.
+		if run.Launch.ID != run.LaunchID {
+			run.Launch = LaunchRecord{ID: run.LaunchID}
+		}
+		run.Launch.Iteration = suspension.Iteration
 		return true
 	})
 	return won, err

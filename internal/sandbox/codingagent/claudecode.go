@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // ClaudeCodeName is this runner's config name.
@@ -133,7 +134,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// whole stdout and nothing upstream limits it; marked, so a reader
 		// can tell a cut from a short run.
 		return sandbox.Result{
-			Text:  tail(text),
+			Text:  textcut.Tail(text, MaxTranscriptBytes),
 			Error: "the coding agent's output could not be parsed",
 		}
 	}
@@ -152,7 +153,14 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		DeliveredRefs: prPattern.FindAllString(resultText, -1),
 	}
 	if usage, ok := obj["usage"].(map[string]any); ok {
-		res.InputTokens = intField(usage, "input_tokens")
+		// INPUT TOKENS ARE A SUM, for the reason the engine's own Anthropic
+		// provider states: the vendor's input_tokens is only the UNCACHED
+		// remainder, and a coding run is almost entirely cached rounds —
+		// so reading it alone put a fraction of every run's prompt on the
+		// budget counter and the spend rollup.
+		res.CacheReadTokens = intField(usage, "cache_read_input_tokens")
+		res.CacheWriteTokens = intField(usage, "cache_creation_input_tokens")
+		res.InputTokens = intField(usage, "input_tokens") + res.CacheReadTokens + res.CacheWriteTokens
 		res.OutputTokens = intField(usage, "output_tokens")
 	}
 	if !success {

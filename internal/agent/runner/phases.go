@@ -205,8 +205,10 @@ type Resume struct {
 // [types.BackendNative] unconditionally, so a phase that spent twenty minutes
 // in a remote box and one that ran three rounds in this process were reported
 // identically: the sandbox badge could never render, and `coding_agent`,
-// `sandbox_id`, `cost_usd` and `delivered_refs` had no producer at all —
-// despite the coding agents reporting every one of them.
+// `sandbox_id` and `delivered_refs` had no producer at all — despite the
+// coding agents reporting every one of them. What the run itself cost is NOT
+// here: that is the run's own fact, on the `sandbox` phase record its
+// collection publishes, which a run that parked on a question also gets.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
@@ -217,11 +219,6 @@ type RunRecord struct {
 	// answering a clarification — and their absence is what says so.
 	CodingAgent string
 	SandboxID   string
-
-	// CostUSD is what the run's own provider billed, where the agent reports
-	// it. A subscription CLI's spend never passes through the engine's token
-	// meter, so this is the only number that sees it.
-	CostUSD float64
 
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string

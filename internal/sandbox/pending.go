@@ -139,6 +139,10 @@ type Release struct {
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
 
+	// Published is whether the run's own phase record went out, recorded
+	// the same way and for the same reason. See [LaunchRecord.Published].
+	Published bool
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -287,6 +291,11 @@ type PendingRun struct {
 	// build carries none, so the two still match each other and nothing
 	// else.
 	LaunchID string `json:"launch_id,omitempty"`
+
+	// Launch is what the run's own phase record needs about the job named
+	// by LaunchID — see [LaunchRecord]. Read only through
+	// [PendingRun.LaunchFacts], which refuses a record kept for another job.
+	Launch LaunchRecord `json:"launch_record,omitzero"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
@@ -725,7 +734,7 @@ type PendingStore interface {
 	// resume of a turn that is over. The caller has a suspended
 	// conversation with nowhere to put it, so the run cannot be resumed and
 	// must be failed rather than left holding a box.
-	MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error)
+	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the
 	// MCP bridge, so the reviewer of a run that outlived its process still
@@ -992,3 +1001,75 @@ type Fence struct {
 
 // Fenced reports whether this token constrains anything.
 func (f Fence) Fenced() bool { return f.Epoch > 0 }
+
+// Suspension is what [PendingStore.MarkSuspended] writes: the suspended
+// Execute loop and the turn iteration it suspended in.
+//
+// The iteration travels BESIDE the conversation rather than being read back
+// out of it, because the conversation is opaque here by design — the
+// coordinator carries it back to the engine without ever decoding it, and a
+// field reached into it would be a second reader of a format this package
+// does not own. The run's phase record is keyed on it (see [LaunchRecord]).
+type Suspension struct {
+	// State is the serialized loop, [PendingRun.ExecuteState].
+	State map[string]any
+
+	// Iteration is the turn iteration the executor suspended in, which is
+	// the iteration the run's own phase record is filed under.
+	Iteration int
+}
+
+// LaunchRecord is what one job's own phase record needs that nothing else on
+// the row says: when it started, which executor iteration launched it, the
+// model it ran on, and whether that record has already been published.
+//
+// KEYED ON THE JOB, by [LaunchRecord.ID], and every reader goes through
+// [PendingRun.LaunchFacts], which answers the zero record for any other job.
+// The row is the TURN's and outlives each job on it, and it is shared by every
+// build in a rolling upgrade: a build that predates this field carries it
+// through its own read-modify-write untouched ([PendingRun.Extra]) — including
+// across the relaunch it performs itself, which it cannot know to clear. A
+// record that named no job would then tell the NEXT job it had been launched
+// at the previous one's instant and already published. Keyed, a stale record
+// is simply not this job's.
+//
+// ONE FIELD RATHER THAN FOUR for the same reason: there is one key to check,
+// and a fact added here later is scoped to its job by construction.
+type LaunchRecord struct {
+	// ID is the [PendingRun.LaunchID] this record belongs to.
+	ID string `json:"launch_id"`
+
+	// StartedAt is when the job was launched, on the store's clock —
+	// written by [PendingStore.BeginLaunch], the moment the launch exists.
+	StartedAt time.Time `json:"started_at,omitzero"`
+
+	// Model is the model the coding agent was pointed at, empty when the
+	// launch named none and the CLI chose its own.
+	Model string `json:"model,omitempty"`
+
+	// Iteration is the turn iteration the launching executor suspended in,
+	// written by [PendingStore.MarkSuspended].
+	Iteration int `json:"iteration,omitempty"`
+
+	// Published is whether the job's `agent_phase_completed{phase: sandbox}`
+	// record went out.
+	//
+	// ONCE PER JOB, and on the row, for exactly the reason
+	// [PendingRun.Charged] is: the publish sits inside the part of the
+	// completion tail that is retried, the retry may run on another node or
+	// after a restart, and every reader of that record — the spend rollup,
+	// each node's daily usage — counts it as spend. A second copy is a
+	// second charge on every surface that shows one. WRITTEN BY THE
+	// RELEASE ([Release.Published]), the one write through which a retry
+	// reaches the publish again.
+	Published bool `json:"published,omitempty"`
+}
+
+// LaunchFacts is the [LaunchRecord] of the job this row holds now, and the
+// zero record when what the row carries belongs to another job or to none.
+func (r PendingRun) LaunchFacts() LaunchRecord {
+	if r.Launch.ID == "" || r.Launch.ID != r.LaunchID {
+		return LaunchRecord{}
+	}
+	return r.Launch
+}

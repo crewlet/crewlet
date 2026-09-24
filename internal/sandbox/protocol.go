@@ -186,10 +186,18 @@ type Result struct {
 	Text    string
 	Success bool
 
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
-	SessionID    string
+	// InputTokens is the run's WHOLE prompt count, its cached share
+	// included, and CacheReadTokens / CacheWriteTokens are the share of it
+	// the provider's prompt cache served and stored — the same convention
+	// every engine provider reports on its completion, so a coding run's
+	// tokens fold into the spend rollup beside the phases the engine ran
+	// itself. A breakdown, never an addition: the total is input + output.
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	CostUSD          float64
+	SessionID        string
 
 	// NeedsInput means the agent asked a question and stopped. Question and
 	// AskTo say what it asked and who should answer: "requester", "team",

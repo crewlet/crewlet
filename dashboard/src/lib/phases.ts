@@ -155,6 +155,19 @@ export interface PhaseRecord {
   /** The branches and pull requests the phase delivered. */
   deliveredRefs: string[];
   /**
+   * The detached coding run a record reports, on a `sandbox` phase (the run
+   * itself) and on the executor that resumed from it. A turn can launch more
+   * than one run in an iteration, so on a `sandbox` phase it is part of the
+   * record's identity — see [phaseKey].
+   */
+  launchId: string;
+  /**
+   * A coding run's own account of what it did — its tool calls and shell
+   * commands — on a `sandbox` phase only. Tail-capped and redacted by the
+   * engine; empty everywhere else.
+   */
+  transcript: string;
+  /**
    * What woke the turn this phase belongs to, as [types.Trigger.Map] writes
    * it. `id` and `sender` have always been on the wire and were not declared
    * here, so nothing could link a turn to the event that asked for it.
@@ -327,8 +340,8 @@ function promptRole(messages: PromptMessage[] | null | undefined, role: string):
 }
 
 /**
- * A phase's identity: `turn|phase|iteration`, plus the task id where there
- * is one.
+ * A phase's identity: `turn|phase|iteration`, plus the task id or the launch
+ * id where there is one.
  *
  * THE TASK ID IS NOT OPTIONAL for a delegated worker. A `delegate` call of
  * eight runs eight `subagent` phases in one executor round, and without it
@@ -336,10 +349,24 @@ function promptRole(messages: PromptMessage[] | null | undefined, role: string):
  * workers, their prompts, their tools and their failures simply are not on
  * the page. A turn's own phases have no task id and keep the three-part key
  * they have always had.
+ *
+ * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a
+ * resumed executor that calls `run_sandbox` again in one iteration launches a
+ * second run, and each is a `sandbox` phase of that iteration. It keys the
+ * `sandbox` phase ONLY — the resumed executor's record names the run it
+ * collected too, and keyed on it that record would stop matching the live
+ * call it replaces.
  */
-export function phaseKey(turnId: string, phase: string, iteration: number, taskId = ""): string {
+export function phaseKey(
+  turnId: string,
+  phase: string,
+  iteration: number,
+  taskId = "",
+  launchId = "",
+): string {
   const base = `${turnId}|${phase}|${iteration}`;
-  return taskId ? `${base}|${taskId}` : base;
+  const discriminator = taskId || (phase === "sandbox" ? launchId : "");
+  return discriminator ? `${base}|${discriminator}` : base;
 }
 
 /** A phase still running, from a seat's live overlay. */
@@ -389,6 +416,8 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     // registered, and the refs are what it REPORTS back.
     sandboxId: "",
     deliveredRefs: [],
+    launchId: "",
+    transcript: "",
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
     startedAt: call.started_at || call.updated_at,
@@ -408,8 +437,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const turnId = String(p.turn_id ?? "");
   const iteration = num(p.iteration);
   const taskId = String(p.task_id ?? "");
+  const launchId = String(p.launch_id ?? "");
   return {
-    key: phaseKey(turnId, phase, iteration, taskId),
+    key: phaseKey(turnId, phase, iteration, taskId, launchId),
     turnId,
     // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
     // carries. The stored column is backfilled across the split
@@ -460,6 +490,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // is one a component is a single line away from drawing.
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
+    launchId,
+    transcript: String(p.activity_transcript ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
     // A finished phase has one instant that matters — when it landed. How
@@ -745,13 +777,18 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
   return [...byTurn.entries()]
     .map(([turnId, list]) => {
       // Within a turn, OLDEST first: a turn is read forwards — onboarding
-      // (first turn only), then execute, then review — which is the opposite
-      // of a feed. A phase not on this list sorts after the ones that are and
-      // then by time, which is right for the nested calls (subagent, judge,
+      // (first turn only), then execute, then the coding runs it launched,
+      // then review — which is the opposite of a feed. A `sandbox` phase is
+      // placed after its executor's record although it ran inside that
+      // phase's window: the executor publishes one record, when it resumes,
+      // and a run read before the executor that launched it reads as work
+      // nobody asked for. Two runs of one iteration keep their time order. A
+      // phase not on this list sorts after the ones that are and then by
+      // time, which is right for the nested calls (subagent, judge,
       // auxiliary) that hang off a host phase.
       const ordered = [...list].sort((a, b) => {
         if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-        const order = ["onboarding", "execute", "review"];
+        const order = ["onboarding", "execute", "sandbox", "review"];
         const ai = order.indexOf(a.phase);
         const bi = order.indexOf(b.phase);
         if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);

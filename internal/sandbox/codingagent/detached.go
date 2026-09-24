@@ -6,23 +6,40 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("sandbox.coding_agent")
 
-// MaxTranscript caps the captured activity transcript carried on the result.
+// MaxTranscriptBytes bounds each piece of a coding run's own account of itself
+// that the engine carries: the activity transcript, the crash detail, and the
+// report the agent wrote.
 //
-// The TAIL is kept: the most recent activity plus the conclusion is what a
-// reader wants, and the head — the clone, the dependency install — is the
-// least interesting thing to drop. 100k characters is a few hundred lines of
-// a coding agent's streamed events, which is enough to see what it did without
-// putting a megabyte of log through the event store per run.
-const MaxTranscript = 100_000
+// BYTES, because what it bounds is an EVENT. Every one of these rides the
+// run's `agent_phase_completed{phase: sandbox}` record (and the report rides
+// the resumed executor's too), and an event over the queue's 8 MiB
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
+// an unbounded transcript does not arrive long, it does not arrive at all.
+// 256 KiB of text is at most 1.5 MiB once JSON has escaped it (a control
+// byte becomes six), and three of them are still well inside the ceiling. It
+// was 100 000 RUNES, which is anything from 100 KB to 400 KB on the wire
+// depending on the script the output was written in: a bound on the wrong
+// unit for the only limit that matters.
+//
+// The TAIL of the transcript and of the crash detail is kept: the most recent
+// activity plus the conclusion is what a reader wants, and the head — the
+// clone, the dependency install — is the least interesting thing to drop. The
+// REPORT keeps its head instead, because it is a document written to be read
+// from the top, and its summary is where it starts.
+//
+// ONE BOUND, NOT ONE PER CALLER: every one of them is the same run's account
+// of itself, and a per-field cap would let the transcript and the error text
+// disagree about how much of one run survives.
+const MaxTranscriptBytes = 256 << 10
 
 // prPattern matches a pull-request URL, on either of the two hosts this engine
 // integrates with. It is a FALLBACK: a runner whose output names its delivered
@@ -256,9 +273,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	stderr = strings.TrimSpace(stderr)
 	switch {
 	case result.Transcript != "":
-		result.Transcript = tail(result.Transcript)
+		result.Transcript = textcut.Tail(result.Transcript, MaxTranscriptBytes)
 	case stderr != "":
-		result.Transcript = tail(stderr)
+		result.Transcript = textcut.Tail(stderr, MaxTranscriptBytes)
 	}
 
 	code, err := readText(ctx, box, paths.ExitCode())
@@ -280,7 +297,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	findings = strings.TrimSpace(findings)
 	switch {
 	case findings != "":
-		result.Text = findings
+		// BOUNDED, like everything else read out of the box: the agent
+		// writes this file and nothing limits it, and it is the response on
+		// the run's own phase record. See [MaxTranscriptBytes] for why the
+		// head is the half kept.
+		result.Text = textcut.Ellipsis(findings, MaxTranscriptBytes)
 		if len(result.DeliveredRefs) == 0 {
 			result.DeliveredRefs = prPattern.FindAllString(findings, -1)
 		}
@@ -310,7 +331,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			// in all three ways — too small to hold the line naming the
 			// failing file, taken from the end that says least about a
 			// crash, and silent about having cut at all.
-			result.Error = tail(detail)
+			result.Error = textcut.Tail(detail, MaxTranscriptBytes)
 		}
 	}
 
@@ -362,28 +383,4 @@ func readText(ctx context.Context, box sandbox.Sandbox, path string) (string, er
 		return "", err
 	}
 	return string(raw), nil
-}
-
-// tail keeps the last MaxTranscript characters with a marker saying it cut.
-//
-// The bound is NOT a parameter. Every caller is bounding the same thing — a
-// coding run's own account of itself — and a per-caller cap would let the
-// transcript and the error text disagree about how much of one run survives.
-//
-// RUNES, not bytes, and the kept half starts on a boundary. A byte slice at a
-// fixed offset from the end begins mid-rune whenever the text is not ASCII,
-// and the event store's JSON encoding replaces that partial rune with U+FFFD
-// — so a run whose output names a non-ASCII path opened with mojibake rather
-// than with a whole character. It is also what makes MaxTranscript's stated
-// unit true.
-func tail(text string) string {
-	if utf8.RuneCountInString(text) <= MaxTranscript {
-		return text
-	}
-	i := len(text)
-	for n := 0; n < MaxTranscript; n++ {
-		_, size := utf8.DecodeLastRuneInString(text[:i])
-		i -= size
-	}
-	return "…[earlier output truncated]…\n" + text[i:]
 }
