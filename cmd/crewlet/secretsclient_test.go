@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -253,6 +254,29 @@ func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 			"secret: %v", err)
 	}
 	if !strings.Contains(err.Error(), "/secrets") {
+		t.Errorf("the refusal does not say what is missing: %v", err)
+	}
+}
+
+// A NODE WHOSE ROUTER HAS NO /secrets IS A MISSING SURFACE TOO, now that the
+// router's own 404 is JSON with a code. That code is `no_route` and never
+// `not_found` — the one this client reads as "no such secret" — so a node that
+// serves no /secrets at all is not taken for a store holding nothing, which
+// the provisioning sink would answer by minting a value it could never write.
+func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
+	t.Cleanup(server.Close)
+	c, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Get(t.Context(), "TOKEN")
+	if err == nil || errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("a node with no /secrets route answered %v, want the missing "+
+			"surface", err)
+	}
+	if !strings.Contains(err.Error(), "no /secrets surface") {
 		t.Errorf("the refusal does not say what is missing: %v", err)
 	}
 }

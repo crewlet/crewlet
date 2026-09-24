@@ -767,8 +767,9 @@ var RestError = class extends Error {
 	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
 	* page, a 200 cut off part way through), or a status with no engine error
 	* code in it. Every refusal the engine writes is JSON with an `error` code,
-	* its auth guard's included, so an answer without one was written by
-	* something in front of it.
+	* its auth guard's included and its router's own `no_route` and
+	* `method_not_allowed` for a route or method it does not serve, so an answer
+	* without one was written by something in front of it.
 	*
 	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
 	* the engine wrote means nothing was done; this means nobody here knows. A

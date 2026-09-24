@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -228,5 +230,32 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 		t.Errorf("work purge waits %s, not past the three %s waits a purge can "+
 			"make and the %s a round trip gets", purgeRequestTimeout,
 			statelog.DefaultResolveBudget, nodeRequestTimeout)
+	}
+}
+
+// A PURGE A NODE DOES NOT SERVE IS REFUSED, not left unknown.
+//
+// The route is absent on a node with no native tracker, and the mux answered
+// it with net/http's text/plain 404 — which carries no engine code, so this
+// command read it as a gateway that might have swallowed the purge: "whether
+// the purge landed is unknown", and an -op-id retry that met the same 404 for
+// ever. The node's own mux ([httpjson.Mux]) answers JSON with a code now, and
+// that is a refusal: nothing was done.
+func TestAPurgeTheNodeDoesNotServeIsRefusedNotUnknown(t *testing.T) {
+	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
+	t.Cleanup(server.Close)
+	stdout, stderr, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
+		"-reason", "why", "-confirm", "ENG-42", bootstrapForURL(t, server.URL))
+	if err == nil {
+		t.Fatalf("a purge the node does not serve exited zero:\n%s", stdout)
+	}
+	var lost noAnswer
+	if errors.As(err, &lost) || strings.Contains(stderr, "-op-id") ||
+		strings.Contains(stderr+stdout, "unknown") {
+		t.Errorf("the node's own 404 was read as no answer (%v):\n%s%s", err,
+			stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "no_route") {
+		t.Errorf("the refusal does not say what the node answered: %v", err)
 	}
 }

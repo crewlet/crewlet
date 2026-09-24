@@ -55,6 +55,25 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 
 ---
 
+## Every refusal carries a code
+
+Every answer the API writes other than a success is JSON with an `error` code:
+the auth guard's `401 invalid_token`, each route's own refusals, and a request
+nothing on the node serves — `404 no_route` for a path (one this node's build
+does not have, or one its configuration leaves unmounted, such as
+`POST /work/{id}/purge` on a company with no native tracker) and
+`405 method_not_allowed`, with an `Allow` header, for a served path under
+another method. Both of those carry a `detail` naming the method and path.
+
+The CLI and the dashboard rely on it. A non-2xx answer with no code was written
+by something **in front of** the node — most often a reverse proxy's read
+timeout — and says nothing about what the node did, so a write that meets one
+is reported as *unknown*, with the operation id to finish it under, rather than
+as refused. An answer with a code is the node's own, and a refusal from the
+node means nothing was done.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -87,7 +106,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker, where it answers `404 no_route` like any path the node does not serve |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -503,7 +522,8 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
+- `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
@@ -1183,7 +1203,8 @@ channel reaches. The generic form `GET /query/{what}?a=b` reaches the same
 answers by name and is what the socket's own frames map onto, so the two can
 never drift. A question whose source this node lacks — an event log, a
 schedule ledger — is left *unregistered* rather than answered empty, so its
-route replies `404` with a JSON error code rather than a bare mux miss.
+route replies `404` with `unknown_query`, which tells it apart from the
+`no_route` a path nothing serves answers.
 
 ### An event on the wire
 

@@ -793,6 +793,8 @@ func TestOnlyAnAnswerWithAnEngineCodeIsTheNodesRefusal(t *testing.T) {
 	}{
 		"an engine refusal":           {http.StatusConflict, `{"error":"eviction_refused","detail":"live"}`, true},
 		"a drain":                     {http.StatusServiceUnavailable, `{"error":"draining"}`, true},
+		"a route the node lacks":      {http.StatusNotFound, `{"error":"no_route","detail":"this node serves nothing at POST /x"}`, true},
+		"a method the route refuses":  {http.StatusMethodNotAllowed, `{"error":"method_not_allowed"}`, true},
 		"a gateway page":              {http.StatusGatewayTimeout, "<html>504</html>", false},
 		"a 503 carrying no code":      {http.StatusServiceUnavailable, `{}`, false},
 		"an empty 502":                {http.StatusBadGateway, "", false},

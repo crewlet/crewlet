@@ -182,7 +182,8 @@ func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 		httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
 		httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
 		httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
-		httpjson.CodeDraining,
+		httpjson.CodeDraining, httpjson.CodeNoRoute,
+		httpjson.CodeMethodNotAllowed, httpjson.CodeInvalidToken,
 	} {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)

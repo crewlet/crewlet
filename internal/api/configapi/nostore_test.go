@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -54,6 +55,30 @@ func TestNoConfigResponseIsCacheable(t *testing.T) {
 		if got := res.Header().Get("Cache-Control"); got != "no-store" {
 			t.Errorf("%s: %s %s answered %d with Cache-Control %q, want no-store",
 				tc.name, tc.method, tc.path, res.Code, got)
+		}
+	}
+}
+
+// THE SURFACE'S OWN 404 AND 405 ARE JSON WITH A CODE, like every other answer
+// the engine writes. They were net/http's text/plain, which the CLI and the
+// dashboard read as something in front of the node — an answer that says
+// nothing about what the node did — rather than as the node's own refusal.
+func TestTheConfigSurfacesOwnRefusalsCarryACode(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	for _, tc := range []struct {
+		method, path string
+		code         string
+	}{
+		{http.MethodDelete, "/config", "method_not_allowed"},
+		{http.MethodGet, "/config/nothing-here", "no_route"},
+	} {
+		res := s.do(t, tc.method, tc.path, "", nil)
+		var body map[string]string
+		if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil ||
+			body["error"] != tc.code {
+			t.Errorf("%s %s answered %d %q, want JSON with code %s", tc.method,
+				tc.path, res.Code, res.Body.String(), tc.code)
 		}
 	}
 }

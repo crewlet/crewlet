@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 )
 
@@ -92,7 +93,9 @@ func (a *assets) serveFavicon(w http.ResponseWriter, r *http.Request) {
 func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 	data, err := fs.ReadFile(a.tree, name)
 	if err != nil {
-		http.NotFound(w, r)
+		// JSON like every other refusal this surface writes, so a client
+		// never has to tell the engine's own 404 from a proxy's.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoRoute)
 		return
 	}
 	etag := a.etagFor(name, data)

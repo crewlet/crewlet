@@ -12,6 +12,11 @@
 // strict client parsing it — the body says it is JSON, the headers swear it is
 // not, and the sniffing that would otherwise paper over it is explicitly
 // disabled. Every error here goes out as real JSON with the right type.
+//
+// The third half is the answers no handler writes: the router's own 404 and
+// 405, which [Mux] turns into this package's JSON, so that EVERY refusal the
+// engine writes carries a code — which is what lets a client tell the node's
+// own answer from a proxy's page in front of it.
 package httpjson
 
 import (
@@ -65,13 +70,38 @@ const (
 	// begun to drain. The request was fine and nothing was done with it; it
 	// belongs on another node, or on this one once it has restarted.
 	CodeDraining Code = "draining"
+
+	// CodeNoRoute is a path nothing on this node serves — a route that is
+	// not registered, a surface its build or configuration does not mount,
+	// an asset that is not in the build. Answered by [Mux] for the mux's
+	// own 404.
+	//
+	// NOT `not_found`, which the routes that DO exist already answer for a
+	// record they do not hold — a secret, an event, a project. A client
+	// branches on that one as "there is no such thing", and `crewlet
+	// secrets get` answers it by reporting the secret absent and the
+	// provisioning sink by minting one: a node with no /secrets surface at
+	// all would have been read as a store holding nothing.
+	CodeNoRoute Code = "no_route"
+
+	// CodeMethodNotAllowed is a path this node serves under another method.
+	// Answered by [Mux] for the mux's own 405, which also carries the
+	// `Allow` header naming the methods it does take.
+	CodeMethodNotAllowed Code = "method_not_allowed"
+
+	// CodeInvalidToken is a credential that is missing, malformed or not
+	// one this node accepts — the auth guard's refusal, and a per-run
+	// token's. ONE spelling for all of them, because telling the caller
+	// which of the three it was tells an attacker the same.
+	CodeInvalidToken Code = "invalid_token"
 )
 
 // Valid reports whether c is one this package defines.
 func (c Code) Valid() bool {
 	switch c {
 	case CodeEncodeFailed, CodeBodyTooLarge, CodeUnreadableBody,
-		CodeInvalidBody, CodeInvalidQuery, CodeInternalError, CodeDraining:
+		CodeInvalidBody, CodeInvalidQuery, CodeInternalError, CodeDraining,
+		CodeNoRoute, CodeMethodNotAllowed, CodeInvalidToken:
 		return true
 	default:
 		return false

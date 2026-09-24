@@ -184,7 +184,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
 		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
-	surface := noStore(routes)
+	// AND THOSE TWO ARE JSON, like every other answer here: see
+	// [httpjson.Mux].
+	surface := noStore(httpjson.Mux(routes))
 	mux.Handle("/config", surface)
 	mux.Handle("/config/", surface)
 }

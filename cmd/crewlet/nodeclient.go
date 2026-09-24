@@ -204,7 +204,10 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 
 // engineCode is the refusal code a non-200 body carries, or "" where it carries
 // none — which no refusal the engine writes does: every one is JSON with an
-// `error` code, the guard's 401 included.
+// `error` code, the guard's 401 included, and so are its router's own
+// `no_route` and `method_not_allowed` for a route or a method the node does
+// not serve ([httpjson.Mux]) — a route an older node lacks is a refusal, not a
+// gateway.
 func engineCode(body []byte) string {
 	var payload struct {
 		Error string `json:"error"`

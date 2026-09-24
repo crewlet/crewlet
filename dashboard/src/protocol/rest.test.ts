@@ -325,6 +325,12 @@ describe("whether an answer is the engine's own", () => {
     ["an engine refusal", () => json({ error: "eviction_refused", detail: "live" }, 409), false],
     ["the guard's own 401", () => json({ error: "invalid_token" }, 401), false],
     [
+      "the router's own 404 for a route this node does not serve",
+      () => json({ error: "no_route", detail: "this node serves nothing at POST /x" }, 404),
+      false,
+    ],
+    ["the router's own 405", () => json({ error: "method_not_allowed" }, 405), false],
+    [
       "a gateway timeout's page",
       () =>
         new Response("<html><h1>504 Gateway Time-out</h1></html>", {

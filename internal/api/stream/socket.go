@@ -128,7 +128,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// nosniff, so a JSON literal handed to it is the one
 			// combination guaranteed to stop a strict client parsing
 			// the body it is being sent.
-			httpjson.Fail(w, http.StatusUnauthorized, "invalid_token")
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 
