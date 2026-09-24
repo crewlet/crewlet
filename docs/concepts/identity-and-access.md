@@ -381,12 +381,12 @@ be.
 So a node that finds an empty estate mints a **one-time code** —
 `cwl_boot_<expiry, unix seconds>_<64 hex>`, thirty-two random bytes behind the
 instant it stops working — writes it beside its store at `0600`, and publishes
-the SHA-256 of the whole value on the identity log. Nothing ever
-serves the code: the log line carries its **path**, and so does the answer to a
-re-issue — and so does `GET /health`, which answers `identity: unclaimed` with
-this node's `bootstrap_code_path` until somebody is enrolled, because it is the
-one surface an install with nobody in it can reach. Reading it means having access to the host, which is the only
-credential a company genuinely has before it has any.
+the SHA-256 of the whole value on the identity log. Nothing ever serves the
+code: the log line carries its **path**, and so does the answer to a re-issue —
+and so does `GET /health`, which answers `identity: unclaimed` with this node's
+`bootstrap_code_path` until somebody is enrolled, because it is the one surface
+an install with nobody in it can reach. Reading it means having access to the
+host, which is the only credential a company genuinely has before it has any.
 
 ```mermaid
 sequenceDiagram
@@ -458,7 +458,8 @@ answer is reachable only by presenting a code whose digest is on the log or in
 the serving node's own file, which a stranger guessing cannot do, or one whose
 spelled expiry has passed, which is answered alike whether or not such a code
 was ever minted — and the digest covers the expiry, so a real code's cannot be
-moved. It is counted against the source like every failed attempt. The remedy is either of:
+moved. It is counted against the source like every failed attempt. The remedy
+is either of:
 
 - **A restart of the node that holds the file.** At boot a node checks its file
   against the log. A code the log still honours is kept — live, because
@@ -483,8 +484,8 @@ moved. It is counted against the source like every failed attempt. The remedy is
 **A stopped attempt never holds the founder's names.** A dead code is refused
 at the take, before anything is claimed. **The founder is derived from the
 code** (a uuid7 at the instant the log minted it), so an attempt that stopped
-halfway — a login outside the grammar, a record whose answer never came — is
-finished by presenting the same code again, rather than blocked by the address
+halfway — a login somebody had already claimed, a record whose answer never
+came — is finished by presenting the same code again, rather than blocked by the address
 its own first attempt claimed. And once that code has died, the fresh one a
 restart or a re-issue hands out derives a *different* person, which the old
 attempt's reservation would refuse as "that address belongs to somebody" —
@@ -503,9 +504,9 @@ ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
 for a deployment restored from a backup where the answer is "ask somebody who
 already has an account" — and there the re-issue route is not served at all
 (`404`), because that deployment never bootstraps this way, where a company
-that has started answers `409 bootstrap_closed`. Either way the route, its open flag on `GET
-/auth/config`, the boot offer and the re-issue ask **one** gate, so none of them
-can offer a code the others would refuse — and a node whose company has started
+that has started answers `409 bootstrap_closed`. Either way the route, its open
+flag on `GET /auth/config`, the boot offer and the re-issue ask **one** gate,
+so none of them can offer a code the others would refuse — and a node whose company has started
 removes any code file it still holds at its next boot, so an established fleet
 keeps no superuser claim on any host.
 
