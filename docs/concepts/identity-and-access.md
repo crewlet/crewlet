@@ -1126,9 +1126,15 @@ cookie past its deadline, a revoked person's cookie and one naming a session a
 record already ended are cleared and nothing else: each of them was already
 over, whatever ended it already said so, and writing a close per post would let
 anybody holding such a cookie author an `iam_session_ended` row per request.
-Ending one **named** session reads the same way — its owner and whether it is
-still live, in one snapshot — and a node that cannot read its rows records the
-close a person asked for without announcing it.
+A node that cannot read its rows still records the close `POST /auth/logout`
+asked for — the lineage and the person come off the cookie's own verified
+signature, so nothing has to be looked up to write it — and announces nothing,
+since it cannot say the session was live until then. Ending one **named**
+session reads the same way — its owner and whether it is still live, in one
+snapshot — but there the owner **is** the read: it is what the caller is
+checked against, because a lineage is not a secret. So a node that cannot read
+its rows answers `503 identity_unavailable` with a `Retry-After` and writes
+nothing, rather than ending a session it cannot say is the caller's.
 
 Every field is there because a node has to answer with it and has no other way
 to know it:
