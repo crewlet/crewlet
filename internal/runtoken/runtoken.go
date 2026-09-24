@@ -94,10 +94,12 @@ const ephemeralTag = "ephemeral"
 // KeyMaterial is one keyring entry: an id every node agrees on, and the
 // material behind it.
 //
-// THE MATERIAL IS NOT RESOLVED. Tier A's ${VAR} references reach here
-// verbatim, because the keyring is read before the secret store that would
-// resolve them is open. Two nodes reading the same document derive the same
-// key either way: what matters is that they agree, not that this is plaintext.
+// THE MATERIAL IS RESOLVED before it reaches here: Tier A expands its whole
+// document from the environment before decoding it (never from the secret
+// store, whose own key this is). So two nodes that spell one key differently
+// — a `${K}` on one, the literal on the other — derive the same key, because
+// they read the same bytes; it used to say the references arrived verbatim,
+// which would have split every token across exactly that fleet.
 type KeyMaterial struct {
 	ID       string
 	Material string

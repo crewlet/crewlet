@@ -6,6 +6,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A company whose agents are at every stage of getting their own GitHub App:
@@ -409,6 +414,43 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	}
 	if strings.Contains(string(body), "BEGIN RSA PRIVATE KEY") {
 		t.Fatal("the app's private key was written into the company document")
+	}
+}
+
+// AN APP IS ITS BEGINNER'S: the key's row, the webhook secret's and the seat's
+// chart record name the person who began the creation, with the credential
+// they began it through beside them.
+//
+// The callback carries no credential of ours, so its writes recorded `setup` —
+// a name that is nobody — and "who gave this agent its GitHub identity" had no
+// answer anywhere. The state carries the beginner now. Mutation: record the
+// completion under anything but the state's party and every check fails.
+func TestAnAppIsRecordedAsWhoBeganIt(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt:          time.Now().Add(time.Hour),
+		SensitiveReauthAt: time.Now().Add(time.Hour),
+	}
+	s.convertOneApp(t, "sre-lead", map[string]any{
+		"id": 91, "slug": "acme-sre-lead", "name": "Acme sre-lead",
+		"pem":            "-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----",
+		"webhook_secret": "the-apps-own-secret",
+	})
+	want := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat}
+	for _, name := range []string{"GITHUB_APP_KEY_SRE_LEAD",
+		"GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD"} {
+		if got := s.vault.author(name); got != authorOf(want) {
+			t.Errorf("%s records %+v, want who began the creation, %+v",
+				name, got, authorOf(want))
+		}
+	}
+	if got := s.seats.by["sre-lead"]; got != want {
+		t.Errorf("the seat's chart record is written as %+v, want %+v", got, want)
 	}
 }
 

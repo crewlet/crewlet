@@ -133,6 +133,14 @@ func wireAPI(
 	if err != nil {
 		return fail("integration status", err)
 	}
+	// THE NODE'S OWN KEYRING, as cmd/crewlet hands it over: every node in
+	// this suite carries one (withKeyring), and a secret store built with
+	// none — which this harness used to pass — refused every credential a
+	// setup submission sealed, on a shape `crewlet run` never produces.
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		return fail("keyring", err)
+	}
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: company,
 		Config:  configSurface,
@@ -140,12 +148,13 @@ func wireAPI(
 		// a seat's own document is the org chart's rather than the stored
 		// revision's, so a per-seat submission writes through the engine.
 		Seats:       e,
-		Secrets:     fleetsecrets.New(backends.Fleet, nil),
+		Secrets:     fleetsecrets.New(backends.Fleet, cipher),
 		Resolve:     e.LookupSecret,
 		Passes:      e.SetupRunner(),
 		Sink:        e.SetupSink,
 		Status:      status,
 		SlackApps:   e.SlackApps,
+		StateCipher: cipher,
 		StateClaims: backends.Fleet,
 	})
 	if err != nil {

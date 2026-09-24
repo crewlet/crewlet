@@ -53,7 +53,6 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -1646,11 +1645,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// ONE AGENT'S OWN GITHUB APP, which is the one thing here a
 		// reconcile loop cannot do alone: an app is created by POSTing a
 		// manifest from a page carrying the operator's own GitHub session.
-		// The signer ties the browser that comes back to the seat that
-		// started, and it is keyed from the SAME Tier A material every
-		// node reads, so a fleet where the two halves land on different
-		// nodes still agrees.
-		StateKeys: appStateKeyMaterial(boot),
+		// The state ties the browser that comes back to the seat that
+		// started and to who started it, sealed under the SAME keyring
+		// every node holds, so a fleet where the two halves land on
+		// different nodes still agrees.
+		StateCipher: cipher,
 		// And the fleet's claim registry SPENDS each state, so a link that
 		// reached a log or a browser history cannot be presented a second
 		// time, on this node or any other.
@@ -1658,11 +1657,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	})
 	if err != nil {
 		return nil, err
-	}
-	if !appStateKeyMaterial(boot).Usable() {
-		log.Warn("github_app_state_key_is_per_process",
-			"detail", "no secrets.keys are configured, so a GitHub App creation "+
-				"begun on one node cannot be finished on another")
 	}
 
 	// What only the engine can answer (in flight, seats, the posture and
@@ -2610,37 +2604,6 @@ func (w engineConfigWriter) SetSeat(
 ) error {
 	_, err := w.engine.SetSeatDocument(ctx, handle, body, summary, by)
 	return err
-}
-
-// appStateKeyMaterial is the Tier A keyring, as the GitHub App state signer
-// is keyed from.
-//
-// THE SAME KEY ON EVERY NODE, which is the only property that matters: a
-// GitHub App callback lands on whichever node the load balancer picks, and a
-// state signed with one key and verified with another is a flow that fails on
-// exactly the fleet it was built for.
-//
-// The material arrives ALREADY RESOLVED — Tier A expands its whole document
-// before decoding, which [config.Secrets.Cipher] states outright — and that
-// is what makes the agreement hold rather than something to apologise for:
-// two nodes that spell one key differently, a `${K}` here and the literal
-// there, derive the SAME signer key because both read the same resolved
-// bytes. (The comment here used to claim the opposite, that the material was
-// deliberately left unresolved to avoid holding plaintext. Under that claim
-// those two nodes would derive different keys and split the App flow across
-// the fleet.)
-//
-// Ordering cannot split it either: [runtoken.KeyFrom] sorts and hashes, so
-// two nodes listing their keys in a different order still agree.
-//
-// A deployment with no keys gets a per-process random key, which is correct
-// for one node and unusable across two — the warning this function's caller
-// logs.
-func appStateKeyMaterial(boot *config.Bootstrap) runtoken.Material {
-	if boot == nil {
-		return runtoken.Material{}
-	}
-	return boot.Secrets.TokenMaterial()
 }
 
 // nativeWork and nativePages are this node's projections, as the read surface

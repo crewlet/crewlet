@@ -33,7 +33,6 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -43,6 +42,23 @@ import (
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+
+// testCipher is a keyring of one fresh key, as a node's own is: what the app
+// state is sealed under.
+func testCipher(t *testing.T) secrets.Cipher {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return cipher
+}
 
 // testAuthor is who a row a case seeds directly records.
 var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
@@ -203,6 +219,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.StateClaims == nil {
 		opts.StateClaims = coordmemory.NewFleet()
 	}
+	if opts.StateCipher == nil {
+		opts.StateCipher = testCipher(t)
+	}
 	if opts.Seats == nil {
 		opts.Seats = &seatStore{}
 	}
@@ -235,6 +254,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			Sink:        func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 			Status:      &statusStore{},
 			SlackApps:   func() map[string]string { return nil },
+			StateCipher: testCipher(t),
 			StateClaims: coordmemory.NewFleet(),
 		}
 	}
@@ -251,6 +271,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sink":        func(o *setupapi.Options) { o.Sink = nil },
 		"Status":      func(o *setupapi.Options) { o.Status = nil },
 		"SlackApps":   func(o *setupapi.Options) { o.SlackApps = nil },
+		"StateCipher": func(o *setupapi.Options) { o.StateCipher = nil },
 		"StateClaims": func(o *setupapi.Options) { o.StateClaims = nil },
 	} {
 		opts := complete()
@@ -301,9 +322,7 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase strin
 		Status:       s.status,
 		SlackApps:    func() map[string]string { return apps },
 		ExternalBase: externalBase,
-		// The keyring a GitHub App state is signed from.
-		StateKeys: runtoken.OneKey("k1", "test-material"),
-		Now:       func() time.Time { return pinned },
+		Now:          func() time.Time { return pinned },
 	})
 	mount(t, s.mux, s.setup, cfg)
 	return s
@@ -980,7 +999,6 @@ func (s *surface) withPass(
 			return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
 		},
 		Status:       status,
-		StateKeys:    runtoken.OneKey("k1", "test-material"),
 		Now:          func() time.Time { return pinned },
 		ExternalBase: s.externalBase,
 	})

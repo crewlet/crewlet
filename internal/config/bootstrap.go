@@ -1605,14 +1605,16 @@ func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
 //
 // ONE BUILDER FOR EVERY ISSUER, because it was three: the engine built this
 // list for the OTLP receiver, the engine built it again for the MCP bridge,
-// and the CLI built it a third time for the GitHub App state signer. Three
-// copies of one rule about which keys a fleet agrees on, in three files that
-// nothing compares.
+// and the CLI built it a third time for a GitHub App state signer the setup
+// surface has since replaced with the keyring's own cipher. Copies of one rule
+// about which keys a fleet agrees on, in files that nothing compares.
 //
-// THE REFERENCES ARE NOT RESOLVED, and must not be: this is read before the
-// secret store whose own key would resolve them is open. Two nodes reading the
-// same document derive the same key either way — what matters is that they
-// agree, not that the material is the plaintext.
+// THE MATERIAL IS ALREADY RESOLVED, as [Secrets.Cipher]'s is: Tier A expands
+// its whole document from the environment before decoding, so two nodes that
+// spell one key differently — a `${K}` on one, the literal on the other —
+// derive the same signing key, because both read the same bytes. (This said
+// the opposite, which would have split every per-run token across such a
+// fleet.)
 func (s *Secrets) TokenMaterial() runtoken.Material {
 	if s == nil {
 		return runtoken.Material{}

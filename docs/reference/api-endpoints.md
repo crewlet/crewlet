@@ -1902,13 +1902,18 @@ curl -X POST https://engine.example.com/setup/integrations/github/app \
   "tier": "review",
   "action_url": "https://github.com/organizations/acme/settings/apps/new",
   "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
-  "state": "<signed token naming the seat>"
+  "state": "<sealed token naming the seat and who began the creation>"
 }
 ```
 
 Those three values are what GitHub's manifest flow takes: the browser POSTs the
 `manifest` as a form field to `action_url`, carrying `state` on that URL so the
-redirect can be tied back to the seat that started. `action_url` is the
+redirect can be tied back to the seat that started — and to whoever started it,
+because the callback's writes are theirs. The state is **sealed** under the
+fleet keyring rather than signed: it travels through GitHub, a browser history
+and every ingress log, and who began a creation is nobody's business there. It
+is URL-safe as it stands, and any node opens it, including one that has already
+made the next keyring key active. `action_url` is the
 organization's own app registration page whenever
 `integrations.github.provisioning.org` names one, because an app registered
 under a person's account cannot be installed on the organization that owns the
@@ -1927,8 +1932,11 @@ what stands in its place, and it is validated before anything else happens.
 
 - With a `code`, the engine converts the manifest, **seals the app's private
   key and webhook secret first**, then records `app_id`, `app_slug` and a
-  `${VAR}` pointing at the sealed key on the seat, through the same per-entity
-  config route [per-seat setup](#per-seat-setup) uses. `installation_id` is
+  `${VAR}` pointing at the sealed key on the seat, through the org chart as
+  [per-seat setup](#per-seat-setup) does. All three writes are **the
+  beginner's**: the sealed rows and the seat's chart record name whoever
+  began the creation, with the credential they began it through — they used
+  to name `setup`, which is nobody. `installation_id` is
   written as `0`: the install is a second act. The page then links to the
   install. The seal comes first because GitHub returns those two values exactly
   once and reissues neither, so a failure after it costs a retry and a failure
@@ -4365,8 +4373,9 @@ Two arrivals, one route: after the app is **created**, with a one-time code to
 convert, and after it is **installed**, with nothing but `?installed=<handle>`.
 Unauthenticated, because a redirect from GitHub carries no engine credential;
 the `state` minted by [`POST /setup/integrations/github/app`](#one-agents-own-github-app)
-stands in its place and is a signed token naming the seat, checked before the
-code is converted — and **spent** there, so a state that reached a browser
+stands in its place and is a token sealed under the fleet keyring naming the
+seat and who began the creation, opened before the code is converted — and
+**spent** there, so a state that reached a browser
 history or an ingress access log cannot be presented a second time within the
 fifteen minutes it stays valid. The spend goes through the fleet's claim
 registry, so it holds when the two halves of the flow land on different nodes,

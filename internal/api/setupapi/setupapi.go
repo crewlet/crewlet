@@ -64,7 +64,6 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -98,7 +97,7 @@ const retryBusySeconds = 3
 
 // Options wire the service.
 //
-// EVERY FIELD BUT Now AND StateKeys IS REQUIRED, and [New] refuses a missing one
+// EVERY FIELD BUT Now IS REQUIRED, and [New] refuses a missing one
 // by name. `crewlet run` builds this beside an engine that holds all of them, so
 // a nil is a wiring mistake, and a surface that quietly shrank around one (no
 // surface at all, every secret write refused, every requirement answering
@@ -173,20 +172,22 @@ type Options struct {
 	// says where the seat's credential lives, which is what it can prove.
 	SlackApps func() map[string]string
 
-	// StateKeys is the Tier A keyring the GitHub App state signer is keyed
-	// from, and it MUST be the same on every node that mints or validates
-	// a state: a fleet where the begin and the callback land on different
-	// nodes would otherwise refuse every completion.
+	// StateCipher seals the GitHub App state, and it MUST be the fleet's own
+	// keyring, the same on every node that mints or opens a state: a fleet
+	// where the begin and the callback land on different nodes would
+	// otherwise refuse every completion.
 	//
-	// One that names no active key takes a per-process key, which is
-	// correct for one node and cannot work across two. That is a real
-	// deployment (a node with no secrets.keys), so it is not refused; the
-	// caller logs what it costs.
-	StateKeys runtoken.Material
+	// REQUIRED, and it always exists where this surface does: config
+	// refuses to serve the API without `secrets.keys`, and every node that
+	// runs a state log needs them anyway. It used to be the keyring's raw
+	// material with a per-process fallback for a node with none — a node
+	// that could begin a creation and then not seal the app's key, which
+	// GitHub issues once, when the browser came back.
+	StateCipher secrets.Cipher
 
 	// StateClaims is where a spent callback state is recorded, so no state
-	// is accepted twice. It has the same fleet requirement as StateKeys for
-	// the same reason: a callback landing on a node that cannot see the
+	// is accepted twice. It has the same fleet requirement as StateCipher
+	// for the same reason: a callback landing on a node that cannot see the
 	// first one's record would accept a replay. The fleet's claim registry
 	// is open on every node.
 	StateClaims StateClaims
@@ -236,6 +237,7 @@ func New(opts Options) (*Service, error) {
 		{"Sink", opts.Sink == nil},
 		{"Status", opts.Status == nil},
 		{"SlackApps", opts.SlackApps == nil},
+		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
 	} {
 		if field.absent {
@@ -278,7 +280,7 @@ func New(opts Options) (*Service, error) {
 	// callback reaches the writer and the secret store through it), and one
 	// constructor for both halves leaves no window in which the begin route
 	// has a service with no flow to validate the state it would mint.
-	s.appFlow = newAppFlow(s, opts.StateKeys, opts.StateClaims)
+	s.appFlow = newAppFlow(s, opts.StateCipher, opts.StateClaims)
 	return s, nil
 }
 

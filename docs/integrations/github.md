@@ -245,13 +245,13 @@ sequenceDiagram
     participant GH as GitHub
 
     Op->>CL: POST /setup/integrations/github/app {"seat": "senior-engineer"}
-    CL-->>Op: manifest, action URL, signed state
+    CL-->>Op: manifest, action URL, sealed state (the seat, and who began it)
     Op->>GH: form POST of the manifest (operator's own session)
     GH-->>Op: confirm the app, then redirect
     GH->>CL: GET /webhooks/github-app?code=...&state=...
     CL->>GH: POST /app-manifests/{code}/conversions
     GH-->>CL: app id, slug, private key, webhook secret (once only)
-    CL->>CL: seal the key and the webhook secret, record the app on the seat
+    CL->>CL: seal the key and the webhook secret, record the app on the seat, both as whoever began it
     CL-->>Op: "App created", then follows the install link after 5 seconds
     Op->>GH: install the app on the organization
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
@@ -442,8 +442,8 @@ verify against, and it answers `503` rather than accepting the delivery.
 
 | Route | Called by | What it does |
 |---|---|---|
-| `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a signed state |
-| `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app; also the page an install returns to |
+| `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a state sealed under the fleet keyring naming the seat and who began the creation |
+| `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app — each written as whoever began the creation; also the page an install returns to |
 
 Creating an app and installing it are two clicks at GitHub, and an operator who
 has just done the first is already going to do the second, so the created-app
@@ -453,16 +453,20 @@ scripting off: the countdown is hidden until the script owns it, so the page
 never promises a redirect it cannot make.
 
 The callback carries no engine credential, because a browser redirect from
-GitHub has none to carry. What stands in its place is the **state**: a signed
-token naming the seat, minted by the begin route, valid for 15 minutes, and
-validated before anything else happens. It is scoped to this flow, so a token
-minted for another signed URL this engine issues cannot be replayed here.
+GitHub has none to carry. What stands in its place is the **state**: a token
+naming the seat and whoever began the creation, minted by the begin route,
+valid for 15 minutes, and opened before anything else happens. The key, the
+webhook secret and the seat's record are all written as that person, with the
+credential they began through beside them. It is scoped to this flow, so
+nothing else the keyring seals — a sign-in's flight, a stored secret — opens
+as one.
 
-Across a fleet the state signer is keyed from the Tier A keyring
-(`secrets.keys`), so a creation begun on one node can be finished on another. A
-deployment with no keys configured falls back to a per-process key, which is
-correct for a single node and cannot work across two; the engine says so at
-startup with `github_app_state_key_is_per_process`.
+It is **sealed** under the Tier A keyring (`secrets.keys`) rather than signed,
+because it travels through GitHub, the browser's history and every ingress log,
+and who began a creation is this company's business rather than theirs. Every
+node holds the keyring — the API is not served without one — so a creation
+begun on one node can be finished on another, including one that has already
+made the next key active during a rotation.
 
 Request and response shapes are in
 [API Endpoints](../reference/api-endpoints.md#one-agents-own-github-app).
