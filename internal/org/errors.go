@@ -151,6 +151,14 @@ var (
 	// so the half-formed case fails loudly instead.
 	ErrEmbeddedEnvRef = errors.New("value embeds a ${VAR} reference")
 
+	// ErrReservedOperatorID reports a seat binding [ReservedOperatorID] with
+	// `contact.crewlet_operator_id`. That id is the attribution a DISABLED
+	// auth guard stamps on every caller, so binding it would make everybody
+	// who reaches an unguarded engine that person — their inbox, their
+	// queue, their writes — and would file every disabled-mode write in the
+	// audit trail under their name.
+	ErrReservedOperatorID = errors.New("operator id is reserved")
+
 	// ErrInvalidSchedule reports a schedule that cannot be evaluated: an
 	// empty name or task, a cron expression without five fields, an unknown
 	// timezone, a non-positive timeout, an unknown target, or a duplicate

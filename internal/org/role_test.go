@@ -309,6 +309,52 @@ func TestContactRejectsEmbeddedEnvRefs(t *testing.T) {
 	}
 }
 
+// THE RESERVED OPERATOR ID IS NOBODY'S. It is what a disabled auth guard
+// stamps on every caller, so a seat bound to it would make everybody who
+// reaches an unguarded engine that person. Refused as a literal — folded,
+// because the lookup that would match it folds — and DROPPED where a ${VAR}
+// resolves to it, since validation cannot always see the environment that
+// value lives in. Only the operator field is reserved: the same text as a
+// GitHub login is somebody's account.
+func TestTheReservedOperatorIDBindsNoSeat(t *testing.T) {
+	t.Parallel()
+	for _, literal := range []string{"anonymous", "Anonymous", " ANONYMOUS "} {
+		c := HumanContact{CrewletOperatorID: literal}
+		c.Normalize()
+		err := c.Validate()
+		if !errors.Is(err, ErrReservedOperatorID) {
+			t.Fatalf("crewlet_operator_id %q: Validate() = %v, want ErrReservedOperatorID",
+				literal, err)
+		}
+		if !strings.Contains(err.Error(), "crewlet_operator_id") {
+			t.Errorf("the refusal does not name the field: %v", err)
+		}
+	}
+	if err := (&HumanContact{GitHubLogin: ReservedOperatorID}).Validate(); err != nil {
+		t.Errorf("a github login spelled like the reserved id was refused: %v", err)
+	}
+
+	ref := &Role{Name: "Ana", Kind: KindHuman,
+		Contact: &HumanContact{SlackUserID: "U1", CrewletOperatorID: "${OPERATOR}"}}
+	if err := ref.Validate(); err != nil {
+		t.Fatalf("a reference is refused before it is resolved: %v", err)
+	}
+	lookup := lookupFrom(map[string]string{"OPERATOR": "Anonymous"})
+	if got := ref.Contact.ResolvedIdentities(lookup); !slices.Equal(got,
+		[]Identity{{TransportSlack, "U1"}}) {
+		t.Errorf("identities = %v: a reference resolving to the reserved id "+
+			"must register no operator binding", got)
+	}
+	if got := ref.ResolvedOperatorID(lookup); got != "" {
+		t.Errorf("ResolvedOperatorID = %q: every disabled-mode write would be "+
+			"read back as this person's", got)
+	}
+	chart := &Organization{Name: "Acme", Roles: []*Role{ref}}
+	if seat := chart.SeatByOperatorID(ReservedOperatorID, lookup); seat != nil {
+		t.Errorf("the disabled guard's caller resolved to seat %q", seat.Handle())
+	}
+}
+
 // TestResolvedIdentitiesEnumeration pins the transport table: one Atlassian
 // account id answers for both Jira and Confluence, and the order is the one
 // registration and rendering walk.

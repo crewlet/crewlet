@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // guard builds a guard over a Tier A shaped by the mutator.
@@ -296,12 +297,13 @@ func TestDisabledServesEverythingAsAnonymous(t *testing.T) {
 
 func TestTheReservedIDIsTheOneTheAPIStamps(t *testing.T) {
 	t.Parallel()
-	// Config refuses it as a token id and the API stamps it. Two copies
-	// would disagree silently, each side staying self-consistent while the
-	// reservation stopped covering what is actually written.
-	if auth.AnonymousOperator != config.ReservedOperatorID {
-		t.Errorf("the API stamps %q but config reserves %q",
-			auth.AnonymousOperator, config.ReservedOperatorID)
+	// Config refuses it as a token id, the chart refuses it as a seat
+	// binding, and the API stamps it. Two copies would disagree silently,
+	// each side staying self-consistent while the reservation stopped
+	// covering what is actually written.
+	if auth.AnonymousOperator != org.ReservedOperatorID {
+		t.Errorf("the API stamps %q but the chart reserves %q",
+			auth.AnonymousOperator, org.ReservedOperatorID)
 	}
 }
 
@@ -488,7 +490,7 @@ func TestConfigRefusesTheShapesThatWouldLockEveryoneOut(t *testing.T) {
 			name: "the reserved attribution as a token id",
 			auth: config.APIAuth{
 				AllowAnonymousRead: true,
-				Tokens:             []config.APIToken{{ID: config.ReservedOperatorID, Token: "t"}},
+				Tokens:             []config.APIToken{{ID: org.ReservedOperatorID, Token: "t"}},
 			},
 			want: "reserved",
 		},

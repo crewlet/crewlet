@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -1541,12 +1542,13 @@ func (a *APIAuth) validate(path Path) error {
 	// "anonymous" is the attribution recorded when auth.disabled is true.
 	// A real token carrying it would collide in an audit row with the
 	// writes made while the guard was off — the one distinction those
-	// rows exist to keep.
-	if _, reserved := seen[ReservedOperatorID]; reserved {
+	// rows exist to keep. The id is org's, because the chart refuses it
+	// as a seat binding too and config is the package that imports org.
+	if _, reserved := seen[org.ReservedOperatorID]; reserved {
 		p.add(at(path, "tokens"), ErrConflict,
 			"token id %q is reserved: it is the attribution recorded when "+
 				"api.auth.disabled is true. Pick a different id",
-			ReservedOperatorID)
+			org.ReservedOperatorID)
 	}
 
 	// The pairing that leaves nothing reachable. No tokens means no
@@ -1616,16 +1618,6 @@ func checkOrigin(path Path, origin string) error {
 	}
 	return p.err()
 }
-
-// ReservedOperatorID is the attribution stamped on writes made while the auth
-// guard is disabled.
-//
-// Exported because two packages need the same answer: config refuses it as a
-// token id, and the API stamps it on a disabled-mode request. A second copy of
-// the string is how those two would come to disagree about which id is
-// reserved — and the disagreement would be silent, because each side would
-// still be self-consistent.
-const ReservedOperatorID = "anonymous"
 
 // ---- secrets --------------------------------------------------------- //
 

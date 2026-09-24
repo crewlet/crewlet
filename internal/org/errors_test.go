@@ -93,6 +93,9 @@ func TestASeatErrorCarriesItsSeatAndField(t *testing.T) {
 		{"an embedded reference", human(func(r *Role) {
 			r.Contact = &HumanContact{SlackUserID: "U${SUFFIX}"}
 		}), ErrEmbeddedEnvRef, []any{"contact", "slack_user_id"}},
+		{"the reserved operator id as a binding", human(func(r *Role) {
+			r.Contact = &HumanContact{SlackUserID: "U0HUMAN", CrewletOperatorID: " Anonymous "}
+		}), ErrReservedOperatorID, []any{"contact", "crewlet_operator_id"}},
 		{"a schedule field", &Role{Name: "Dev", Schedules: []Schedule{
 			{Name: "standup", Cron: "0 9 * * *", Task: "post"},
 			{Name: "report", Cron: "0 9 * *", Task: "post"},

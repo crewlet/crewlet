@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -107,6 +109,57 @@ func TestAnAnonymousReaderIsNeitherBoundNorAnOperator(t *testing.T) {
 	}
 	if got["handle"] != "" {
 		t.Errorf("handle = %v, want none", got["handle"])
+	}
+}
+
+// A DISABLED GUARD IS NEVER A PERSON. With `api.auth.disabled` every caller
+// is stamped with the reserved id, so a seat bound to that id would hand
+// whoever reaches the engine that person's dashboard — their inbox, their
+// queue, their name on every write. The literal is refused where the company
+// is read, naming the field; a `${VAR}` cannot be, because its value lives in
+// an environment validation may not see, so the resolution drops it instead.
+//
+// Not parallel: the reference resolves against the process environment, which
+// is what every consumer of the binding reads.
+func TestADisabledGuardIsNeverAPerson(t *testing.T) {
+	b := config.DefaultBootstrap()
+	b.API.Auth.Disabled = true
+	caller, ok := auth.New(&b).Operator("")
+	if !ok || caller != org.ReservedOperatorID {
+		t.Fatalf("a disabled guard answered %q/%v, want the reserved id", caller, ok)
+	}
+
+	literal := strings.Replace(viewerCompany, "crewlet_operator_id: ops-1",
+		"crewlet_operator_id: "+caller, 1)
+	_, err := config.ParseCompany([]byte(literal))
+	if !errors.Is(err, org.ErrReservedOperatorID) {
+		t.Fatalf("a seat bound to %q parsed with %v, want it refused", caller, err)
+	}
+	if !strings.Contains(err.Error(), "crewlet_operator_id") {
+		t.Errorf("the refusal does not name the field: %v", err)
+	}
+
+	t.Setenv("CREWLET_TEST_BOUND_OPERATOR", "Anonymous")
+	cfg, err := config.ParseCompany([]byte(strings.Replace(viewerCompany,
+		"crewlet_operator_id: ops-1",
+		"crewlet_operator_id: ${CREWLET_TEST_BOUND_OPERATOR}", 1)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Work:    &stubWork{},
+	})
+	answered, err := r.Answer(t.Context(), "viewer", nil, caller)
+	got := answerMap(t, answered, err)
+	if got["handle"] != "" {
+		t.Errorf("the disabled guard's caller is seat %v; a reference resolving "+
+			"to the reserved id must bind nobody", got["handle"])
+	}
+	if got["operator_id"] != caller {
+		t.Errorf("operator_id = %v, want the reserved id the guard stamped",
+			got["operator_id"])
 	}
 }
 
