@@ -1247,20 +1247,20 @@ func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
 func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	invite := func(id, op string) error {
+	invite := func(op string) error {
 		_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-			ID: id, Email: "sarah@example.com",
+			Email:     "sarah@example.com",
 			Grants:    []iam.Grant{iam.GrantStateRead},
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      op, Reason: "onboarding",
 		})
 		return err
 	}
-	if err := invite("018f3a9c-0000-7000-8000-0000000000d1", "op-1"); err != nil {
+	if err := invite(operationKey()); err != nil {
 		t.Fatalf("the first invitation: %v", err)
 	}
 	rig.drain()
-	err := invite("018f3a9c-0000-7000-8000-0000000000d2", "op-2")
+	err := invite(operationKey())
 	if err == nil {
 		t.Fatal("a second invitation to the same address was accepted, so " +
 			"the company holds two links that each create one person")
@@ -1281,8 +1281,7 @@ func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	if _, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-		ID:    "018f3a9c-0000-7000-8000-0000000000e1",
-		Email: "sarah@example.com", OpID: "op-1",
+		Email: "sarah@example.com", OpID: operationKey(),
 	}); err == nil {
 		t.Error("an invitation with no expiry was accepted")
 	}

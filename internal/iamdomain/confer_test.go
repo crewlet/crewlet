@@ -69,23 +69,23 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	invite := func(w *iamdomain.Writer, address, op string, grants []iam.Grant) error {
+	invite := func(w *iamdomain.Writer, address string, grants []iam.Grant) error {
 		return rig.draining(func() error {
 			_, err := w.Invite(rig.t.Context(), iamdomain.InviteMint{
-				ID: uuid.Must(uuid.NewV7()).String(), Email: address,
+				Email:  address,
 				Grants: grants, ExpiresAt: brokerAt.Add(168 * time.Hour),
-				OpID: op, Reason: "onboarding",
+				OpID: operationKey(), Reason: "onboarding",
 			})
 			return err
 		})
 	}
-	if err := invite(narrowAdmin(rig), "sarah@example.com", "op-widen",
+	if err := invite(narrowAdmin(rig), "sarah@example.com",
 		[]iam.Grant{iam.GrantConfigWrite}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party holding only %s issued an invitation conferring "+
 			"config:write (%v) — the redemption would hand out what the "+
 			"issuer never held", iamdomain.AdminGrant, err)
 	}
-	if err := invite(narrowAdmin(rig), "ravi@example.com", "op-within",
+	if err := invite(narrowAdmin(rig), "ravi@example.com",
 		[]iam.Grant{iamdomain.AdminGrant}); err != nil {
 		t.Errorf("an invitation conferring what the issuer holds was "+
 			"refused: %v", err)
@@ -100,14 +100,15 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	offered := []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
 	issue := func(address string) string {
 		t.Helper()
-		id := uuid.Must(uuid.NewV7()).String()
+		var id string
 		if err := rig.draining(func() error {
-			_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-				ID: id, Email: address, Grants: offered,
+			issued, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+				Email: address, Grants: offered,
 				Colleague: iam.ColleagueRead,
 				ExpiresAt: brokerAt.Add(168 * time.Hour),
-				OpID:      "op-invite-" + id, Reason: "onboarding",
+				OpID:      operationKey(), Reason: "onboarding",
 			})
+			id = issued.ID
 			return err
 		}); err != nil {
 			t.Fatalf("invite %s: %v", address, err)
@@ -298,6 +299,25 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 
 // blindOf is the keyed blind this rig's writer derives an address's subject
 // from, which is what an invitation's spend arbitrates on.
+// operationKey is a fresh operation key, which a create's id is derived from:
+// a uuid7, as every one the surfaces mint is.
+func operationKey() string { return uuid.Must(uuid.NewV7()).String() }
+
+// invitationIDOf is the invitation an operation key issues under the rig's
+// company key.
+func invitationIDOf(t *testing.T, key string) string {
+	t.Helper()
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatalf("NewBlinder: %v", err)
+	}
+	id, err := blinder.InvitationID(key)
+	if err != nil {
+		t.Fatalf("derive the invitation of %s: %v", key, err)
+	}
+	return id
+}
+
 func blindOf(t *testing.T, address string) string {
 	t.Helper()
 	blinder, err := iamdomain.NewBlinder(testBlindKey)

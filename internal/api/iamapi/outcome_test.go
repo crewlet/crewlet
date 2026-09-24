@@ -82,6 +82,95 @@ func TestAWriteNobodyCanConfirmIsNeitherAnsweredNorAnnounced(t *testing.T) {
 	}
 }
 
+// A CREATE RETRIED UNDER THE KEY ITS UNKNOWN ANSWER CARRIED NAMES WHAT ITS
+// FIRST ATTEMPT CREATED.
+//
+// The unknown answer says the only safe retry is the SAME one, sent back as the
+// Idempotency-Key — and both creates minted a fresh id per request, so the
+// retry named a second person or a second invitation, which the address the
+// first attempt claimed refused as somebody else's: 409 against its own first
+// attempt, and the link to an invitation that may have landed shown to nobody.
+// Mutation: mint the person or the invitation per request again and the retry
+// names another one.
+func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, call, target string
+		body               map[string]any
+		created            func(r *rig, answer answered) string
+	}{
+		{"a person", "enrol", "/iam/people",
+			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
+			func(r *rig, _ answered) string { return r.writer.enrolled.PersonID }},
+		{"an invitation", "invite", "/iam/invitations",
+			map[string]any{"email": "dana@example.com"},
+			func(_ *rig, answer answered) string {
+				id, _ := answer.body["id"].(string)
+				return id
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.outcomes = map[string]statelog.Outcome{
+				tc.call: statelog.OutcomeUnknown}
+			first := r.as(administrator(), http.MethodPost, tc.target, tc.body)
+			key, _ := first.body["op_id"].(string)
+			if first.status != http.StatusServiceUnavailable || key == "" {
+				t.Fatalf("the first attempt answered %d (%v), want 503 with "+
+					"the key to retry under", first.status, first.body)
+			}
+			firstPerson := r.writer.enrolled.PersonID
+
+			r.writer.outcomes = nil
+			retry := r.asWith(administrator(), http.MethodPost, tc.target,
+				tc.body, http.Header{iamapi.IdempotencyHeader: {key}})
+			if retry.status/100 != 2 {
+				t.Fatalf("the retry answered %d: %v", retry.status, retry.body)
+			}
+			if tc.call == "enrol" && tc.created(r, retry) != firstPerson {
+				t.Errorf("the retry enrolled %s, want its first attempt's %s",
+					tc.created(r, retry), firstPerson)
+			}
+			if tc.call == "invite" {
+				// THE SAME LINK: the id is derived from the key, so the
+				// retry hands back the invitation the first attempt may
+				// have issued.
+				again := r.asWith(administrator(), http.MethodPost, tc.target,
+					tc.body, http.Header{iamapi.IdempotencyHeader: {key}})
+				if tc.created(r, retry) == "" ||
+					tc.created(r, again) != tc.created(r, retry) {
+					t.Errorf("two retries under one key answered invitations "+
+						"%q and %q", tc.created(r, retry), tc.created(r, again))
+				}
+			}
+			if r.writer.invited.OpID != "" && r.writer.invited.OpID != key {
+				t.Errorf("the retry was published under %q, want its key %q",
+					r.writer.invited.OpID, key)
+			}
+		})
+	}
+}
+
+// A CREATE'S KEY IS A UUID7, because the id it creates is derived from it and
+// every id this estate creates is a uuid7 whose instant is its creation.
+func TestACreatesKeyThatIsNoUUID7IsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	for _, target := range []string{"/iam/people", "/iam/invitations"} {
+		got := r.asWith(administrator(), http.MethodPost, target,
+			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
+			http.Header{iamapi.IdempotencyHeader: {"retry-1"}})
+		if got.status != http.StatusBadRequest {
+			t.Errorf("%s under the key retry-1 answered %d, want 400", target,
+				got.status)
+		}
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("a refused key still published %v", r.writer.calls)
+	}
+}
+
 // A WRITE DURABLE AND NOT YET APPLIED HERE IS A 202, NOT A 200.
 //
 // `200` promises the administrator's next read HERE sees what they wrote;

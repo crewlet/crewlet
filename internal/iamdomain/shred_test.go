@@ -293,14 +293,12 @@ func TestAnInvitationsKeyLivesExactlyAsLongAsItsRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSealer: %v", err)
 	}
-	const (
-		live    = "018f3a9c-0000-7000-8000-0000000000d1"
-		refused = "018f3a9c-0000-7000-8000-0000000000d2"
-	)
-	invite := func(id, op string) error {
+	liveKey, refusedKey := operationKey(), operationKey()
+	live, refused := invitationIDOf(t, liveKey), invitationIDOf(t, refusedKey)
+	invite := func(op string) error {
 		return rig.during(func() error {
 			_, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-				ID: id, Email: "sarah@example.com",
+				Email:     "sarah@example.com",
 				Grants:    []iam.Grant{iam.GrantStateRead},
 				ExpiresAt: brokerAt.Add(24 * time.Hour),
 				OpID:      op, Reason: "onboarding",
@@ -308,11 +306,11 @@ func TestAnInvitationsKeyLivesExactlyAsLongAsItsRow(t *testing.T) {
 			return err
 		})
 	}
-	if err := invite(live, "op-1"); err != nil {
+	if err := invite(liveKey); err != nil {
 		t.Fatalf("the first invitation: %v", err)
 	}
 	var claimed *iamdomain.ErrClaimed
-	if err := invite(refused, "op-2"); !errors.As(err, &claimed) {
+	if err := invite(refusedKey); !errors.As(err, &claimed) {
 		t.Fatalf("the second invitation to one address answered %v, want it "+
 			"refused on the address", err)
 	}

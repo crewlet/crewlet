@@ -755,6 +755,21 @@ id derived from the object alone made the broker collapse the second into the
 first inside its duplicate window — acknowledged, and never applied. Send a key
 when you mean a retry, and only then.
 
+**A create is named by its key.** `POST /iam/people` derives the person it
+creates, and `POST /iam/invitations` the invitation it issues, from the
+operation's key — the `Idempotency-Key` when one is sent, otherwise one minted
+for the request and answered as `op_id`. So the retry an `unknown` asks for
+names what its first attempt may have created: a person whose address and login
+that attempt already claimed is finished rather than refused `409` by its own
+first half, and an invitation that landed is answered with its own link and the
+deadline it was issued with. The invitation's id is what its link carries, so it
+is derived under the company's own key and an operation key is never a way to
+compute a link. A create's key is therefore a **uuid7**, as every `op_id` is,
+and any other value is `400 bad_params`. The same key with a *different* body —
+another address, another login, other grants — is `409 bad_params` carrying the
+`op_id`, and so is the key of an invitation since redeemed or aged out: a retry
+is the same request, and a new person or a new link is a new key.
+
 A lost race on an address, a login or a seat is `409` **naming who holds it**.
 An authority refusal is `403` and will never land however often it is retried.
 A login that is absent or outside its holder's kind is `400` — `POST

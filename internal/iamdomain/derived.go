@@ -109,16 +109,63 @@ func founderMark(id uuid.UUID) [16 - founderMarkAt]byte {
 	return mark
 }
 
-// derivedID is the one derivation both credentials share.
+// CreatedPersonID is the person an administrator's create names, derived from
+// the OPERATION KEY the create is published under.
+//
+// # Why a create is derived too
+//
+// `POST /iam/people` is the same sequence a redemption is — the address, the
+// login, the person — and a create whose outcome nobody could establish is
+// retried under the same key, which the answer hands back for exactly that. A
+// person minted per request made that retry name a SECOND person: its address
+// claim found the address held by the first attempt's person and refused the
+// retry as a conflict with somebody else, so the documented retry of an unknown
+// answered 409 against its own first attempt, and the person it may have
+// created could not be recovered. Derived from the key, every attempt of one
+// operation names one person, and a claim its first attempt took is one the
+// retry already holds.
+//
+// THE KEY MUST BE A UUID7, and its instant is the person's, for the reason
+// every person id is one: the directory pages in id order and that order is
+// creation order. A key that is not one is [ErrInvalid] — the surface mints one
+// where the caller sent none, and hands it back for the retry.
+func CreatedPersonID(key string) (string, error) {
+	id, err := operationKey(key)
+	if err != nil {
+		return "", err
+	}
+	return derivedID("create", id.String(), instantOf(id)).String(), nil
+}
+
+// operationKey parses an operation key a created identity is derived from,
+// refusing one that is not a uuid7.
+func operationKey(key string) (uuid.UUID, error) {
+	id, err := uuid.Parse(key)
+	if err != nil || id.Version() != 7 || id.Variant() != uuid.RFC4122 {
+		return uuid.UUID{}, fmt.Errorf("%w: the operation key %q is not a "+
+			"uuid7. A create's key is the seed of the id it creates, and every "+
+			"id this estate creates is a uuid7 whose instant is its creation — "+
+			"send the key the first attempt was published under, which the "+
+			"answer carried as its op_id", ErrInvalid, key)
+	}
+	return id, nil
+}
+
+// derivedID is the one derivation every derived identity shares.
 func derivedID(label, origin string, at time.Time) uuid.UUID {
 	digest := sha256.Sum256([]byte("crewlet/iam/derived-person/" + label +
 		"\x00" + origin))
+	return uuid7At(at, digest[:16])
+}
+
+// uuid7At lays sixteen derived bytes out as a uuid7 at an instant.
+//
+// THE INSTANT FIRST, 48 bits of milliseconds, then the version and the variant
+// over the derived bits — the uuid7 layout, so every reader that orders or ages
+// an id reads a derived one as it reads a minted one.
+func uuid7At(at time.Time, bits []byte) uuid.UUID {
 	var id uuid.UUID
-	copy(id[:], digest[:16])
-	// THE INSTANT FIRST, 48 bits of milliseconds, then the version and the
-	// variant over the digest's bits — the uuid7 layout, so every reader
-	// that orders or ages a person id reads this one as it reads a minted
-	// one.
+	copy(id[:], bits)
 	var ms [8]byte
 	binary.BigEndian.PutUint64(ms[:], uint64(at.UnixMilli()))
 	copy(id[:6], ms[2:])

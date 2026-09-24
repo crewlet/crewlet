@@ -250,6 +250,20 @@ can still land between the two checks of an invitation is a race — somebody
 else enrolling, a link withdrawn a moment ago — and its residue is the ordinary
 orphaned reservation the claim report names.
 
+**Every enrolment's person is derived, and none of them rewrites somebody who
+exists.** A redemption's person comes from its invitation, the founder from the
+code, and an administrator's create from the operation's key — the one an
+`unknown` answer hands back to retry under — so the retry of any of them names
+the person its first attempt claimed for, and finishes it. The person record is
+arbitrated rather than a create, because the claims before it leave a
+reservation a create would refuse, so it reads the person in its own snapshot
+and so does every claim of the sequence: one who is already enrolled is refused
+in the terms of the authority the enrolment named — a link already used, a code
+that has created its founder, a key that already names somebody else — unless
+it is the administrator's very create being retried. A key reused for another
+address, or a second redemption of a link, therefore never hands an existing
+person a second address or rewrites their credentials.
+
 "Somebody else exists" is **one predicate** everywhere it is asked — the
 record above, the route's open flag, the boot path's decision to mint a code,
 the re-issue and the mint itself: a person or a machine that is enrolled and

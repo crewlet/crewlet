@@ -207,7 +207,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		// is the one that should fail before anything else has
 		// happened.
 		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			Claim{Sealed: sealedEmail}, "", in.OpID+":email", in.Kind)
+			Claim{Sealed: sealedEmail}, "", in.OpID+":email", &in)
 		if claimErr != nil {
 			return statelog.Result{}, claimErr
 		}
@@ -223,7 +223,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
 	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{}, "",
-		in.OpID+":login:"+in.Login, in.Kind)
+		in.OpID+":login:"+in.Login, &in)
 	if err != nil {
 		return statelog.Result{}, err
 	}
@@ -238,7 +238,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// only the reservation this same redemption finishes on its retry.
 	if in.Link != nil {
 		linked, err := w.claim(ctx, at, KindLink, in.Link.Blind, in.PersonID,
-			Claim{Issuer: in.Link.Issuer}, "", in.OpID+":link", in.Kind)
+			Claim{Issuer: in.Link.Issuer}, "", in.OpID+":link", &in)
 		if err != nil {
 			return statelog.Result{}, err
 		}
@@ -277,6 +277,9 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// provider account with no row on the trail saying so.
 	var pinned Link
 	decide := func(tx *sql.Tx) error {
+		if err := w.createsNobodyTwice(ctx, tx, in); err != nil {
+			return err
+		}
 		if basis != nil {
 			if err := basis(tx); err != nil {
 				return err
@@ -319,6 +322,112 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		})
 	}
 	return result, err
+}
+
+// createsNobodyTwice refuses a person record for somebody who already exists,
+// read inside the record's own snapshot, unless it is the very enrolment that
+// created them being retried.
+//
+// # An enrolment creates; it never rewrites
+//
+// The record is arbitrated rather than a create — the claims before it leave a
+// reservation, which a create would find and refuse — so nothing at the broker
+// stops a person record landing over somebody who is already enrolled. Every
+// enrolment's person is derived, so the one that reaches an existing person is
+// a second request under one derivation, and landing it would rewrite their
+// grants, their name and their credentials with another request's:
+//
+//   - A REDEMPTION is refused outright, as a link or a code already used: the
+//     person it created signs in from here on, and a retry answered with a
+//     session would let whoever holds the link and the first password sign in
+//     past a second factor enrolled since, and after a password change.
+//   - AN ADMINISTRATOR'S CREATE is let through only when the operation ledger
+//     holds this very operation — a retry of the create that made them, whose
+//     record the ledger then collapses into the first — and is
+//     [ErrOperationReused] otherwise.
+func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
+	in Enrolment) error {
+
+	enrolled, err := isEnrolled(ctx, tx, in.PersonID)
+	if err != nil || !enrolled {
+		return err
+	}
+	if in.Invitation == "" && in.BootstrapCode == "" {
+		applied, err := opApplied(ctx, tx, in.OpID)
+		if err != nil || applied {
+			return err
+		}
+	}
+	return in.alreadyEnrolled()
+}
+
+// notYetEnrolled refuses an enrolment's claim on a person who already exists:
+// a claim they do not hold yet is not the retry of the enrolment that created
+// them, which names what they hold, so it is a second request under the one
+// derivation and would hand an existing person a second address or login.
+func (in *Enrolment) notYetEnrolled(ctx context.Context, tx *sql.Tx,
+	kind ObjectKind) error {
+
+	enrolled, err := isEnrolled(ctx, tx, in.PersonID)
+	if err != nil || !enrolled {
+		return err
+	}
+	return fmt.Errorf("%w (an enrolment does not give an existing person a "+
+		"new %s)", in.alreadyEnrolled(), kind)
+}
+
+// alreadyEnrolled is the refusal an enrolment meets when the person it would
+// create already exists, in the terms of the authority it named — ONE answer
+// whichever step of the sequence meets it, so a surface maps one sentinel per
+// basis rather than learning which step fired.
+//
+//   - A REDEMPTION's link has been used: the person it created is enrolled.
+//   - A BOOTSTRAP's code has created its founder, which is the company having
+//     started.
+//   - AN ADMINISTRATOR'S key already names somebody, and a new person is a new
+//     operation under a new key.
+func (in *Enrolment) alreadyEnrolled() error {
+	switch {
+	case in.Invitation != "":
+		return fmt.Errorf("%w: invitation %s has already been used — the "+
+			"person it created is enrolled", ErrRefused, in.Invitation)
+	case in.BootstrapCode != "":
+		return fmt.Errorf("%w: %w: the one-time code already created its "+
+			"person", ErrRefused, ErrBootstrapClosed)
+	}
+	return fmt.Errorf("%w: person %s already exists, and operation %s is not "+
+		"the one that created them — a new person is a new operation under a "+
+		"new key", ErrOperationReused, in.PersonID, in.OpID)
+}
+
+// isEnrolled reports whether a person row exists and is not a reservation,
+// read inside a decide's snapshot.
+func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) {
+	var kind string
+	err := tx.QueryRowContext(ctx,
+		`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&kind)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("iamdomain: read whether %s is enrolled: %w",
+			personID, err)
+	}
+	return !reservation(kind), nil
+}
+
+// opApplied reports whether this node's operation ledger holds an operation,
+// read inside a decide's snapshot — so the answer is about the same applied
+// state as the rows beside it.
+func opApplied(ctx context.Context, tx *sql.Tx, opID string) (bool, error) {
+	var held bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM iam_ops WHERE op_id = ?)`, opID).
+		Scan(&held); err != nil {
+		return false, fmt.Errorf("iamdomain: read the operation ledger for "+
+			"%s: %w", opID, err)
+	}
+	return held, nil
 }
 
 // basisOf is the check an enrolment's named authority is held to, or nil for
@@ -672,19 +781,21 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	// caller: a login's grammar is the kind of whoever holds it, and a
 	// caller stating that kind would be stating what it read in another
 	// transaction — which is the one input this check cannot trust.
-	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, "", opID, "")
+	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, "", opID, nil)
 }
 
 // claim is the shared body, so an enrolment's own claims and an operator's
 // take exactly the same path — a second implementation is where one of them
 // comes to publish at a different pattern.
 //
-// enrolling is the kind of the person an ENROLMENT is creating, and empty
-// everywhere else. It exists because the enrolment's claims run before the
-// person's own record — they are what can be refused — so the row whose kind
-// a login's grammar is judged against does not exist yet; the enrolment
-// validated the kind itself, and it is the one caller that knows it without
-// reading. Every other claim reads its holder's kind inside the snapshot.
+// enrolling is the ENROLMENT a claim is one step of, and nil everywhere else.
+// It exists because the enrolment's claims run before the person's own record
+// — they are what can be refused — so the row whose kind a login's grammar is
+// judged against does not exist yet; the enrolment validated the kind itself,
+// and it is the one caller that knows it without reading. Every other claim
+// reads its holder's kind inside the snapshot. It is also what a claim on
+// somebody who already exists is refused IN THE TERMS OF: see
+// [Enrolment.alreadyEnrolled].
 //
 // payload carries what a claim states beside its token — an address's sealed
 // form, a link's issuer — and nothing else: the person and the chart position
@@ -692,7 +803,7 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 // is read only for a link: see [ErrLinked].
 func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	kind ObjectKind, token, personID string, payload Claim, replacing, opID string,
-	enrolling iam.Kind) (statelog.Result, error) {
+	enrolling *Enrolment) (statelog.Result, error) {
 
 	if token == "" || personID == "" || opID == "" {
 		return statelog.Result{}, fmt.Errorf("iamdomain: a %s claim needs a "+
@@ -743,7 +854,10 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			// between the two take a name its kind may not hold — and
 			// a person holding `token:<id>` is the deployment's Tier A
 			// credential acting as their seat.
-			holderKind := enrolling
+			var holderKind iam.Kind
+			if enrolling != nil {
+				holderKind = enrolling.Kind
+			}
 			if holderKind == "" {
 				var err error
 				if holderKind, err = enrolledKindOf(ctx, tx, personID); err != nil {
@@ -759,7 +873,11 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			// reason: a machine has no provider sign-in to make, and
 			// a subject pinned to one would be a way to act as a
 			// service account from a browser.
-			if err := linkable(ctx, tx, personID, enrolling); err != nil {
+			var enrolledKind iam.Kind
+			if enrolling != nil {
+				enrolledKind = enrolling.Kind
+			}
+			if err := linkable(ctx, tx, personID, enrolledKind); err != nil {
 				return err
 			}
 			if err := unlinkedElsewhere(ctx, tx, personID, token,
@@ -787,6 +905,21 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 		}
 		if held && holder != personID {
 			return &ErrClaimed{Kind: kind, Token: token, Holder: holder}
+		}
+		if enrolling != nil && !held {
+			// AN ENROLMENT NEVER GIVES AN ENROLLED PERSON A NEW CLAIM.
+			// Its person is derived — from an invitation, a code or an
+			// administrator's operation key — so an enrolment reaching
+			// somebody who already exists is a second request under
+			// one derivation: a key reused for another address, or a
+			// redemption after the one that created them. A retry of
+			// the enrolment that DID create them names the tokens they
+			// already hold, which the arm above lets through; anything
+			// else would hand an existing person a second address or
+			// login under an operation that was never about them.
+			if err := enrolling.notYetEnrolled(ctx, tx, kind); err != nil {
+				return err
+			}
 		}
 		claim := Claim{V: DocumentVersion, Person: personID,
 			Sealed: payload.Sealed, Issuer: payload.Issuer}
@@ -1082,7 +1215,7 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 	// the claim that freed its token.
 	mark := w.gesture()
 	claimed, err := w.claim(ctx, mark, kind, to, personID, payload, from,
-		opID+":"+string(kind), "")
+		opID+":"+string(kind), nil)
 	switch {
 	case err != nil:
 		return statelog.Result{}, err
@@ -2207,34 +2340,45 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 //
 // # The link is not here
 //
-// This publishes the invitation's id and what redeeming it confers. The
-// SECRET a person follows is the caller's — minted by them, shown once, and
-// never written to this log, because a log is replicated, snapshotted, backed
-// up and donated to joining peers. What is stored is the id, which is the
-// verifier: holding the link is holding the id.
+// This publishes the invitation's id and what redeeming it confers, and the
+// caller shows the link once. What is stored is the id, which is the verifier:
+// holding the link is holding the id.
+//
+// # Its id is its OPERATION's, derived under the company's key
+//
+// The id is [Blinder.InvitationID] of the operation key rather than a value the
+// caller mints, so a retry of an issue whose outcome nobody could establish —
+// the one retry the answer tells a caller to make — names the invitation its
+// first attempt issued. The id used to be minted per request: the retry named a
+// SECOND invitation, which the address refused as spoken for by the first, so
+// the retry answered 409 against its own first attempt and the link to the one
+// that may have landed was never shown to anybody. A retry that finds its own
+// invitation publishes nothing and answers it; a key that already issued an
+// invitation for another address or on other terms, or one no longer open, is
+// [ErrOperationReused] rather than a second invitation under one id.
 func (w *Writer) Invite(ctx context.Context, in InviteMint) (
-	statelog.Result, error) {
+	InviteIssued, error) {
 
 	if err := w.mayAdminister(OpInvite); err != nil {
-		return statelog.Result{}, err
+		return InviteIssued{}, err
 	}
 	// WHAT IT CONFERS IS DECIDED HERE, ONCE, against the issuer — the
 	// redemption reads it back rather than deciding again — so this is
 	// the one place an invitation can be held to the rule every other
 	// grant change is: a caller may not confer what they do not hold.
 	if err := w.mayConfer(nil, in.Grants); err != nil {
-		return statelog.Result{}, err
+		return InviteIssued{}, err
 	}
 	switch {
-	case in.ID == "" || in.OpID == "":
-		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
-			"its own id and an operation id")
+	case in.OpID == "":
+		return InviteIssued{}, errors.New("iamdomain: an invitation needs an " +
+			"operation key — its id is derived from it")
 	case in.Email == "":
-		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
+		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
 			"the address it is for — it arbitrates on that address, so one " +
 			"with none would contend with nothing and two would both win")
 	case in.ExpiresAt.IsZero():
-		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
+		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
 			"an expiry; one read as `never` is a superuser claim that stays " +
 			"live in somebody's mailbox for the life of the company")
 	case in.Colleague != "" && !in.Colleague.Valid():
@@ -2242,22 +2386,29 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		// redeeming confers is decided here, once, and a level the
 		// enrolment would refuse is a link that can never be redeemed —
 		// found out by the person it was sent to.
-		return statelog.Result{}, fmt.Errorf("%w: %q is not a colleague "+
+		return InviteIssued{}, fmt.Errorf("%w: %q is not a colleague "+
 			"level — want one of %v", ErrInvalid, in.Colleague, iam.Colleagues)
 	}
 	if w.blinds == nil || w.sealer == nil {
-		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
+		return InviteIssued{}, fmt.Errorf("iamdomain: this node cannot "+
 			"mint an invitation: %s", w.missingKeys())
 	}
 	blinder, err := w.blinds.Blinder(ctx)
 	if err != nil {
-		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
+		return InviteIssued{}, fmt.Errorf("iamdomain: this node cannot "+
 			"derive the subject an invitation's address arbitrates on: %w", err)
 	}
 	blind, err := blinder.Email(in.Email)
 	if err != nil {
-		return statelog.Result{}, fmt.Errorf("iamdomain: blind an "+
+		return InviteIssued{}, fmt.Errorf("iamdomain: blind an "+
 			"invitation's address: %w", err)
+	}
+	// THE ID IS THE OPERATION'S, and it is derived before anything is
+	// minted: a key that is not a uuid7 is refused here, with nothing left
+	// behind.
+	id, err := blinder.InvitationID(in.OpID)
+	if err != nil {
+		return InviteIssued{}, err
 	}
 	// SEALED UNDER THE INVITATION'S OWN ID rather than a person's, because
 	// there is no person yet. The key is minted here and destroyed by the
@@ -2266,22 +2417,22 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// its row — so an address somebody typed and never sent leaves no
 	// cleartext anywhere, which is the same promise a removal makes, one
 	// object earlier.
-	if err := w.sealer.Mint(ctx, in.ID, w.secretAuthor(), w.Now()); err != nil {
-		return statelog.Result{}, fmt.Errorf("iamdomain: mint an "+
+	if err := w.sealer.Mint(ctx, id, w.secretAuthor(), w.Now()); err != nil {
+		return InviteIssued{}, fmt.Errorf("iamdomain: mint an "+
 			"invitation's key: %w", err)
 	}
-	sealed, err := w.sealer.Seal(ctx, in.ID, FieldEmail, in.Email)
+	sealed, err := w.sealer.Seal(ctx, id, FieldEmail, in.Email)
 	if err != nil {
-		return statelog.Result{}, fmt.Errorf("iamdomain: seal an "+
+		return InviteIssued{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
 	}
 	mutation, err := EncodeInvitation(Invitation{
-		V: DocumentVersion, ID: in.ID, Sealed: sealed,
+		V: DocumentVersion, ID: id, Sealed: sealed,
 		InvitedBy: w.Actor, Grants: in.Grants, Colleague: in.Colleague,
 		ExpiresAt: in.ExpiresAt,
 	})
 	if err != nil {
-		return statelog.Result{}, err
+		return InviteIssued{}, err
 	}
 	subject := EmailSubject(blind)
 	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: an invitation
@@ -2290,7 +2441,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	rec, err := w.record(subject, OpInvite, "",
 		BucketScope(BucketOf(blind)), mutation, in.Reason)
 	if err != nil {
-		return statelog.Result{}, err
+		return InviteIssued{}, err
 	}
 	// THE ROW READ IS WHAT REFUSES THE SEQUENTIAL CASE, and the broker's
 	// create-at-zero is what settles the concurrent one. Both are needed
@@ -2303,7 +2454,16 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// PERSON or by an invitation nobody has redeemed. Reading only the
 	// people, as a claim's own decide does, missed every outstanding
 	// invitation and produced a second link for the same address.
+	//
+	// AND THIS OPERATION'S OWN INVITATION FIRST, because a retry finds the
+	// one its first attempt issued on this very address — outstanding,
+	// spoken for — and must be answered with it rather than refused by it.
+	expires := in.ExpiresAt
 	decide := func(tx *sql.Tx) error {
+		expires = in.ExpiresAt
+		if err := w.issuedBefore(ctx, tx, id, blind, in, &expires); err != nil {
+			return err
+		}
 		holder, held, err := holderOf(ctx, tx, KindEmail, blind)
 		if err != nil {
 			return err
@@ -2322,7 +2482,93 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternCreate, decide))
-	return result, err
+	return InviteIssued{Result: result, ID: id, ExpiresAt: expires}, err
+}
+
+// ErrOperationReused reports an operation key that already names something
+// other than what this call asks for: an invitation issued for another address
+// or on other terms, one no longer open, or an enrolment of a person who
+// already exists holding other claims.
+//
+// A REFUSAL AND NOT A DEDUPE. The key is what a retry is recognised by, and a
+// retry is the SAME request: answered with the first attempt's object, a second
+// DIFFERENT request under a reused key would be told its invitation was issued
+// — or its person created — when what exists is somebody else's.
+var ErrOperationReused = errors.New("iamdomain: that operation key already " +
+	"names something else")
+
+// issuedBefore answers whether the invitation an operation derives was already
+// issued, read inside the issue's own snapshot: nil where it was not,
+// [errNothingToPublish] where this is a retry that found its own, and
+// [ErrOperationReused] where the key already issued something this call is not.
+//
+// THE TERMS ARE COMPARED, not only the address: a retry is the same request, so
+// an invitation on the same address that confers other grants or another reach
+// was issued by a different request that reused the key — and answering it as
+// this one's would hand out a link to what somebody else offered.
+func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind string,
+	in InviteMint, expiresAt *time.Time) error {
+
+	var (
+		held              string
+		expires, redeemed int64
+		document          []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT email_blind, expires_at, redeemed_at, document
+		  FROM iam_invites WHERE id = ?`, id).
+		Scan(&held, &expires, &redeemed, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: read invitation %s: %w", id, err)
+	}
+	stored, err := DecodeInvitation(document)
+	if err != nil {
+		return fmt.Errorf("iamdomain: open invitation %s: %w", id, err)
+	}
+	switch {
+	case held != blind || !sameGrants(stored.Grants, in.Grants) ||
+		stored.Colleague != in.Colleague:
+		return fmt.Errorf("%w: operation %s already issued invitation %s on "+
+			"other terms — a retry is the same request; a new invitation needs "+
+			"a new key", ErrOperationReused, in.OpID, id)
+	case redeemed != 0:
+		return fmt.Errorf("%w: the invitation operation %s issued has been "+
+			"redeemed", ErrOperationReused, in.OpID)
+	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
+		return fmt.Errorf("%w: the invitation operation %s issued has aged "+
+			"out; issue a new one under a new key", ErrOperationReused, in.OpID)
+	}
+	// THE DEADLINE IT WAS ISSUED WITH, which is the one its link keeps: a
+	// retry an hour later is not a later invitation.
+	*expiresAt = time.UnixMilli(expires).UTC()
+	return errNothingToPublish
+}
+
+// sameGrants reports whether two grant lists confer the same set.
+func sameGrants(a, b []iam.Grant) bool {
+	for _, g := range a {
+		if !slices.Contains(b, g) {
+			return false
+		}
+	}
+	for _, g := range b {
+		if !slices.Contains(a, g) {
+			return false
+		}
+	}
+	return true
+}
+
+// InviteIssued is what an issue answers: the write's outcome, the id the link
+// is built from — the one the OPERATION derives, whether this call published it
+// or found its own first attempt had — and the deadline the invitation keeps.
+type InviteIssued struct {
+	statelog.Result
+	ID        string
+	ExpiresAt time.Time
 }
 
 // openInvitationFor is the invitation on an address that has not been
@@ -2355,11 +2601,6 @@ func openInvitationFor(ctx context.Context, tx *sql.Tx, blind string,
 
 // InviteMint is what issuing an invitation needs.
 type InviteMint struct {
-	// ID is the invitation's own id, which is also the verifier a
-	// redemption presents. The CALLER mints it, because the caller is
-	// what shows the link once and this never sees the secret again.
-	ID string
-
 	// Email is the address it is for, in the clear. It is blinded for the
 	// subject and sealed for the row before anything is published.
 	Email string
@@ -2374,6 +2615,10 @@ type InviteMint struct {
 	// ExpiresAt is when it stops being redeemable. REQUIRED.
 	ExpiresAt time.Time
 
+	// OpID is the operation KEY, a uuid7, and the invitation's id is
+	// derived from it ([Blinder.InvitationID]) — so the id is the
+	// operation's rather than the caller's, and a retry under the same key
+	// names the invitation its first attempt issued.
 	OpID   string
 	Reason string
 }

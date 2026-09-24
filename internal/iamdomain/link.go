@@ -114,7 +114,7 @@ func (w *Writer) Link(ctx context.Context, in LinkChange) (statelog.Result, erro
 			in.Link.Blind, payload, in.OpID, in.Reason)
 	} else {
 		result, err = w.claim(ctx, w.gesture(), KindLink, in.Link.Blind,
-			in.PersonID, payload, "", in.OpID+":"+string(KindLink), "")
+			in.PersonID, payload, "", in.OpID+":"+string(KindLink), nil)
 	}
 	w.announce(ctx, result, err, types.IAMIdentityLinked{
 		Person: in.PersonID, Issuer: in.Link.Issuer, Via: types.LinkViaAdmin,

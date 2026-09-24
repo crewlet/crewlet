@@ -198,6 +198,39 @@ func (s *Service) opIDFor(r *http.Request, derived string) string {
 	return derived + ":" + uuid.NewString()
 }
 
+// createKey is the operation key a CREATE is published under — the caller's
+// own where they sent one, and a fresh uuid7 minted here where they did not —
+// answering false once it has written the refusal.
+//
+// # The id of what a create creates is derived from it
+//
+// A create is retried under the key its unknown answer handed back, and the
+// person or the invitation it names is derived from that key
+// ([iamdomain.CreatedPersonID], [iamdomain.Blinder.InvitationID]) so the retry
+// names the same one. Each used to be minted per request, so the retry named a
+// second object, which the address its first attempt claimed refused as
+// somebody else's: the documented retry of an unknown answered 409 against its
+// own first attempt, and what that attempt created could not be recovered.
+//
+// A UUID7 AND NOTHING ELSE, because every id this estate creates is one and its
+// instant is the creation — a key that is not one is refused naming the rule,
+// rather than accepted as the other routes' opaque keys are.
+func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	given := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
+	if given == "" {
+		return uuid.Must(uuid.NewV7()).String(), true
+	}
+	if id, err := uuid.Parse(given); err != nil || id.Version() != 7 {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": "the " + IdempotencyHeader + " on a " +
+				"create is the seed of the id it creates, so it must be a " +
+				"uuid7 — send back the op_id the first attempt answered with, " +
+				"or omit it for a new create"})
+		return "", false
+	}
+	return given, true
+}
+
 // unavailable answers a read this node could not perform.
 //
 // 503 AND NEVER AN EMPTY LIST. An identity estate that could not be read and
@@ -313,6 +346,13 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	case errors.Is(err, iamdomain.ErrLinked):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeSubjectConflict,
 			map[string]string{"detail": err.Error()})
+		return
+	case errors.Is(err, iamdomain.ErrOperationReused):
+		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
+		// invitation or person, or one no longer open. A conflict the
+		// caller resolves with a new key, never by waiting.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error(), "op_id": opID})
 		return
 	case errors.As(err, &claimed):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,

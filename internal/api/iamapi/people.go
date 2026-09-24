@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -208,8 +206,19 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 				" is not a principal kind"})
 		return
 	}
-	person := uuid.Must(uuid.NewV7()).String()
-	opID := s.opIDFor(r, "people:create:"+person)
+	// THE PERSON IS THE OPERATION'S, derived from its key, so a retry
+	// under the key an unknown answer handed back names the person its
+	// first attempt claimed for — see [Service.createKey].
+	opID, ok := s.createKey(w, r)
+	if !ok {
+		return
+	}
+	person, err := iamdomain.CreatedPersonID(opID)
+	if err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error()})
+		return
+	}
 	enrolled, err := writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: kind,
 		// ACTIVE FROM THE MOMENT IT IS CREATED, because an

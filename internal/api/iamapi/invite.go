@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -35,12 +33,15 @@ type inviteBody struct {
 
 // PostInvite is `POST /iam/invitations`.
 //
-// # The URL is returned exactly once
+// # The URL is returned by the operation that issued it, and by nothing else
 //
 // The estate holds the invitation's ID, which IS the verifier: holding the
-// link is holding the id. Nothing stores the URL and no route reads one back,
-// so an invitation an administrator lost is re-issued rather than recovered —
-// which is the same promise a minted token makes and for the same reason.
+// link is holding the id. No route reads one back, so an invitation an
+// administrator lost is re-issued rather than recovered. The one answer that
+// carries it again is a RETRY of the issue itself — the same request under the
+// same Idempotency-Key, which is what an unknown answer tells a caller to send
+// — because the id is derived from that key and the retry is the same
+// operation rather than a read.
 //
 // # What it confers is decided HERE, by whoever issues it
 //
@@ -83,14 +84,21 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
-	id := uuid.Must(uuid.NewV7()).String()
-	opID := s.opIDFor(r, "invite:"+id)
-	invited, err := writer.Invite(r.Context(), iamdomain.InviteMint{
-		ID: id, Email: address, Grants: in.Grants, Colleague: in.Colleague,
+	// THE INVITATION IS THE OPERATION'S: its id is derived from the key
+	// under the company's own, so a retry under the key an unknown answer
+	// handed back hands back the link to the invitation its first attempt
+	// issued — see [Service.createKey].
+	opID, ok := s.createKey(w, r)
+	if !ok {
+		return
+	}
+	issued, err := writer.Invite(r.Context(), iamdomain.InviteMint{
+		Email: address, Grants: in.Grants, Colleague: in.Colleague,
 		ExpiresAt: s.now().Add(InviteWindow),
 		OpID:      opID,
 		Reason:    reasonOr(in.Reason, "invited through /iam"),
 	})
+	invited, id := issued.Result, issued.ID
 	if err != nil || !landed(invited) {
 		// NO LINK FOR AN INVITATION NOBODY CAN CONFIRM: it would be a
 		// URL that answers 410 the first time somebody follows it.
@@ -108,7 +116,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		"position", invited.Position.String())
 	s.answer(w, r, opID, invited, nil, http.StatusCreated, map[string]any{
 		"id": id, "url": s.inviteURL(id),
-		"expires_at": s.now().Add(InviteWindow),
+		"expires_at": issued.ExpiresAt,
 		"detail": "this link is shown once and cannot be read back; what the " +
 			"estate holds is the invitation's id, which is what redeeming it " +
 			"presents",

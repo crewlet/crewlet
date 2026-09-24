@@ -188,6 +188,42 @@ func (b *Blinder) Subject(issuer, subject string) (string, error) {
 	return b.derive("oidc", issuer+"\x00"+subject)
 }
 
+// InvitationID is the invitation an issue names, derived from the operation
+// key it is published under — so a retry of an issue whose outcome nobody could
+// establish names the invitation its first attempt issued, and hands back the
+// link to it rather than a second invitation the address then refuses.
+//
+// # Under the company's key, because the id is the verifier
+//
+// Holding an invitation's link is holding its id, so the id is a bearer
+// credential for whatever the invitation confers, and its entropy must not be
+// the caller's to choose: a key somebody typed, or minted from a weak source,
+// derived under a plain hash would be a link anybody could compute. Under the
+// company's key it is unguessable without that key whatever the operation key
+// was — and in a MAC domain of its own ([invitationIDDomain]), so no blind of
+// any address or subject is ever an invitation id.
+//
+// A UUID7 AT THE KEY'S INSTANT, which is what [InvitedPersonID] derives the
+// person the invitation creates at: the key must be a uuid7 ([operationKey]).
+func (b *Blinder) InvitationID(key string) (string, error) {
+	if b == nil || len(b.key) == 0 {
+		return "", ErrNoBlindKey
+	}
+	id, err := operationKey(key)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, b.key)
+	_, _ = mac.Write([]byte(invitationIDDomain))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(id.String()))
+	return uuid7At(instantOf(id), mac.Sum(nil)[:16]).String(), nil
+}
+
+// invitationIDDomain separates an invitation id's MAC from every blind the same
+// key derives, for [blindDomain]'s reason.
+const invitationIDDomain = "crewlet/iam/invitation-id/v1"
+
 // derive is the one HMAC, and the one encoding.
 //
 // THE CLASS IS INSIDE THE MAC rather than beside it, so an address's blind and

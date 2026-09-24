@@ -106,7 +106,7 @@ type Writer interface {
 		statelog.Result, error)
 	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
 		statelog.Result, error)
-	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Result, error)
+	Invite(ctx context.Context, in iamdomain.InviteMint) (iamdomain.InviteIssued, error)
 
 	// Link pins an identity provider subject to somebody who already
 	// exists, or moves them from one to another; Unlink takes it off

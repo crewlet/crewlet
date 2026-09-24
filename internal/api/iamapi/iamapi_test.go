@@ -105,6 +105,14 @@ type answered struct {
 // as runs one request as a principal.
 func (r *rig) as(p iam.Principal, method, target string, body any) answered {
 	r.t.Helper()
+	return r.asWith(p, method, target, body, nil)
+}
+
+// asWith is [rig.as] with the request's headers set by prepare.
+func (r *rig) asWith(p iam.Principal, method, target string, body any,
+	header http.Header) answered {
+
+	r.t.Helper()
 	var payload *strings.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -118,6 +126,11 @@ func (r *rig) as(p iam.Principal, method, target string, body any) answered {
 		req = httptest.NewRequest(method, target, nil)
 	} else {
 		req = httptest.NewRequest(method, target, payload)
+	}
+	for name, values := range header {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
 	}
 	req = req.WithContext(iam.WithPrincipal(req.Context(), p))
 	rec := httptest.NewRecorder()
@@ -401,10 +414,24 @@ func (w *fakeWriter) Rebind(_ context.Context, person, from, to, _, _ string) (
 type move struct{ kind, person, from, to string }
 
 func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
-	statelog.Result, error) {
+	iamdomain.InviteIssued, error) {
 
 	w.invited = in
-	return w.did("invite")
+	result, err := w.did("invite")
+	// THE REAL DERIVATION, under a fixture key: the id is the operation's,
+	// and a case about a retry holds the surface to handing back the same
+	// one.
+	blinder, berr := iamdomain.NewBlinder([]byte(strings.Repeat("k",
+		iamdomain.MinBlindKeyBytes)))
+	if berr != nil {
+		return iamdomain.InviteIssued{}, berr
+	}
+	id, derr := blinder.InvitationID(in.OpID)
+	if derr != nil {
+		return iamdomain.InviteIssued{}, derr
+	}
+	return iamdomain.InviteIssued{Result: result, ID: id,
+		ExpiresAt: in.ExpiresAt}, err
 }
 
 func (w *fakeWriter) Link(_ context.Context, in iamdomain.LinkChange) (

@@ -600,15 +600,16 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 		broker = &silentBroker{Appender: inner, on: ".person."}
 		return broker
 	})
-	invitation := uuid.Must(uuid.NewV7()).String()
+	var invitation string
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
-		_, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			ID: invitation, Email: "joiner@example.com", Grants: offered,
+		issued, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
+			Email: "joiner@example.com", Grants: offered,
 			Colleague: iam.ColleagueRead,
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
-			OpID:      "invite-joiner", Reason: "onboarding",
+			OpID:      operationKey(), Reason: "onboarding",
 		})
+		invitation = issued.ID
 		return err
 	}); err != nil {
 		t.Fatalf("invite: %v", err)
@@ -776,15 +777,16 @@ func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
 		broker = &silentBroker{Appender: inner, on: ".person."}
 		return broker
 	})
-	invitation := uuid.Must(uuid.NewV7()).String()
+	var invitation string
 	offered := []iam.Grant{iam.GrantStateRead}
 	if err := rig.draining(func() error {
-		_, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			ID: invitation, Email: "later@example.com", Grants: offered,
+		issued, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
+			Email: "later@example.com", Grants: offered,
 			Colleague: iam.ColleagueRead,
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
-			OpID:      "invite-later", Reason: "onboarding",
+			OpID:      operationKey(), Reason: "onboarding",
 		})
+		invitation = issued.ID
 		return err
 	}); err != nil {
 		t.Fatalf("invite: %v", err)
