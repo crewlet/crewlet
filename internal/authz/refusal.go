@@ -14,8 +14,10 @@ const (
 	// DetailReason is the rule's own [Reason].
 	DetailReason = "reason"
 	// DetailGrants is [Decision.Grants]: the capabilities any one of which
-	// would have admitted the caller. Always present, and an EMPTY list is
-	// an answer — no capability would, and what is missing is a relation
+	// would have admitted the caller — or, on the one verb that asks for two
+	// at once (ending every session in the company), the ones the caller
+	// lacks, every one of which it needs. Always present, and an EMPTY list
+	// is an answer — no capability would, and what is missing is a relation
 	// the chart does not hold — rather than an omission.
 	DetailGrants = "grants"
 	// DetailWindow is [Decision.Recency] on a step-up refusal: which of

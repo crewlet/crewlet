@@ -436,15 +436,17 @@ the two deadlines the table judges against (`reauth_at`,
 `sensitive_reauth_at`) and whether each is already due, so a screen can say so
 before somebody starts rather than after they submit.
 
-**A credential with nobody at a keyboard is fresh by construction**, in both
-windows: a Tier A token (and a session exchanged from one), a personal access
-token or service token, and the development principal. There is nothing else
-any of them could present, and the break-glass credential has to reach a
-sensitive gesture on the day the identity provider is down. What bounds a
-machine token instead is its grants: `secrets:read` and `people:manage` — the
-two grants behind the sensitive gestures that need a person present — can never
-be minted onto one. No tool asks for a proof: a seat has no keyboard, and
-`/operator/mcp` is not a step-up surface.
+**A credential with nobody at a keyboard is fresh by construction** — a Tier A
+token (and a session exchanged from one) and the development principal in both
+windows, and a personal access or service token in `step_up` only. There is
+nothing else any of them could present, and the break-glass credential has to
+reach a sensitive gesture on the day the identity provider is down; a machine
+token never does, because every sensitive gesture needs a person present and a
+token proves nobody is. It is bounded twice over: `secrets:read` and
+`people:manage` — the grants behind the sensitive gestures about somebody else
+— can never be minted onto one, and it is never proved for the sensitive window,
+which closes the ones a person makes about themselves. No tool asks for a proof:
+a seat has no keyboard, and `/operator/mcp` is not a step-up surface.
 
 **And a node that cannot read identity answers `503`, never `403`.** The
 principal a node could not check and the principal that carries nothing are
@@ -676,7 +678,7 @@ list and nothing ever will be.
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written. An id naming a password, a second factor, the recovery codes or a provider **link** also asks a proof inside `step_up_sensitive`, and a link's id unlinks it, which the record layer admits only with `people:manage` |
-| `POST /iam/invalidate-all` | `fleet:operate`. Ends every session **and every machine token** |
+| `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `POST /iam/bootstrap-code` | `people:manage`; `409 bootstrap_closed` once anybody is enrolled, and **absent** (`404 not_found`) where `api.auth.bootstrap` is closed |
 | `GET /iam/audit` | `audit:read` |

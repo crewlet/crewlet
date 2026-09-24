@@ -698,6 +698,26 @@ func (w proofWindows) stamp(p *iam.Principal, provedAt time.Time) {
 	p.SensitiveReauthAt = provedAt.Add(w.sensitive)
 }
 
+// stampOrdinary gives p the ORDINARY window's deadline for a proof taken at
+// provedAt, and none for the sensitive one — which [iam.Principal.Proved] reads
+// as stale there, for ever.
+//
+// WHAT A MACHINE TOKEN EARNS. It has nobody at a keyboard and nothing else to
+// present, so presenting it is its whole proof for the gestures an automation
+// makes — a configuration, a chart, a credential or a directory write. The
+// sensitive gestures are the ones that need a PERSON present — a secret's
+// value, somebody's authority, how somebody proves who they are, every session
+// at once — and a token proves nobody is. Stamped fresh in both windows, a
+// token reached a sensitive gesture wherever a verb admitted its owner as
+// THEMSELVES rather than on a grant: the safety argument was that no token
+// carries a grant the sensitive rows ask for, and a self arm asks none. The
+// break-glass credential keeps both windows ([Guard.principalFor]), because it
+// has to reach a sensitive gesture on the day the identity provider is down.
+func (w proofWindows) stampOrdinary(p *iam.Principal, provedAt time.Time) {
+	w.stamp(p, provedAt)
+	p.SensitiveReauthAt = time.Time{}
+}
+
 // personID parses the id a bearer carries.
 //
 // AN UNPARSEABLE ONE IS THE ZERO UUID rather than a refusal, and it cannot be

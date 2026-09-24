@@ -1183,6 +1183,14 @@ func (w *Writer) revoke(ctx context.Context, personID string, past *uint64,
 // the one that needs an administrator. Ending EVERYBODY's sessions is a
 // company-wide act with no self-service reading at all.
 //
+// BOTH HATS: [AdminGrant], because it ends every person's authority at once,
+// AND fleet:operate, because a restore is run by whoever runs the deployment.
+// It asked the first alone while the route admitted on the second alone, so
+// the two disagreed about who may make it and an operator holding the route's
+// grant was refused here; internal/authz's row now asks both as well, and a
+// machine token can carry neither half that matters — people:manage is never
+// minted onto one.
+//
 // WHAT IT IS FOR, stated where somebody will reach for it: the last step of a
 // restore. A restore rolls this estate back to an artefact's own instant, so a
 // revocation somebody performed after the copy was taken is rolled back with
@@ -1200,6 +1208,9 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpInvalidate); err != nil {
+		return statelog.Result{}, err
+	}
+	if err := w.mayOperate(OpInvalidate); err != nil {
 		return statelog.Result{}, err
 	}
 	if opID == "" {

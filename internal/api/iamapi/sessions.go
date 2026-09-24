@@ -97,16 +97,17 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 
 // PostInvalidateAll is `POST /iam/invalidate-all`.
 //
-// # It is the restore runbook's last step, and it takes fleet:operate
+// # It is the restore runbook's last step, and it takes BOTH hats
 //
-// The design asked for fleet:operate AND people:manage. It is fleet:operate
-// alone, and the reasoning is the primary caller: a restore is run by whoever
-// runs the deployment, and requiring people:manage as well would mean every
-// SRE who can restore also holds the grant that can grant — which is worse for
-// least privilege than the blast radius it was meant to bound. Anybody with
-// people:manage can already revoke every person one at a time; what this adds
-// is the ability to do it WITHOUT knowing who was affected, which is exactly
-// what a restore needs and is a node gesture rather than a directory one.
+// fleet:operate AND people:manage, the design's rule, stated once on the
+// authority table's row and again on the record (internal/iamdomain): a
+// restore is run by whoever runs the deployment, and ending every session and
+// machine token at once ends every person's authority, which is the
+// directory's to decide. It used to be admitted here on fleet:operate alone
+// while the record refused anybody without people:manage, so an operator the
+// route let through was refused a step later — and the argument that a
+// machine token could never reach a sensitive gesture rested on that unstated
+// second check.
 //
 // A backup taken before a revocation restores the session rows that revocation
 // ended, so a pre-restore bearer would work again — a cookie, or a machine

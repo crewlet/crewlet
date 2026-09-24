@@ -629,6 +629,13 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				if d.Allowed {
 					continue
 				}
+				if also, _ := authz.AlsoGrantOf(a); also != "" {
+					// A TWO-PARTY ROW names what the caller lacks and
+					// needs ALL of it: with every named grant it is
+					// admitted, and short of any one it is not.
+					namesExactlyWhatItLacks(t, a, object, d)
+					continue
+				}
 				var admits []iam.Grant
 				for _, g := range iam.AllGrants {
 					alone := person("jane.doe", g)
@@ -730,5 +737,35 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 					d.Reason, d.Grants, onSeat.Reason, onSeat.Grants)
 			}
 		})
+	}
+}
+
+// namesExactlyWhatItLacks holds a TWO-PARTY row's refusal to its own
+// contract: the grants it names, added to what the caller holds, admit it on
+// the grant — and every one of them is needed, so the caller short of any one
+// is still refused.
+func namesExactlyWhatItLacks(t *testing.T, a authz.Action, object authz.Object,
+	d authz.Decision) {
+
+	t.Helper()
+	if len(d.Grants) == 0 {
+		t.Errorf("%s on %+v refused (%s) naming nothing, and it asks for two "+
+			"grants", a, object, d.Reason)
+		return
+	}
+	with := person("jane.doe", d.Grants...)
+	if got := authz.Decide(t.Context(), with, a, object, chart{}, decidedAt); !got.Allowed ||
+		got.Reason != authz.ReasonGrant {
+		t.Errorf("%s on %+v: holding every grant the refusal named (%v) "+
+			"decided %+v, want admitted on the grant", a, object, d.Grants, got)
+	}
+	for i := range d.Grants {
+		short := slices.Delete(slices.Clone(d.Grants), i, i+1)
+		if got := authz.Decide(t.Context(), person("jane.doe", short...), a,
+			object, chart{}, decidedAt); got.Allowed {
+			t.Errorf("%s on %+v: holding %v, short of %s, was admitted — the "+
+				"refusal named a grant it did not need", a, object, short,
+				d.Grants[i])
+		}
 	}
 }

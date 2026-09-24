@@ -770,8 +770,9 @@ api:
       step_up_sensitive: 15m  # 1m..step_up (default 15m): the same for
                               #   revealing a secret, changing what somebody
                               #   may do or how they prove who they are, and
-                              #   ending every session. A token is fresh
-                              #   by construction in both
+                              #   ending every session. A Tier A token is
+                              #   fresh by construction in both; a machine
+                              #   token only in step_up
     audit:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never

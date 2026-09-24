@@ -31,11 +31,10 @@ import (
 // # A machine token is refused both, whoever it acts as
 //
 // A personal access token acts AS its owner — a person, carrying their seat
-// — and is stepped up by construction for the grants it was minted with,
-// because it has nothing else to present. That makes the kind check below
-// pass and the step-up clock read fresh, so without a refusal of its own a
-// token would reach the two gestures a step-up exists to protect: whoever
-// holds a pipeline's environment could enrol their own second factor on the
+// — so the kind check below passes for it. It is stepped up by construction
+// for the ordinary window only, which the sensitive one these gestures ask
+// would refuse anyway; the refusal of its own is what SAYS why: whoever holds
+// a pipeline's environment must never enrol their own second factor on the
 // owner's account, or regenerate the recovery codes and read them. A token
 // PROVES NOBODY IS PRESENT, so it manages no proof — see [machineToken].
 //

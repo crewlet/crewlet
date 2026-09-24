@@ -401,6 +401,9 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
 
 	case ClassOperator:
+		if r.also != "" {
+			return grantedBoth(p, r.grant, r.also)
+		}
 		return granted(p, r.grant)
 
 	case ClassDirectoryRead, ClassDirectorySelf:
@@ -450,6 +453,31 @@ func granted(p iam.Principal, g iam.Grant) Decision {
 		return consulting(Decision{Allowed: true, Reason: ReasonGrant}, g)
 	}
 	return consulting(Decision{Reason: ReasonNoGrant}, g)
+}
+
+// grantedBoth is the capability check of a row that asks for TWO capabilities
+// at once ([rule.also]).
+//
+// A REFUSAL NAMES WHAT THIS PRINCIPAL LACKS, and every one of them is needed —
+// the one place [Decision.Grants] is a conjunction rather than a choice. It
+// names the missing ones and not both, because the grant a caller already
+// holds is not what would change the answer: an SRE holding the deployment's
+// grant is told the directory's is missing, and nothing else. An allow names
+// both, which is what admitted them.
+func grantedBoth(p iam.Principal, first, second iam.Grant) Decision {
+	if first == "" || second == "" {
+		return Decision{Reason: ReasonNoGrant}
+	}
+	var missing []iam.Grant
+	for _, g := range []iam.Grant{first, second} {
+		if !p.Can(g) {
+			missing = append(missing, g)
+		}
+	}
+	if len(missing) == 0 {
+		return consulting(Decision{Allowed: true, Reason: ReasonGrant}, first, second)
+	}
+	return consulting(Decision{Reason: ReasonNoGrant}, missing...)
 }
 
 // consulting records which capabilities the rule that decided would have

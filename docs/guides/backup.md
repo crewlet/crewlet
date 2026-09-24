@@ -415,8 +415,11 @@ estate and are untouched, which is what you run this command — and re-mint the
 pipelines' tokens — with.
 
 Run it **after** the fleet is up and **before** anybody is told the restore is
-finished. It takes `fleet:operate`, which is the grant whoever ran the restore
-already holds.
+finished. It takes `fleet:operate` **and** `people:manage` — the grant whoever
+ran the restore holds, and the directory's, because it ends every person's
+authority at once — and a proof of identity inside `step_up_sensitive`, which
+a Tier A token holding both grants (as the break-glass one does) satisfies by
+construction. A machine token never can: it never carries `people:manage`.
 
 Then read `crewlet iam check`: a restore under a different keyring reports
 every person as *sealed under a key this deployment does not have* rather than

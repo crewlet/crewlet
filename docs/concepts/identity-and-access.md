@@ -190,8 +190,8 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
 | `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's, and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
-| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge, and `POST /iam/invalidate-all` |
-| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them |
+| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge, and — with `people:manage` beside it — `POST /iam/invalidate-all` |
+| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
 **Connecting an integration has no grant of its own.** `/setup` performs no
@@ -257,13 +257,15 @@ not removed. A reservation is nobody, and a **suspended** person is somebody:
 the company has started, and the way back in for it is an administrator or a
 Tier A token, never a second founder carrying the whole ceiling.
 
-**`POST /iam/invalidate-all` takes `fleet:operate` rather than both.** It is
-the restore runbook's last step, run by whoever runs the deployment; requiring
-`people:manage` as well would mean every SRE who can restore also holds the
-grant that can grant, which is worse for least privilege than the blast radius
-it was meant to bound. Anybody with `people:manage` can already revoke every
-person one at a time — what this adds is doing it *without knowing who was
-affected*, which is exactly what a restore needs.
+**`POST /iam/invalidate-all` takes both `fleet:operate` and `people:manage`.**
+It is the restore runbook's last step, run by whoever runs the deployment, and
+it ends every person's authority at once — every session and every machine
+token — which is the directory's to decide. The route used to admit on
+`fleet:operate` alone while the record it writes refused anybody without
+`people:manage`, so an operator the route let through was refused one step
+later; now the route, the record and this page say the same thing. The Tier A
+token the runbook runs it with holds both, and a machine token can never hold
+`people:manage`, so no pipeline's credential signs the company out.
 
 ### A grant this build has never heard of
 
@@ -898,9 +900,11 @@ epoch and refused once that moves — which is what makes offboarding complete;
 and `crewlet iam invalidate-all`, because it is minted at the company's session
 generation too, for [a restore's reason](#two-counters-and-why-there-are-two).
 
-**A token manages no proof.** It is stepped up by construction for the grants
-it carries — it has nothing else to present — which is exactly why it is
-refused every gesture about *how its owner proves who they are*: it cannot mint
+**A token manages no proof.** It is stepped up by construction for the
+ordinary window — it has nothing else to present — and never for the sensitive
+one, because every sensitive gesture needs a person present and a token proves
+nobody is; and it is refused every gesture about *how its owner proves who they
+are*: it cannot mint
 another token, enrol or replace a second factor, regenerate the recovery codes,
 or answer a step-up, and `DELETE /iam/credentials/{id}` from one revokes
 machine tokens (itself included) and nothing else. Whoever finds a token leaked
@@ -1614,16 +1618,23 @@ step-up it replaces the session it was made from.
 What counts as having proved is a fact about the **credential**. A session
 proved when it signed in or stepped up, and each node composes the two
 deadlines from that instant and its own two windows on every request, so a
-shortened window takes effect at once. A credential with nobody at a keyboard —
-a Tier A token and the session exchanged from one, a personal access or
-service token, the development principal — is **fresh by construction** in both
-windows, because there is nothing else it could ever present, and the
+shortened window takes effect at once. A credential with nobody at a keyboard
+is **fresh by construction**, because there is nothing else it could ever
+present — but not all of them in both windows. A Tier A token, the session
+exchanged from one and the development principal are fresh in both: the
 break-glass credential has to reach a sensitive gesture on the day the identity
-provider is down. What bounds a machine token instead is what it carries:
-`secrets:read` and `people:manage`, the two grants behind the gestures that need
-a person present, can never be minted onto one. And **no tool** asks for a
-proof — a seat has no keyboard, and the operator's assistant's surface is not a
-step-up surface — which the build checks too.
+provider is down. A **personal access or service token** is fresh for `step_up`
+only, and never for `step_up_sensitive`: every sensitive gesture needs a person
+present, and a token proves nobody is. That is two locks, not one. A token can
+never carry `secrets:read` or `people:manage` — the grants behind the sensitive
+gestures about somebody else — and it is never proved for the sensitive window,
+which closes the gestures a person makes about *themselves* on no grant at all:
+it used to be fresh in both, and the only thing between it and changing how its
+owner signs in was each route remembering to refuse it. The build holds both
+halves: every sensitive row about anybody else asks a grant no token carries,
+and a token asking about its own owner is refused every one. And **no tool**
+asks for a proof — a seat has no keyboard, and the operator's assistant's
+surface is not a step-up surface — which the build checks too.
 
 ### Route policy travels with the route
 
@@ -1925,7 +1936,8 @@ sets of sessions:
   needs an administrator.
 - **The fleet-wide session generation** (`iam_session_generation`) ends *every*
   session in the company, and every machine token. One row, about nobody,
-  moved by `crewlet iam invalidate-all`, and it requires `fleet:operate`.
+  moved by `crewlet iam invalidate-all`, and it requires `fleet:operate` and
+  `people:manage` both.
 
 The second is not the first at a larger scale, and the difference is what a
 **restore** does. Restoring rolls the identity estate back to the instant the

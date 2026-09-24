@@ -3,6 +3,7 @@ package authz_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,107 @@ func TestASelfArmsOwnWindowIsARealOneOnARowThatHasOne(t *testing.T) {
 			t.Errorf("%s states a window for its self arm and admits nobody "+
 				"as themselves, so the window is asked of no request", a)
 		}
+	}
+}
+
+// ENDING EVERY SESSION IN THE COMPANY TAKES BOTH HATS.
+//
+// The deployment's grant runs a restore and the directory's decides who may
+// act; this gesture is both at once — it ends every person's authority and
+// every machine token in one record — so it asks for both, and
+// internal/iamdomain's record holds the same rule. A refusal names what the
+// caller LACKS, which is the only thing that would change the answer: an SRE
+// holding the deployment's grant is told the directory's is missing. And it
+// asks the sensitive window of a caller holding both.
+//
+// Mutation: admit on the deployment's grant alone and the SRE is let through;
+// name both grants on every refusal and the SRE is told to ask for one they
+// hold.
+func TestEndingEverySessionInTheCompanyTakesBothHats(t *testing.T) {
+	t.Parallel()
+	decide := func(p iam.Principal) authz.Decision {
+		return authz.Decide(t.Context(), p, authz.ActionSessionInvalidate,
+			authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
+	}
+	for _, c := range []struct {
+		name    string
+		holds   []iam.Grant
+		missing []iam.Grant
+	}{
+		{"the deployment's grant alone", []iam.Grant{iam.GrantFleetOperate},
+			[]iam.Grant{iam.GrantPeopleManage}},
+		{"the directory's grant alone", []iam.Grant{iam.GrantPeopleManage},
+			[]iam.Grant{iam.GrantFleetOperate}},
+		{"neither", nil, []iam.Grant{iam.GrantFleetOperate, iam.GrantPeopleManage}},
+	} {
+		d := decide(person("sam.sre", c.holds...))
+		if d.Allowed || d.Reason != authz.ReasonNoGrant ||
+			!slices.Equal(d.Grants, c.missing) {
+			t.Errorf("%s decided %+v, want refused naming exactly %v", c.name,
+				d, c.missing)
+		}
+	}
+	both := person("ana.admin", iam.GrantFleetOperate, iam.GrantPeopleManage)
+	if d := decide(both); !d.Allowed || d.Reason != authz.ReasonGrant {
+		t.Errorf("both grants decided %+v, want admitted on the grant", d)
+	}
+	proof := decidedAt.Add(-40 * time.Minute)
+	both.ReauthAt, both.SensitiveReauthAt = proof.Add(time.Hour), proof.Add(15*time.Minute)
+	if d := decide(both); d.Allowed || d.Reason != authz.ReasonStepUp ||
+		d.Recency != iam.RecencySensitive {
+		t.Errorf("both grants on a proof forty minutes old decided %+v, want a "+
+			"step-up naming %s", d, iam.RecencySensitive)
+	}
+}
+
+// A SENSITIVE GESTURE ABOUT ANYBODY BUT THE CALLER NEEDS A GRANT NO MACHINE
+// TOKEN CAN CARRY.
+//
+// The sensitive window's safety does not rest on who has proved what alone: a
+// Tier A token is fresh in it by construction, because break-glass must reach
+// a sensitive gesture on the day the provider is down. So every way into one
+// that is not the caller acting on their OWN record asks for a grant that
+// needs a person present ([iam.PersonPresentGrants]) — which internal/iamdomain
+// refuses at a machine token's mint and internal/iam/credential strips from
+// what one carries on every request. Walked over every sensitive row with a
+// principal holding everything ELSE, freshly proved, asking about somebody
+// else, about the company and about nobody: none is admitted. The one way left
+// — the self arm, somebody changing how they themselves prove who they are —
+// is closed to a machine token by the guard, which never proves one for the
+// sensitive window (internal/api/auth holds that half).
+//
+// Mutation: gate a sensitive row on a grant a token can carry and it is
+// admitted here.
+func TestASensitiveGestureAboutAnybodyElseNeedsAGrantNoTokenCarries(t *testing.T) {
+	t.Parallel()
+	var carried []iam.Grant
+	for _, g := range iam.AllGrants {
+		if !slices.Contains(iam.PersonPresentGrants, g) {
+			carried = append(carried, g)
+		}
+	}
+	p := person("ci.pipeline", carried...)
+	somebodyElse := uuid.New().String()
+	sensitive := 0
+	for _, a := range authz.Actions() {
+		if r, _ := authz.RecencyOf(a); r != iam.RecencySensitive {
+			continue
+		}
+		sensitive++
+		for _, object := range []authz.Object{
+			{Kind: authz.KindPerson, Owner: somebodyElse, ID: somebodyElse},
+			{Kind: authz.KindCompany},
+			{},
+		} {
+			if d := authz.Decide(t.Context(), p, a, object, nimbus(), decidedAt); d.Allowed {
+				t.Errorf("%s about %+v admitted a principal holding no grant "+
+					"that needs a person present (%s) — a machine token carrying "+
+					"the same would reach it", a, object, d.Reason)
+			}
+		}
+	}
+	if sensitive == 0 {
+		t.Fatal("the table has no sensitive row, so this walk certifies nothing")
 	}
 }
 

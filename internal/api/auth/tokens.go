@@ -182,14 +182,14 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 		// author stays the owner; the operator column names the token.
 		Via: iam.MachineTokenName(presented.ID),
 	}
-	// STEPPED UP BY CONSTRUCTION for the grants it carries, in both windows,
-	// as every non-interactive credential is: there is nothing else it could
-	// present. The sensitive window is reachable only through what the token
-	// carries, and the two grants that need a person present — revealing a
-	// secret's value and changing who holds authority — can never be minted
-	// onto one (internal/iamdomain refuses them at the mint, and it is
-	// asserted there).
-	g.proof.stamp(&p, now)
+	// STEPPED UP BY CONSTRUCTION FOR THE ORDINARY WINDOW, as every
+	// non-interactive credential is — there is nothing else it could present
+	// — and NEVER FOR THE SENSITIVE ONE, which is a person's to satisfy: see
+	// [proofWindows.stampOrdinary]. The two grants that need a person
+	// present are also never minted onto a token (internal/iamdomain) and
+	// never carried by one (internal/iam/credential); this is the half that
+	// holds where a verb admits the owner as themselves on no grant at all.
+	g.proof.stampOrdinary(&p, now)
 	if owner.Seat == "" {
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
 	}

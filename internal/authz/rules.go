@@ -198,11 +198,11 @@ const (
 	ActionSessionEnd      Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
-	// the restore runbook's last step. The deployment's own grant, like
-	// [ActionFleetOperate], and a verb of its own because it asks for the
-	// SENSITIVE window where the deployment's other controls ask for the
-	// ordinary one: it is the one gesture here that cannot be taken back for
-	// anybody, and it signs out the whole company including the person
+	// the restore runbook's last step. BOTH hats, the deployment's grant AND
+	// the directory's ([rule.also]), and a verb of its own because it asks
+	// for the SENSITIVE window where the deployment's other controls ask for
+	// the ordinary one: it is the one gesture here that cannot be taken back
+	// for anybody, and it signs out the whole company including the person
 	// making it.
 	ActionSessionInvalidate Action = "iam.invalidate"
 )
@@ -220,6 +220,19 @@ type rule struct {
 	// and empty on an operator row is a gate somebody forgot to fill in,
 	// which [granted] refuses.
 	grant iam.Grant
+
+	// also is a SECOND capability an operator row requires beside grant:
+	// the row admits only a principal holding BOTH. Empty on every row but
+	// the one gesture that belongs to two parties at once — ending every
+	// session in the company, which is the deployment's to run and the
+	// directory's to decide ([ActionSessionInvalidate]).
+	//
+	// A FIELD AND NOT A SECOND VERB ASKED FROM INSIDE THE HANDLER, because
+	// the table is what a REST route, a socket question and a walk all read:
+	// a handler that asked the second grant itself would be the one place
+	// the rule was stated, and a walk over the table would certify a row
+	// that admits on one grant alone.
+	also iam.Grant
 
 	// humanOnly marks a verb NO AGENT may take, whatever its class would
 	// allow — purging a task beyond recovery, taking a project out of
@@ -521,12 +534,19 @@ var rules = map[Action]rule{
 	// looping over the directory would do it to the whole company.
 	ActionSessionEnd: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
 		selfRecency: iam.RecencyAny},
-	// ENDING EVERY SESSION IN THE COMPANY is the deployment's grant — a
-	// restore is run by whoever runs the deployment — at the SENSITIVE
-	// window: it is irreversible for everybody at once. A Tier A token is
-	// fresh by construction, so the restore runbook's CLI step still runs
-	// on the day nobody can sign in.
-	ActionSessionInvalidate: {class: ClassOperator, grant: iam.GrantFleetOperate, recency: iam.RecencySensitive},
+	// ENDING EVERY SESSION IN THE COMPANY takes BOTH HATS — the design's
+	// rule, and the one internal/iamdomain's own record holds too: the
+	// deployment's grant, because a restore is run by whoever runs the
+	// deployment, AND the directory's, because it ends every person's
+	// authority at once, every machine token included. Admitted on the
+	// deployment's grant alone, the route promised an SRE a gesture the
+	// record then refused them, and the table's own safety argument for a
+	// machine token rested on a check nothing here stated. At the SENSITIVE
+	// window: it is irreversible for everybody at once. A Tier A token holds
+	// both and is fresh by construction, so the restore runbook's CLI step
+	// still runs on the day nobody can sign in.
+	ActionSessionInvalidate: {class: ClassOperator, grant: iam.GrantFleetOperate,
+		also: iam.GrantPeopleManage, recency: iam.RecencySensitive},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -570,6 +590,16 @@ func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
 func GrantOf(a Action) (iam.Grant, bool) {
 	r, ok := rules[a]
 	return r.grant, ok
+}
+
+// AlsoGrantOf reports the SECOND capability a two-party operator row asks for
+// beside [GrantOf]'s, and empty for every row that asks one or none — see
+// [rule.also].
+//
+// EXPORTED FOR THE WALKS, on [GrantOf]'s terms. Use [Decide].
+func AlsoGrantOf(a Action) (iam.Grant, bool) {
+	r, ok := rules[a]
+	return r.also, ok
 }
 
 // ClassOf reports which rule governs a verb.

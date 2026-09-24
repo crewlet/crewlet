@@ -892,6 +892,41 @@ func TestInvalidatingEverySessionIsRefusedWithoutTheGrant(t *testing.T) {
 	}
 }
 
+// AN INVALIDATION TAKES BOTH HATS: the directory's grant AND the deployment's.
+//
+// It ends every person's authority at once, which is people:manage's to
+// decide, and it is the last step of a restore, which is fleet:operate's to
+// run. The record asked the first alone while the route admitted on the second
+// alone, so an operator holding what the route asked for was refused here.
+// Each half alone is refused, nothing is published, and the party holding
+// both — the control — lands.
+//
+// Mutation: drop either check and the party holding only the other one bumps
+// the generation.
+func TestInvalidatingEverySessionTakesBothHats(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	for name, grants := range map[string][]iam.Grant{
+		"the directory's grant alone":  {iam.GrantPeopleManage},
+		"the deployment's grant alone": {iam.GrantFleetOperate},
+	} {
+		party := rig.writer.As(principalNamed("half.hatted", iam.KindPerson, grants))
+		if _, err := party.InvalidateAll(rig.t.Context(), "op-"+name, ""); !errors.Is(
+			err, iamdomain.ErrRefused) {
+			t.Errorf("%s invalidating every session got %v, want %v", name,
+				err, iamdomain.ErrRefused)
+		}
+	}
+	both := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iam.GrantPeopleManage, iam.GrantFleetOperate}))
+	if err := rig.during(func() error {
+		_, err := both.InvalidateAll(rig.t.Context(), "op-both", "a restore")
+		return err
+	}); err != nil {
+		t.Errorf("the party holding both grants was refused: %v", err)
+	}
+}
+
 // A SEAT BINDING RECORDS THE CHART POSITION IT WAS DECIDED AT.
 //
 // It is what makes the seat lookup three-valued, and the field has exactly one

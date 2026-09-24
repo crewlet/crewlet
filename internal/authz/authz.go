@@ -80,8 +80,17 @@
 // client can ask the person and replay the request. Who counts as having
 // proved is the principal's business ([iam.Principal.Proved]): a session
 // proved when it signed in or stepped up, while a credential with nobody at a
-// keyboard — a Tier A token, a machine token, the development principal — is
-// fresh by construction, because there is nothing else it could ever present.
+// keyboard is fresh by construction, because there is nothing else it could
+// ever present — a Tier A token and the development principal in both windows,
+// a machine token in the ordinary one only, since every sensitive gesture needs
+// a person present. Two walks hold the sensitive window to that: every
+// sensitive row about anybody but the caller asks a grant no token carries
+// ([iam.PersonPresentGrants]), and internal/api/auth's refuses a token every
+// sensitive row about its own owner.
+//
+// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and one does: ending every
+// session in the company is the deployment's to run and the directory's to
+// decide, so it takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
 package authz
@@ -232,7 +241,10 @@ type Decision struct {
 	Err error
 
 	// Grants are the capabilities the deciding rule would have admitted
-	// THIS principal on, for THIS object — any one of them is enough.
+	// THIS principal on, for THIS object — any one of them is enough, on
+	// every row but the one that asks for two at once ([rule.also]), where a
+	// refusal names the ones this principal LACKS and every one of them is
+	// needed.
 	// The capability a grant rule asks for, the admin grant a relation
 	// rule is overridden by, both directory grants a directory read
 	// accepts. Empty where no capability could have changed the answer:

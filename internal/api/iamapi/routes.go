@@ -113,11 +113,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// how somebody proves who they are — which the pattern cannot see.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
-	// THE FLEET'S OWN GRANT, not the directory's. sessions.go argues it:
-	// a restore is run by whoever runs the deployment, and requiring
-	// people:manage as well would hand every SRE the grant that can grant.
-	// ITS OWN VERB beside the deployment's other controls, because it asks
-	// for the SENSITIVE window: it signs out everybody, irreversibly.
+	// BOTH HATS, the deployment's grant and the directory's — sessions.go
+	// argues it. ITS OWN VERB beside the deployment's other controls,
+	// because it asks for the SENSITIVE window: it signs out everybody,
+	// irreversibly.
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)

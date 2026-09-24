@@ -205,9 +205,9 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 //
 // AND NEVER A GRANT THAT NEEDS A PERSON PRESENT ([iam.PersonPresentGrants]),
 // whatever the row says. The mint refuses them, and this is the half the
-// request path relies on: a token is fresh by construction in both step-up
-// windows, which is safe only while it can reach no gesture those grants
-// open, so a row carrying one (from a peer whose decide did not refuse it, or
+// request path relies on: a token is fresh by construction for the ordinary
+// step-up window, and the gestures those grants open are ones it must never
+// reach, so a row carrying one (from a peer whose decide did not refuse it, or
 // from anywhere else) grants it nothing here.
 func (row TokenRow) EffectiveGrants() []iam.Grant {
 	out := make([]iam.Grant, 0, len(row.Grants))
