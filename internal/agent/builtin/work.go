@@ -344,6 +344,19 @@ type Actor struct {
 	// twice. See [Actor.OperationSeed] and ADR-0017.
 	WorkKey string
 
+	// RequestKey is the caller's own idempotency key for ONE request made
+	// outside a turn — the `request_id` a person's write carries through
+	// the operator surface, set by that surface and never by an argument.
+	//
+	// IT IS WHAT MAKES A RETRY ONE WRITE. A person whose write answered
+	// `unknown` (the broker took it, nobody heard back) retries it, and
+	// without a key of their own the retry minted a fresh operation id and
+	// wrote a second time — a second comment, a second created item. Keyed
+	// on the request, the operation ledger collapses the retry into the
+	// first attempt, exactly as it collapses a redelivered turn. Empty for
+	// every in-turn write, whose identities above already do this.
+	RequestKey string
+
 	Chain []string
 }
 
@@ -360,14 +373,27 @@ type Actor struct {
 // mint a fresh id and write again. Falling back to the run keeps the
 // within-run guarantee without inventing a cross-run one.
 //
-// EMPTY OUTSIDE A TURN, which is the operator surface: their MCP client made
-// one call, nothing will redeliver it, and an invented key would be a lie
-// about what produced the write.
+// THE CALLER'S REQUEST KEY OUTSIDE A TURN, prefixed `req-` so it can never
+// equal a work key or a run id — the three are minted by different parties,
+// and a seed one of them could collide with would collapse a person's write
+// into a seat's. A retried request carries the same key, so the retry is the
+// same operation; a new request carries a new one, so it is a new write.
+//
+// EMPTY OUTSIDE A TURN WITH NO KEY, which is an MCP call from an operator's
+// own assistant: nothing will redeliver it and it names no request, so every
+// derived id falls back to a fresh one — an invented key would be a lie about
+// what produced the write, and a STABLE one would collapse every later write
+// as a redelivery of the first.
 func (a Actor) OperationSeed() string {
-	if a.WorkKey != "" {
+	switch {
+	case a.WorkKey != "":
 		return a.WorkKey
+	case a.TurnID != "":
+		return a.TurnID
+	case a.RequestKey != "":
+		return "req-" + a.RequestKey
 	}
-	return a.TurnID
+	return ""
 }
 
 // Record is WHOSE OWN STATE this actor writes and reads: the seat the
@@ -463,25 +489,29 @@ func (d WorkDeps) partyOf(handle string) tracker.Party {
 	return d.Party(handle)
 }
 
-// turnKey is the idempotency key a comment carries, or "" outside a turn.
+// callSeed is the idempotency key a comment carries: the turn's where there
+// is one, the caller's request key where there is not, and "" for a call that
+// named neither.
 //
-// NIL-SAFE, because these tools serve two callers now. A TURN's key makes a
+// NIL-SAFE, because these tools serve two callers. A TURN's key makes a
 // comment idempotent: the engine's redelivery guarantees make a re-run turn
-// ordinary, and without it a seat says the same thing twice. An OPERATOR has
-// no turn and no redelivery — their MCP client made one call — so there is
-// nothing to deduplicate against and an invented key would be a lie about
-// what produced the comment.
+// ordinary, and without it a seat says the same thing twice. A PERSON has no
+// turn, but a person RETRIES — a write that answered `unknown` is sent again
+// with the same request key — and keyed on it the retry is the first comment
+// rather than a second. With neither there is nothing to deduplicate against,
+// and an invented key would be a lie about what produced the comment.
 //
 // THROUGH [Actor.OperationSeed] rather than reading a field, because which of
-// a turn's two identities an idempotent id is built from is one rule and this
+// a caller's identities an idempotent id is built from is one rule and this
 // is its second caller. Written out here it would be the same rule spelled
 // twice, free to disagree — the shape internal/whsec and internal/textcut
 // exist because of.
-func turnKey(turn *turnctx.Turn) string {
-	if turn == nil {
-		return ""
+func callSeed(turn *turnctx.Turn, requestKey string) string {
+	actor := Actor{RequestKey: requestKey}
+	if turn != nil {
+		actor.TurnID, actor.WorkKey = turn.RunID, turn.WorkKey
 	}
-	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey}.OperationSeed()
+	return actor.OperationSeed()
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1272,7 +1302,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	now := t.deps.now()
 	task := tracker.Task{
 		V:           tracker.DocumentVersion,
-		ID:          uuid.NewString(),
+		ID:          taskIDFor(actor, args),
 		Title:       strings.TrimSpace(argString(args, "title")),
 		Body:        argString(args, "body"),
 		Type:        strings.TrimSpace(argString(args, "type")),
@@ -1552,29 +1582,30 @@ func handles(all ...string) []string {
 
 // opIDFor is the operation id one tool call writes under.
 //
-// DERIVED FROM THE TURN AND THE OBJECT rather than minted fresh, so a re-run
-// turn — which the engine's redelivery guarantees make ordinary — writes ONCE.
+// DERIVED FROM THE CALLER'S SEED AND THE OBJECT rather than minted fresh, so a
+// re-run turn — which the engine's redelivery guarantees make ordinary — writes
+// ONCE, and so does a person's retried request, whose seed is the request key
+// it carried both times (see [Actor.OperationSeed]).
 //
-// OUTSIDE A TURN IT IS FRESH PER CALL, and that is the whole of the second
-// branch: there is nothing to be idempotent against, because nothing is going
-// to redeliver an operator's tool call. It used to return `verb + "-" + object`
-// here on the reasoning that "the object's own id is enough to make it unique"
-// — which is true of two DIFFERENT objects and false of the same one twice, so
-// the id was stable for the life of the deployment and the operation ledger
-// collapsed every write after the first as a redelivery.
+// WITH NO SEED IT IS FRESH PER CALL, and that is the whole of the second
+// branch: an MCP call from an operator's own assistant names no request and
+// nothing will redeliver it, so there is nothing to be idempotent against. It
+// used to return `verb + "-" + object` here on the reasoning that "the
+// object's own id is enough to make it unique" — which is true of two
+// DIFFERENT objects and false of the same one twice, so the id was stable for
+// the life of the deployment and the operation ledger collapsed every write
+// after the first as a redelivery.
 //
-// Measured through `/operator/mcp`, which is the ONLY write path the dashboard
-// offers and what an operator's own assistant connects to: a work item could
-// be updated exactly once. The second update, and every one after it, wrote
-// nothing and answered `outcome: "applied"` with the FIRST write's position —
-// the worst shape a write surface has, because the caller is told it worked.
-// The same held for a dependency change, a re-removal after a restore, a
-// merge, and (through [callKey]) a priority list, a pin set and an inbox
-// mark.
+// Measured through `/operator/mcp`: a work item could be updated exactly once.
+// The second update, and every one after it, wrote nothing and answered
+// `outcome: "applied"` with the FIRST write's position — the worst shape a
+// write surface has, because the caller is told it worked. The same held for a
+// dependency change, a re-removal after a restore, a merge, a priority list, a
+// pin set and an inbox mark — the last three through a helper of their own
+// that spelled this rule a second time, until they were brought here.
 //
-// [commentID] three hundred lines below has always had this right, and is
-// where the shape comes from: the turn's key where there is one, a fresh uuid
-// where there is not.
+// [commentID] has always had this right, and is where the shape comes from:
+// the caller's seed where there is one, a fresh uuid where there is not.
 func opIDFor(actor Actor, verb, object string) string {
 	seed := actor.OperationSeed()
 	if seed == "" {
@@ -2331,6 +2362,41 @@ func commentID(actor Actor, taskID string) string {
 	}
 	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+actor.Handle)).String()
 }
+
+// taskIDFor is a new work item's own id, derived so a repeated create files
+// ONE item.
+//
+// The create's operation id is [opIDFor] over this id, so an id minted fresh
+// made that operation id fresh too and nothing about a create was ever
+// idempotent: a redelivered turn filed its work a second time, and a person
+// whose "file this" answered `unknown` and who pressed retry got two items,
+// each waking its assignee. Derived from the caller's seed, the repetition is
+// the same id and therefore the same operation, which the ledger collapses.
+//
+// OVER THE TITLE AND THE PROJECT AS GIVEN, because one seed legitimately files
+// several items — a turn that breaks work down creates five — and those differ
+// in what they say. Two creates of the same title into the same project under
+// one seed are the one case this collapses, and that is a repetition: a
+// within-run duplicate is exactly what [Actor.OperationSeed]'s run fallback
+// exists to write once.
+//
+// FRESH WITH NO SEED, for the reason [opIDFor] is: nothing will repeat an MCP
+// call that named no request, and two identical calls from an assistant are
+// two items because that is what it asked for.
+func taskIDFor(actor Actor, args map[string]any) string {
+	seed := actor.OperationSeed()
+	if seed == "" {
+		return uuid.NewString()
+	}
+	name := seed + "\x00" + strings.ToUpper(strings.TrimSpace(argString(args, "project"))) +
+		"\x00" + strings.TrimSpace(argString(args, "title"))
+	return uuid.NewSHA1(taskNamespace, []byte(name)).String()
+}
+
+// taskNamespace is the uuid namespace derived work item ids live under. Fixed
+// for the life of the format: an item's id is durable on every node, and a new
+// namespace would make every repeated create after the change a second item.
+var taskNamespace = uuid.MustParse("3b7e9a52-0c4d-5f16-9a8e-6d2c1b4f7e30")
 
 // commentNamespace is the uuid namespace comment ids are derived under. Fixed
 // for the life of the format: it is durable in every comment row.

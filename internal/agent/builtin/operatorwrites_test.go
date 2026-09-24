@@ -50,7 +50,7 @@ import (
 
 // operatorActor is a write with no turn: a token acting for the company.
 //
-// It is what `opsmcp.WorkActor` builds — the operator's own name as the
+// It is what `operator.WorkActor` builds — the operator's own name as the
 // handle, the kind saying it is not a seat, and NO TURN ID, which is the whole
 // point of the case.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -207,11 +207,160 @@ func TestATurnWithNoWorkKeySeedsFromItsRun(t *testing.T) {
 	if got := keyed.OperationSeed(); got != "wk-1" {
 		t.Errorf("seed = %q, want the work key — the run does not survive a redelivery", got)
 	}
-	// OUTSIDE A TURN THERE IS NOTHING TO BE IDEMPOTENT AGAINST: an operator's
-	// MCP client made one call and nothing will redeliver it.
+	// OUTSIDE A TURN WITH NO REQUEST KEY THERE IS NOTHING TO BE IDEMPOTENT
+	// AGAINST: an operator's MCP client made one call and nothing will
+	// redeliver it.
 	if got := (builtin.Actor{}).OperationSeed(); got != "" {
 		t.Errorf("seed = %q, want empty for a write with no turn behind it", got)
 	}
+}
+
+// A PERSON'S RETRY IS ONE WRITE: outside a turn, the caller's own request key
+// seeds every derived id.
+//
+// # What was wrong
+//
+// Outside a turn every derived id was fresh, which is right for an MCP call
+// nobody will repeat and wrong for a person who DOES repeat one: a write that
+// answered `unknown` — the broker took it and nobody heard back — is sent
+// again, and a fresh id made the retry a second item, a second comment, a
+// second priority write. Worse, three verbs (`set_priorities`, `set_pins`,
+// `mark_inbox`) did not derive through [builtin.Actor.OperationSeed] at all but
+// through a helper of their own, so a seed the actor carried could never have
+// reached them.
+//
+// # What is asserted
+//
+// The operation ids, as in the cases above: equal ids are writes the ledger
+// collapses. The same key twice is one id on every verb; a different key is a
+// different one, or the key would collapse a person's SECOND write — the
+// defect the case above guards, reached from the other side.
+func TestARequestKeySeedsTheOperationOutsideATurn(t *testing.T) {
+	t.Parallel()
+	keyed := func(key string) func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+			return builtin.Actor{
+				Handle: "founder", Kind: tracker.AuthorOperator,
+				OperatorID: "founder", RequestKey: key,
+			}, nil
+		}
+	}
+
+	// THE PRECEDENCE: a turn's identities outrank a request key, which a
+	// turn never carries, and the key is prefixed so it can never equal
+	// either of them.
+	for name, c := range map[string]struct {
+		actor builtin.Actor
+		want  string
+	}{
+		"the key alone":       {builtin.Actor{RequestKey: "r-1"}, "req-r-1"},
+		"the run outranks it": {builtin.Actor{TurnID: "run-1", RequestKey: "r-1"}, "run-1"},
+		"the work key first":  {builtin.Actor{WorkKey: "wk-1", TurnID: "run-1", RequestKey: "r-1"}, "wk-1"},
+	} {
+		if got := c.actor.OperationSeed(); got != c.want {
+			t.Errorf("%s: seed = %q, want %q", name, got, c.want)
+		}
+	}
+
+	t.Run("a work item update", func(t *testing.T) {
+		t.Parallel()
+		ids := func(keys ...string) []string {
+			trk := newFakeTracker()
+			for _, key := range keys {
+				reg := workRegistry(t, builtin.WorkDeps{
+					Reader: trk, Writer: trk.as, Actor: keyed(key),
+				})
+				if got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+					"item": "ENG-1", "priority": "urgent",
+				}); got.Failed {
+					t.Fatalf("update failed: %s", got.Output)
+				}
+			}
+			return trk.opIDs
+		}
+		retried := ids("r-1", "r-1")
+		if retried[0] != retried[1] {
+			t.Errorf("a retried update wrote under %q and then %q — the ledger "+
+				"cannot collapse it", retried[0], retried[1])
+		}
+		if !strings.HasPrefix(retried[0], "req-r-1-update-") {
+			t.Errorf("the retried update wrote under %q, which is not seeded "+
+				"from its request", retried[0])
+		}
+		if two := ids("r-1", "r-2"); two[0] == two[1] {
+			t.Errorf("two requests wrote under one id %q, so the second is "+
+				"collapsed as a retry of the first", two[0])
+		}
+	})
+
+	t.Run("a created work item", func(t *testing.T) {
+		t.Parallel()
+		create := func(key, title string) (string, string) {
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, Actor: keyed(key),
+			})
+			if got := callNoTurn(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": title, "project": "ENG",
+			}); got.Failed {
+				t.Fatalf("create failed: %s", got.Output)
+			}
+			if len(trk.created) != 1 || len(trk.opIDs) != 1 {
+				t.Fatalf("one create wrote %v", trk.opIDs)
+			}
+			return trk.created[0].ID, trk.opIDs[0]
+		}
+		// A CREATE'S OPERATION ID IS OVER THE NEW ITEM'S OWN ID, so a
+		// fresh item id made every create a fresh operation and a retried
+		// "file this" was two items.
+		firstID, firstOp := create("r-1", "Ship the thing")
+		againID, againOp := create("r-1", "Ship the thing")
+		if firstID != againID || firstOp != againOp {
+			t.Errorf("a retried create filed %s under %q and then %s under %q "+
+				"— two items for one request", firstID, firstOp, againID, againOp)
+		}
+		if otherID, _ := create("r-2", "Ship the thing"); otherID == firstID {
+			t.Errorf("two requests filed one item %s", otherID)
+		}
+		freshA, _ := create("", "Ship the thing")
+		freshB, _ := create("", "Ship the thing")
+		if freshA == freshB {
+			t.Errorf("two calls naming no request filed one item %s — an "+
+				"assistant that asks twice is asking for two", freshA)
+		}
+	})
+
+	t.Run("the person verbs", func(t *testing.T) {
+		t.Parallel()
+		for _, verb := range []struct {
+			tool string
+			args map[string]any
+		}{
+			{tracker.SetPrioritiesTool, map[string]any{"items": []any{"ENG-1"}}},
+			{tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}},
+			{tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}},
+		} {
+			opID := func(key string) string {
+				person := &personSpy{}
+				reg := personSurface(t, newFakeTracker(), person, keyed(key), nil)
+				if got := callNoTurn(t, reg, verb.tool, verb.args); got.Failed {
+					t.Fatalf("%s failed: %q", verb.tool, got.Output)
+				}
+				return person.opID
+			}
+			if a, b := opID("r-1"), opID("r-1"); a != b {
+				t.Errorf("a retried %s wrote under %q and then %q — the "+
+					"request key never reached it", verb.tool, a, b)
+			}
+			if a, b := opID("r-1"), opID("r-2"); a == b {
+				t.Errorf("two %s requests wrote under one id %q", verb.tool, a)
+			}
+			if a, b := opID(""), opID(""); a == b {
+				t.Errorf("two %s calls naming no request wrote under one id "+
+					"%q, so the second is collapsed as a redelivery", verb.tool, a)
+			}
+		}
+	})
 }
 
 // commonPrefix is the leading text two strings share.
@@ -223,4 +372,38 @@ func commonPrefix(a, b string) string {
 		}
 	}
 	return a[:n]
+}
+
+// AND A REDELIVERED TURN FILES ITS WORK ONCE, which is the same defect reached
+// from inside a turn: the create's operation id is over the new item's id, and
+// that id was minted fresh on every attempt — so the work key that collapses a
+// redelivered update, comment or status move never collapsed a create, and a
+// turn that failed after filing its work filed it again on the retry.
+func TestARedeliveredTurnFilesOneItem(t *testing.T) {
+	t.Parallel()
+	filed := map[string]string{}
+	for _, run := range []string{"run-1", "run-2"} {
+		turn := workTurn(t)
+		turn.RunID, turn.WorkKey = run, "wk-1"
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		entry, ok := reg.Lookup(builtin.CreateWorkItemTool)
+		if !ok {
+			t.Fatal("create_work_item is not registered")
+		}
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(t.Context(), turn,
+			map[string]any{"title": "Ship the thing", "project": "ENG"})
+		if err != nil || got.Failed {
+			t.Fatalf("%s: err=%v result=%+v", run, err, got)
+		}
+		if len(trk.created) != 1 {
+			t.Fatalf("%s filed %d items", run, len(trk.created))
+		}
+		filed[run] = trk.created[0].ID
+	}
+	if filed["run-1"] != filed["run-2"] {
+		t.Errorf("the attempts filed %s and %s — a redelivery the engine "+
+			"guarantees is a second item on somebody's board",
+			filed["run-1"], filed["run-2"])
+	}
 }

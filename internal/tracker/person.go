@@ -43,7 +43,7 @@ import (
 // as the credential in their hand: a write made through somebody's own API
 // token is attributed to the TOKEN with author kind `operator`, deliberately,
 // because a tracker whose author field is chosen by the writer is not an audit
-// trail (see internal/api/opsmcp). So the subject these verbs key on is
+// trail (see internal/api/operator). So the subject these verbs key on is
 // [Writer.Record] — the seat the credential is bound to — while the author on
 // every record they publish stays [Writer.Actor]. Keyed on the actor instead,
 // a founder marking their own inbox through their own assistant wrote a second

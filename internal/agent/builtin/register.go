@@ -514,7 +514,7 @@ func feedReads(deps WorkDeps) bool {
 // both — so it belongs in one switch rather than on a method every tool would
 // have to remember to write. What made it worth exporting is that both surfaces
 // the engine serves published every tool with a name, a description and a
-// schema and nothing else: [internal/api/opsmcp] hands a company's whole
+// schema and nothing else: [internal/api/operator] hands a company's whole
 // tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
 // seat's tools to a sandboxed coding agent, and neither client could tell a
 // read from an irreversible write. The registry has carried these hints the

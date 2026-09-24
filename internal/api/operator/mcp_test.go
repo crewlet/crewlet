@@ -1,4 +1,4 @@
-package opsmcp_test
+package operator_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -23,7 +23,7 @@ import (
 // their config says.
 func TestNoNativeBackendServesNothing(t *testing.T) {
 	t.Parallel()
-	if s := opsmcp.New(opsmcp.Options{}); s != nil {
+	if s := operator.New(operator.Options{}); s != nil {
 		t.Errorf("a company with no native backend got a surface serving %v", s.Tools())
 	}
 }
@@ -34,10 +34,10 @@ func TestNoNativeBackendServesNothing(t *testing.T) {
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	only := opsmcp.New(opsmcp.Options{
+	only := operator.New(operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
 		},
 	})
 	if only == nil {
@@ -64,7 +64,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
 	ctx := auth.WithOperator(t.Context(), "ops-bot")
 
-	actor, err := opsmcp.WorkActor(nil)(ctx, nil)
+	actor, err := operator.WorkActor(nil)(ctx, nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	// filtering on a name matched half of what they did. The kind is already
 	// its own column on both rows, so the prefix was a second encoding of a
 	// fact the row carries.
-	page, err := opsmcp.PageActor(ctx, nil)
+	page, err := operator.PageActor(ctx, nil)
 	if err != nil {
 		t.Fatalf("PageActor: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		return o
 	}
 
-	bound, err := opsmcp.WorkActor(chart)(auth.WithOperator(t.Context(), "founder"), nil)
+	bound, err := operator.WorkActor(chart)(auth.WithOperator(t.Context(), "founder"), nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 
 	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
 	// chart — and it writes under its own id exactly as before.
-	unbound, err := opsmcp.WorkActor(chart)(auth.WithOperator(t.Context(), "ci"), nil)
+	unbound, err := operator.WorkActor(chart)(auth.WithOperator(t.Context(), "ci"), nil)
 	if err != nil {
 		t.Fatalf("WorkActor for an unbound token: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
 		"no chart loaded": func() *org.Organization { return nil },
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := opsmcp.WorkActor(none)(
+			got, err := operator.WorkActor(none)(
 				auth.WithOperator(t.Context(), "founder"), nil)
 			if err != nil {
 				t.Fatalf("WorkActor: %v", err)
@@ -236,10 +236,10 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 		"an empty operator id":       auth.WithOperator(context.Background(), ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := opsmcp.WorkActor(nil)(ctx, nil); err == nil {
+			if _, err := operator.WorkActor(nil)(ctx, nil); err == nil {
 				t.Error("a write with no operator was attributed rather than refused")
 			}
-			if _, err := opsmcp.PageActor(ctx, nil); err == nil {
+			if _, err := operator.PageActor(ctx, nil); err == nil {
 				t.Error("a page write with no operator was attributed rather than refused")
 			}
 		})
@@ -252,12 +252,12 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 // surface behind no credential at all.
 func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 	t.Parallel()
-	if !auth.AlwaysGuarded(opsmcp.Path) {
+	if !auth.AlwaysGuarded(operator.MCPPath) {
 		t.Fatalf("%s is not on the always-guarded list, so allow_anonymous_read "+
-			"opens a surface that files work", opsmcp.Path)
+			"opens a surface that files work", operator.MCPPath)
 	}
-	if strings.HasPrefix(opsmcp.Path, "/mcp/") {
-		t.Fatalf("%s is under the sandbox bridge's exempt prefix", opsmcp.Path)
+	if strings.HasPrefix(operator.MCPPath, "/mcp/") {
+		t.Fatalf("%s is under the sandbox bridge's exempt prefix", operator.MCPPath)
 	}
 }
 
@@ -266,12 +266,12 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 // implementation, which is what this whole seam exists to avoid.
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
-	s := opsmcp.New(opsmcp.Options{
+	s := operator.New(operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
 		},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: operator.PageActor},
 	})
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
@@ -400,14 +400,14 @@ func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, 
 // client that skips the prompt for a read prompted on every one.
 func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	t.Parallel()
-	s := opsmcp.New(opsmcp.Options{
+	s := operator.New(operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor(nil),
+			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: opsmcp.PageActor,
+			Actor: operator.PageActor,
 		},
 	})
 	if s == nil {
@@ -422,9 +422,20 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 
 	// AND THE TWO ENDS OF THE RANGE ARE WHAT THEY CLAIM, or the check
 	// above would pass on a surface that annotated everything the same.
-	if got := s.Annotations(tracker.SearchWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
-		t.Errorf("the ranked search advertises %+v, which is not a proven "+
+	if got := s.Annotations(tracker.ListWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
+		t.Errorf("the board read advertises %+v, which is not a proven "+
 			"read", got)
+	}
+	// AND A VERB THIS COMPANY IS NOT SERVED ADVERTISES NOTHING. This case
+	// once asserted the ranked search here, on a surface wired with no
+	// search backend — and passed, because the hints were answered for any
+	// name at all rather than for what the surface actually lists.
+	if slices.Contains(s.Tools(), tracker.SearchWorkItemsTool) {
+		t.Fatalf("the ranked search is served with no search backend wired")
+	}
+	if got := s.Annotations(tracker.SearchWorkItemsTool); got != (tools.Annotations{}) {
+		t.Errorf("a verb this surface does not serve is reported with hints "+
+			"%+v — a check for what is advertised passes on what is not", got)
 	}
 	if got := s.Annotations(tracker.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
 		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+

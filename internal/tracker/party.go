@@ -14,7 +14,7 @@ import (
 // different on a record: a write made through their credential is attributed
 // to the TOKEN's own name with author kind `operator`, never to a seat handle,
 // because a tracker whose author field is chosen by the writer is not an audit
-// trail (see internal/api/opsmcp). That rule is right and it is not what this
+// trail (see internal/api/operator). That rule is right and it is not what this
 // type changes.
 //
 // What it changes is the READ. Every personal question — "what am I assigned",

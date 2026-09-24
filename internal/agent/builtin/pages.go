@@ -80,12 +80,32 @@ type PageDeps struct {
 	// this is a seam rather than a second copy of these five tools.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
+	// RequestKey reads the caller's own idempotency key off a request made
+	// outside a turn, or "" — the page half of [Actor.RequestKey], which
+	// the work tools carry on their actor. It is a seam of its own because
+	// [pages.Actor] is the knowledge base's attribution record and a
+	// request key is not attribution: nothing about it is written to a
+	// history row. Nil, which is every seat's surface, reads "".
+	//
+	// What it buys is that a person's retried comment is ONE comment: the
+	// comment's operation id is derived from it exactly as from a turn's
+	// key (see [callSeed]).
+	RequestKey func(ctx context.Context) string
+
 	// Await blocks until this node's projection has applied a revision.
 	// See [WorkDeps.Await]: same seam, same reason, and it matters more
 	// here — a page's SavePage takes the version it read, so a turn that
 	// writes and then re-reads through a projection that has not caught
 	// up gets a stale version and its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
+}
+
+// requestKey is the caller's request key, or "" — see [PageDeps.RequestKey].
+func (d PageDeps) requestKey(ctx context.Context) string {
+	if d.RequestKey == nil {
+		return ""
+	}
+	return d.RequestKey(ctx)
 }
 
 // settle waits for a write to reach this node's own applied rows. Best effort;
@@ -616,7 +636,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	in := pages.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey: turnKey(turn),
+		CallKey: callSeed(turn, t.deps.requestKey(ctx)),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

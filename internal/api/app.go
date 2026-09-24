@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -186,15 +186,16 @@ type Options struct {
 	// node without the ingress role serves it alone, through [BridgeOnly].
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base, served to
-	// an operator's AI assistant over MCP. Nil serves none and the route
-	// is ABSENT, which is the honest shape for a company on Jira and
-	// Confluence: there is nothing here it could manage.
+	// Operator is the company's own tracker and knowledge base as ONE tool
+	// catalogue, served to the people who run it — over MCP for an
+	// operator's own AI assistant. Nil serves none and the route is ABSENT,
+	// which is the honest shape for a company on Jira and Confluence: there
+	// is nothing here it could manage.
 	//
 	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
 	// company, and the credential's own name is what lands on each record
 	// as the author.
-	Operator *opsmcp.Server
+	Operator *operator.Server
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
@@ -336,7 +337,7 @@ func New(opts Options) (*App, error) {
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt
-	// wholesale for the sandbox bridge — see opsmcp.Path.
+	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require

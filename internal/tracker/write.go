@@ -231,7 +231,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 //
 // [Writer.Actor] is who WROTE the record and it stays the token, because a
 // tracker whose author field is chosen by the writer is not an audit trail
-// (see internal/api/opsmcp). This answers the other question — whose inbox,
+// (see internal/api/operator). This answers the other question — whose inbox,
 // whose pins, whose queue — and the answer there is the PERSON. A founder
 // whose assistant marks their inbox read is marking `jane-founder`'s inbox and
 // signing it `founder`: one gesture with two different correct answers, rather

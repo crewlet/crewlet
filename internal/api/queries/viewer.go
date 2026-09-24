@@ -94,7 +94,7 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 //
 // A write made through somebody's own credential is attributed to the TOKEN,
 // not to their seat, and deliberately so: a tracker whose author field is
-// chosen by the writer is not an audit trail (see internal/api/opsmcp). The
+// chosen by the writer is not an audit trail (see internal/api/operator). The
 // consequence is that one person's rows carry two names — `jane-founder` on
 // what a colleague assigned them, `founder` on everything their own assistant
 // filed — so a personal read asked about one of them answered nothing. A

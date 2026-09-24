@@ -355,9 +355,9 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != pages.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", kb.actors)
 	}
-	if kb.comments[0].TurnKey != "turn-1" {
+	if kb.comments[0].CallKey != "turn-1" {
 		t.Errorf("the comment carries turn key %q — a re-run turn would post twice",
-			kb.comments[0].TurnKey)
+			kb.comments[0].CallKey)
 	}
 	if !slices.Equal(kb.comments[0].Mentions, []string{"pm"}) {
 		t.Errorf("mentions = %v", kb.comments[0].Mentions)

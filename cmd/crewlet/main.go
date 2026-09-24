@@ -33,7 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -1549,7 +1549,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// The OPERATOR MCP surface. Built here rather than in the engine
 		// because it is an API concern, and because its writer identity
 		// comes off an HTTP request's own credential.
-		Operator:     operatorMCP(e),
+		Operator:     operatorSurface(e),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
@@ -2441,23 +2441,6 @@ func nativePages(e *engine.Engine) queries.PageReader {
 	return nil
 }
 
-// operatorMCP builds the operator's own MCP surface, or nil.
-//
-// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
-// is what makes this one implementation of ten tools rather than two — see
-// [builtin.WorkDeps.Actor].
-//
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; an operator does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on a person's behalf.
-//
-// Which UNIT the work is filed into is not a default of this surface and no
-// longer needs one: the tracker reads it off the project's own row at the
-// write, so an operator's item belongs to the team that owns the project it
-// named. It used to be stamped from the caller's own team, which an operator
-// has not got — so every item filed here read "Filed into: no unit" beside a
-// project page naming its unit.
 // operatorWriter is the node's tracker writer acting as one operator.
 //
 // ONE HELPER FOR THE EIGHT SEAMS BELOW, because turning a tool-layer actor
@@ -2474,8 +2457,26 @@ func operatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
 	})
 }
 
-func operatorMCP(e *engine.Engine) *opsmcp.Server {
-	var opts opsmcp.Options
+// operatorSurface builds the operator surface — the one tool catalogue every
+// operator transport serves — or nil.
+//
+// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
+// is what makes this one implementation of every tool rather than two — see
+// [builtin.WorkDeps.Actor].
+//
+// The DEFAULTS are deliberately absent. A seat files into its unit's project
+// when it names none, because a seat HAS a unit; an operator does not, so the
+// argument is required and the tool refuses naming it rather than guessing a
+// project on a person's behalf.
+//
+// Which UNIT the work is filed into is not a default of this surface and no
+// longer needs one: the tracker reads it off the project's own row at the
+// write, so an operator's item belongs to the team that owns the project it
+// named. It used to be stamped from the caller's own team, which an operator
+// has not got — so every item filed here read "Filed into: no unit" beside a
+// project page naming its unit.
+func operatorSurface(e *engine.Engine) *operator.Server {
+	var opts operator.Options
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}
@@ -2590,7 +2591,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// THE SAME CHART DECIDES WHO IS WRITING: a token bound to
 			// a human seat writes that PERSON's own state, while the
 			// author on the record stays the token.
-			Actor: opsmcp.WorkActor(opts.Org),
+			Actor: operator.WorkActor(opts.Org),
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an
@@ -2611,7 +2612,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
 		opts.Pages = builtin.PageDeps{
 			Reader: reader, Writer: writer,
-			Actor:    opsmcp.PageActor,
+			Actor:    operator.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Reserved: reservedFor(e),
 			Await:    e.WaitCommitted,
@@ -2632,7 +2633,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
 	// about a person's line, the other about who plans a container's work.
 	opts.LeadsProject = engine.LeadsProjectOf(e)
-	return opsmcp.New(opts)
+	return operator.New(opts)
 }
 
 // leadsOf answers whether one handle leads another, walking the chart's own

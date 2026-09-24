@@ -2130,6 +2130,23 @@ its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the
 one that is not.
 
+### One catalogue, and a call is a fresh write
+
+The tool set is built **once** per company and every operator transport serves
+that one value — so a verb, its schema, its hints and the wording of its
+refusals cannot differ between the ways a person reaches it. The hints each
+tool is listed with (read-only, destructive, idempotent, open-world) are the
+catalogue's own, and a verb this company is not served is not listed at all.
+
+An MCP call names no request of its own, so **every call here is a fresh
+write**: an assistant that files the same item twice gets two items, because
+that is what it asked for twice, and there is nothing to deduplicate against.
+A transport that does carry the caller's own request identity seeds every
+operation it writes from it, so a retry of that one request — sent again after
+an `unknown` — is the same operation and the ledger collapses it into the
+first; a create, a comment, an update and a person's own marks, pins and queue
+all follow the one rule.
+
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
 neither gets no endpoint at all. `search_knowledge` is the exception and is

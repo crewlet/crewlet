@@ -40,14 +40,16 @@ type NewComment struct {
 	// not they watch, and each is subscribed.
 	Mentions []string
 
-	// TurnKey makes a comment made from a turn idempotent: a re-run turn
-	// posts once.
+	// CallKey makes a comment idempotent across the one repetition its
+	// caller can produce: a re-run turn (the turn's key) posts once, and so
+	// does a person's retried request (their request key). Empty for a call
+	// that named neither, which posts a fresh comment every time.
 	//
 	// IT DERIVES THE OPERATION ID rather than only the comment's own,
 	// which is the upgrade the log brings: the operation ledger collapses
 	// the whole record, so a retried turn does not even append — where the
 	// bucket could only make the second write land on the same key.
-	TurnKey string
+	CallKey string
 
 	Quiet bool
 }
@@ -285,16 +287,17 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 
 // commentOpID is the operation this comment belongs to.
 //
-// DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
-// the ledger collapses rather than a second comment. The comment's own id is
+// DERIVED FROM THE CALLER'S KEY when one is named, so a re-run turn or a
+// retried request is one operation the ledger collapses rather than a second
+// comment. The comment's own id is
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
 func (s *Store) commentOpID(pageID string, in NewComment) string {
-	if strings.TrimSpace(in.TurnKey) == "" {
+	if strings.TrimSpace(in.CallKey) == "" {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + strings.TrimSpace(in.TurnKey) + "\x00" +
+	name := pageID + "\x00" + strings.TrimSpace(in.CallKey) + "\x00" +
 		hex.EncodeToString(sum[:])
 	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
 }

@@ -227,7 +227,7 @@ func TestATurnsCommentOnAPageIsPostedOnce(t *testing.T) {
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
 
-	in := pages.NewComment{Body: "the agent's note", TurnKey: "turn-7"}
+	in := pages.NewComment{Body: "the agent's note", CallKey: "turn-7"}
 	for range 3 {
 		if _, _, err := r.store.Comment(t.Context(), agent("eng"), page.Page.ID,
 			in); err != nil {

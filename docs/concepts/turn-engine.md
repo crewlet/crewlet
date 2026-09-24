@@ -641,7 +641,12 @@ Everything that must happen **once per unit of work however many times it
 runs** keys on the work key, never on the run: the completion ledger, the
 [episode row](agent-learning.md), the counterparty interaction count, the
 [conversation entry](conversation-sessions.md), and the derived ids that make
-a re-run's tracker comment and work-item update land once. Everything that
+a re-run's tracker comment, work-item update and **filed work item** land once.
+A create's id is derived from the work key, the project and the title, so a
+turn that filed its work and then broke files it once, not again on the retry;
+two creates of the same title into the same project in one run are the one
+pair that collapses, and that pair is a repetition rather than two pieces of
+work. Everything that
 describes **one execution** keys on the run: the phase records, the live view,
 a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
 
