@@ -69,7 +69,10 @@ same tool it made first, so it runs a gesture again by repeating the call with
 exactly the same arguments — before calling that tool with anything else. The
 **operator's MCP** has no turn, so every write's answer carries its `op_id` and
 a call that brings it back is that operation again
-([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)).
+([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
+— and only that one: the id names the call's tool and a digest of its
+arguments, and brought back with any other it is refused before anything is
+written, rather than half-answered from the first call.
 The purge and node-gate routes take theirs as `?op_id=`. A caller that sends
 neither starts a new operation, which finishes nothing: a create repeated that
 way files a second item. A create whose item landed and whose dependencies did

@@ -275,6 +275,49 @@ func TestAnOperationIDCarriedToAnotherTaskIsRefused(t *testing.T) {
 	}
 }
 
+// A CREATE'S OPERATION CARRIED TO ANOTHER PROJECT IS REFUSED, NOT FILED AS A
+// SECOND ITEM — through the real writer, publisher and ledger.
+//
+// A caller holding an operation id can send it with any task. The task's id is
+// a function of the operation, so it is the same task; but the first append of
+// a create is on its project's COUNTER, so a create in another project meets
+// the record the ledger holds for that step on the first project's counter,
+// and is refused `op_reused` before anything is decided: no counter moves, no
+// task is filed. The same project is the retry, answered with its item.
+func TestACreatesOperationCarriedToAnotherProjectIsRefused(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t)
+	op := statelog.NewOpID(time.Now(), "create")
+	task := newTask("t-reused")
+	if _, err := r.writer.CreateTask(t.Context(), op, task, nil); err != nil {
+		t.Fatalf("the create in ENG: %v", err)
+	}
+	r.drain()
+	end := r.logEnd(t)
+
+	task.Project = "OPS"
+	_, err := r.writer.CreateTask(t.Context(), op, task, nil)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonOpReused {
+		t.Fatalf("the ENG create's operation sent with a create in OPS answered "+
+			"%v, want an op_reused refusal", err)
+	}
+	if got := r.logEnd(t); got != end {
+		t.Fatalf("the refused create put %d record(s) on the log", got-end)
+	}
+	if answer := r.ask(map[string]any{"container": "project:OPS"}); len(answer.Rows) != 0 {
+		t.Fatalf("OPS holds %d task(s), want none", len(answer.Rows))
+	}
+	// AND THE SAME PROJECT IS THE FIRST CALL, answered with its item.
+	task.Project = "ENG"
+	again, err := r.writer.CreateTask(t.Context(), op, task, nil)
+	if err != nil || again.Outcome != statelog.OutcomeApplied ||
+		again.Key != oneTask(t, r, "t-reused").Key {
+		t.Fatalf("the create brought back in its own project = (%+v key %q, %v), "+
+			"want the item it filed", again.Result, again.Key, err)
+	}
+}
+
 // logEnd is the log's last sequence.
 func (r *roundTrip) logEnd(t *testing.T) uint64 {
 	t.Helper()

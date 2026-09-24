@@ -1891,8 +1891,10 @@ func handles(all ...string) []string {
 // each write it makes is a STEP of that operation, named by what it writes, so
 // the same call brought back with its `op_id` derives every id it derived the
 // first time — and a create derives the same task. Its arguments are not
-// part of it: the id the caller brought back is the claim that this is that
-// call.
+// part of the step, because the operation is already bound to them: an
+// `op_id` names the one call it was answered for, and brought back with any
+// other arguments it is refused before anything here runs
+// ([WorkDeps.bindOperation]).
 func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
 	if actor.Operation != "" {
 		return statelog.StepOpID(actor.Operation, verb+"-"+object)
@@ -2519,6 +2521,9 @@ func labelFailure(actor Actor, write labelWrite, opID, project string,
 			"Do not report it as done until a call answers without this error.",
 			stopped, capitalize(again), write.then, write.twice)
 	}
+	if reused := reusedOperation(actor, write.tool, err); reused != "" {
+		return reused
+	}
 	return fmt.Sprintf("%s was refused before %s: declaring its labels in %s "+
 		"did not land (%v). Nothing was written — do not report it as done.",
 		write.tool, write.before, project, err)
@@ -3002,6 +3007,9 @@ func readFailure(name string, err error) string {
 // the `op_id`, and a caller holding neither has no repeat that is the same
 // operation — telling it to repeat one filed a second item.
 func writeFailure(actor Actor, name string, err error) string {
+	if reused := reusedOperation(actor, name, err); reused != "" {
+		return reused
+	}
 	var clash *tracker.TagClash
 	var full *tracker.TagsFull
 	switch {
@@ -3097,6 +3105,33 @@ func writeFailure(actor Actor, name string, err error) string {
 		"report it as done.", name, err)
 }
 
+// reusedOperation explains a write refused because the caller's operation
+// already names a write to another object, or is "" for any other error.
+//
+// A BROUGHT-BACK `op_id` ALWAYS CARRIES ITS OWN CALL's ARGUMENTS
+// ([WorkDeps.bindOperation]), so its steps name the objects the first call
+// named — except where the world moved under them: the key a move aliases is
+// the item's CURRENT key, and an item somebody else moved since is aliased
+// under another. That step then meets the record the ledger already holds for
+// it on another subject, and the state log refuses it
+// ([statelog.ReasonOpReused]) rather than answering a write that is not this
+// one. The remedy is the one thing a generic "NOT made" leaves out: this write
+// needs an operation of its own. ONLY where the caller named the operation — a
+// seat's ids are derived and it has no `op_id` to leave out.
+func reusedOperation(actor Actor, tool string, err error) string {
+	var refusal *statelog.Unavailable
+	if actor.Operation == "" || !errors.As(err, &refusal) ||
+		refusal.Reason != statelog.ReasonOpReused {
+		return ""
+	}
+	return fmt.Sprintf("%s was refused, and this call's change was NOT made: "+
+		"the operation `op_id` %q names already wrote to something else (%v) — "+
+		"what this call names has changed since the call that op_id was "+
+		"answered for — so it cannot finish that call here. Read the item "+
+		"again, and leave `op_id` out to make this as a new write.",
+		tool, actor.Operation, err)
+}
+
 // sameCall says how this caller makes THIS call again as the same operation,
 // as a clause to be told — or "" where no repeat is the same operation.
 //
@@ -3145,9 +3180,16 @@ const opIDArg = "op_id"
 // conditioned on a version was refused as stale by its own first copy.
 //
 // So each call there IS an operation: one minted for it and answered as
-// `op_id` ([WorkDeps.withOperation]), or the one the caller brought back,
+// `op_id` ([withOperation]), or the one the caller brought back,
 // held to the same rule every surface that takes one holds it to
 // ([statelog.CheckCallerOpID]). Every write the call makes derives from it.
+//
+// # Why a brought-back id must come with its own call
+//
+// The id is minted NAMING the call — the tool and a digest of its arguments
+// ([callName]) — and brought back it is accepted only with that call. With any
+// other it is refused before a single write: see [callName] for the second
+// items and the half-applied gestures a looser rule let through.
 //
 // # Why a turn's call is refused one
 //
@@ -3172,16 +3214,73 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 		}
 		return actor, ""
 	}
+	call := callName(tool, args)
 	if !brought {
-		actor.Operation = statelog.NewOpID(time.Now(), tool)
+		actor.Operation = statelog.NewOpID(time.Now(), call)
 		return actor, ""
 	}
 	op, _ := raw.(string)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
+	if !answeredFor(op, call) {
+		return actor, fmt.Sprintf("%s refused that `op_id`, and nothing was "+
+			"written: it was answered for another call — another tool, or "+
+			"this one with other arguments — and an op_id finishes only the "+
+			"call it was answered for. To finish that call, send its "+
+			"arguments unchanged with it; to make this one, leave `op_id` out.",
+			tool)
+	}
 	actor.Operation = op
 	return actor, ""
+}
+
+// callName is the name an operator's operation id carries: the tool, and a
+// digest of the arguments of the call it is minted for.
+//
+// # Why the arguments are in the operation
+//
+// Because an `op_id` promises that nothing is made twice, and a brought-back
+// id with other arguments cannot keep that promise any other way. Its steps
+// are named by the objects the call writes ([opIDFor]), so the same id sent
+// with another project derived another operation and filed a second item; and
+// named without them, the steps that DID match were answered as the first
+// call's while the ones that did not — a dependency mirror on a blocker the
+// first call never named, a subtask re-parented onto another canonical item,
+// a tag declared that the first call never asked for — landed as a write
+// nothing had authored. Refused whole, before the first append, none of those
+// can happen: the id is that call, or it is nothing.
+//
+// A DIGEST, not the arguments, because an id is at most
+// [statelog.MaxCallerOpIDBytes] and travels in every record and ledger row its
+// steps write; sixteen hex digits of [turnctx.ArgsDigest] tell an accidental
+// change apart with certainty, which is all this check is for — a caller can
+// mint any id that carries an instant anyway, so this is not a credential.
+// The `op_id` itself is left out of it, since the first call carried none.
+func callName(tool string, args map[string]any) string {
+	rest := make(map[string]any, len(args))
+	for key, value := range args {
+		if key != opIDArg {
+			rest[key] = value
+		}
+	}
+	return tool + "." + turnctx.ArgsDigest(rest)[:callDigestLen]
+}
+
+// callDigestLen is how many hex digits of the arguments' digest an operator's
+// operation id carries: 64 bits, far past any accidental collision, in an id
+// of at most 74 bytes with the longest tool that offers one
+// (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
+// [statelog.MaxCallerOpIDBytes].
+const callDigestLen = 16
+
+// answeredFor reports whether op was minted for call: a uuid and exactly that
+// name ([statelog.NewOpID]'s grammar), with no step after it — a step's id
+// handed back would be a NEW call's operation deriving new objects.
+func answeredFor(op, call string) bool {
+	uuidLen := len(uuid.Nil.String())
+	return len(op) == uuidLen+1+len(call) && op[uuidLen] == '.' &&
+		op[uuidLen+1:] == call
 }
 
 // withOperation puts the call's operation on its answer, where it has one:
@@ -3207,8 +3306,9 @@ func (d WorkDeps) operationParam(schema map[string]any) map[string]any {
 			"answer from this tool left `unknown` or part of the way through, " +
 			"send back the `op_id` that answer carried, unchanged, with exactly " +
 			"the same arguments: the call is then that same operation, and is " +
-			"answered with what landed. Under the same op_id, different " +
-			"arguments are answered as the first call rather than applied.",
+			"answered with what landed. An op_id belongs to that one call: " +
+			"sent with this tool and any other argument, or with another " +
+			"tool, it is refused before anything is written.",
 	}
 	return schema
 }

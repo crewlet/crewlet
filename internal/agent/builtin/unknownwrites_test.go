@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -166,31 +165,36 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 	for _, unvouched := range []bool{false, true} {
 		for name, args := range operatorCalls {
 			u := &unknownWriter{fakeTracker: newFakeTracker(), unvouched: unvouched}
-			call := map[string]any{}
-			for k, v := range args {
-				call[k] = v
-			}
-			op := statelog.NewOpID(time.Now(), name)
-			if !restates[name] {
-				call["op_id"] = op
-			}
-			got := callNoTurn(t, u.operatorSurface(t), name, call)
+			reg := u.operatorSurface(t)
+			got := callNoTurn(t, reg, name, args)
 			if len(u.ops) == 0 {
 				t.Errorf("%s (unvouched %v) wrote nothing, so this case shows "+
 					"nothing: %s", name, unvouched, got.Output)
 				continue
 			}
 			checkUnknownAnswer(t, name, unvouched, got)
-			switch {
-			case restates[name]:
+			if restates[name] {
 				if !strings.Contains(got.Output, u.ops[0]) ||
 					!strings.Contains(got.Output, "harmless") {
 					t.Errorf("%s does not name operation %s, or say a repeat is "+
 						"harmless: %s", name, u.ops[0], got.Output)
 				}
-			case !strings.Contains(got.Output, "`op_id` \""+op+"\""):
-				t.Errorf("%s (unvouched %v) does not say to bring back op_id %s: %s",
-					name, unvouched, op, got.Output)
+				continue
+			}
+			// THE op_id IT NAMES IS THE ONE THAT FINISHES IT: brought back
+			// with the same call, every write derives the id it derived
+			// the first time.
+			op := answeredOp(t, got)
+			again := map[string]any{"op_id": op}
+			for k, v := range args {
+				again[k] = v
+			}
+			callNoTurn(t, reg, name, again)
+			if len(u.ops) != 2 || u.ops[1] != u.ops[0] ||
+				!strings.HasPrefix(u.ops[0], op+".") {
+				t.Errorf("%s (unvouched %v) named op_id %s, and brought back it "+
+					"wrote under %q — not the same operation", name, unvouched,
+					op, u.ops)
 			}
 		}
 	}

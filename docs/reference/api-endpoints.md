@@ -2037,8 +2037,18 @@ argument is offered by `create_work_item`, `update_work_item`,
 `restore_work_item`, `set_priorities`, `set_pins`, `mark_inbox` and
 `save_work_view`, and held to the rule the purge and gate routes hold theirs
 to: an id this engine minted, at most 128 bytes of visible ASCII — anything
-else is refused naming `op_id`. Under the same `op_id`, different arguments
-are answered as the first call rather than applied.
+else is refused naming `op_id`. An `op_id` belongs to **the one call it was
+answered for**: the id names that call's tool and carries a digest of its
+arguments, so brought back with the same tool and exactly the same arguments it
+is that operation again, and with any other argument — another item, another
+project, another title, another blocker — or with another tool, it is refused
+naming `op_id` before anything is written. Nothing is ever made twice under
+one, and nothing is half-made: a looser rule would answer the steps the two
+calls share from the first call and write the ones they do not. To make a
+different write, leave `op_id` out. One case is refused later, by the ledger,
+and says so: an operation whose step now meets another object — a move whose
+item somebody else moved in between, so the key it aliases is another — is
+refused `op_reused`, and the answer says to leave `op_id` out.
 
 The one field that differs is **who the call acts as**. There is no turn and no
 seat here, so this surface supplies its own identity, and every tool resolves

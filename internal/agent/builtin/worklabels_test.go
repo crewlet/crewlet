@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -97,10 +95,6 @@ func TestAWriteStoppedAtItsLabelDeclarationIsAnsweredUnderItsOwnTool(t *testing.
 					for k, v := range tc.args {
 						args[k] = v
 					}
-					op := statelog.NewOpID(time.Now(), name)
-					if operator {
-						args["op_id"] = op
-					}
 
 					got := call(args)
 					checkStoppedAtLabels(t, name, got, tc.notMade)
@@ -117,7 +111,9 @@ func TestAWriteStoppedAtItsLabelDeclarationIsAnsweredUnderItsOwnTool(t *testing.
 					again := name + " again with exactly the same arguments, " +
 						"before calling it with any others"
 					named := declaration
+					var op string
 					if operator {
+						op = answeredOp(t, got)
 						again = fmt.Sprintf("%s again with exactly the same "+
 							"arguments and `op_id` %q", name, op)
 						named = op

@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -61,6 +62,28 @@ func answerOf(t *testing.T, got tools.Result) map[string]any {
 	}
 	return out
 }
+
+// answeredOp is the op_id an operator's answer carried: a receipt's field, or
+// the one a failed answer tells the caller to bring back — held to the rule
+// the surface holds a brought-back id to.
+func answeredOp(t *testing.T, got tools.Result) string {
+	t.Helper()
+	var receipt map[string]any
+	op := ""
+	if json.Unmarshal([]byte(got.Output), &receipt) == nil {
+		op, _ = receipt["op_id"].(string)
+	} else if named := broughtBack.FindStringSubmatch(got.Output); named != nil {
+		op = named[1]
+	}
+	if err := statelog.CheckCallerOpID(op); err != nil {
+		t.Fatalf("the answer names no op_id the surface would take back (%v): %s",
+			err, got.Output)
+	}
+	return op
+}
+
+// broughtBack is how a failed answer names the op_id to bring back.
+var broughtBack = regexp.MustCompile("`op_id` \"([^\"]+)\"")
 
 func TestAnOperatorsCreateBroughtBackIsTheSameCreate(t *testing.T) {
 	t.Parallel()
@@ -268,15 +291,27 @@ func TestAStoppedGestureTellsEachCallerHowToFinishIt(t *testing.T) {
 
 	trk := newFakeTracker()
 	trk.writeErr = stopped
-	op := statelog.NewOpID(time.Now(), builtin.UpdateWorkItemTool)
-	got := callNoTurn(t, retrySurface(t, trk, nil), builtin.UpdateWorkItemTool,
-		map[string]any{"item": "ENG-1", "priority": "urgent", "op_id": op})
-	if !got.Failed || !strings.Contains(got.Output, "`op_id` \""+op+"\"") {
-		t.Errorf("an operator's stopped gesture does not name the op_id %s to "+
-			"bring back: %q", op, got.Output)
+	reg := retrySurface(t, trk, nil)
+	args := map[string]any{"item": "ENG-1", "priority": "urgent"}
+	got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, args)
+	if !got.Failed {
+		t.Fatalf("an operator's stopped gesture answered as a receipt: %s", got.Output)
 	}
+	op := answeredOp(t, got)
 	if strings.Contains(got.Output, "before calling it with any others") {
 		t.Errorf("an operator was told a seat's repeat: %s", got.Output)
+	}
+	// AND BRINGING IT BACK IS THE SAME OPERATION: every write it makes
+	// derives the id it derived the first time.
+	trk.writeErr = nil
+	if again := callNoTurn(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "priority": "urgent", "op_id": op,
+	}); again.Failed {
+		t.Fatalf("the op_id brought back with its own call was refused: %s", again.Output)
+	}
+	if len(trk.opIDs) != 1 || !strings.HasPrefix(trk.opIDs[0], op+".") {
+		t.Errorf("the brought-back call wrote under %v, want a step of %s",
+			trk.opIDs, op)
 	}
 
 	seat := newFakeTracker()
@@ -339,13 +374,15 @@ func TestAnOperatorsUnknownCreateNamesTheOperationToBringBack(t *testing.T) {
 		Key:    "ENG-9",
 		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
 	}
-	op := statelog.NewOpID(time.Now(), builtin.CreateWorkItemTool)
 	got := callNoTurn(t, retrySurface(t, trk, nil), builtin.CreateWorkItemTool,
-		map[string]any{"title": "x", "project": "ENG", "op_id": op})
-	if !got.Failed || !strings.Contains(got.Output, "`op_id` \""+op+"\"") ||
-		!strings.Contains(got.Output, "Do not reword it") {
-		t.Errorf("an operator's unknown create does not say to bring back %s: %q",
-			op, got.Output)
+		map[string]any{"title": "x", "project": "ENG"})
+	if !got.Failed || !strings.Contains(got.Output, "Do not reword it") {
+		t.Errorf("an operator's unknown create does not say to bring back its "+
+			"op_id unchanged: %q", got.Output)
+	}
+	if op := answeredOp(t, got); !strings.HasPrefix(trk.opIDs[0], op+".") {
+		t.Errorf("the answer names op_id %s, and the create wrote under %s, "+
+			"which is not a step of it", op, trk.opIDs[0])
 	}
 	if strings.Contains(got.Output, trk.opIDs[0]) {
 		t.Errorf("the answer names the create's own write id %s, which brought "+

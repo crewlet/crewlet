@@ -46,10 +46,14 @@ import (
 // minted at, and the instant is recovered from the id itself ([OpMintedAt]),
 // so nothing can stamp a later one: not a writer, not a retry, not a caller
 // outside the engine that hands an id back. Everything after the uuid is for
-// the READER of the ledger and nothing parses it: an optional NAME saying
-// what the operation is — its verb and its object, which is what makes a stuck
-// operation findable in the ledger rather than a row nobody can trace back —
-// and one `.step` per append of a multi-append gesture ([StepOpID]). Three
+// the READER of the ledger and nothing in this package parses it: an optional
+// NAME saying what the operation is — its verb and its object, which is what
+// makes a stuck operation findable in the ledger rather than a row nobody can
+// trace back — and one `.step` per append of a multi-append gesture
+// ([StepOpID]). A surface that answers ids to callers may put in the name what
+// it needs to recognise the call an id was minted for, and hold a brought-back
+// id to it — the operator's tracker tools carry the call's tool and a digest
+// of its arguments there, and refuse the id with any other call. Three
 // constructors mint every id the engine publishes under:
 //
 //   - [NewOpID] for an operation minted NOW, by the call that publishes it;
