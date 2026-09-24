@@ -101,3 +101,69 @@ func TestADependencyRetryAnswersEachStepWithItsOwnWrite(t *testing.T) {
 		}
 	})
 }
+
+// A DEPENDENCY CHANGE REPORTS ITS OWN TASK'S VERSION, and an outcome whatever
+// its mirrors did.
+//
+// The result's version is the LAST COMMIT's, and a dependency change's last
+// commit is usually another task's — a blocker's mirror, a dependent's edge. A
+// caller reporting it as the version of the task it named handed back an
+// `if_match` that task never had, refused as stale. And a `blocking`-only
+// change whose own mirror was left one-sided reported nothing at all: the
+// authored edges on the other tasks were never counted, so it answered the
+// zero result — an outcome that is none of the three, and no position.
+func TestADependencyChangeReportsItsOwnTasksVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the waiting side, whose last commit is the blocker's", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		// APPLIED, because a version is what an applied write reports.
+		r.applyWhileWriting()
+		filedTask(t, r, "dep")
+		filedTask(t, r, "blk")
+		got, err := r.writer.Depend(t.Context(), statelog.NewOpID(time.Now(), "depend"),
+			tracker.DependencyChange{
+				Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
+			}, fixedLeads{project: "eng-lead"})
+		if err != nil || len(got.OneSided) != 0 {
+			t.Fatalf("the premise: Depend = (%+v, %v), want both ends written", got, err)
+		}
+		r.drain()
+		if got.Version == got.TaskVersion {
+			t.Fatalf("the premise: the last commit is dep's own (%d), so this "+
+				"case shows nothing", got.Version)
+		}
+		if want := int64(r.task(t, "dep").Task.Version); got.TaskVersion != want {
+			t.Errorf("TaskVersion = %d, want dep's own version %d — %d is the "+
+				"blocker's mirror", got.TaskVersion, want, got.Version)
+		}
+	})
+
+	t.Run("a blocking-only change whose own mirror did not land", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		r.applyWhileWriting()
+		filedTask(t, r, "blk")
+		filedTask(t, r, "dep")
+		lossy, lost := r.lossyWriter(t)
+		lost.afterAppendTo("dep", func() { lost.refuse("blk") })
+		got, err := lossy.Depend(t.Context(), statelog.NewOpID(time.Now(), "depend"),
+			tracker.DependencyChange{
+				Task: "blk", Project: "ENG", BlockingAdd: []string{"dep"},
+			}, fixedLeads{})
+		if err != nil || !slices.Contains(got.OneSided, "blk") {
+			t.Fatalf("the premise: Depend = (%+v, %v), want blk's own mirror "+
+				"one-sided", got, err)
+		}
+		if !got.Outcome.Valid() || got.Position.Seq == 0 {
+			t.Errorf("the change answered outcome %q at %+v — dep's authored edge "+
+				"landed, and that commit is what it has to report", got.Outcome,
+				got.Position)
+		}
+		if got.TaskVersion != 0 {
+			t.Errorf("TaskVersion = %d, but nothing landed on blk's own subject",
+				got.TaskVersion)
+		}
+	})
+}
