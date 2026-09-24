@@ -138,11 +138,12 @@ const SemanticScanBudget = time.Second
 
 // Semantic runs the two-stage search and returns the exactly-reranked hits.
 //
-// IT RAISES rather than answering empty, and the seam above it is what turns a
-// failure into the empty block a turn tolerates: this is the storage layer,
-// where "the store would not answer" and "nothing matched" are different
-// facts, and collapsing them here would make a broken index look exactly like
-// a company that has written nothing down.
+// IT RAISES rather than answering empty, and its callers decide what a failure
+// becomes — a search's scan ([NodeScanner.Scan]) answers its range without the
+// semantic half and says it skipped it, and [Eval] fails the measurement:
+// this is the storage layer, where "the store would not answer" and "nothing
+// matched" are different facts, and collapsing them here would make a broken
+// index look exactly like a company that has written nothing down.
 func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, error) {
 	if len(q.Vector) == 0 {
 		return nil, fmt.Errorf("search: the semantic half needs a query vector")

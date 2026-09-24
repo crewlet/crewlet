@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
@@ -25,9 +25,12 @@ func cli(t *testing.T, args ...string) (string, string, error) {
 	return out.String(), errs.String(), err
 }
 
-// -check REPORTS AND APPLIES NOTHING. A command that migrated while
-// answering "what would you migrate" could never answer it.
-func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
+// -check REPORTS, AND MAKES NOTHING WHERE THERE IS NO DATABASE. A command
+// that migrated while answering "what would you migrate" could never answer
+// it, and the deploy gate runs before the node does, possibly as another user:
+// a database, -wal or .lock it made would be one the engine then meets as
+// somebody else's, at a path the check was only pointed at.
+func TestMigrateCheckReportsPendingAndMakesNothing(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 
@@ -40,17 +43,13 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 	if !strings.Contains(out, "pending") {
 		t.Errorf("output = %q", out)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "index.db")); statErr == nil {
-		// Reading may create the file, but it must not create the
-		// schema — which the next assertion proves.
-		schemas, perr := store.Pending(context.Background(),
-			filepath.Join(dir, "index.db"), store.Options{})
-		if perr != nil {
-			t.Fatalf("Pending: %v", perr)
-		}
-		node := estate(t, schemas, store.EstateNode)
-		if len(node.Applied) != 0 || len(node.Pending) == 0 {
-			t.Errorf("-check applied %d migration(s)", len(node.Applied))
+	node := filepath.Join(dir, "index.db")
+	for _, db := range []string{node, store.ReplicatedPath(node, "")} {
+		for _, file := range []string{db, db + "-wal", db + ".lock"} {
+			if _, statErr := os.Stat(file); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("-check left %s behind (stat: %v) on a path that held no database",
+					file, statErr)
+			}
 		}
 	}
 }
@@ -217,10 +216,9 @@ func TestBudgetsShowListsWhatEachScopeSpent(t *testing.T) {
 	}
 }
 
-// A REFUSING SCOPE SAYS SO. A refused charge increments nothing, so a seat
-// charged in rounds stalls short of its cap and its row reads as headroom: 99
-// of 100 looks healthy on a table with no other column. The refusal stamp is
-// the gate's own record of saying no, and the table prints it.
+// A REFUSING SCOPE SAYS SO, and since when. The refusal stamp is the gate's own
+// record of turning a charge away, which neither USED nor CAP carries, so the
+// table prints it last in the row, and a dash for a scope that is not refusing.
 func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
 	node := newFakeNode(t)
 	node.budgets = []byte(`{"durable":true,
@@ -389,16 +387,12 @@ func TestBudgetsRejectsAnUnknownSubcommand(t *testing.T) {
 	}
 }
 
-var _ = time.Now
-
-// TWO CONFIG DOCUMENTS IS A REFUSAL, and it must be reachable.
-//
-// The guard used to be conjoined with "a positional subject was already
-// taken", which made it unreachable on the exact input it was written for:
-// `crewlet migrate a.yaml b.yaml` puts both names in the tail with no
-// subject, so neither branch fired and the command fell through to
-// ./crewlet.yaml — migrating, for real and without -check, a database the
-// operator never named.
+// TWO CONFIG DOCUMENTS IS A REFUSAL, wherever they sit among the flags.
+// Resolving them to either one — or to neither, and so to ./crewlet.yaml —
+// would migrate a database the operator did not mean, for real unless -check
+// was given. The cases reach the guard by different routes: after a flag both
+// names are left in the flag set's tail, and before one the first is peeled
+// off as the subject and the second stays in the tail.
 func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
@@ -430,7 +424,7 @@ func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 
 // AND NAMING IT TWICE, once positionally and once with -config, is refused
 // rather than silently resolved — they would have to agree and nothing
-// checks that they do. `run` already had this guard; migrate did not.
+// checks that they do. `run` refuses the same.
 func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)

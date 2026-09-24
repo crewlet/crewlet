@@ -13,10 +13,10 @@ import (
 //
 // For the same reason the budget reset is a route rather than a command: what
 // has to be copied is only reachable from inside the running engine. The
-// store is one file this process holds an exclusive lock on, and the
-// coordination estate is a broker embedded in this process that binds no
-// socket — so a CLI run while the engine is down cannot read the second, and
-// one run while the engine is UP cannot safely open the first.
+// store is two files, each held under an exclusive lock by this process, and
+// the coordination estate is a broker embedded in this process that binds no
+// socket — so a CLI run while the engine is down cannot read the broker's
+// estate, and one run while the engine is UP is refused the store.
 //
 // `crewlet backup` is a client of this route.
 

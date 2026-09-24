@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1176,6 +1177,99 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	}
 	if coordinator.AwaitingSandbox("swe") {
 		t.Fatal("the seat stayed parked once its question was recorded")
+	}
+}
+
+// A QUESTION TOO LARGE FOR THE RUN'S RECORD ENDS THE RUN, rather than being
+// handed back to be asked again. The refusal is permanent: handed back, every
+// completion that followed would announce the same question once more and be
+// refused the same way, with the seat's mail parked behind a run that could
+// never wait for its answer.
+func TestAQuestionTooLargeToRecordEndsTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.markBusy("swe")
+	question := strings.Repeat("?", MaxQuestionBytes+1)
+	rig.runner.Finish(Result{NeedsInput: true, Question: question, AskTo: "requester"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("a question that can never be recorded was handed back for a retry: %v", err)
+	}
+	rig.finished("t1")
+	if got := rig.questions(); len(got) != 0 {
+		t.Errorf("%d question(s) were announced that the run could never wait on", len(got))
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureQuestionUnrecorded {
+		t.Fatalf("failures = %+v, want one %q", failed, types.SandboxFailureQuestionUnrecorded)
+	}
+	for _, want := range []string{strconv.Itoa(len(question)), strconv.Itoa(MaxQuestionBytes)} {
+		if !strings.Contains(failed[0].Detail, want) {
+			t.Errorf("the detail %q does not name %s", failed[0].Detail, want)
+		}
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Error("the seat stayed parked on a run that has ended")
+	}
+}
+
+// tooLargeToPark is a store that refuses a park as too large, as the store's
+// own ceiling does whatever the question's share of it was.
+type tooLargeToPark struct{ PendingStore }
+
+func (tooLargeToPark) MarkAwaiting(context.Context, string, Clarification) error {
+	return fmt.Errorf("sandbox: update run t1: %w", coord.ErrTooLarge)
+}
+
+// A PARK THE STORE REFUSES AS TOO LARGE ENDS THE RUN TOO, for the same reason:
+// the store's ceiling answers the same way on every attempt.
+func TestAParkTheStoreRefusesAsTooLargeEndsTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: tooLargeToPark{rig.pending},
+		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("a park refused for good was handed back for a retry: %v", err)
+	}
+	rig.finished("t1")
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureQuestionUnrecorded {
+		t.Fatalf("failures = %+v, want one %q", failed, types.SandboxFailureQuestionUnrecorded)
+	}
+	if !strings.Contains(failed[0].Detail, strconv.Itoa(coord.MaxRecordBytes)) {
+		t.Errorf("the detail %q does not name the record's limit", failed[0].Detail)
+	}
+}
+
+// THE RECORDED QUESTION IS REDACTED, as the announced one is: the record is
+// what the board lists while the run waits, so a credential in it would reach
+// every screen that shows parked runs.
+func TestARecordedQuestionIsRedacted(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	secret := "glpat-" + strings.Repeat("e", 20)
+	rig.runner.Finish(Result{NeedsInput: true, AskTo: "requester",
+		Question: "is " + secret + " the right token?"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	parked := rig.get("t1")
+	if parked.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the run parked", parked.Status)
+	}
+	if strings.Contains(parked.Question, secret) || parked.Question == "" {
+		t.Errorf("the recorded question is %q", parked.Question)
 	}
 }
 

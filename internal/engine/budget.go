@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -39,6 +40,14 @@ type meter struct {
 var _ toolloop.BudgetMeter = (*meter)(nil)
 
 // Spend checks and increments in ONE operation. See coord.Budgets.Charge.
+//
+// A REFUSED ROUND IS COUNTED ALL THE SAME, because it has been billed: the
+// round's model call answered before it was charged, which is the only point
+// its size is known. The gate counts nothing it refuses, so the refused tokens
+// are post-charged ([coord.Budgets.PostCharge]) — without that the counter
+// under-states the company by exactly the rounds that found it at its cap,
+// and disagrees with every phase record, which reports what the provider
+// billed. See [toolloop.BudgetMeter].
 func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	got, err := m.budgets.Charge(ctx, m.agentScope, tokens, m.orgLimit, m.agentLimit)
 	if err != nil {
@@ -48,11 +57,58 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: %w", err)
 	}
 	if !got.OK {
+		m.countRefused(ctx, tokens, got)
 		return toolloop.SpendOutcome{
 			Scope: got.RefusedScope, Used: got.RefusedUsed, Limit: got.RefusedLimit,
 		}, nil
 	}
 	return toolloop.SpendOutcome{OK: true, Used: got.OrgUsed, Limit: m.orgLimit}, nil
+}
+
+// countRefused post-charges a round the gate refused.
+//
+// WITHOUT THE CALLER'S CANCELLATION: the tokens are spent at the vendor
+// whatever becomes of the turn, and a write skipped because the turn's context
+// ended between the refusal and here is spend no counter ever hears about.
+//
+// A post-charge that fails is LOGGED, not returned. The refusal is already the
+// answer, and it is the one the caller acts on: returning an error in its place
+// would report an outage instead of a budget the operator has to raise, for a
+// write whose only cost when lost is a counter that reads low by this round.
+func (m *meter) countRefused(ctx context.Context, tokens int, refusal coord.Spend) {
+	if _, err := m.budgets.PostCharge(context.WithoutCancel(ctx), m.agentScope, tokens); err != nil {
+		log.WarnContext(ctx, "budget_refused_round_uncounted", "scope", m.agentScope,
+			"tokens", tokens, "refused_scope", refusal.RefusedScope, "error", err.Error(),
+			"detail", "the round was billed and refused, and its tokens did not reach the "+
+				"counter, which now reads low by them")
+	}
+}
+
+// Room reports whether this seat's next model call may be sent, reading the
+// counter and counting nothing.
+//
+// No room is a capped scope at or past its limit: the call's own charge would
+// be refused whatever its size, and it would be billed before the refusal. The
+// COMPANY is checked first, for the reason [coord.Budgets.Charge] reports it
+// first: "the company is out" is the fact an operator acts on, and raising one
+// seat's ceiling against an exhausted company changes nothing.
+//
+// Read off the spend alone, never off [coord.Usage.RefusedAt]. The stamp
+// clears only on an admitted charge, so a room that consulted it would refuse
+// a scope whose cap a later revision raised, and no charge could ever be
+// admitted to clear it: the seat would stay stopped until an operator reset a
+// counter that already had room.
+func (m *meter) Room(ctx context.Context) (toolloop.SpendOutcome, error) {
+	scopes, err := m.capped(ctx)
+	if err != nil {
+		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget room: %w", err)
+	}
+	for _, s := range scopes {
+		if s.used >= s.limit {
+			return toolloop.SpendOutcome{Scope: s.name, Used: s.used, Limit: s.limit}, nil
+		}
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
 }
 
 // Remaining is this seat's headroom, in tokens.
@@ -69,31 +125,54 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 // unlimited answers zero with a nil error, which is the same "no ceiling" a
 // company that set no budget already has.
 func (m *meter) Remaining(ctx context.Context) (int, error) {
+	scopes, err := m.capped(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("engine: budget headroom: %w", err)
+	}
 	headroom, capped := 0, false
-	for _, scope := range []struct {
-		key   string
-		limit int
-	}{
-		{coord.OrgScope, m.orgLimit},
-		{m.agentScope, m.agentLimit},
-	} {
-		if scope.limit <= 0 {
-			continue
-		}
-		used, err := m.budgets.Used(ctx, scope.key)
-		if err != nil {
-			return 0, fmt.Errorf("engine: budget headroom for %s: %w", scope.key, err)
-		}
+	for _, s := range scopes {
 		// TRACKED WITH A FLAG, not by testing headroom against zero: a
 		// scope that has spent its whole allowance HAS zero headroom, and
 		// reading that as "not set yet" would let the other scope's room
 		// overwrite it — turning an exhausted company into an uncapped
 		// one at exactly the moment the cap matters.
-		if left := max(scope.limit-used, 0); !capped || left < headroom {
+		if left := max(s.limit-s.used, 0); !capped || left < headroom {
 			headroom, capped = left, true
 		}
 	}
 	return headroom, nil
+}
+
+// cappedScope is one scope with a ceiling, and what it has spent.
+type cappedScope struct {
+	// name is what a refusal calls the scope: "org" or "agent", the words
+	// [coord.Spend.RefusedScope] uses.
+	name  string
+	key   string
+	limit int
+	used  int
+}
+
+// capped reads the spend of every scope this seat is capped by, the company
+// first. A limit of 0 is unlimited for that scope, matching the config, and is
+// neither read nor returned.
+func (m *meter) capped(ctx context.Context) ([]cappedScope, error) {
+	var out []cappedScope
+	for _, s := range []cappedScope{
+		{name: string(types.BudgetScopeOrg), key: coord.OrgScope, limit: m.orgLimit},
+		{name: string(types.BudgetScopeAgent), key: m.agentScope, limit: m.agentLimit},
+	} {
+		if s.limit <= 0 {
+			continue
+		}
+		used, err := m.budgets.Used(ctx, s.key)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", s.key, err)
+		}
+		s.used = used
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // remainingFor is the seat's headroom reader, or nil.

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -36,9 +37,9 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // The counterpart of the dispatcher's own abandon decision, on the other path
 // a turn can arrive by, and it exists for the same reasons. A resumed turn
 // re-enters the executor's suspended conversation, so a redelivery re-runs
-// every call the resumed round made, and a run that came back from a coding box
-// is the turn most likely to have pushed a branch or opened a pull request
-// already. A turn that PANICKED is abandoned too: the suspended conversation is
+// every call the resumed round made after re-entering it; the calls made
+// before the suspend are answered in that conversation and are not made
+// again. A turn that PANICKED is abandoned too: the suspended conversation is
 // the same bytes on every delivery, so the retry reaches the same defect.
 //
 // A resumer wraps its error in this when, and only when, the turn's own answer
@@ -466,6 +467,23 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	return true
 }
 
+// MaxQuestionBytes is the longest question, in bytes, a run can park on.
+//
+// A parked run's question is kept on the run's own record, one message that
+// [coord.MaxRecordBytes] bounds. The record keeps its suspension within
+// [rowBytes], half the transport's ceiling, so that the rest is room for the
+// writes its lifecycle makes to it, and a park's question is the one of those
+// a coding agent sizes. JSON writes one byte of a string as at most
+// [jsonEscapeBytes] — a control character, an invalid byte, or one of the
+// < > & the encoder escapes becomes a \u escape — so a question within that
+// fraction of the room never outgrows the room on its own, whatever its bytes
+// are.
+const MaxQuestionBytes = (coord.MaxRecordBytes - rowBytes) / jsonEscapeBytes
+
+// jsonEscapeBytes is the most bytes encoding/json writes for one byte of a
+// string: a \u00XX escape.
+const jsonEscapeBytes = 6
+
 // park announces the question, records it, and settles the box per the pause
 // policy.
 //
@@ -490,12 +508,31 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // "never hold a blocked box": tear it down now and park straight into reseed
 // for zero holding cost. The answer resumes the work either way; only the
 // starting point differs, a live checkout against the pushed branch.
+//
+// A QUESTION THE RUN'S RECORD CANNOT HOLD ENDS THE RUN instead of parking it.
+// The refusal is permanent — the same bytes are refused on every attempt — so
+// handing the claim back would have the next completion ask it again, and
+// again, with the seat's mail parked behind a run that can never wait. One
+// longer than [MaxQuestionBytes] is refused before anybody is asked it; one
+// the store refuses anyway is refused after, the question already announced.
 func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) error {
+	// REDACTED ONCE, and the one text both the announcement and the record
+	// carry: the record is what the board serves while the run waits, so a
+	// credential the agent put in its question would otherwise reach every
+	// screen that lists parked runs.
+	question := redact.Secrets(result.Question)
+	if len(question) > MaxQuestionBytes {
+		c.questionUnrecorded(ctx, run, question, fmt.Sprintf(
+			"the coding agent asked a question of %d bytes, past the %d a run's record can hold "+
+				"one within, so the run could not wait for an answer and was ended",
+			len(question), MaxQuestionBytes))
+		return nil
+	}
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
 		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
-		Question: redact.Secrets(result.Question), Audience: result.AskTo,
+		Question: question, Audience: result.AskTo,
 		ConversationKey: run.ConversationKey,
 	}
 	ev := events.New(announcement, events.TraceContext{
@@ -508,9 +545,20 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	}
 
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-		Question: result.Question, Audience: result.AskTo,
+		Question: question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
 	}); err != nil {
+		if errors.Is(err, coord.ErrTooLarge) {
+			// Within the bound and refused all the same: what the park
+			// writes beside the question is not bounded here, and the
+			// store's own ceiling is the one that answers.
+			c.questionUnrecorded(ctx, run, question, fmt.Sprintf(
+				"the run's record could not hold the %d-byte question the coding agent asked "+
+					"beside what the record already carries, which a record keeps within %d "+
+					"bytes, so the run could not wait for an answer and was ended",
+				len(question), coord.MaxRecordBytes))
+			return nil
+		}
 		c.unclaim(ctx, run, true)
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
@@ -525,6 +573,21 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	log.InfoContext(ctx, "sandbox_run_awaiting_clarification",
 		"turn_id", run.TurnID, "audience", result.AskTo)
 	return nil
+}
+
+// questionUnrecorded ends a run whose record cannot hold the question it asked.
+//
+// The question is logged WHOLE first, because the settle takes the run's
+// record and its box with it: this line is the one place left that holds what
+// the agent wanted to know. Redacted already, like everything else a question
+// reaches.
+func (c *Coordinator) questionUnrecorded(ctx context.Context, run PendingRun, question, detail string) {
+	log.WarnContext(ctx, "sandbox_question_unrecorded", "turn_id", run.TurnID,
+		"agent", run.AgentHandle, "question_bytes", len(question), "question", question,
+		"detail", detail)
+	c.settleFailed(ctx, run, types.SandboxFailureQuestionUnrecorded, detail+
+		"; the question is whole in the log of the node that collected the run, "+
+		"as sandbox_question_unrecorded")
 }
 
 // TryResumeFromAnswer resumes a parked run if this event answers its question.

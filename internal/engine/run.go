@@ -28,7 +28,6 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
-	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -347,13 +346,6 @@ type Engine struct {
 	seatMCP   map[string]*mcp.Bridge
 	seatTools map[string]*tools.Registry
 
-	// embeddings is the company's vector backend, swapped on apply. An
-	// atomic pointer rather than a mutex because it is read on the turn's
-	// prefetch hot path and written only by an apply: the read must not
-	// queue behind anything, and there is nothing else to hold a lock
-	// across.
-	embeddings atomic.Pointer[embeddings.Embedder]
-
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a
 	// loop this process runs, and rebuilding it on an apply would start a
@@ -395,8 +387,9 @@ type Engine struct {
 	// that turns sources whose text has moved into vector records. On the
 	// ENGINE for the reason the trim is — it is a loop this process runs,
 	// and rebuilding it on an apply would leave two loops holding one
-	// company's provider budget. It reads the current epoch's embedder per
-	// tick instead, so a model change lands without a restart.
+	// company's provider budget. It reads the embedding backend of the
+	// epoch current at each tick instead, so a model change lands without
+	// a restart.
 	embedding *embedDuty
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an

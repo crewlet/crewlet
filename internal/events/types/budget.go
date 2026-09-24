@@ -74,12 +74,17 @@ type BudgetMeter struct {
 	UsedTokens int    `json:"used_tokens"`
 	MaxTokens  int    `json:"max_tokens"`
 	// RefusedAt is when the cap last turned a charge away, as RFC 3339 in UTC,
-	// and empty while the scope is not refusing. That, not UsedTokens >=
-	// MaxTokens, is what "exhausted" means: a refused charge increments
-	// nothing, so the counter stops short of the cap by the size of the round
-	// that would not fit. It is the shared counter's own stamp
-	// (coord.Usage.RefusedAt), cleared by the scope's next admitted charge,
-	// so every node reports the same one.
+	// and empty while the scope is not refusing. It is the shared counter's
+	// own stamp (coord.Usage.RefusedAt), cleared by the scope's next admitted
+	// charge, so every node reports the same one.
+	//
+	// EXHAUSTED IS EITHER this stamp or UsedTokens at or past MaxTokens. A
+	// round the cap refuses has been billed — it is charged once its model
+	// call has answered — and is counted all the same, so after a refusal the
+	// counter reads past the cap by that round; and spend counted after it
+	// happened, a coding run's, can take a counter past its cap with no
+	// refusal at all. Either way the next round the seat asks for is refused
+	// before it is sent.
 	RefusedAt string `json:"refused_at"`
 }
 

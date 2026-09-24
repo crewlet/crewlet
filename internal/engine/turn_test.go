@@ -1306,12 +1306,10 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	}
 }
 
-// THE ONE WAY OUT OF THE SANDBOX PARK. A coding run that stops to ask a
-// person something leaves its seat busy, so every inbound on that seat is
-// requeued — including the person's reply. Without this seam the answer is
-// parked behind the question for ever: the run sits awaiting until its box's
-// pause TTL reclaims it, and the person who answered is never told anything
-// happened.
+// AN ANSWER BEHIND ANOTHER JOB IS HANDLED RATHER THAN REQUEUED. A seat whose
+// other coding job is still running parks every inbound, and one of those can
+// be the reply to a question a second job parked on. Requeued, it would wait
+// behind the job that is still running, and so would the run it answers.
 func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	t.Parallel()
 	r := &recorder{}
@@ -1341,6 +1339,138 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	}
 	if !slices.Equal(asked, []string{"swe/chat:C1"}) {
 		t.Errorf("the coordinator was asked %v", asked)
+	}
+}
+
+// A COPY OF AN ANSWER ALREADY HANDED OVER IS NOT OFFERED AGAIN BEHIND ANOTHER
+// JOB. Its ack lost, it comes back while the seat is still busy — and by then
+// the run it answered may have parked on its NEXT question, on the same thread,
+// which the copy would be taken as the reply to. The park path reads the
+// completion ledger before it offers, as the proceed path does, and parks the
+// copy with the rest.
+func TestARedeliveredAnswerIsNotOfferedBehindAnotherJob(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Completions = ledgerstore.NewMemoryCompletions()
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, AwaitingSandbox: true}
+	}
+	offered := 0
+	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+		offered++
+		return true, nil
+	}
+	reply := inThread("notification", "chat:C1")
+
+	if got := d.Dispatch(context.Background(), "swe", []*events.Event{reply}); got.Outcome != queue.OutcomeAck ||
+		offered != 1 {
+		t.Fatalf("the answer was outcome %v and offered %d time(s); want it acked after one offer",
+			got.Outcome, offered)
+	}
+
+	again := d.Dispatch(context.Background(), "swe", []*events.Event{reply})
+	if offered != 1 {
+		t.Errorf("the redelivered answer was offered again (%d offers), and would answer the "+
+			"run's next question", offered)
+	}
+	if again.Outcome != queue.OutcomeAck || len(r.parked) != 1 {
+		t.Errorf("the redelivered answer was outcome %v with %d park(s); want it parked with "+
+			"the rest, to be dropped once the seat is free", again.Outcome, len(r.parked))
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a delivery on a busy seat ran %d turn(s)", len(r.reqs))
+	}
+}
+
+// AN ANSWER TO A LONE PARKED RUN IS HANDLED RATHER THAN RUN AS A TURN.
+//
+// A run parked on a question frees its seat — a person can take days, and the
+// answer arrives on the seat's own inbox — so on a seat running nothing else
+// the reply is screened like any other message and proceeds. Offered only on
+// the park path, it would run as a fresh turn that knew nothing of the
+// question, and the run would wait on for an answer that had already arrived.
+func TestAnAnswerToALoneParkedRunIsHandledRatherThanRunAsATurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = ledgerstore.NewMemoryCompletions()
+	var asked []string
+	d.Answer = func(_ context.Context, handle, conversation, answer string,
+		trigger *events.Event,
+	) (bool, error) {
+		asked = append(asked, handle+"/"+conversation)
+		if answer == "" || trigger == nil {
+			t.Error("the answer text and its trigger did not reach the coordinator")
+		}
+		return true, nil
+	}
+	reply := inThread("notification", "chat:C1")
+
+	got := d.Dispatch(context.Background(), "swe", []*events.Event{reply})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack — the delivery was handled", got.Outcome)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("the answer also ran as %d turn(s)", len(r.reqs))
+	}
+	if !slices.Equal(asked, []string{"swe/chat:C1"}) {
+		t.Errorf("the coordinator was asked %v", asked)
+	}
+
+	// A COPY OF IT THAT COMES BACK — its ack lost — is dropped by the
+	// completion ledger rather than offered again, where it would answer
+	// whatever the run asks next on the same thread, or run as a turn.
+	asked = nil
+	again := d.Dispatch(context.Background(), "swe", []*events.Event{reply})
+	if again.Outcome != queue.OutcomeAck || len(asked) != 0 || len(r.reqs) != 0 {
+		t.Errorf("a redelivered answer was outcome %v, offered %v and ran %d turn(s); want it "+
+			"acked and nothing else", again.Outcome, asked, len(r.reqs))
+	}
+}
+
+// A DELIVERY THAT IS NOT AN ANSWER RUNS ITS TURN. The offer is made to every
+// conversation, and a thread with no run parked on it is the ordinary case.
+func TestAProceedingDeliveryThatIsNotAnAnswerRunsItsTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	offered := 0
+	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+		offered++
+		return false, nil
+	}
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if got.Outcome != queue.OutcomeAck || len(r.reqs) != 1 || offered != 1 {
+		t.Errorf("outcome %v, %d turn(s), offered %d time(s); want an ack, one turn, one offer",
+			got.Outcome, len(r.reqs), offered)
+	}
+}
+
+// AN ANSWER THAT COULD NOT BE HANDED OVER COMES BACK, and is never spent on a
+// turn: that turn would know nothing of the question, and the run would go on
+// waiting for the reply it had consumed.
+func TestAnAnswerThatCouldNotBeHandedOverIsRedelivered(t *testing.T) {
+	t.Parallel()
+	for name, handled := range map[string]bool{
+		"the claim could not be taken":          false,
+		"the resume failed and was handed back": true,
+	} {
+		r := &recorder{result: turn.Result{Decision: phase.Done}}
+		d := dispatcher(t, r)
+		d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+			return handled, errors.New("the coordination store is unreachable")
+		}
+		got := d.Dispatch(context.Background(), "swe",
+			[]*events.Event{inThread("notification", "chat:C1")})
+		if got.Outcome != queue.OutcomeNak {
+			t.Errorf("%s: outcome = %v, want a NAK so the answer is offered again", name, got.Outcome)
+		}
+		if len(r.reqs) != 0 {
+			t.Errorf("%s: the answer ran as a turn", name)
+		}
 	}
 }
 

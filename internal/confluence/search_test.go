@@ -75,7 +75,7 @@ func TestAConfluenceSearchExcludesByTheSeamsOneRule(t *testing.T) {
 			t.Parallel()
 			hits := searcher.Search(context.Background(), knowledge.Query{
 				Text: "deploy", Org: o, Seat: seat, ExcludeAncestors: tc.excluded,
-			})
+			}).Hits
 			var ids []string
 			for _, hit := range hits {
 				ids = append(ids, hit.PageID)

@@ -135,6 +135,11 @@ func (m panicsOnSpend) Spend(context.Context, int) (toolloop.SpendOutcome, error
 	panic(m.value)
 }
 
+// Room has room, so the round is sent and the panic comes from its charge.
+func (panicsOnSpend) Room(context.Context) (toolloop.SpendOutcome, error) {
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
 func TestAPanicAfterTheAnswerLeavesItUncommittedAndBilled(t *testing.T) {
 	t.Parallel()
 	value := &panicValue{"the meter"}

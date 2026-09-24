@@ -223,16 +223,27 @@ budget runs out.
 That ledger is also what a **retried write** meets first. Every attempt's
 snapshot reads it before deciding anything, so a write retried under an
 operation id this node has already applied answers `applied` at the position
-it applied at and publishes nothing — however long after the first attempt it
-comes, since the broker forgets a message id after its duplicate window and
-the ledger keeps one for thirty days. A retry whose first record is on the log
-and not yet applied on this node finds no row: an arbitrated write is still
-refused by the broker, because its expectation is formed below that record,
-and waits for this node to apply it; the additive kinds take no expectation,
-which is why their applies fold a second record under one operation id to
-nothing. The ledger has nothing to say about an operation applied before this
-node adopted a peer's snapshot either, since an artefact carries no ledger —
-past the duplicate window, a retry of one of those is decided again.
+it applied at and publishes nothing — for thirty days after it applied, which
+is how long the ledger keeps a row, where the broker forgets a message id after
+its two-minute duplicate window. A retry whose first record is on the
+log and not yet applied on this node finds no row, and still publishes
+nothing. An update to an object this node has already consumed a record on is
+refused by the broker, because its expectation is formed below that record; a
+create, or a write on an object this node has consumed nothing on, forms no
+expectation at all, and the broker's last sequence on the object says this
+node is behind. Either way the write waits for this node to apply that record,
+inside the same five-second budget and refused `behind` past it, and the next
+attempt's ledger read answers. The additive kinds take no expectation, which is
+why their applies fold a second record under one operation id to nothing.
+
+The ledger has nothing to say about an operation older than thirty days,
+whose row the sweep removed, or about one this node holds only through a
+peer's snapshot it adopted, since an artefact carries no ledger: a retry of
+either is decided again. The adopted case is answered instead where the write
+can show its operation was minted before the adoption — `applied` at the first
+record when the broker acknowledges the retry as that record's duplicate, and
+`unknown` when the retry's append goes unanswered and a record the ledger does
+not name has landed on the object.
 
 ## Completeness is a different fact from freshness
 

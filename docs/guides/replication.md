@@ -47,10 +47,25 @@ different with each.
   a second record. What is not yet true is that you can read it back here.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
-  retry carries the same operation id: inside the log's two-minute duplicate
-  window the broker answers it with the record the first attempt landed, if it
-  landed. A retry later than that is decided again from the rows as they are
-  then, so retry promptly.
+  retry carries the same operation id: once the node it reaches has applied the
+  record the first attempt landed, that node's operation ledger answers the
+  retry `applied` at the record's position and publishes nothing — for thirty
+  days, which is how long a node keeps a ledger row. What that leaves:
+  - **A first record the node has not applied yet.** The retry waits for it,
+    inside the five-second budget, and is refused `behind` past it; retry
+    again and the ledger answers.
+  - **An additive write** — a turn's spend recorded on a task. It takes no
+    expectation, so past the broker's two-minute duplicate window a retry of
+    one whose first record the node has not applied lands a second record,
+    which the apply folds to nothing.
+  - **A ledger row older than thirty days**, which the node's sweep removed.
+    The retry is decided again from the rows as they are then.
+  - **A record the node holds only through a peer's snapshot it adopted.** A
+    snapshot carries no ledger, so the retry is decided again — except where
+    the write can show its operation was minted before the adoption: then an
+    append the broker acknowledges as the first record's duplicate answers
+    `applied` at that record, and one that goes unanswered answers `unknown`
+    rather than deciding again.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait

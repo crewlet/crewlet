@@ -196,7 +196,12 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		if adding {
 			notify = found.wakeFor(other, nil, leads)
 		}
-		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+		// NAMED BY THE TASK IT WRITES, as every step of this call is:
+		// normalised() states each counterparty once, so the name is
+		// unique, and a name by position would answer a call whose list
+		// differs from the first attempt's with the ledger row of
+		// whichever task sat at that position then.
+		if _, err := w.UpdateTask(ctx, stepID(opID, "b/"+id),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, notify); err != nil {
 			return out, fmt.Errorf("tracker: %d of this call's edges were "+
@@ -302,7 +307,7 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		e.remove = append(e.remove, change.BlockingRemove...)
 	}
 
-	for i, id := range order {
+	for _, id := range order {
 		subject, held := found.byID[id]
 		if id == change.Task {
 			subject, held = found.self, true
@@ -326,7 +331,7 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		if id == change.Task {
 			writer = w.After(authored)
 		}
-		result, err := writer.UpdateTask(ctx, stepID(opID, fmt.Sprintf("m%d", i)),
+		result, err := writer.UpdateTask(ctx, stepID(opID, "m/"+id),
 			id, subject.Project, NoIfMatch, TaskPatch{Depend: intent},
 			ChangeRelations, notify)
 		if err != nil {

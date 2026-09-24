@@ -218,36 +218,62 @@ func (r *retention) space(out *statelog.Reading) {
 // due at once would otherwise both scan the corpus; the one that did not claim
 // it answers from the measurement before, which is what it would have read a
 // moment earlier.
+//
+// A SCAN ITS CALLER GAVE UP ON IS NO ATTEMPT. A report runs on the API
+// request's context, so a client that disconnects mid-scan ends the scan with
+// its own cancellation — which says nothing about the corpus. Cached as a
+// failure it would blank this node's coverage for a whole interval and write
+// `vector_coverage_unreadable` about a corpus that reads perfectly well; so
+// the claim is handed back, nothing is cached or written, and the next report
+// scans. A failure while the caller's context is still live is the corpus's,
+// and is cached.
 func (r *retention) semanticCoverage(ctx context.Context, now time.Time) *float64 {
 	if r.coverage == nil {
 		return nil
 	}
 	r.mu.Lock()
-	due := r.coverAt.IsZero() || now.Sub(r.coverAt) >= RetentionInterval
+	claimedBefore := r.coverAt
+	due := claimedBefore.IsZero() || now.Sub(claimedBefore) >= RetentionInterval
 	if due {
 		r.coverAt = now
 	}
 	fraction, known := r.coverFraction, r.coverKnown
 	r.mu.Unlock()
-	if due {
-		measured, ok, err := r.coverage(ctx)
-		if err != nil {
-			// A FAILURE IS CACHED AS NOTHING KNOWN, so the scan and
-			// this line come once per interval while it lasts.
-			measured, ok = 0, false
-			r.logs().WarnContext(ctx, "vector_coverage_unreadable", "err", err,
-				"detail", "the recall_below_floor alarm has nothing to judge "+
-					"until a scan succeeds; the next is tried one trim "+
-					"interval from now")
-		}
-		fraction, known = measured, ok
-		r.mu.Lock()
-		r.coverFraction, r.coverKnown = fraction, known
-		r.mu.Unlock()
-		if r.metrics != nil && known {
-			r.metrics.Set(metrics.TrackerVectorCoverage, fraction, nil)
-		}
+	if !due {
+		return coverageAnswer(fraction, known)
 	}
+	measured, ok, err := r.coverage(ctx)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// HANDED BACK only while it is still this call's: a report that
+		// claimed the scan after this one did owns the stamp now.
+		r.mu.Lock()
+		if r.coverAt.Equal(now) {
+			r.coverAt = claimedBefore
+		}
+		r.mu.Unlock()
+		return coverageAnswer(fraction, known)
+	case err != nil:
+		// A FAILURE IS CACHED AS NOTHING KNOWN, so the scan and this line
+		// come once per interval while it lasts.
+		measured, ok = 0, false
+		r.logs().WarnContext(ctx, "vector_coverage_unreadable", "err", err,
+			"detail", "the recall_below_floor alarm has nothing to judge "+
+				"until a scan succeeds; the next is tried one trim "+
+				"interval from now")
+	}
+	r.mu.Lock()
+	r.coverFraction, r.coverKnown = measured, ok
+	r.mu.Unlock()
+	if r.metrics != nil && ok {
+		r.metrics.Set(metrics.TrackerVectorCoverage, measured, nil)
+	}
+	return coverageAnswer(measured, ok)
+}
+
+// coverageAnswer is a coverage measurement as a report carries it: the
+// fraction, or nil when nothing is known.
+func coverageAnswer(fraction float64, known bool) *float64 {
 	if !known {
 		return nil
 	}

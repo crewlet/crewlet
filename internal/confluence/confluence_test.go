@@ -105,7 +105,9 @@ func client(t *testing.T, inst *instance) *confluence.Client {
 //
 // An empty scope plus a seat riding the shared org account means searching
 // the whole instance — which is how one seat reads a page its own account
-// never could.
+// never could. A caller that searches without asking the pre-gate first is
+// answered MARKED FAILED rather than empty: the query never reached the site,
+// so an empty answer would claim the knowledge base holds nothing it matches.
 func TestAnUnscopedSearchOnTheOrgCredentialIsRefused(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t, func(string) (int, string) {
@@ -119,10 +121,52 @@ func TestAnUnscopedSearchOnTheOrgCredentialIsRefused(t *testing.T) {
 	if searcher.CanSearch(&org.Role{Name: "SWE"}, o) {
 		t.Fatal("the pre-gate allowed a search that cannot be permitted")
 	}
-	if hits := searcher.Search(context.Background(), knowledge.Query{
+	if answer := searcher.Search(context.Background(), knowledge.Query{
 		Text: "how do we deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	}); len(hits) != 0 {
-		t.Fatalf("hits = %+v", hits)
+	}); !answer.Failed || len(answer.Hits) != 0 {
+		t.Fatalf("a refused search answered %+v, want an empty answer marked failed", answer)
+	}
+}
+
+// A SEARCH WITH NO CREDENTIAL TO RUN AS SAYS IT DID NOT RUN.
+//
+// A seat holding no Confluence credential of its own searches as the org
+// account, and a searcher built without one has nothing to search as at all.
+// The query never reaches the site, and an answer that came back merely empty
+// would read as a knowledge base with nothing on the subject. The control is
+// the same query from a seat that does hold a credential, which runs.
+func TestASearchWithNoCredentialToRunAsIsMarkedFailed(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t, func(string) (int, string) {
+		return 200, `{"results":[{"id":"1","title":"Deploy runbook",
+			"space":{"key":"ENG"},"body":{"storage":{"value":"<p>Run it.</p>"}}}]}`
+	})
+	holder := &org.Role{Name: "Holder", DeclaredHandle: "holder"}
+	searcher := confluence.NewSearcher(confluence.SearcherOptions{
+		ForSeat: func(seat *org.Role) (*confluence.Client, bool) {
+			if seat == holder {
+				return client(t, inst), true
+			}
+			return nil, false
+		},
+	})
+	o := &org.Organization{Name: "nimbus", KnowledgeScope: []string{"ENG"}}
+	o.Normalize()
+
+	if answer := searcher.Search(context.Background(), knowledge.Query{
+		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
+	}); !answer.Failed || len(answer.Hits) != 0 {
+		t.Errorf("a search with no credential to run as answered %+v, want an "+
+			"empty answer marked failed", answer)
+	}
+	if q := inst.lastQuery(); q != "" {
+		t.Errorf("a search with no credential reached the site with %q", q)
+	}
+	ran := searcher.Search(context.Background(), knowledge.Query{
+		Text: "deploy", Org: o, Seat: holder,
+	})
+	if ran.Failed || len(ran.Hits) != 1 {
+		t.Errorf("the control, a seat with its own credential, answered %+v", ran)
 	}
 }
 
@@ -147,11 +191,14 @@ func TestASeatWithItsOwnCredentialSearchesUnscoped(t *testing.T) {
 	if !searcher.CanSearch(seat, o) {
 		t.Fatal("a seat with its own credential was refused the pre-gate")
 	}
-	hits := searcher.Search(context.Background(), knowledge.Query{
+	answer := searcher.Search(context.Background(), knowledge.Query{
 		Text: "how do we deploy", Org: o, Seat: seat,
 	})
-	if len(hits) != 1 || hits[0].Title != "Deploy runbook" {
-		t.Fatalf("hits = %+v", hits)
+	hits := answer.Hits
+	if answer.Failed || answer.Partial != nil || len(hits) != 1 ||
+		hits[0].Title != "Deploy runbook" {
+
+		t.Fatalf("answer = %+v", answer)
 	}
 	if hits[0].Snippet != "Run the pipeline." {
 		t.Errorf("snippet = %q", hits[0].Snippet)
@@ -218,7 +265,7 @@ func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 
 	hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	})
+	}).Hits
 	if len(hits) != 1 || hits[0].Title != "Real page" {
 		t.Fatalf("an unreviewed draft reached a seat's search: %+v", hits)
 	}
@@ -247,17 +294,29 @@ func TestTheSkillsSpaceIsNotKnowledge(t *testing.T) {
 
 	hits := searcher.Search(context.Background(), knowledge.Query{
 		Text: "x", Org: o, Seat: &org.Role{Name: "SWE"},
-	})
+	}).Hits
 	if len(hits) != 1 || hits[0].Container != "ENG" {
 		t.Fatalf("a tool-skill page was returned as knowledge: %+v", hits)
 	}
 }
 
-// A SEARCH NEVER FAILS THE CALLER: a turn must not die because a wiki was
-// slow, so every failure path is an empty result.
-func TestASearchFailureIsAnEmptyBlock(t *testing.T) {
+// A SEARCH THE SITE REFUSED NEVER FAILS THE CALLER, AND SAYS IT FAILED.
+//
+// A turn must not die because a wiki was slow, so the answer is an empty one
+// rather than an error — and it is MARKED, because a seat reading an unmarked
+// empty answer tries other words against a search that is not running, or
+// writes the page it could not find. The control is the same search once the
+// site answers, which is not marked.
+func TestASearchTheSiteRefusedIsAnEmptyAnswerMarkedFailed(t *testing.T) {
 	t.Parallel()
+	var healthy bool
+	var mu sync.Mutex
 	inst := newInstance(t, func(string) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if healthy {
+			return 200, `{"results":[]}`
+		}
 		return 500, `{"message":"the instance is unwell"}`
 	})
 	searcher := confluence.NewSearcher(confluence.SearcherOptions{
@@ -268,16 +327,43 @@ func TestASearchFailureIsAnEmptyBlock(t *testing.T) {
 	})
 	o := &org.Organization{Name: "nimbus"}
 	o.Normalize()
-	if hits := searcher.Search(context.Background(), knowledge.Query{
-		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
-	}); hits != nil {
-		t.Fatalf("hits = %+v", hits)
+	query := knowledge.Query{Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"}}
+	if answer := searcher.Search(context.Background(), query); !answer.Failed ||
+		len(answer.Hits) != 0 {
+
+		t.Fatalf("a search the site refused answered %+v, want an empty answer "+
+			"marked failed", answer)
+	}
+	mu.Lock()
+	healthy = true
+	mu.Unlock()
+	if answer := searcher.Search(context.Background(), query); answer.Failed {
+		t.Errorf("a search the site answered with no results is marked failed: %+v", answer)
 	}
 }
 
-// THE CQL IS ESCAPED, or a page title with a quote in it would end the
-// literal early and the query would mean something nobody wrote.
-func TestTheQueryIsEscapedAndCapped(t *testing.T) {
+// TEXT WITH NOTHING IN IT IS NOT A FAILURE: nothing was asked, so there is no
+// search to have failed, and nothing reaches the site.
+func TestAnEmptyQueryIsNeitherSentNorFailed(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t, func(string) (int, string) {
+		t.Error("an empty query reached the site")
+		return 200, `{"results":[]}`
+	})
+	searcher := confluence.NewSearcher(confluence.SearcherOptions{Org: client(t, inst)})
+	o := &org.Organization{Name: "nimbus", KnowledgeScope: []string{"ENG"}}
+	o.Normalize()
+	if answer := searcher.Search(context.Background(), knowledge.Query{
+		Text: "  ", Org: o,
+	}); answer.Failed || len(answer.Hits) != 0 {
+		t.Errorf("an empty query answered %+v, want an empty answer", answer)
+	}
+}
+
+// THE CQL IS ESCAPED, or a query with a quote in it would end the literal
+// early and the search would mean something nobody wrote — and the text is
+// SENT WHOLE, never cut to a length.
+func TestTheQueryIsEscapedAndSentWhole(t *testing.T) {
 	t.Parallel()
 	got := confluence.BuildCQL(`say "hello" \ now`, []string{`EN"G`}, false)
 	if !strings.Contains(got, `\"hello\"`) || !strings.Contains(got, `\\`) {

@@ -46,12 +46,13 @@ import (
 // nothing, so "which construction site did this row come from" is a question
 // that must not be answerable.
 //
-// The embedder is read HERE, at each construction, rather than held: an apply
-// can add or replace one, and equip, the workers and the prefetch are each
-// rebuilt on the epoch they belong to. The retention sweep's diary is built
-// once at boot and may therefore carry none — it only deletes.
-func (e *Engine) diary(db *store.DB) *learning.Diary {
-	return learning.NewDiary(db, learning.WithEmbedding(e.embedder()))
+// The embedder is the EPOCH's, passed in rather than read off the node:
+// equip, the workers and the prefetch are each built for one epoch, and a
+// diary that took whatever backend the node held when it was built would
+// embed with a revision that epoch does not run. The retention sweep's diary
+// is built once at boot with no epoch, and so carries none — it only deletes.
+func (e *Engine) diary(db *store.DB, c *Company) *learning.Diary {
+	return learning.NewDiary(db, learning.WithEmbedding(c.embed()))
 }
 
 // buildReflectionWorkers assembles this epoch's learning passes.
@@ -98,7 +99,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	var workers []learning.Worker
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(models, e.diary(db),
+		decider, err := learning.NewPersistDecider(models, e.diary(db, c),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,
@@ -116,7 +117,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// (retrieval_limit) presuppose rows exist — a company that wants no
 	// episodic memory turns learning off entirely.
 	episodist, err := learning.NewEpisodist(learning.NewEpisodes(db),
-		learning.EpisodistOptions{Embed: e.embedder()})
+		learning.EpisodistOptions{Embed: c.embed()})
 	if err != nil {
 		log.Warn("episodist_unavailable", "error", err,
 			"detail", "no episode will be recorded, so recall and skill "+

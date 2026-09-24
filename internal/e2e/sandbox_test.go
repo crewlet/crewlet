@@ -415,7 +415,10 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	n.wake(t, "swe", "the api test is flaking, please fix it")
+	// ON A THREAD, because the thread is how the answer is recognised: the
+	// run records the conversation it asked in, and the reply is the next
+	// message on it.
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
 	waitFor(t, "the run to park on its question", func() bool {
 		for _, run := range n.activeRuns(t) {
@@ -444,6 +447,30 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	}
 	if parked.PausedAt.IsZero() {
 		t.Fatal("the row does not record that a snapshot is being held")
+	}
+
+	// THE ANSWER. The seat runs nothing else, so the reply is screened like
+	// any other message and proceeds toward a turn; the dispatcher offers it
+	// to the parked run first, and the run resumes on it. Offered only to a
+	// seat busy with another job, it would run as a fresh turn that knew
+	// nothing of the question, and the run would go on waiting.
+	n.wakeInConversation(t, "swe", "target main", codingConversation)
+	waitFor(t, "the parked turn to resume on the answer", func() bool {
+		return slices.Contains(n.model.seen(), "resumed")
+	}, n.diagnose)
+	waitFor(t, "the run to leave awaiting_clarification", func() bool {
+		for _, run := range n.activeRuns(t) {
+			if run.Status == sandbox.StatusAwaiting {
+				return false
+			}
+		}
+		return true
+	}, n.diagnose)
+	// THE SAME TURN, not a second one: the executor opened once, and the
+	// answer re-entered it.
+	if got := countOf(n.model.seen(), "execute"); got != 1 {
+		t.Fatalf("the executor opened %d times; the answer must resume the parked turn, "+
+			"not start another. phases = %v", got, n.model.seen())
 	}
 }
 

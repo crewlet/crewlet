@@ -340,8 +340,10 @@ providers:
                                         #   and the semantic half of the engine's own
                                         #   knowledge and work-item search (see
                                         #   `knowledge.vectors`). Omit it and the
-                                        #   first two fall back to recency and those
-                                        #   searches are keyword-only.
+                                        #   diary's candidate pool falls back to
+                                        #   recency, similarity recall of episodes
+                                        #   is off, and those searches are
+                                        #   keyword-only.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
                                         #   one emits 3072, text-embedding-3-small
@@ -1037,7 +1039,7 @@ knowledge:
   root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page;
                                          #   searched and routed like any other container
   vectors: true                          # fuse semantic recall into the native searches; unset derives
-                                         #   from providers.embeddings, false embeds nothing
+                                         #   from providers.embeddings, false embeds nothing for search
 ```
 
 `knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.

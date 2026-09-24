@@ -70,15 +70,15 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is three things.
+// Five things.
 //
 // THE PARTY REGISTRY, indexed BEFORE the epoch is stored, so no reader can
 // find a company through [Engine.Company] whose parties are not in
 // [Engine.Registry]. An apply indexes earlier still, before it rebuilds the
 // vendor wiring that registers into the new registry, and that index is kept
-// rather than rebuilt here. Boot has nothing to rebuild in between, and indexed
-// only at the end of construction, after every fleet duty was already armed;
-// see [Engine.Registry] for what that window did.
+// rather than rebuilt here. Boot has nothing to rebuild in between, and
+// indexes here, before any fleet duty is armed; see [Engine.Registry] for why
+// no reader may find the one without the other.
 //
 // And a store opened with NO width, which is a node that booted with no active
 // revision. It holds no rows, and its first epoch is what tells it how wide
@@ -92,11 +92,32 @@ func (e *Engine) RecheckGitHub() {
 // and so runs once this one is; see [Engine.auditSkills] for why it takes
 // no epoch.
 //
+// And the INBOX COALESCING KNOBS, written into the batch options every seat
+// this node holds reads ([Engine.tuneBatching]). Here and not while the epoch
+// is equipped, because that value is the node's rather than the epoch's: an
+// apply refused after equipping would otherwise leave every inbox coalescing
+// by numbers from a revision the node is not serving.
+//
+// And the TOOL SKILLS' ${var} MAP ([Engine.refreshSkillVariables]), which is
+// config and so refreshed per epoch — unlike the skills themselves, which come
+// from the knowledge base and outlive one — and here for the coalescing
+// knobs' reason: the registry it is written into is the node's, and a refused
+// revision's map would render every seat's skills while the node serves the
+// epoch before. Written BEFORE the epoch is stored, so no turn on this epoch
+// renders a skill with the map of the one before.
+//
+// The EMBEDDING BACKEND needs nothing here beyond the store below: it is part
+// of the epoch ([Company]), so storing the epoch is what publishes it.
+//
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
 func (e *Engine) installEpoch(c *Company) {
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)
+	}
+	e.tuneBatching(c)
+	if c != nil {
+		e.refreshSkillVariables(c)
 	}
 	e.epoch.current.Store(c)
 	if c != nil && c.Models == nil {

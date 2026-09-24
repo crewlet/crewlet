@@ -410,8 +410,8 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		return Manifest{}, err
 	}
 	// AND THE COPY IS MADE SELF-CONTAINED AGAIN before it is measured:
-	// reading it opened it, which grows a -wal and a -shm beside it, and
-	// what is digested and offered is one file.
+	// reading it opened it, which grows a -wal and a lock sidecar beside it,
+	// and what is digested and offered is one file.
 	if err = store.QuiesceCopy(ctx, part); err != nil {
 		discard()
 		return Manifest{}, err

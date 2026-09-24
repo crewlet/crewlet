@@ -100,12 +100,13 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// A STORE FILE READABLE BEYOND ITS OWNER IS TIGHTENED, AND THE NODE SAYS SO.
+// A STORE FILE READABLE BEYOND ITS OWNER IS TIGHTENED, AND THE OPENER SAYS SO.
 // A database the driver made before its opener readied the files is 0644, and
-// so is its -wal; nothing but the engine opens either, so the wider mode serves
-// nobody the engine knows of and exposes everything in them. The next open
-// takes every bit beyond the owner's, and the line names the file and the mode
-// it had, so an operator whose own grant went with it learns why.
+// so is its -wal; nothing but crewlet needs to open either — the engine, or
+// while it is stopped one of its own commands run as the same user — so the
+// wider mode serves nobody crewlet knows of and exposes everything in them. The
+// next open takes every bit beyond the owner's, and the line names the file
+// and the mode it had, so an operator whose own grant went with it learns why.
 //
 // Not parallel: it reads the node's log, which is the process's.
 func TestAStoreFileReadableBeyondItsOwnerIsTightened(t *testing.T) {
@@ -150,6 +151,41 @@ func TestAStoreFileReadableBeyondItsOwnerIsTightened(t *testing.T) {
 			t.Errorf("no store_file_mode_tightened line names %s and the 0644 it had; the log holds:\n%s",
 				filepath.Base(file), lines.String())
 		}
+	}
+}
+
+// THE COPY IS OWNER-ONLY BEFORE THE VERIFY OPENS IT. The driver makes it from
+// the umask, 0644 under the usual 022, and the verify opens it the way every
+// opener opens a database file (see [ownerOnly]): a copy that reached the
+// verify with a wider mode would be tightened there, and every backup and every
+// snapshot would log store_file_mode_tightened at WARN about a file the store
+// made a moment before.
+//
+// Not parallel: it sets the process umask and reads the process's log.
+func TestTheVerifyFindsTheCopyAlreadyOwnerOnly(t *testing.T) {
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var lines lockedBuffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &lines)
+	defer logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	underUmask(t, 0o022, func() {
+		if _, err := db.Backup(context.Background(), dest); err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+	})
+
+	if strings.Contains(lines.String(), "store_file_mode_tightened") {
+		t.Errorf("the backup's own verify tightened the copy it had just made, so every "+
+			"backup and every snapshot warns about a file nobody widened; the log holds:\n%s",
+			lines.String())
+	}
+	if mode := modeOf(t, dest); mode != fileMode {
+		t.Errorf("the copy is %#o at its final name, want %#o", mode, fileMode)
 	}
 }
 

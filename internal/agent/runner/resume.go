@@ -110,16 +110,30 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
 	})
 	if err != nil {
-		// resumedCalls, not calls: a resumed phase's record has to carry
-		// the PRE-SUSPEND rounds too. The round that called run_sandbox
-		// was never closed — [turn.Run] returns on a suspend without
-		// appending it — so its writes exist in no ledger anywhere, and a
-		// resume that broke would otherwise report a turn that had done
-		// nothing when it is precisely the turn that has done the most.
-		return turn.Work{Calls: resumedCalls(surface, state, answer)}, describe(surface), err
+		// THIS RE-ENTRY'S OWN CALLS, and only those. What a broken phase's
+		// calls decide is one question — [turn.Abandon], through
+		// [turn.Acted]: would a retry repeat a write outside the engine? —
+		// and a retry of a resume re-enters the conversation the pending-run
+		// row holds.
+		// Every call made before the suspend is answered in that
+		// conversation, the coding run's launch among them, so no retry
+		// makes it again; what this re-entry did before it broke, it would.
+		// Handed the carried calls, a provider's 503 would read as a turn
+		// that had acted, and the finished run would be settled and its
+		// record deleted rather than handed back for the retry.
+		//
+		// The phase's RECORD is not this list: runPhase published it on the
+		// way out, pre-suspend rounds and launch included.
+		return turn.Work{Calls: calls(surface)}, describe(surface), err
 	}
 
 	if res.Suspended {
+		// Published only if recording the suspension panics; see
+		// [closing]. No prompts, as on the record below.
+		base := ranRecord(phase.Execute, state.Round, "", "", res, surface)
+		base.Run = r.cfg.Resume.Run
+		closer := r.closing(phaseCtx, base)
+		defer closer.onPanic()
 		r.recordSuspension(phaseCtx, state.Round, surface, res.Result, history, res.Elapsed)
 		return turn.Work{
 			Text: res.Text, Calls: resumedCalls(surface, state, answer), Suspended: true,
@@ -133,16 +147,13 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// No system or user prompt on the record: this phase did not open a
 	// conversation, it re-entered one, and publishing the original opening
 	// again would show a reader a prompt that was not sent this time.
-	work, described, err := r.finishWork(phaseCtx, state.Round, work{
+	work, described := r.finishWork(phaseCtx, state.Round, work{
 		submit: submit, res: res, surface: surface, snapshot: snapshot,
 		// WHICH BOX. This phase suspended on a coding run and is being
 		// re-entered with its result, which is the one thing that makes it
 		// a sandbox phase rather than a native one.
 		run: r.cfg.Resume.Run,
 	})
-	if err != nil {
-		return turn.Work{Calls: resumedCalls(surface, state, answer)}, describe(surface), err
-	}
 	// The WHOLE phase's calls, pre-suspend rounds included — see
 	// resumedCalls.
 	work.Calls = resumedCalls(surface, state, answer)
@@ -151,15 +162,21 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 
 // resumedCalls is what the WHOLE executor phase called, pre-suspend rounds
 // included — the call it suspended on among them, answered with answer
-// ([suspendedOn]).
+// ([suspendedOn]) — for a re-entry that finished or suspended again.
 //
-// The delivery check, the submission's own citations, the iteration ledger and
-// the proof that the turn reached outside the engine all read this list, and
-// all of them are about the turn rather than about one re-entry: a resumed
-// turn that saw only the post-resume calls would read a delivery made before
-// the suspend as never having happened, and re-fire it. The call that launched
-// the coding run is one of those calls: it started a billed box, which is
-// outside the engine as surely as a post is.
+// The delivery check, the submission's own citations, the reviewer's evidence,
+// the iteration ledger and the conversation ledger all read this list, and all
+// of them are about the turn rather than about one re-entry: a resumed turn
+// that saw only the post-resume calls would read a delivery made before the
+// suspend as never having happened, and re-fire it, and its reviewer would
+// judge a coding turn without the coding run's report.
+//
+// [turn.Acted] reads it too, and so a re-entry that FINISHED counts as having
+// reached outside the engine whenever the phase ever did — the launch is on
+// this list, and run_sandbox is open-world. A turn that breaks after this
+// round, in its review or in a later round, is therefore abandoned rather than
+// retried, whatever it did after re-entering. A re-entry that broke hands back
+// its own calls instead; see [Runner.Resume].
 func resumedCalls(s *tools.Surface, state execstate.State, answer string) []ledger.Call {
 	prior := make([]ledger.Call, 0, len(state.ToolExecutions)+1)
 	for _, exec := range state.ToolExecutions {

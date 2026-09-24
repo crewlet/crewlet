@@ -49,10 +49,12 @@ type Providers struct {
 	// arbitrary but stable; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
-	// Embeddings powers the learning subsystem's vector recall. Nil
-	// disables it — episodes are still written, but nothing searches them
-	// by similarity.
-	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for diary and episode recall."`
+	// Embeddings powers the learning subsystem's vector recall, and the
+	// semantic half of the engine's own knowledge and work-item search
+	// (`knowledge.vectors`). Nil disables both — episodes are still
+	// written, but nothing searches them by similarity, and those searches
+	// are keyword-only.
+	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for diary and episode recall, and for the semantic half of the engine's own knowledge and work-item search (see knowledge.vectors)."`
 
 	// Sandbox is the code-runtime backend. Nil (or type none) means no
 	// seat can run a sandboxed coding run, whatever its own gate says.

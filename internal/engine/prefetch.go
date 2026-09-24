@@ -41,7 +41,7 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 		SummarizeMaxTokens: company.Config.Learning.Reflect.SummarizeMaxTokens,
 	}
 	if db := e.backends.Store; db != nil {
-		src.Diary = e.diary(db)
+		src.Diary = e.diary(db, company)
 		src.Episodes = learning.NewEpisodes(db)
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)
@@ -51,7 +51,7 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	// similarity half of the memory pool to recency alone and episode
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
-	src.Embed = e.embedder()
+	src.Embed = company.embed()
 	return prefetch.New(src)
 }
 

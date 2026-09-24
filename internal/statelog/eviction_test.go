@@ -79,15 +79,12 @@ func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	}
 }
 
-// A LIVE LEASE REFUSES AN EVICTION, and that refusal is a precondition of the
-// whole design.
+// A LIVE LEASE REFUSES AN EVICTION.
 //
-// The write-path fence that stops an evicted node writing reads a tombstone
-// cached on the coordination loop — the same loop the target still has if it
-// is holding a lease. So the only state in which an eviction is safe is one
-// where the target has been out of contact for several round trips, which is
-// exactly why the publisher checks a third source that stays fresh when
-// coordination is wedged.
+// A node holding its presence lease is running, and an eviction takes it out
+// of service: its writes above the eviction apply nowhere and the trim stops
+// counting it. That is the remedy for a node that has stopped — so the refusal
+// says why, and an operator who knows more than the lease does may force it.
 func TestAnEvictionIsRefusedWhileTheTargetIsStillTalking(t *testing.T) {
 	t.Parallel()
 	live := []statelog.Presence{{NodeID: "b"}}

@@ -172,7 +172,7 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(subject, op), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Mutation:   body,
@@ -195,6 +195,23 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 			Op:      string(op), OpID: opID, Scope: scope.Resolve(subject),
 		},
 	}, nil
+}
+
+// recordVersionOf is the version a record is written at: a gate-installing
+// record — an eviction by its kind, a purge by its op, as [Domain.InstallsGate]
+// reads them — at [GateRecordVersion] for ever, and everything else at
+// [RecordVersion].
+//
+// THE TWO ARE EQUAL TODAY, and this is what keeps them apart the day
+// RecordVersion moves: a gate record at a version an older build cannot read
+// stops that build's applier at it, on every node still running one.
+//
+//nolint:unparam // constant until RecordVersion moves; see above.
+func recordVersionOf(subject Subject, op OpKind) int {
+	if subject.Kind.InstallsGate() || op == OpPurge {
+		return GateRecordVersion
+	}
+	return RecordVersion
 }
 
 // Validate refuses a scope a writer cannot mean.

@@ -416,7 +416,7 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 		filedTask(t, r, id)
 	}
 	var second error
-	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" },
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.t/t-1" },
 		func() {
 			_, second = r.writer.As("bea", tracker.AuthorAgent, tracker.Provenance{}).
 				UpdateTasks(t.Context(), "op-bulk-2", []string{"t-3"}, "ENG",
@@ -542,7 +542,7 @@ func TestABulkLeaseOutlivesADeadHolderByNoMoreThanTheClaimTTL(t *testing.T) {
 	var refused error
 	var held []coord.Lease
 	var lapsed *coord.Lease
-	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" }, func() {
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.t/t-1" }, func() {
 		ctx := context.WithoutCancel(t.Context())
 		_, refused = peer.UpdateTasks(ctx, "op-peer", []string{"t-3"}, "ENG",
 			tracker.TaskPatch{Title: ptr("peer")}, tracker.ChangeFields, nil)
@@ -614,7 +614,7 @@ func TestABulkThatRunsPastAHeartbeatKeepsItsLease(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 	var before, after []coord.Lease
-	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" }, func() {
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.t/t-1" }, func() {
 		ctx := context.WithoutCancel(t.Context())
 		before, _ = claims.ListLive(ctx, coord.Class("bulk"))
 		time.Sleep(tracker.ClaimHeartbeat + 2*time.Second)
@@ -661,7 +661,7 @@ func TestABulkEditOnAnUnreachableStoreIsStillOneAtATimeHere(t *testing.T) {
 		filedTask(t, r, id)
 	}
 	var second error
-	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" },
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.t/t-1" },
 		func() {
 			_, second = r.writer.UpdateTasks(t.Context(), "op-bulk-2",
 				[]string{"t-3"}, "ENG", tracker.TaskPatch{Title: ptr("second")},
@@ -791,6 +791,190 @@ func TestARetriedCreateKeysFromTheNumberItsFirstMintTook(t *testing.T) {
 	}
 	if created.Key != "ENG-2" {
 		t.Errorf("the next create keyed its task %q, want ENG-2", created.Key)
+	}
+}
+
+// A RETRIED CREATE CARRIES THE FIELDS ITS OWN APPEND COERCED.
+//
+// The retry's mint is answered from this node's operation ledger, which runs no
+// decide — so anything the create took out of the mint's closure is the zero it
+// started as, and the task would be published with its fields as the caller
+// typed them: "High" stored where every filter, grouping and total looks for
+// "o-high". The task's own append decides what it carries.
+//
+// Mutation: take the coerced fields out of the mint's guard again and the
+// retried task stores "High".
+func TestARetriedCreateCarriesTheFieldsItsOwnAppendCoerced(t *testing.T) {
+	t.Parallel()
+	task := newTask("t-1")
+	task.Key = ""
+	task.Fields = map[string]json.RawMessage{"f-impact": json.RawMessage(`"High"`)}
+	broker := &refusingAppender{subject: tracker.TaskSubject(task.ID).Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+	seedFields(t, r)
+
+	broker.refusing(true)
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err == nil {
+		t.Fatal("the first attempt filed the task the broker refused, so this " +
+			"case is not the shape it names")
+	}
+	r.drain()
+	broker.refusing(false)
+
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	r.drain()
+	if got := string(taskOf(t, r, task.ID).Fields["f-impact"]); got != `"o-high"` {
+		t.Fatalf("the retried task stores f-impact as %s, want \"o-high\" — the "+
+			"option's id, which every filter over the field compares against", got)
+	}
+}
+
+// A RETRIED PROMOTION MARKS THE PARENT ITS OWN APPEND READ.
+//
+// The retry's mint is answered from the ledger, so a parent carried out of the
+// mint's closure is an empty task: its project is blank, and the parent's own
+// append is refused as naming none — on every retry, so the item is never
+// marked. The parent's append reads the parent in its own snapshot instead.
+//
+// Mutation: build the parent's checklist from a parent read in the mint's guard
+// and the retry is refused, the item unmarked.
+func TestARetriedPromotionMarksTheParentItsOwnAppendRead(t *testing.T) {
+	t.Parallel()
+	broker := &refusingAppender{subject: tracker.TaskSubject("t-2").Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+	parent := newTask("t-1")
+	parent.Key = ""
+	parent.Checklists = []tracker.Checklist{{
+		ID: "l-1", Name: "steps",
+		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
+	}}
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", parent, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	subtask := newTask("t-2")
+	subtask.Key = ""
+	broker.refusing(true)
+	if _, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask,
+		nil); err == nil {
+		t.Fatal("the first attempt created the subtask the broker refused, so " +
+			"this case is not the shape it names")
+	}
+	r.drain()
+	broker.refusing(false)
+
+	if _, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask,
+		nil); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	r.drain()
+	item := taskOf(t, r, "t-1").Checklists[0].Items[0]
+	if item.PromotedTo == nil || *item.PromotedTo != "t-2" {
+		t.Fatalf("after the retry the item points at %v, want the subtask t-2",
+			item.PromotedTo)
+	}
+	if child := taskOf(t, r, "t-2"); child.Parent == nil || *child.Parent != "t-1" {
+		t.Fatalf("the subtask's parent is %v, want t-1", child.Parent)
+	}
+}
+
+// A BULK EDIT RE-RUN OVER ITS FAILURES WRITES THEM.
+//
+// The caller re-runs the tasks that failed under the same op id, which is a
+// shorter list than the first run's. A step named by its place in the list maps
+// the re-run's first task onto the first run's first — whose ledger row answers
+// `applied` for a task the re-run never wrote.
+//
+// Mutation: name each step by its index again and the re-run reports t-2
+// applied while it stays todo.
+func TestABulkEditRerunOverItsFailuresWritesThem(t *testing.T) {
+	t.Parallel()
+	broker := &refusingAppender{subject: tracker.TaskSubject("t-2").Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+	for _, id := range []string{"t-1", "t-2"} {
+		task := newTask(id)
+		task.Key = ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	done := tracker.StatusDone
+	broker.refusing(true)
+	first, err := r.writer.UpdateTasks(t.Context(), "op-bulk",
+		[]string{"t-1", "t-2"}, "ENG", tracker.TaskPatch{Status: &done},
+		tracker.ChangeStatus, nil)
+	if err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if _, failed := first.Failed["t-2"]; !failed {
+		t.Fatalf("the first run failed %v, and this case needs t-2 among them",
+			first.Failed)
+	}
+	r.drain()
+	broker.refusing(false)
+
+	rerun, err := r.writer.UpdateTasks(t.Context(), "op-bulk", []string{"t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil)
+	if err != nil {
+		t.Fatalf("the re-run: %v", err)
+	}
+	if len(rerun.Applied) != 1 || rerun.Applied[0] != "t-2" {
+		t.Fatalf("the re-run applied %v, want t-2", rerun.Applied)
+	}
+	r.drain()
+	if got := taskOf(t, r, "t-2").Status; got != tracker.StatusDone {
+		t.Fatalf("t-2 is %s after a re-run that reported it applied — the step "+
+			"was answered from another task's ledger row", got)
+	}
+}
+
+// AN EDIT ADDRESSED TO A PROJECT THE TASK IS NOT IN IS REFUSED.
+//
+// The record's scope is built from the project the caller names, and a task's
+// path in the scope alphabet sits under its project — so a record addressed to
+// the wrong one is filed, where a node defers it, somewhere no later write to
+// the task probes. A caller naming the wrong project read the task before it
+// moved, and re-reads.
+//
+// Mutation: drop the check and the edit lands, its record claiming a task in
+// OPS.
+func TestAnEditAddressedToAnotherProjectIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := newTask("t-1")
+	task.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", task, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	done := tracker.StatusDone
+	_, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-1", "OPS",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil)
+	if !errors.Is(err, tracker.ErrStaleVersion) {
+		t.Fatalf("an edit addressed to OPS for a task in ENG = %v, want a "+
+			"refusal that sends the caller to re-read", err)
+	}
+	r.drain()
+	if got := taskOf(t, r, "t-1").Status; got == tracker.StatusDone {
+		t.Fatal("the edit addressed to the wrong project landed")
 	}
 }
 

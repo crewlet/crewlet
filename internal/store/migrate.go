@@ -64,13 +64,12 @@ var Estates = []Estate{EstateNode, EstateReplicated}
 
 // migrateMu serialises migration runs across every handle in the process.
 //
-// It replaces a Postgres advisory lock, and the replacement is smaller than
-// the original because the problem is: three OS processes could race the DDL
-// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
-// lock had to be a database object for that reason. Here one process owns the
-// file — Turso does not support any other arrangement — so the only race left
-// is two handles on one path inside this binary, which a package-level mutex
-// closes completely. Migrations run once at Open, so the contention is nil.
+// The store's file lock admits one process per file (see lock.go), so no
+// other process can race this one's DDL and the migrator needs no lock of its
+// own inside the database. What is left is two handles on one path inside
+// this binary, which share the process's claim, and a package-level mutex
+// closes that completely. Migrations run once at Open, so the contention is
+// nil.
 var migrateMu sync.Mutex
 
 // migrate applies every embedded schema file that has not been applied yet, in
@@ -78,10 +77,8 @@ var migrateMu sync.Mutex
 //
 // Forward-only, one transaction per file, with the schema_migrations row
 // written inside that transaction — so a file is either fully applied and
-// recorded, or neither. Turso makes DDL transactional, which is what
-// lets a whole file go in as one statement batch: the Postgres migrator split
-// files on ';' and then had to validate its own naive splitter (dollar-quoted
-// bodies would be cut in half). Nothing here needs that.
+// recorded, or neither. Turso makes DDL transactional, which is what lets a
+// whole file go in as one statement batch, with nothing splitting it on ';'.
 func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	migrateMu.Lock()
 	defer migrateMu.Unlock()
@@ -241,14 +238,14 @@ func SchemaVersions(estate Estate) []string {
 // it makes "what would this apply" unanswerable through it: by the time you
 // could ask, the answer is none.
 //
-// # It makes nothing it did not find
+// # It makes no database
 //
 // A database that does not exist has applied nothing, and is reported so
-// without being made: no database file, no -wal and no lock sidecar are left
-// on a path the check was only pointed at. The deploy gate this answers for
-// runs before the node does, possibly as another user, and every file it made
-// would be one the node then meets as somebody else's — or a database at a
-// path nobody meant.
+// without being made: no database file, no -wal and no lock sidecar is
+// created on a path the check was only pointed at. The deploy gate this
+// answers for runs before the node does, possibly as another user, and every
+// file it made would be one the node then meets as somebody else's — or a
+// database at a path nobody meant.
 //
 // A database that exists but has no schema_migrations table has applied
 // nothing too, which is what a fresh deployment looks like rather than an
@@ -346,6 +343,9 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	if err != nil {
 		return Schema{}, err
 	}
+	// A CLOSURE, because the claim below can replace lock: `defer
+	// lock.release()` would bind the nil a database with no sidecar gets here,
+	// and the claim that made the sidecar would never be given back.
 	defer func() { lock.release() }()
 
 	switch _, statErr := os.Stat(path); {

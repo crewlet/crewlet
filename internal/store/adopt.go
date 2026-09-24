@@ -18,14 +18,12 @@ import (
 //
 // # The order, and what each step is for
 //
-// A SQLite-family database in WAL mode is not one file: it is the database
-// plus a -wal holding committed pages the database itself does not have yet,
-// plus a -shm indexing that -wal. Renaming the database alone leaves the OLD
-// -wal beside the NEW database — a file whose pages belong to a database that
-// is gone, which the next open will happily apply. That is
-// internal/store/backup.go's torn-copy hazard from the other direction, and
-// backup.go:222-226 removes a prepared artefact's sidecars before ITS rename
-// for exactly this reason.
+// A database in WAL mode is not one file: it is the database plus a -wal
+// holding committed pages the database itself does not have yet. Renaming the
+// database alone leaves the OLD -wal beside the NEW database — a file whose
+// pages belong to a database that is gone, which the next open will happily
+// apply. That is the torn-copy hazard backup.go's file doc describes, from the
+// other direction.
 //
 //  1. Checkpoint and close the PREPARED file, so every page it holds is in
 //     the file itself.
@@ -216,6 +214,17 @@ func checkpointAndClose(ctx context.Context, path string) error {
 // handle would go on writing into a file that is no longer at that name. The
 // join owns the rename between these two calls, and it is the join that knows
 // whether it reached it.
+//
+// # The path stays claimed across the bracket
+//
+// Closing the peer gives back its share of the claim on the path, and the
+// install that follows checkpoints and replaces the file there. So the close
+// takes a share of its own first, kept on the node handle, and the reopen
+// gives it back only once the reopened handle holds one. Released in between,
+// the path would be free to another process for the whole install: any crewlet
+// process that opens that file would be admitted to a file being replaced, and
+// its claim would then refuse the reopen, leaving this node with no replicated
+// estate at all.
 func (d *DB) CloseReplicated() error {
 	switch {
 	case d == nil || d.sql == nil:
@@ -224,16 +233,26 @@ func (d *DB) CloseReplicated() error {
 		return fmt.Errorf("store: a %s handle has no replicated peer — the "+
 			"bracket is the node handle's, because that is the one every "+
 			"caller reaches the replicated estate through", d.estate)
-	case d.Replicated() == nil:
+	}
+	peer := d.replicated.Swap(nil)
+	if peer == nil {
 		// ALREADY CLOSED IS NOT AN ERROR: a join that failed between
 		// the close and the rename unwinds by reopening, and an unwind
 		// that had to know how far it got would be a second state
 		// machine beside the phase the adoption row already records.
 		return nil
 	}
-	err := d.replicated.Swap(nil).Close()
+	// THE SHARE BEFORE THE CLOSE: while the peer is open its own share holds
+	// the claim, so this one joins it rather than taking the lock afresh,
+	// and the claim never lapses between the two.
+	claim, err := lockStore(peer.path)
 	if err != nil {
-		return fmt.Errorf("store: close the replicated estate: %w", err)
+		d.replicated.Store(peer)
+		return fmt.Errorf("store: keep %s claimed across the close: %w", peer.path, err)
+	}
+	d.swapClaim.Swap(claim).release()
+	if closeErr := peer.Close(); closeErr != nil {
+		return fmt.Errorf("store: close the replicated estate: %w", closeErr)
 	}
 	return nil
 }
@@ -246,7 +265,8 @@ func (d *DB) CloseReplicated() error {
 // A failure here leaves the node with NO replicated estate rather than with
 // the old one, and says so: after the rename the old database is gone, and a
 // handle that quietly went on answering from a file the caller cannot name is
-// the failure the whole sequence is against.
+// the failure the whole sequence is against. The path stays claimed through a
+// failure, so a retry reopens it with no window for another process either.
 func (d *DB) ReopenReplicated(ctx context.Context) error {
 	switch {
 	case d == nil || d.sql == nil:
@@ -270,5 +290,8 @@ func (d *DB) ReopenReplicated(ctx context.Context) error {
 			"node has none open and cannot serve without one: %w", path, err)
 	}
 	d.replicated.Store(replicated)
+	// The reopened handle holds its own share now, so the one kept across
+	// the swap has done its work.
+	d.swapClaim.Swap(nil).release()
 	return nil
 }

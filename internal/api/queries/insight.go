@@ -714,9 +714,9 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
-		// THE EXCLUSION A SEAT'S SEARCH APPLIES, or this would show an
-		// operator the unreviewed drafts no agent is shown — and answer
-		// "what would an agent find" with pages an agent would not.
+		// THE EXCLUSION A SEAT'S SEARCH APPLIES, named as a seat's
+		// `search_knowledge` names it, so the unreviewed drafts no agent is
+		// shown are not shown here either.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	// A SEARCH THAT STARTED AND DEGRADED, which is what `note` beside the

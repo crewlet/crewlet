@@ -103,6 +103,27 @@ func TestTheOperatorSurfaceFollowsALiveMove(t *testing.T) {
 				step, name, text.String(), res.IsError, field)
 		}
 	}
+	// answered calls a tool the surface serves and wants its answer to say
+	// every one of the phrases.
+	answered := func(step, name string, args map[string]any, phrases ...string) {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %s failed as a protocol error: %v", step, name, err)
+		}
+		var text strings.Builder
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				text.WriteString(tc.Text)
+			}
+		}
+		for _, phrase := range phrases {
+			if !strings.Contains(text.String(), phrase) {
+				t.Errorf("%s: %s answered %q, which does not say %q",
+					step, name, text.String(), phrase)
+			}
+		}
+	}
 	const (
 		write  = builtin.WritePageTool
 		create = builtin.CreateWorkItemTool
@@ -129,6 +150,24 @@ integrations:
 		map[string]any{"title": "Runbook", "body": "Steps.", "container": "ENG"})
 	refused("moved to Confluence and Jira", create, "tracker.backend",
 		map[string]any{"title": "Ship it", "project": "ENG"})
+
+	// A CONFLUENCE WHOSE ORG TOKEN RESOLVES TO NOTHING: the company runs a
+	// knowledge base this node is not serving, since no searcher is built
+	// without that credential. Search stays offered — it is registered the
+	// seat way, on the company running a knowledge base at all — and the
+	// tool names the setting to fix rather than answering that nothing
+	// matched. The variable is one nothing sets.
+	apply(companyYAML + `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: "${CREWLET_OPERATOR_TEST_NO_SUCH_CONFLUENCE_TOKEN}"
+    webhook_secret: cf
+`)
+	check("moved to a Confluence it cannot search", map[string]bool{write: false, create: true, search: true})
+	answered("moved to a Confluence it cannot search", search,
+		map[string]any{"query": "deploy runbook"},
+		"not searchable here", "integrations.confluence.token")
 
 	apply(companyYAML + `
 knowledge:

@@ -210,7 +210,8 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answ
 		// ranking: asking for exactly the limit and then removing three
 		// skill pages would return five results where eight were
 		// available.
-		Limit: q.Hits() * SearchOverfetch,
+		Limit:    q.Hits() * SearchOverfetch,
+		Prefetch: q.Prefetch,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),

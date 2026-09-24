@@ -12,28 +12,21 @@ import (
 )
 
 // WHAT THESE CASES PROTECT: Pending is a second way into a connection, and it
-// had drifted from the first.
+// has to reach one exactly as Open does.
 //
 // [Pending] answers "what would `crewlet migrate` apply?" without applying it,
-// which means it opens a pool and reads. It used to do that with its own copy
-// of Open's preamble — resolve, build a pool, ping — and the copy was missing
-// two things Open does and one it does not:
+// which means it opens a pool and reads. It gets that pool from openPrepared,
+// as Open does, so the diagnostic command:
 //
-//   - it never called prepareTursoLibrary, so the FIRST connection the
-//     diagnostic command made went straight into the driver's own loader,
-//     whose answer to a half-written cache is a panic inside a sync.Once. The
-//     command that exists to report the schema safely was the one command
-//     that could take the process down on the exact failure the preparation
-//     was written for. See turso.go.
-//   - it never bounded the pool, so `crewlet migrate` ran on whatever
-//     database/sql felt like opening rather than on the four connections
-//     every other opener gets.
-//   - it took no file lock, so it read the database of a LIVE engine and only
-//     refused at the point it tried to change it. The check that runs first
-//     was the one with no guard.
+//   - prepares the native library before the driver's own loader runs, whose
+//     answer to a half-written cache is a panic inside a sync.Once (see
+//     turso.go) — the command that exists to report the schema safely must not
+//     be one that can take the process down;
+//   - runs on the pool bounds every other opener gets;
 //
-// All three are the same defect — a second code path — so the fix is one
-// path (openPrepared) and these cases are what hold it there.
+// and it holds the file lock across its read, so the database of a LIVE
+// engine is refused rather than read. These cases are what hold each of those
+// in place.
 
 // pendingChildEnv marks the child half of the panic case, so it is inert in an
 // ordinary run.
@@ -118,17 +111,22 @@ func TestPendingRefusesADatabaseAnotherProcessHolds(t *testing.T) {
 // Pending that never released would still let the Open in `crewlet migrate`
 // through — the leak is invisible from the outside and only bites a LATER
 // process, after this one has already exited and hidden the evidence. So what
-// is checked is that the claim on this path is gone: no entry, not merely a
-// second caller getting past it.
+// is checked is that the claim on each estate's path is gone: no entry, not
+// merely a second caller getting past it.
 //
-// BOTH WAYS IT TAKES ONE: a database it reads under the lock, and a sidecar
-// it asks of where there is no database to read.
+// EVERY WAY IT TAKES ONE: a sidecar it finds beside a database it reads, a
+// sidecar it makes beside a database that has none — the shape a snapshot
+// fetched for adoption arrives in, which [PendingEstate] inspects through the
+// same path — and a sidecar it finds where there is no database to read.
 func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// stage leaves path the way Pending finds it.
 		stage func(t *testing.T, path string)
+		// sidecar is whether stage leaves a lock sidecar beside path, which
+		// decides whether Pending finds its claim or has to make one.
+		sidecar bool
 	}{
 		{"a database it reads", func(t *testing.T, path string) {
 			db, err := Open(t.Context(), path, Options{})
@@ -136,34 +134,49 @@ func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 				t.Fatalf("Open: %v", err)
 			}
 			_ = db.Close()
-		}},
+		}, true},
+		{"a database with no sidecar beside it", func(t *testing.T, path string) {
+			db, err := Open(t.Context(), path, Options{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			_ = db.Close()
+			for _, file := range []string{path, ReplicatedPath(path, "")} {
+				if err := os.Remove(file + lockSuffix); err != nil {
+					t.Fatalf("remove the sidecar beside %s: %v", file, err)
+				}
+			}
+		}, false},
 		{"a sidecar with no database beside it", func(t *testing.T, path string) {
 			lock, err := lockStore(path)
 			if err != nil {
 				t.Fatalf("lockStore: %v", err)
 			}
 			lock.release()
-		}},
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "seq.db")
 			tc.stage(t, path)
-			if _, err := os.Stat(path + lockSuffix); err != nil {
-				t.Fatalf("no sidecar beside %s, so Pending has no lock to take: the premise", path)
+			if _, err := os.Stat(path + lockSuffix); (err == nil) != tc.sidecar {
+				t.Fatalf("a sidecar beside %s: %t, want %t (stat: %v) — the premise",
+					path, err == nil, tc.sidecar, err)
 			}
 
 			if _, err := Pending(t.Context(), path, Options{}); err != nil {
 				t.Fatalf("Pending: %v", err)
 			}
 
-			locksHeld.mu.Lock()
-			held := locksHeld.by[path]
-			locksHeld.mu.Unlock()
-			if held != nil {
-				t.Fatalf("Pending kept its claim on %s (%d holder(s)) — the process "+
-					"never gives the file back, and the next one to want it is refused "+
-					"by a lock nothing is using", path, held.holds)
+			for _, file := range []string{path, ReplicatedPath(path, "")} {
+				locksHeld.mu.Lock()
+				held := locksHeld.by[file]
+				locksHeld.mu.Unlock()
+				if held != nil {
+					t.Fatalf("Pending kept its claim on %s (%d holder(s)) — the process "+
+						"never gives the file back, and the next one to want it is refused "+
+						"by a lock nothing is using", file, held.holds)
+				}
 			}
 
 			db, err := Open(t.Context(), path, Options{})
@@ -262,9 +275,8 @@ func estateOf(t *testing.T, schemas []Schema, want Estate) Schema {
 	return Schema{}
 }
 
-// THE POOL BOUNDS REACH EVERY OPENER. Open used to apply them and Pending did
-// not; asserting the shared helper is what keeps that from happening again,
-// because it is the one place either of them can get a connection.
+// THE POOL BOUNDS REACH EVERY OPENER, asserted on the shared helper because it
+// is the one place any of them gets a pool on a database file.
 func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "bounds.db")

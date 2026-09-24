@@ -85,13 +85,13 @@ func EscapeCQL(value string) string {
 // BuildCQL renders one search.
 //
 // THE QUERY IS NOT SHORTENED. A query the server refuses is an error the
-// searcher logs, and the caller sees no hits; a silently shortened query is a
-// DIFFERENT SEARCH, returning plausible pages for terms the seat never asked
-// about, with nothing anywhere saying so. Every caller of the knowledge seam
-// refuses a text past knowledge.MaxQueryBytes before it reaches here instead,
-// naming the limit: the `search_knowledge` tool, the dashboard's knowledge
-// question, and the turn-start prefetch, which searches nothing when the
-// auxiliary model's line runs past it.
+// searcher logs, and the caller sees an answer marked failed; a silently
+// shortened query is a DIFFERENT SEARCH, returning plausible pages for terms
+// the seat never asked about, with nothing anywhere saying so. Every caller of
+// the knowledge seam refuses a text past knowledge.MaxQueryBytes before it
+// reaches here instead, naming the limit: the `search_knowledge` tool, the
+// dashboard's knowledge question, and the turn-start prefetch, which searches
+// nothing when the auxiliary model's line runs past it.
 //
 // Shape: `space IN ("ENG","HANDBOOK") AND type = page AND text ~ "…"`.
 //

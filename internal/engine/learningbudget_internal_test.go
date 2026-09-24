@@ -10,29 +10,24 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
-// THE LEAK THIS FILE CLOSES.
-//
-// `token_budget` was charged in exactly two places — the turn loop and the
-// coding sandbox — while the persist decider, the counterparty profiler and
-// the episode-compaction summarizer each resolved a model and called
-// Provider.Complete directly. That spend was real money and it reached no
-// counter, so a company at its ceiling kept paying forever AND the number an
-// operator reads understated what had been spent.
-//
 // The cases below are about the SEAM: a worker that resolves its model the
-// ordinary way is charged without knowing it is being charged, which is what
-// makes a worker added later charge too.
+// ordinary way is read for room and charged without knowing it, which is what
+// makes a worker added later subject to the budget too.
 
 // countingMeter records what it was asked to spend and whether it refuses.
+// full is a budget with no room left; an err fails both verbs.
 type countingMeter struct {
 	spent  int
 	calls  int
 	refuse bool
+	full   bool
 	err    error
 }
 
@@ -43,6 +38,16 @@ func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutc
 	}
 	m.spent += tokens
 	return toolloop.SpendOutcome{OK: !m.refuse, Used: m.spent}, nil
+}
+
+func (m *countingMeter) Room(context.Context) (toolloop.SpendOutcome, error) {
+	if m.err != nil {
+		return toolloop.SpendOutcome{}, m.err
+	}
+	if m.full {
+		return toolloop.SpendOutcome{Scope: "org", Used: 100, Limit: 100}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
 }
 
 // answeringProvider returns a completion with a known token cost.
@@ -112,8 +117,8 @@ func TestWithNoBudgetTheProviderIsNotWrapped(t *testing.T) {
 
 // A FAILED CHARGE DOES NOT FAIL THE COMPLETION. The call already succeeded at
 // the vendor and the caller's work is valid; turning a coordination blip into
-// a reflection outage would be the wrong trade, and the pre-flight gate is
-// what actually stops the spending.
+// a reflection outage would be the wrong trade, and the room read before the
+// next call is what actually stops the spending.
 func TestAnUncountedSpendStillReturnsTheCompletion(t *testing.T) {
 	t.Parallel()
 	meter := &countingMeter{err: errors.New("counter unreachable")}
@@ -144,17 +149,72 @@ func TestAFailedCompletionChargesNothing(t *testing.T) {
 	}
 }
 
-// THE PRE-FLIGHT GATE ASKS WITHOUT SPENDING. A probe that charged a token to
-// find out whether it may charge would make the question cost what it is
-// asking about.
-func TestTheBudgetGateProbesWithAZeroCharge(t *testing.T) {
+// AN AUXILIARY CALL ON A SPENT BUDGET IS NOT SENT.
+//
+// Its charge comes after the answer, because that is when its size is known,
+// so a budget read only by the charge pays for every call an exhausted company
+// makes and refuses each one after the provider has billed it.
+func TestAnAuxiliaryCallOnASpentBudgetIsNotSent(t *testing.T) {
 	t.Parallel()
-	meter := &countingMeter{}
-	if _, err := meter.Spend(t.Context(), 0); err != nil {
-		t.Fatal(err)
+	meter := &countingMeter{full: true}
+	inner := &answeringProvider{in: 10, out: 10}
+	member := meteredHead(t, inner, meter)
+
+	_, err := member.Provider.Complete(t.Context(), llm.Request{})
+	var refusal *toolloop.BudgetError
+	if !errors.As(err, &refusal) || refusal.Scope != "org" {
+		t.Fatalf("err = %v, want the company's budget named as the reason", err)
 	}
-	if meter.spent != 0 {
-		t.Errorf("the probe moved the counter by %d", meter.spent)
+	if inner.calls != 0 || meter.calls != 0 {
+		t.Errorf("a call on a spent budget reached the provider %d times and the counter %d",
+			inner.calls, meter.calls)
+	}
+}
+
+// AN UNREADABLE ROOM DOES NOT STOP LEARNING. Unknown is not "no" for best-effort
+// work, and the call's own charge is what keeps an unreadable counter from also
+// being a free one.
+func TestAnUnreadableRoomStillSendsTheAuxiliaryCall(t *testing.T) {
+	t.Parallel()
+	meter := &countingMeter{err: errors.New("counter unreachable")}
+	inner := &answeringProvider{in: 10, out: 10}
+	member := meteredHead(t, inner, meter)
+
+	if _, err := member.Provider.Complete(t.Context(), llm.Request{}); err != nil {
+		t.Fatalf("an unreadable budget stopped a learning call: %v", err)
+	}
+	if inner.calls != 1 {
+		t.Errorf("the provider was called %d times, want 1", inner.calls)
+	}
+}
+
+// REFLECTION DECLINES TO START AT THE CEILING, and asks without moving the
+// counter. A charge of nothing cannot ask it — the counter admits one without
+// looking — and a pass that runs and then finds itself over budget has
+// already made its auxiliary calls.
+func TestReflectionDeclinesToStartAtTheCeiling(t *testing.T) {
+	t.Parallel()
+	dev := &org.Role{Name: "Dev"}
+	c := meteredCompany(100, dev)
+	fleet := coordmem.NewFleet()
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	gate := e.learningBudget(c)
+
+	if ok, err := gate(t.Context(), dev); err != nil || !ok {
+		t.Fatalf("gate under the cap = %v, %v; want the pass to run", ok, err)
+	}
+	if _, err := fleet.PostCharge(t.Context(), scopeOf(t, c, dev), 100); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	ok, err := gate(t.Context(), dev)
+	if err != nil {
+		t.Fatalf("gate at the cap: %v", err)
+	}
+	if ok {
+		t.Error("reflection started on a company already at its token_budget")
+	}
+	if used, _ := fleet.Used(t.Context(), coord.OrgScope); used != 100 {
+		t.Errorf("asking moved the counter to %d", used)
 	}
 }
 

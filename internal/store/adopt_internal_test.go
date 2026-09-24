@@ -187,3 +187,87 @@ func readProbe(t *testing.T, path string) (string, bool) {
 	}
 	return mark, true
 }
+
+// THE REPLICATED PATH STAYS CLAIMED ACROSS THE BRACKET.
+//
+// The install between CloseReplicated and ReopenReplicated checkpoints and
+// replaces the file at that path. Released for that window, the path would
+// admit another process, and that process's claim would then refuse the
+// reopen, leaving the node with no replicated estate.
+//
+// ANOTHER PROCESS is a second open file description on the sidecar: flock
+// excludes it exactly as it would a peer's, where a second claim taken through
+// this process's refcount would only share the first.
+func TestTheReplicatedPathStaysClaimedAcrossTheBracket(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "node.db")
+	db, err := Open(t.Context(), path, Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+	replicated := ReplicatedPath(path, "")
+
+	lockableByAnotherProcess := func() bool {
+		t.Helper()
+		f, err := os.OpenFile(replicated+lockSuffix, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatalf("open the sidecar as a peer would: %v", err)
+		}
+		defer func() { _ = f.Close() }()
+		held, err := tryLock(f)
+		if err != nil {
+			t.Fatalf("lock the sidecar as a peer would: %v", err)
+		}
+		if held {
+			_ = unlock(f)
+		}
+		return held
+	}
+	shares := func() int {
+		t.Helper()
+		locksHeld.mu.Lock()
+		defer locksHeld.mu.Unlock()
+		if held := locksHeld.by[replicated]; held != nil {
+			return held.holds
+		}
+		return 0
+	}
+
+	if err := db.CloseReplicated(); err != nil {
+		t.Fatalf("CloseReplicated: %v", err)
+	}
+	if lockableByAnotherProcess() {
+		t.Fatalf("with the peer closed for the install, another process could claim %s, "+
+			"and its claim would refuse the reopen that follows", replicated)
+	}
+
+	if err := db.ReopenReplicated(t.Context()); err != nil {
+		t.Fatalf("ReopenReplicated: %v", err)
+	}
+	if got := shares(); got != 1 {
+		t.Errorf("%s has %d share(s) of the claim after the reopen, want the reopened "+
+			"handle's alone: the share kept across the swap was never given back", replicated, got)
+	}
+
+	// AND A NODE CLOSED WHILE ITS PEER IS CLOSED GIVES THE PATH BACK: the share
+	// kept across the swap has nothing else to release it.
+	if err := db.CloseReplicated(); err != nil {
+		t.Fatalf("second CloseReplicated: %v", err)
+	}
+	closed = true
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := shares(); got != 0 {
+		t.Errorf("%s still has %d share(s) of the claim after the node closed", replicated, got)
+	}
+	if !lockableByAnotherProcess() {
+		t.Errorf("after the node closed, another process still cannot claim %s", replicated)
+	}
+}

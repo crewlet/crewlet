@@ -11,10 +11,12 @@ import (
 // What they hold is the reason: the node estate is this node's audit log, its
 // agents' memory, the company's config revisions and the sealed bootstrap half
 // of the secret store, and the replicated estate is the company's tracker and
-// knowledge base. No other process opens either — the lock beside each
-// (lock.go) refuses every other crewlet process, and a copy is taken from
-// inside this one ([DB.Backup]) — so a mode wider than the owner's grants
-// nothing the engine uses, and grants every local user everything in them.
+// knowledge base. Nothing but crewlet needs to open either: the engine, or,
+// while it is stopped, one of crewlet's own commands run as the same user. The
+// lock beside each (lock.go) admits one process at a time, and an online copy
+// is one the engine takes of itself ([DB.Backup]). So a mode wider than the
+// owner's grants nothing crewlet uses, and grants every local user everything
+// in them.
 //
 // THE DRIVER DOES NOT DO THIS ON ITS OWN. It creates a database and its -wal
 // from the process umask, which under the usual 022 is 0644, and it does not
@@ -44,18 +46,19 @@ const walSuffix = "-wal"
 // with rows in it opens as a WAL with no frames.
 //
 // AN EXISTING FILE WITH A WIDER MODE IS TIGHTENED rather than warned about, and
-// the node logs `store_file_mode_tightened` naming the file and the mode it
-// had. No process but this one reads these files, so the wider mode serves
-// nothing the engine does; a grant an operator meant for something else fails
-// loudly once it is gone — that reader is refused, naming the path — while a
-// mode left open fails silently for as long as nobody reads a warning about
-// it. Only the bits beyond the owner's go: the owner's own are left as they
-// are.
+// the process that opened it logs `store_file_mode_tightened` naming the file
+// and the mode it had. Nothing but crewlet needs to read these files, one
+// process at a time and as the user the engine runs as, so the wider mode
+// serves nothing crewlet does; a grant an operator meant for something else
+// fails loudly once it is gone — that reader is refused, naming the path —
+// while a mode left open fails silently for as long as nobody reads a warning
+// about it. Only the bits beyond the owner's go: the owner's own are left as
+// they are.
 //
 // A file this process cannot tighten — one another user owns — is logged
 // (`store_file_mode_not_tightened`) and left for the driver to open, which it
 // does or refuses on its own terms: a store that works with a file too open
-// is a warning to act on, not a node to take down.
+// is a warning to act on, not a process to take down.
 func ownerOnly(path string) error {
 	if path == "" || strings.HasPrefix(path, ":memory:") {
 		// An in-memory database has no file for anybody to read.
@@ -93,12 +96,13 @@ func ownerOnlyFile(file string) error {
 		log.Warn("store_file_mode_not_tightened",
 			"path", file, "mode", fmt.Sprintf("%#o", was), "error", err.Error(),
 			"detail", "this file is readable beyond its owner and this process could not "+
-				"change that: run the engine as the file's owner, or `chmod go-rwx` it")
+				"change that: run crewlet as the file's owner, or `chmod go-rwx` it")
 		return nil
 	}
 	log.Warn("store_file_mode_tightened",
 		"path", file, "was", fmt.Sprintf("%#o", was), "now", fmt.Sprintf("%#o", now),
-		"detail", "no process but this engine opens the store's files, so every permission "+
+		"detail", "nothing but crewlet needs the store's files — the engine, or while it is "+
+			"stopped one of its own commands run as the same user — so every permission "+
 			"beyond the owner's was taken from this one")
 	return nil
 }

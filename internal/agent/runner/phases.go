@@ -75,9 +75,10 @@ type Config struct {
 	// because nothing imported internal/agent/subagent at all.
 	Subagent *SubagentConfig
 
-	// Budget is the shared token counter a turn charges. Nil disables the
-	// per-round charge, which is the embedded single-node case where no
-	// counter is shared with anyone.
+	// Budget is the shared token counter, read for room before each round
+	// and before the extension judge is asked, and charged once each call
+	// has answered. Nil disables both: a turn with no ceiling to enforce is
+	// given none.
 	Budget toolloop.BudgetMeter
 
 	// Fence stops a turn whose seat this node no longer holds, checked at
@@ -378,6 +379,11 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 
 	if res.Suspended {
+		// A suspending phase publishes no record of its own — the resumed
+		// half does — so this one is published only if recording the
+		// suspension panics. See [closing].
+		closer := r.closing(phaseCtx, ranRecord(phase.Execute, round, system, user, res, surface))
+		defer closer.onPanic()
 		r.recordSuspension(phaseCtx, round, surface, res.Result, history, res.Elapsed)
 		// A suspended phase submitted nothing and is not finished. It
 		// returns with the ledger intact; the resumed turn comes back
@@ -387,10 +393,11 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		}, describe(surface), nil
 	}
 
-	return r.finishWork(phaseCtx, round, work{
+	w, described := r.finishWork(phaseCtx, round, work{
 		submit: submit, res: res, surface: surface, snapshot: snapshot,
 		system: system, user: user,
 	})
+	return w, described, nil
 }
 
 // executorPrompt is the executor's opening: its system message and the turn's
@@ -446,6 +453,12 @@ type work struct {
 	// notes is what the pass's record has to say about itself beyond what
 	// finishWork derives, or "".
 	notes string
+
+	// replay is what an agent-mode run called over the bridge, whose
+	// submissions are fed back through submit before it is read (see
+	// [replaySubmission]). Nil for a pass that ran in this process, whose
+	// submission tool was called by the loop itself.
+	replay []ledger.Call
 }
 
 // finishWork turns a finished executor pass into the turn's Work, publishing
@@ -454,7 +467,18 @@ type work struct {
 // Shared with the resume path, which reaches the same point by a different
 // road: a resumed executor is the same phase continuing, so it must report
 // the same shape and rescue the same way.
-func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.Work, turn.Surface, error) {
+//
+// EVERYTHING BETWEEN THE PASS AND ITS RECORD runs under the pass's own guard
+// ([closing]), the replay of an agent run's submission included: the phase has
+// already run and billed, and a panic anywhere here would otherwise leave it
+// with no record at all.
+func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.Work, turn.Surface) {
+	base := ranRecord(phase.Execute, round, w.system, w.user, w.res, w.surface)
+	base.Run = w.run
+	closer := r.closing(phaseCtx, base)
+	defer closer.onPanic()
+
+	replaySubmission(phaseCtx, w.submit, w.replay)
 	payload, submitted := w.submit.Value()
 	if !submitted {
 		// THE RESCUE PATH. An executor that ran out of rounds, or simply
@@ -480,20 +504,15 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	}
 
 	missing := missingTools(w.surface)
-	r.emitter().completed(phaseCtx, phaseRecord{
-		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
-		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
-		Decision: payload.Outcome, Rescued: !submitted,
-		Notes:     joinNotes(missingNote(missing), w.notes),
-		Run:       w.run,
-		Available: w.surface.Active(),
-		// The names the executor was shown as prose, with no schemas.
-		// Sending every MCP server's tool definitions is what made a turn
-		// expensive, and this is what replaced it — which is why
-		// Available (the schemas actually passed) is the short list and
-		// the catalogue is the long one.
-		Catalogue: w.snapshot.Names(),
-	})
+	rec := base
+	rec.Decision, rec.Rescued = payload.Outcome, !submitted
+	rec.Notes = joinNotes(missingNote(missing), w.notes)
+	// The names the executor was shown as prose, with no schemas. Every MCP
+	// server's tool definitions on every request is what makes a turn
+	// expensive, which is why Available (the schemas actually passed) is the
+	// short list and the catalogue is the long one.
+	rec.Catalogue = w.snapshot.Names()
+	closer.publish(rec)
 
 	return turn.Work{
 		Outcome:         turn.Outcome(payload.Outcome),
@@ -506,7 +525,77 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		MissingTools:    missing,
 		ExhaustedRounds: w.res.Exhausted,
 		Rescued:         !submitted,
-	}, describe(w.surface), nil
+	}, describe(w.surface)
+}
+
+// ranRecord is what every record of a phase that ran carries before its
+// outcome is known: its prompts, what [Runner.runPhase] measured of it, and
+// the tools it could call.
+func ranRecord(ph phase.Phase, iteration int, system, user string, res phaseResult,
+	surface *tools.Surface,
+) phaseRecord {
+	return phaseRecord{
+		Phase: ph, Iteration: iteration, System: system, User: user,
+		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
+		Available: surface.Active(),
+	}
+}
+
+// closing is a phase that has run and whose record is not yet published.
+//
+// [Runner.runPhase] publishes the record of a phase that fails or panics
+// INSIDE it, and returns. From there the phase's own method reads what the
+// phase produced — its submission, what the surface recorded — and publishes
+// the completed record itself, and a panic in between would leave the phase
+// with no record at all: the calls it made, the tokens it billed and the rounds
+// it ran reach nothing durable. So each method that holds a finished phase
+// opens one of these and defers [closing.onPanic], which publishes the phase
+// as failed with what runPhase measured and then panics on with the same
+// value, and publishes its own record through [closing.publish].
+type closing struct {
+	ctx  context.Context
+	emit emitter
+	base phaseRecord
+	sent bool
+}
+
+// closing opens the record of a phase that has run, published under the
+// phase's own context. base is what the failure record carries.
+func (r *Runner) closing(phaseCtx context.Context, base phaseRecord) *closing {
+	return &closing{ctx: phaseCtx, emit: r.emitter(), base: base}
+}
+
+// publish sends the phase's completed record.
+//
+// SENT IS MARKED BEFORE IT IS HANDED OVER. A panic inside the emitter is a
+// defect in publishing, and a failure record would go down the same path to
+// the same defect; it would also count the phase's tokens into the turn's
+// tally a second time, since the emitter tallies before it publishes.
+func (c *closing) publish(rec phaseRecord) {
+	c.sent = true
+	c.emit.completed(c.ctx, rec)
+}
+
+// onPanic publishes the failure record of a phase whose closing panicked, then
+// panics again with the same value, so the turn's guard ends the turn with a
+// breach naming it. Deferred; it does nothing on any other exit.
+//
+// Through [recordPanic], so a panic publishing the failure record does not
+// replace the phase's own.
+func (c *closing) onPanic() {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	if !c.sent {
+		c.sent = true
+		rec := c.base
+		recordPanic(c.ctx, rec.Phase, rec.Iteration, recovered, func(err error) {
+			rec.Failed, rec.Err = true, err
+			c.emit.completed(c.ctx, rec)
+		})
+	}
+	panic(recovered)
 }
 
 // Review judges the round.
@@ -553,6 +642,10 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		// off the Work this Review was handed.
 		return turn.Review{}, err
 	}
+	// The phase has run; what follows is its record's to publish. See
+	// [closing].
+	closer := r.closing(phaseCtx, ranRecord(phase.Review, round, system, reviewTask(r.cfg.Task), res, surface))
+	defer closer.onPanic()
 
 	payload, submitted := submit.Value()
 	if !submitted {
@@ -568,11 +661,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 				"executor set out to do against what the tool log says it did, " +
 				"and call " + SubmitReviewTool + ".",
 		}
-		r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+		closer.publish(reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+	closer.publish(reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      payload.Decision,
@@ -615,12 +708,9 @@ func reviewTask(task string) string {
 func reviewRecord(round int, system, user string, res phaseResult,
 	decision, notes string, rescued bool, surface *tools.Surface,
 ) phaseRecord {
-	return phaseRecord{
-		Phase: phase.Review, Iteration: round, System: system, User: user,
-		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
-		Decision: decision, Notes: notes, Rescued: rescued,
-		Available: surface.Active(),
-	}
+	rec := ranRecord(phase.Review, round, system, user, res, surface)
+	rec.Decision, rec.Notes, rec.Rescued = decision, notes, rescued
+	return rec
 }
 
 // missingNote names the tools an Execute phase called that its surface did not
@@ -1123,6 +1213,20 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
 
+	// ROOM BEFORE THE JUDGE, read only where the judge would be asked at all.
+	// Its call is charged once it has answered, as a round's is, so a budget
+	// already at its cap would pay for a verdict on rounds the tool loop would
+	// then refuse to send. No room, or no answer from the counter, declines
+	// the extension rather than failing the turn, as a refused charge does.
+	if ask, _ := policy.ShouldAsk(req.RoundsUsed); ask && r.cfg.Judge != nil {
+		if err := toolloop.CheckRoom(ctx, r.cfg.Budget); err != nil {
+			log.WarnContext(ctx, "extension_judge_not_asked", "phase", ph,
+				"iteration", iteration, "error", err.Error())
+			span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
+			return 0, extension.Rescue("the judge was not asked: " + err.Error())
+		}
+	}
+
 	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
 	// [extension.Consider] for the same reason the span is: that function is
 	// policy plus a model and has no business knowing what is recorded about
@@ -1175,12 +1279,7 @@ func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
 	if outcome.OK {
 		return nil
 	}
-	scope := outcome.Scope
-	if scope == "" {
-		scope = "org"
-	}
-	return fmt.Errorf("the %s budget refused %d tokens (%d of %d used)",
-		scope, tokens, outcome.Used, outcome.Limit)
+	return fmt.Errorf("charging the extension judge %d tokens: %w", tokens, toolloop.Refusal(outcome))
 }
 
 // foldOnto merges one loop invocation's record onto the rounds already behind

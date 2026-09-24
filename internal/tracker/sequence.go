@@ -172,6 +172,13 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // that never happened. A freshly minted id per attempt would defeat the ledger
 // for exactly the lost-acknowledgement case it exists for, which is contract
 // 2's own rule about why an operation id is minted once.
+//
+// A STEP IS NAMED BY WHAT IT WRITES — the task's id for a step that writes one
+// of several — so a retry whose list differs from the first attempt's still
+// finds each task's own row. And the name is shared between builds like every
+// op id: a gesture begun on a build that named a step differently and retried
+// on this one finds no row under this name, and that step is decided again
+// from the rows as they are then.
 func stepID(opID, step string) string { return opID + "." + step }
 
 // WriteResult is what a tracker write returns.
@@ -265,26 +272,21 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	}
 	task.Tags = tags
 
-	// THE COERCED VALUES COME BACK OUT OF THE SNAPSHOT, and the LAST run
-	// of the closure is the one whose mint was accepted — so both are
-	// assigned rather than appended to, exactly as the update path does
-	// with its own warnings.
-	var (
-		coerced  map[string]json.RawMessage
-		warnings []string
-	)
+	// THE MINT'S GUARD REFUSES AND DECIDES NOTHING. It runs the create's
+	// refusals in the counter's snapshot so a create that can never land
+	// takes no number with it; what the task CARRIES — its coerced fields
+	// and the warnings about them — is decided inside the task's own
+	// append ([Writer.writeTask]). A mint answered from this node's
+	// operation ledger runs no decide at all, so a value taken out of this
+	// closure on that retry is the zero it started as: the task would be
+	// published with its fields as typed rather than as coerced.
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		func(tx *sql.Tx) error {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			var err error
-			coerced, warnings, err = w.refuseCreate(ctx, tx, task)
-			return err
+			_, _, refused := w.refuseCreate(ctx, tx, task)
+			return refused
 		})
 	if err != nil {
 		return WriteResult{Result: minted}, err
-	}
-	if coerced != nil {
-		task.Fields = coerced
 	}
 	rank, err := IntegerAt(n)
 	if err != nil {
@@ -305,18 +307,28 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
 	result.Key, result.Rank = task.Key, task.Rank
-	result.Warnings = append(result.Warnings, warnings...)
 	return result, err
 }
 
 // writeTask is sequence 1's second append and 1a's second, shared because they
 // are the same append: a whole task at expectation zero, guarded by its own
 // row.
+//
+// THE CREATE IS DECIDED HERE, in full: the refusals [Writer.refuseCreate]
+// makes run again in this snapshot — the key mint before it is a separate
+// append, so an archive, a catalogue edit or a purged parent landing between
+// the two is one only this read can see — and the fields the record carries
+// are the ones [settleFields] coerces here. The warnings come from the same
+// run, and a write answered from this node's operation ledger ran none, so it
+// reports the body's warnings alone.
 func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
+	// ASSIGNED, NOT APPENDED: the decide runs once per round, and the last
+	// run is the one whose record the result names.
+	var fieldWarnings []string
 	result, err := w.publish(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
@@ -337,21 +349,24 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
-			// THE PARENT IS READ HERE AGAIN, in the snapshot this record
-			// is decided from, because the key mint before it is a
-			// separate append: a purge landing between the two is one
-			// only this read can see. See [refusePurged].
-			if task.Parent != nil && *task.Parent != "" {
-				if err := refusePurged(ctx, tx, *task.Parent, "parent"); err != nil {
-					return statelog.Decision{}, err
-				}
+			coerced, warned, err := w.refuseCreate(ctx, tx, task)
+			if err != nil {
+				return statelog.Decision{}, err
 			}
+			// A COPY, so a later round decides from the task as the
+			// caller handed it rather than from this round's coercion.
+			settled := task
+			if coerced != nil {
+				settled.Fields = coerced
+			}
+			fieldWarnings = warned
 			return w.decide(subject, OpCreate, ChangeCreated, scope, opID,
-				task, notify, at)
+				settled, notify, at)
 		},
 	})
 	return WriteResult{
-		Result: result, Warnings: bodyWarnings(task.Body),
+		Result:   result,
+		Warnings: append(bodyWarnings(task.Body), fieldWarnings...),
 	}, err
 }
 
@@ -372,15 +387,23 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 //
 // # The number comes back from the record that landed
 //
-// Not from the decision, and not from the counter's row. The framework runs a
-// decide once per round, and a mint answered from this node's operation ledger
-// — a retry of a mint that already landed — runs none that landed: a closure
-// that captured the number would hand back whatever its last run read, which
-// on a retry is the counter AFTER the first mint, so the caller would key its
-// items from numbers nobody minted and the next mint would collide with them.
-// The row moves on with every later mint. The record at the result's position
-// is the one every node applied, and it says where the counter ended; the
-// first number is that less k, plus one.
+// Not from the decision, and not from the counter's row. A retry of a mint
+// that already landed is answered from this node's operation ledger: the
+// round that answers it runs no decide, and when the first attempt had already
+// applied here no round runs one at all. So a closure that captured the number
+// hands back the zero it started as, or whatever a round the broker refused
+// last read — a number nobody minted, which the caller would key its items
+// from and the next mint would collide with. The row moves on with every later
+// mint. The record at the result's position is the one every node applied, and
+// it says where the counter ended; the first number is that less k, plus one.
+//
+// # The guard refuses and returns nothing
+//
+// guard runs inside the counter's decide, which is how a create's refusals
+// stop it before it takes a number. For the ledger's reason above it does not
+// run on a retry the ledger answers, so it is a place to refuse and never a
+// place to compute: whatever the next append needs, that append decides in its
+// own snapshot.
 //
 // WHICH MAKES k PART OF THE MINT'S IDENTITY. The record states where the
 // counter ended and not where it began, so a retry recovers the right range
@@ -652,6 +675,17 @@ func bodyWarnings(body string) []string {
 // promoted with no subtask behind it — a struck-through line pointing at
 // nothing, which no reader can tell from a subtask somebody purged.
 //
+// # Every append decides from its own snapshot
+//
+// The mint's guard reads the parent to REFUSE — a purged, absent or removed
+// parent, an item it does not hold, a subtask filed outside the parent's
+// project — and carries nothing out of that read. The subtask's append decides
+// the subtask, and the parent's append marks the item on the parent as ITS
+// snapshot holds it ([PromotionIntent]). A value carried from one append's
+// closure into the next is the zero it started as whenever the first is
+// answered from this node's operation ledger, which is exactly what a retry of
+// a promotion whose mint landed is.
+//
 // CRASH RESIDUE: a numbering gap, exactly as row 1; or a landed subtask whose
 // parent item is still un-marked. REPAIRER: nobody for the gap. The un-marked
 // parent needs none either, because the subtask's id is a uuid5 over the item:
@@ -670,6 +704,9 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		return WriteResult{}, fmt.Errorf("tracker: a promotion mints no subtask "+
 			"id — it is a uuid5 over item %s, which is what makes a retry "+
 			"re-derive the same subtask rather than a second one", itemID)
+	case subtask.Project == "":
+		return WriteResult{}, fmt.Errorf("tracker: the subtask promoted from item "+
+			"%s names no project — it lives in its parent's", itemID)
 	}
 	// THE SAME DEFAULT AS A PLAIN CREATE, and for the same reason: a
 	// checklist item carries no type, so a promotion that named none would
@@ -677,8 +714,12 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	if subtask.Type == "" {
 		subtask.Type = DefaultTaskType
 	}
+	// THE PARENT IS SET BEFORE THE MINT, because the create's refusals read
+	// it: a field a project requires of SUBTASKS is checked on a task that
+	// has a parent, and a guard that ran on a parentless copy checked the
+	// other rule.
+	subtask.Parent = &parentID
 
-	var parent Task
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
 		func(tx *sql.Tx) error {
 			// PURGED IS ASKED BEFORE ABSENT, because a purged parent is
@@ -699,16 +740,21 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 					"restore it before promoting anything out of it",
 					parentID, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
+			case current.Project != subtask.Project:
+				// A SUBTASK LIVES IN ITS PARENT'S PROJECT — a cross-project
+				// move carries the whole subtree for that reason — and the
+				// parent's append below is addressed to that project.
+				return fmt.Errorf("tracker: task %s is in %s and the subtask "+
+					"promoted out of it names %s — a subtask lives in its "+
+					"parent's project", parentID, current.Project, subtask.Project)
 			}
 			if _, _, found := findItem(current, itemID); !found {
 				return fmt.Errorf("tracker: task %s has no checklist item %s",
 					parentID, itemID)
 			}
-			parent = current
 			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
-			// built from a checklist item, which has none — so the
-			// coerced map it answers with is empty and is dropped
-			// deliberately rather than threaded through.
+			// built from a checklist item, which has none — and the
+			// guard only refuses: the subtask's own append decides it.
 			_, _, err = w.refuseCreate(ctx, tx, subtask)
 			return err
 		})
@@ -723,7 +769,6 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	at := w.Now()
 	subtask.Key = fmt.Sprintf("%s-%d", subtask.Project, n)
 	subtask.Rank = rank
-	subtask.Parent = &parentID
 	subtask.CreatedAt, subtask.UpdatedAt = at, at
 	if subtask.Status == "" {
 		subtask.Status = StatusTodo
@@ -743,9 +788,9 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		return created, err
 	}
 
-	lists := markPromoted(parent, itemID, subtask.ID)
 	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists},
+		subtask.Project, NoIfMatch,
+		TaskPatch{Promote: &PromotionIntent{Item: itemID, Subtask: subtask.ID}},
 		ChangeChecklist, nil)
 	if err != nil {
 		return created, fmt.Errorf("tracker: subtask %s was created and its "+
@@ -769,23 +814,50 @@ func findItem(task Task, itemID string) (list, item int, found bool) {
 	return 0, 0, false
 }
 
-// markPromoted is the parent's own new checklist state.
+// settlePromotion resolves a [PromotionIntent] into the parent's whole new
+// checklist tree, from the parent as the decide snapshot holds it.
 //
 // THE ITEM IS NOT DELETED. It stays, pointing at the subtask, which is what
 // renders it struck through with the new key — a deletion would lose the fact
 // that this line became that task.
-func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
-	lists := make([]Checklist, len(parent.Checklists))
-	copy(lists, parent.Checklists)
-	l, i, found := findItem(parent, itemID)
-	if !found {
-		return lists
+//
+// AN ITEM GONE OR PROMOTED ELSEWHERE IS REFUSED rather than marked: the
+// promotion minted a subtask for a line that is no longer there, or that
+// already names another task, and marking it would record a promotion over a
+// decision somebody else made in between. The counts [checkChecklistCaps]
+// bounds are unchanged by a mark, so the tree needs no second check here.
+//
+// A COPY, for [settleWatch]'s reason: the decide runs again on a retry, and a
+// resolution folded into the captured patch would compound across attempts.
+func settlePromotion(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.Promote == nil {
+		return patch, nil
 	}
+	if patch.Checklists != nil {
+		return patch, fmt.Errorf("tracker: this patch carries both a promotion "+
+			"of item %s and a whole checklist tree — a caller states one or the "+
+			"other", patch.Promote.Item)
+	}
+	item, subtask := patch.Promote.Item, patch.Promote.Subtask
+	l, i, found := findItem(current, item)
+	if !found {
+		return patch, fmt.Errorf("tracker: task %s no longer has checklist item "+
+			"%s, so there is nothing to mark promoted to %s", current.ID, item,
+			subtask)
+	}
+	if to := current.Checklists[l].Items[i].PromotedTo; to != nil && *to != subtask {
+		return patch, fmt.Errorf("tracker: checklist item %s on task %s is "+
+			"already promoted to %s, not %s", item, current.ID, *to, subtask)
+	}
+	lists := make([]Checklist, len(current.Checklists))
+	copy(lists, current.Checklists)
 	items := make([]ChecklistItem, len(lists[l].Items))
 	copy(items, lists[l].Items)
-	items[i].PromotedTo = &subtaskID
+	items[i].PromotedTo = &subtask
 	lists[l].Items = items
-	return lists
+	patch.Promote = nil
+	patch.Checklists = &lists
+	return patch, nil
 }
 
 // localClaims is this node's half of every claim a sequence takes: the
@@ -1605,8 +1677,13 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "admitted"})
 
 	result := WriteResult{Failed: map[string]string{}}
-	for i, id := range subjects {
-		one, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+	for _, id := range subjects {
+		// THE STEP IS NAMED BY THE TASK IT WRITES, never by its place in
+		// the list. The caller re-runs the failures under the same op id,
+		// and a step named by position maps that shorter list's first
+		// task onto the first run's first — whose ledger row answers
+		// `applied` for a task this call never wrote.
+		one, err := w.UpdateTask(ctx, stepID(opID, "t/"+id),
 			id, project, NoIfMatch, patch, kind, notify)
 		if err != nil {
 			result.Failed[id] = err.Error()

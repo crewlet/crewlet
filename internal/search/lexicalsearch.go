@@ -125,10 +125,11 @@ const defaultSearchLimit = 10
 //
 // IT RAISES rather than answering empty, unlike [knowledge.Searcher], and the
 // two are reconciled at the seam: this is the storage layer, where "the store
-// would not answer" and "nothing matched" are different facts, and the
-// knowledge adapter above it is what turns a failure into the empty block a
-// turn tolerates. Collapsing them here would make a broken index look exactly
-// like a company that has written nothing down.
+// would not answer" and "nothing matched" are different facts, and what a
+// failure becomes is decided above it — the knowledge searcher answers one
+// marked failed, the work search returns it as an error. Collapsing them here
+// would make a broken index look exactly like a company that has written
+// nothing down.
 //
 // THE HITS ARE THE EXACT BM25 TOP-N, whatever [maxPostingScan] is.
 //

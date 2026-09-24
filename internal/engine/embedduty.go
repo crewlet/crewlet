@@ -128,11 +128,11 @@ func (e *Engine) corpora() []search.Corpus {
 	}
 }
 
-// vectorSpace is the embedding space the CURRENT epoch's knowledge search runs
-// in — the provider and the model id every vector carries — and false when the
-// company's search has no semantic half: `knowledge.vectors` is off (unset, it
-// derives from `providers.embeddings`), the provider cannot batch, or the
-// model id resolves to nothing.
+// vectorSpace is the embedding space the CURRENT epoch's search runs in — the
+// provider and the model id every vector carries — and false when the
+// company's search has no semantic half: it configures no
+// `providers.embeddings`, `knowledge.vectors` is off (unset, it derives from
+// `providers.embeddings`), or the provider cannot batch.
 //
 // ONE FUNCTION FOR THE DUTY AND FOR THE QUERY. A query vector is comparable
 // only with vectors of its own model and width, so the search has to embed its
@@ -140,19 +140,23 @@ func (e *Engine) corpora() []search.Corpus {
 // `knowledge.vectors: false` has to stop both, since a query embedded against
 // a corpus nothing fills is a provider call for an answer the scan cannot give.
 //
-// READ PER CALL rather than captured, because the provider is replaced on
-// every config apply: a duty holding the embedder it was built with would go
-// on writing rows at the retired model's id after an operator changed it, and
-// the rows a change is meant to supersede would never be selected again.
+// ALL THREE FROM ONE READ OF THE EPOCH, whose own backend ([vectorBackend])
+// they are. Taken from anywhere else, one of them could belong to another
+// revision: a provider built for a revision an apply then refused, paired with
+// the served revision's model id, would have the duty write one model's
+// vectors under another model's name and every hybrid query compare its own
+// model's vector with them.
+//
+// READ PER CALL rather than captured, because an apply replaces the epoch: a
+// duty holding the backend it was built with would go on writing rows at the
+// retired model's id after an operator changed it, and the rows a change is
+// meant to supersede would never be selected again.
 func (e *Engine) vectorSpace() (embeddings.BatchEmbedder, string, bool) {
-	if !e.Company().Config.VectorsEnabled() {
+	c := e.Company()
+	if c == nil || c.vectors == nil || !c.vectors.search {
 		return nil, "", false
 	}
-	held := e.embeddings.Load()
-	if held == nil || *held == nil {
-		return nil, "", false
-	}
-	batch, ok := (*held).(embeddings.BatchEmbedder)
+	batch, ok := c.vectors.embedder.(embeddings.BatchEmbedder)
 	if !ok {
 		// A PROVIDER THAT CANNOT BATCH DOES NOT RUN THIS DUTY. One
 		// source per round trip is 110 000 round trips for a cold fill,
@@ -161,15 +165,7 @@ func (e *Engine) vectorSpace() (embeddings.BatchEmbedder, string, bool) {
 		// never to a corpus walk.
 		return nil, "", false
 	}
-	cfg := e.Company().Config.Providers.Embeddings
-	if cfg == nil {
-		return nil, "", false
-	}
-	model := e.resolver().Value(cfg.Model)
-	if model == "" {
-		return nil, "", false
-	}
-	return batch, model, true
+	return batch, c.vectors.model, true
 }
 
 // querySpace is [Engine.vectorSpace] as a knowledge or work search asks it,

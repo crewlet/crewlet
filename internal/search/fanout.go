@@ -101,12 +101,13 @@ type Slice struct {
 	Lexical  []Scored
 	Semantic []Scored
 
-	// SemanticSkipped says this participant answered without its semantic
-	// half — no embeddings provider, no vectors yet, or a scan that
-	// failed. SEPARATE FROM A MISSING SLICE, because they degrade the
-	// answer differently: a missing slice loses a range of the corpus,
-	// while this loses the half that finds what shares no word with the
-	// query, across the range it did scan.
+	// SemanticSkipped says this participant was sent a vector and its
+	// semantic scan failed, so it answered its range without that half. A
+	// query sent with no vector is not skipped here: it asked for one half.
+	// SEPARATE FROM A MISSING SLICE, because they degrade the answer
+	// differently: a missing slice loses a range of the corpus, while this
+	// loses the half that finds what shares no word with the query, across
+	// the range it did scan.
 	SemanticSkipped bool
 
 	// Building says this participant's LEXICAL INDEX has not completed a
@@ -161,6 +162,14 @@ type FanQuery struct {
 	// Not on the wire: a participant answers its top FuseN whatever the
 	// coordinator's caller asked for, so only the coordinator reads it.
 	Limit int
+
+	// Prefetch says a turn's own context assembly is asking, rather than
+	// somebody searching deliberately. It changes nothing about the answer:
+	// the coordinator copies it onto [Answer.Prefetch], so [FanOut.Report]
+	// can file the search's duration under it.
+	//
+	// Not on the wire, for Limit's reason: only the coordinator reports.
+	Prefetch bool
 }
 
 // ErrLimit reports a [FanQuery.Limit] above [FuseN].
@@ -316,6 +325,18 @@ type Answer struct {
 	// answer can be missing is then a document that matches the question's
 	// meaning and shares none of its words.
 	SemanticSkipped bool
+
+	// Hybrid says the query went out carrying a vector, so every
+	// participant was asked for both halves. False is an answer ranked on
+	// words alone: a company whose search has no semantic half, or a query
+	// that could not be embedded, which SemanticSkipped then marks. A
+	// hybrid search runs the vector scan as well as the lexical one, so
+	// [FanOut.Report] files its duration apart from a lexical one's.
+	Hybrid bool
+
+	// Prefetch is the query's [FanQuery.Prefetch], carried to
+	// [FanOut.Report].
+	Prefetch bool
 }
 
 // Partial reports whether part of the corpus went unscanned.
@@ -408,6 +429,11 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 	// lexical query, which none of them may report as degraded, so the
 	// answer would otherwise read as whole.
 	answer.SemanticSkipped = answer.SemanticSkipped || notEmbedded
+	// WHAT WAS ASKED, read off the query every participant was sent rather
+	// than off the company's settings: a company with a semantic half whose
+	// query could not be embedded ran a lexical search, and is filed as one.
+	answer.Hybrid = len(q.Vector) > 0
+	answer.Prefetch = q.Prefetch
 	if f.Report != nil {
 		f.Report(answer, time.Since(started))
 	}

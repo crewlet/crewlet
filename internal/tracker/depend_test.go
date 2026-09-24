@@ -468,6 +468,51 @@ func TestRestatingAnEdgeIsNotASecondEdge(t *testing.T) {
 	}
 }
 
+// A DEPENDENCY RE-RUN WITH A SHORTER LIST WRITES EVERY TASK IT NAMES.
+//
+// Each step is named by the task it writes. A step named by its place in the
+// list maps a re-run naming fewer tasks onto whichever task sat at that place
+// the first time — and that task's ledger row answers `applied` for an edge
+// the re-run never wrote.
+//
+// Mutation: name the blocking steps by index again and d2 never gains its
+// edge.
+func TestADependencyRerunWithAShorterListWritesEveryTaskItNames(t *testing.T) {
+	t.Parallel()
+	broker := &refusingAppender{subject: tracker.TaskSubject("d2").Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+	for _, id := range []string{"blk", "d1", "d2"} {
+		filedTask(t, r, id)
+	}
+
+	broker.refusing(true)
+	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "blk", Project: "ENG", BlockingAdd: []string{"d1", "d2"},
+	}, nil); err == nil {
+		t.Fatal("the first call wrote the edge the broker refused, so this case " +
+			"is not the shape it names")
+	}
+	r.drain()
+	broker.refusing(false)
+
+	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "blk", Project: "ENG", BlockingAdd: []string{"d2"},
+	}, nil); err != nil {
+		t.Fatalf("the re-run: %v", err)
+	}
+	r.drain()
+	if !slices.ContainsFunc(r.task(t, "d2").Task.Relations, func(rel tracker.Relation) bool {
+		return rel.Kind == tracker.RelationWaitingOn && rel.Other == "blk"
+	}) {
+		t.Fatal("d2 carries no waiting_on edge after a re-run that named it — " +
+			"its step was answered from d1's ledger row")
+	}
+}
+
 // task reads one task back, with its links and the derived blocked flag.
 func (r *roundTrip) task(t *testing.T, id string) tracker.TaskDetail {
 	t.Helper()

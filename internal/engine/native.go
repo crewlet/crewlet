@@ -1565,12 +1565,27 @@ func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
 // `search_degraded` and `search_scoped` are each a property of the answers a
 // node gave, and an alarm whose input nobody records is permanently silent —
 // which looks exactly like a system with nothing wrong.
+//
+// THE DURATION IS FILED UNDER WHAT THIS SEARCH WAS, from the answer's own
+// record of it: `path` is who asked — a turn's prefetch, or somebody's
+// deliberate search — and `rung` is how it ranked, `hybrid` when the query
+// carried a vector and `lexical` when it did not. A label fixed here instead
+// would file every prefetch and every words-only scan under the deliberate,
+// hybrid search, and the figure read off that series would describe a mix.
 func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 	if e.metrics == nil {
 		return
 	}
+	path := "interactive"
+	if answer.Prefetch {
+		path = "prefetch"
+	}
+	rung := "lexical"
+	if answer.Hybrid {
+		rung = "hybrid"
+	}
 	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
-		metrics.Attrs{"path": "interactive", "rung": "hybrid"})
+		metrics.Attrs{"path": path, "rung": rung})
 	coverage := "complete"
 	if answer.Partial() {
 		coverage = "scoped"

@@ -36,8 +36,8 @@
 // naming the pid that holds the file. See lock.go for why an OS lock rather
 // than a pid file, and why two handles inside one process share the claim
 // instead. That is what makes the rule above true rather than merely stated:
-// the secret-store CLIs open this database from a second process as their
-// documented gesture, and before the lock the only defence was this comment.
+// every `crewlet` command that opens the store's files does so from its own
+// OS process, and the lock is what refuses one run beside a live engine.
 //
 // The files are the owner's alone on disk as well: every open makes a
 // database and its -wal owner-only before the driver sees them, and takes
@@ -49,10 +49,9 @@
 // the KV layer instead, and that separation is why nothing
 // here has to be safe against a peer.
 //
-// It also collapses a whole idiom. The Postgres migrator took an advisory lock
-// because `crewlet run`, `crewlet run api` and `crewlet config import` could
-// each race the DDL from a different OS process. One process means one
-// in-process mutex, and the lock protocol simply disappears.
+// It also means the migrator needs no lock inside the database: with one
+// process per file, the only race left is two handles in this one, which an
+// in-process mutex closes (see migrateMu).
 //
 // # One writer, and the begin that makes it safe
 //
@@ -297,6 +296,16 @@ type DB struct {
 	// no file to exclude anyone from. See lock.go.
 	lock *fileLock
 
+	// swapClaim is a share of this process's claim on the REPLICATED
+	// estate's path, held by the node handle from [DB.CloseReplicated]
+	// until [DB.ReopenReplicated] succeeds, and nil at every other moment.
+	// The peer's own share goes with its Close, and the install that runs
+	// between the two replaces the file at that path — so without this
+	// share the path would be free for another process to lock for exactly
+	// that window, and the reopen would be refused. ATOMIC for the reason
+	// replicated is: the adoption writes it while Close may be reading it.
+	swapClaim atomic.Pointer[fileLock]
+
 	// writes is the line this handle's write transactions take their place
 	// in, shared with every other handle this process has open on the same
 	// file. Taken from [fileLock.queue] at open, so it is never nil on a
@@ -304,7 +313,7 @@ type DB struct {
 	writes *writeQueue
 
 	// opened is the Options this handle was opened with, kept so
-	// [DB.ReplaceReplicated] can bring the peer back up IDENTICALLY. A
+	// [DB.ReopenReplicated] can bring the peer back up IDENTICALLY. A
 	// second Options assembled at the reopen is a second place to decide
 	// the pool bounds, the pin count and the embedding width — and the
 	// one thing a node must not do after adopting a peer's database is
@@ -429,10 +438,9 @@ func ReplicatedPath(nodePath, configured string) string {
 // replicatedFileName is the replicated estate's name beside the node's.
 const replicatedFileName = "crewlet-replicated.db"
 
-// openEstate opens one estate: its lock, its pool, its own migration
+// openEstate opens one estate's file: its lock, its pool, its own migration
 // sequence, and — for the node estate, which goes first — the capability
 // probe both share.
-// openEstate opens one estate's file.
 //
 // inherited is the DRIVER-level probe a sibling estate already paid for, or
 // nil to probe this pool. It exists because the probe answers a question about
@@ -440,17 +448,13 @@ const replicatedFileName = "crewlet-replicated.db"
 // estate would pay a binary search of prepared statements to hear the answer
 // its first one already has.
 //
-// IT IS A PARAMETER RATHER THAN AN ASSIGNMENT AFTER THE FACT, and that is the
-// whole of the fix it carries: the caps used to be copied onto the replicated
-// handle by [Open] AFTER openEstate had already written its `store_opened`
-// line, so every node boot logged `estate=replicated max_variables=0
-// vector_functions=false page_cache_kib=0` for a handle that in fact had all
-// three. Harmless while nothing read them — and then [InsertRows] landed,
-// which sizes every applier's statements from MaxVariables and reads 0 as
-// "one row per statement". An operator reading that line would conclude the
-// replicated estate writes the slow shape, and a standalone
-// [OpenEstate](EstateReplicated) handle genuinely DID, because nothing ever
-// assigned its caps at all.
+// IT IS A PARAMETER RATHER THAN AN ASSIGNMENT AFTER THE FACT, because the caps
+// are read the moment the handle exists: this function's own `store_opened`
+// line reports them, and the state-log applier hands MaxVariables to every
+// domain's apply, where [InsertRows] reads 0 as "one row per statement". Caps
+// assigned once this returned would be logged as zeros for a handle that has
+// them, and a standalone [OpenEstate] handle, which nothing else assigns caps
+// to, would write the slow shape.
 func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 	inherited *Capabilities) (*DB, error) {
 	opts = opts.forEstate(estate)
@@ -529,19 +533,17 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 // openPrepared readies the native library and the database's files, and
 // returns a live pool with this package's bounds and session state applied.
 //
-// ONE PATH TO A CONNECTION, and that is the whole reason it exists. [Open] and
-// [Pending] both need a pool, and Pending used to build its own: it resolved
-// the driver, called openPool and pinged — but never prepared the native
-// library, so the first connection `crewlet migrate` made went straight into
-// the driver's own loader, whose answer to a half-written cache is a PANIC
-// inside a sync.Once (see turso.go). The command that exists to report the
-// schema safely was the one command that could take the process down on it.
-// It also silently ran on an unbounded pool. Neither was a decision; both were
-// a second code path drifting from the first.
+// ONE PATH TO A CONNECTION, and that is the whole reason it exists: every pool
+// this package opens on a database file is built here, so none reaches the
+// driver's own loader unprepared — whose answer to a half-written cache is a
+// PANIC inside a sync.Once (see turso.go) — runs on an unbounded pool, or
+// opens files the umask made (see filemode.go). A second path is how one of
+// those gets skipped.
 //
-// It does NOT lock. The claim on the file belongs to the caller, because the
-// two callers want opposite things from it: Open holds it for the life of the
-// handle, and Pending takes it only across its read.
+// It does NOT lock. Whether the file is claimed, and for how long, is the
+// caller's to decide: [Open] holds the claim for the life of the handle,
+// [Pending] only across its read, and a copy this process made has no peer to
+// exclude.
 func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, error) {
 	// BEFORE THE POOL, because the driver loads its native library on the
 	// first connection and PANICS if the shared cache it loads from is
@@ -616,6 +618,9 @@ func (d *DB) Close() error {
 	if peerDB := d.replicated.Swap(nil); peerDB != nil {
 		peer = peerDB.Close()
 	}
+	// A node closed while an adoption holds its peer closed still holds the
+	// peer's path through the swap's share, which nothing else gives back.
+	d.swapClaim.Swap(nil).release()
 	err := d.sql.Close()
 	d.lock.release()
 	return errors.Join(err, peer)

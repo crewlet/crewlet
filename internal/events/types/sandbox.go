@@ -186,7 +186,8 @@ type SandboxRunFailed struct {
 // A NAMED SET, because these are not variations of one failure: an
 // unreachable box is infrastructure, a missing conversation is a bug in this
 // engine, a suspension that could not be recorded is the coordination store or
-// this engine, an abandoned tail is a node that died, and a removed seat is an
+// this engine, a question that could not be recorded is the coding agent's own
+// output, an abandoned tail is a node that died, and a removed seat is an
 // operator's own change. An operator seeing them merged into "the sandbox
 // failed" would chase the wrong one.
 const (
@@ -210,6 +211,14 @@ const (
 	// that is no longer launching is not ended under this reason: its
 	// conversation landed after all, or somebody else already ended it.
 	SandboxFailureSuspensionUnrecorded = "suspension_unrecorded"
+
+	// SandboxFailureQuestionUnrecorded is a run that stopped to ask a
+	// person a question its record cannot hold, so it could not wait for
+	// the answer. The refusal is permanent — the same question is refused
+	// on every attempt — so the run is ended rather than handed back to
+	// ask it again. The detail names the question's size and the limit it
+	// passed; the question itself is in the collecting node's log.
+	SandboxFailureQuestionUnrecorded = "question_unrecorded"
 
 	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
 	// company and not restored within the mailbox retirement grace. It is

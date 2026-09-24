@@ -18,6 +18,7 @@ type fakeRetentionNode struct {
 	gated    string
 	confirm  string
 	gateKind string
+	force    string
 }
 
 func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
@@ -47,14 +48,26 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 		mux.HandleFunc("POST /work/retention/"+verb+"/{node}",
 			func(w http.ResponseWriter, r *http.Request) {
 				n.gated, n.confirm = r.PathValue("node"), r.URL.Query().Get("confirm")
-				n.gateKind = verb
+				n.gateKind, n.force = verb, r.URL.Query().Get("force")
 				w.Header().Set("Content-Type", "application/json")
+				// THE ROUTE'S OWN SHAPE: one entry per log the gesture
+				// reached, each with its own outcome.
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"node": r.PathValue("node"), "evicted": verb == "evict",
-					"outcome": "applied",
-					"position": map[string]any{
-						"stream": "CREWLET_TRACKER_LOG", "seq": 918280002,
-					},
+					"op_id": "op-gate",
+					"domains": []map[string]any{{
+						"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
+						"outcome": "applied",
+						"position": map[string]any{
+							"stream": "CREWLET_TRACKER_LOG", "seq": 918280002,
+						},
+					}, {
+						"domain": "pages", "stream": "CREWLET_PAGES_LOG",
+						"outcome": "pending",
+						"position": map[string]any{
+							"stream": "CREWLET_PAGES_LOG", "seq": 41,
+						},
+					}},
 				})
 			})
 	}
@@ -332,5 +345,53 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 	// the node stays counted reads the unchanged floor as a failed gesture.
 	if !strings.Contains(stdout, "stays COUNTED") {
 		t.Errorf("the eviction never says the node stays counted:\n%s", stdout)
+	}
+	if node.force != "" {
+		t.Errorf("an eviction without -force asked for force=%q", node.force)
+	}
+}
+
+// TestAGateAnswersOneLinePerLog: an eviction lands on each log that gates on
+// it, and each record lands — or stays pending — on its own, so the command
+// says which. A pending record is durable and not yet applied on the node
+// that answered, which is the difference between a node that has stopped
+// writing and one that is about to.
+//
+// Mutation: print one outcome for the gesture and the pending log goes unsaid;
+// drop the -force flag's parameter and the node is never asked to force.
+func TestAGateAnswersOneLinePerLog(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+
+	stdout, _, err := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-force")
+	if err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	for _, want := range []string{
+		"evict node-4 on tracker: applied at CREWLET_TRACKER_LOG 918280002",
+		"evict node-4 on pages: pending at CREWLET_PAGES_LOG 41",
+		"the gate on pages takes effect as each node reaches it",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the eviction's output lacks %q:\n%s", want, stdout)
+		}
+	}
+	if node.force != "true" {
+		t.Errorf("-force reached the node as force=%q", node.force)
+	}
+
+	// A READMISSION TAKES NO FORCE: nothing refuses one on a live lease.
+	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
+		"-confirm", "node-4", "-force"); err == nil {
+		t.Error("a readmission accepted -force")
+	}
+	stdout, _, err = cli(t, "retention", "readmit", "node-4", base, "-confirm", "node-4")
+	if err != nil {
+		t.Fatalf("readmit: %v", err)
+	}
+	if node.gateKind != "readmit" ||
+		!strings.Contains(stdout, "readmit node-4 on tracker: applied") {
+		t.Errorf("the readmission reached %q and printed:\n%s", node.gateKind, stdout)
 	}
 }

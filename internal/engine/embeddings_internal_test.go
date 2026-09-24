@@ -77,6 +77,8 @@ func TestNoEmbeddingsConfiguredMeansNoEmbedder(t *testing.T) {
 	}
 }
 
+// A BACKEND CARRIES THE MODEL ITS PROVIDER WAS BUILT WITH, and its revision's
+// own search switch, so no reader has to take either from anywhere else.
 func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -87,8 +89,24 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 	if got == nil {
 		t.Fatal("no embedder was built")
 	}
-	if got.Width() != 768 {
-		t.Fatalf("width = %d, want the declared 768", got.Width())
+	if got.embedder.Width() != 768 {
+		t.Fatalf("width = %d, want the declared 768", got.embedder.Width())
+	}
+	if got.model != "text-embedding-3-small" || !got.search {
+		t.Errorf("the backend carries model %q and search %v, want the declared "+
+			"model and the switch that derives on from a configured provider",
+			got.model, got.search)
+	}
+	off, err := e.buildEmbedder(companyWith(t, fmt.Sprintf(embeddingDoc, 768)+`
+knowledge:
+  vectors: false
+`))
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	if off == nil || off.search {
+		t.Errorf("a revision with knowledge.vectors off built %+v, want a backend "+
+			"its search does not use", off)
 	}
 }
 
@@ -134,7 +152,7 @@ func TestTheDeclaredWidthMatchingTheStoreIsNotAChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildEmbedder: %v", err)
 	}
-	if got == nil || got.Width() != 768 {
+	if got == nil || got.embedder.Width() != 768 {
 		t.Fatalf("embedder = %v, want one at 768", got)
 	}
 }
@@ -149,34 +167,29 @@ func TestAStoreOpenedWithoutVectorsVetoesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildEmbedder: %v", err)
 	}
-	if got == nil || got.Width() != 3072 {
+	if got == nil || got.embedder.Width() != 3072 {
 		t.Fatalf("embedder = %v, want one at 3072", got)
 	}
 }
 
 // The prefetch takes a FUNCTION, and nil is how it learns there is no
-// similarity search — so an engine that built no embedder must hand it a nil
-// func rather than a live method value closing over a nil interface, which
-// is not nil and panics on the first call.
+// similarity search — so an epoch with no backend, and no epoch at all, must
+// hand it a nil func rather than a live method value closing over a nil
+// interface, which is not nil and panics on the first call.
 func TestNoEmbedderIsANilFuncNotAPanickingOne(t *testing.T) {
 	t.Parallel()
-	e := &Engine{}
-	if e.embedder() != nil {
-		t.Fatal("an engine that never stored an embedder handed out a callable")
+	if (*Company)(nil).embed() != nil {
+		t.Fatal("no epoch handed out a callable")
 	}
-	var none embeddings.Embedder
-	e.embeddings.Store(&none)
-	if e.embedder() != nil {
-		t.Fatal("a stored nil embedder handed out a callable")
+	if (&Company{}).embed() != nil {
+		t.Fatal("an epoch with no embedding backend handed out a callable")
 	}
 }
 
 func TestAStoredEmbedderIsHandedOutAsItsEmbedMethod(t *testing.T) {
 	t.Parallel()
-	e := &Engine{}
-	var fake embeddings.Embedder = embeddings.NewFake(4)
-	e.embeddings.Store(&fake)
-	embed := e.embedder()
+	c := &Company{vectors: &vectorBackend{embedder: embeddings.NewFake(4), model: "fake"}}
+	embed := c.embed()
 	if embed == nil {
 		t.Fatal("a stored embedder handed out nothing")
 	}

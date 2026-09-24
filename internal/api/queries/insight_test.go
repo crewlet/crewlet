@@ -657,6 +657,10 @@ func TestKnowledgeMarksAPartialAnswerAndAFailedOne(t *testing.T) {
 // THE SCREEN HIDES WHAT A SEAT IS NOT SHOWN. It answers "what would an agent
 // find", and an agent's search excludes the auto-drafted pages nobody has
 // reviewed — so this one does too, or it shows an operator pages no agent sees.
+//
+// Held on the exclusion the query ASKS FOR ([knowledge.Query.Excluded]), which
+// is what every backend applies, rather than on the field the caller set: the
+// field left nil takes the same default, and an empty one turns it off.
 func TestKnowledgeHidesTheDraftsASeatsSearchHides(t *testing.T) {
 	t.Parallel()
 	var asked []knowledge.Query
@@ -664,7 +668,7 @@ func TestKnowledgeHidesTheDraftsASeatsSearchHides(t *testing.T) {
 		Knowledge: served(indexSearcher{asked: &asked}),
 		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
 	}, "knowledge", map[string]any{"q": "deploy"})
-	if len(asked) != 1 || !slices.Contains(asked[0].ExcludeAncestors, knowledge.AutoDraftedParent) {
+	if len(asked) != 1 || !slices.Contains(asked[0].Excluded(), knowledge.AutoDraftedParent) {
 		t.Errorf("the search was asked %+v, want the auto-drafts excluded", asked)
 	}
 }

@@ -197,9 +197,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 	}
 	surface = built
 
-	replaySubmission(ctx, submit, bridged)
-
-	work, described, err := r.finishWork(ctx, state.Round, work{
+	work, described := r.finishWork(ctx, state.Round, work{
 		submit:   submit,
 		res:      agentRunResult(answer, bridged),
 		surface:  surface,
@@ -208,10 +206,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 		// The calls the log does not hold, said on the record of the pass
 		// whose calls they were. See [Resume.BridgedDropped].
 		notes: droppedNote(r.cfg.Resume.BridgedDropped),
+		// The CLI's own submit_work calls, replayed through this pass's
+		// submission tool before it is read.
+		replay: bridged,
 	})
-	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
-	}
 	// The RUN's calls, not this process's surface's — see the doc above.
 	work.Calls = bridged
 	return work, described, nil
@@ -259,7 +257,8 @@ func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
 // call is a correction, and replaying in order is what makes that true here
 // too. A call the decoder rejects is skipped rather than failing the resume —
 // the run happened, its other calls happened, and a malformed submission is
-// exactly the "said nothing" case the rescue path exists for.
+// exactly the "said nothing" case the rescue path exists for. Nothing to
+// replay is a pass whose submission tool the loop called itself.
 func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call) {
 	for _, call := range bridged {
 		if call.Name != SubmitWorkTool || call.Failed {

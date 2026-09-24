@@ -8,7 +8,9 @@
 //
 // Four things here are load-bearing and each replaced an incident:
 //
-//   - THE BUDGET CHECK AND THE INCREMENT ARE ONE OPERATION, and the refusal
+//   - THE BUDGET IS READ BEFORE EVERY MODEL CALL AND CHARGED AFTER IT. The
+//     read counts nothing and stops a call a spent budget could never admit;
+//     the charge's check and increment are ONE operation, and its refusal
 //     names its own scope. Re-reading the caps afterwards to work out which
 //     one said no is a read a peer's spend can invalidate between the refusal
 //     and the report.
@@ -165,13 +167,14 @@ type Narration struct {
 	Content string
 }
 
-// SpendOutcome is the shared counter's answer to a spend.
+// SpendOutcome is the shared counter's answer to a spend, or to a read of its
+// room.
 //
 // It carries the REFUSING SCOPE rather than just a boolean, because the
 // alternative — re-reading the caps to work out which budget said no — is a
 // read a peer's spend can invalidate between the refusal and the report. On a
-// refusal, Used is that scope's spend as the refusal found it, before these
-// tokens, and Limit is its cap.
+// refusal, Used is that scope's spend as the refusal found it (before these
+// tokens, on a Spend), and Limit is its cap.
 type SpendOutcome struct {
 	OK    bool
 	Scope string
@@ -186,6 +189,11 @@ type SpendOutcome struct {
 // only from its answer — so the provider has billed them whatever the counter
 // then says. What the counter decides is whether the caller may go on: run the
 // round's tools, start another round.
+//
+// The question BEFORE a call is therefore a different one, and it has a verb
+// of its own: Room reads whether a scope is already at its cap, so a budget
+// that is spent stops the next call before it is sent rather than after the
+// provider has billed it.
 type BudgetMeter interface {
 	// Spend counts tokens a model call has billed and reports whether the
 	// budget had room for them, checking and counting in ONE operation so
@@ -199,12 +207,20 @@ type BudgetMeter interface {
 	// means the counter could not be reached, which is not a refusal and
 	// must not be treated as one.
 	Spend(ctx context.Context, tokens int) (SpendOutcome, error)
+
+	// Room reports whether the budget can admit another model call, before
+	// that call is sent, and counts nothing. OK false names a scope already
+	// at or past its cap, with its spend and its limit. OK true is not a
+	// promise: the call's own charge can still refuse once its size is
+	// known. An error means the counter could not be read, which is neither
+	// a refusal nor a yes, and each caller says which way it fails.
+	Room(ctx context.Context) (SpendOutcome, error)
 }
 
-// ErrBudgetExhausted is returned when a spend was refused. Callers branch on
-// it: a phase that stopped because the company ran out of tokens is a
-// different event from one whose provider failed, and they are reported
-// differently.
+// ErrBudgetExhausted is returned when a spend was refused, or a call was not
+// sent because its budget had no room. Callers branch on it: a phase that
+// stopped because the company ran out of tokens is a different event from one
+// whose provider failed, and they are reported differently.
 var ErrBudgetExhausted = errors.New("toolloop: token budget exhausted")
 
 // BudgetError carries which scope refused.
@@ -218,9 +234,21 @@ func (e *BudgetError) Error() string {
 	return fmt.Sprintf("%s (%s budget: %d/%d)", ErrBudgetExhausted, e.Scope, e.Used, e.Limit)
 }
 
-// Is makes every budget breach match [ErrBudget], so a caller can test the
-// class without naming which ceiling was hit.
+// Is makes every budget breach match [ErrBudgetExhausted], so a caller can test
+// the class without naming which ceiling was hit.
 func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhausted }
+
+// Refusal is the error a budget with no room is reported as: a Spend it
+// refused, or a Room that found a scope at its cap. One constructor, so a call
+// stopped before it was sent and a round stopped after it was billed name
+// their scope the same way wherever the meter is read.
+func Refusal(outcome SpendOutcome) error {
+	scope := outcome.Scope
+	if scope == "" {
+		scope = "org"
+	}
+	return &BudgetError{Scope: scope, Used: outcome.Used, Limit: outcome.Limit}
+}
 
 // Progress is the in-flight view of a running loop.
 //
@@ -495,8 +523,9 @@ type Config struct {
 	// it — see ToolResult.Suspend.
 	AllowSuspend bool
 
-	// Budget is the shared counter. Nil disables charging, which is for
-	// tests and for loops the caller has already charged.
+	// Budget is the shared counter, read for room before every round's
+	// model call and charged once the call has answered. Nil disables both,
+	// which is for tests and for loops the caller has already charged.
 	Budget BudgetMeter
 
 	// Fence is checked at the top of every round, before any tokens are
@@ -670,6 +699,16 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			if err := cfg.Fence(); err != nil {
 				return nil, err
 			}
+		}
+		// THE BUDGET'S ROOM, before the call rather than after it. The
+		// round's own charge can only come once the provider has answered,
+		// because that is when its size is known, so a budget already at its
+		// cap would otherwise pay for one more model call every time a round
+		// was asked for — a seat whose counter is spent, billed a round per
+		// trigger before the charge refused it. Nothing has been sent this
+		// round, so there is nothing to record on the way out either.
+		if err := CheckRoom(ctx, cfg.Budget); err != nil {
+			return nil, err
 		}
 
 		// Re-read every round, so a surface mutated by this round's own
@@ -1097,11 +1136,31 @@ func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if outcome.OK {
 		return nil
 	}
-	scope := outcome.Scope
-	if scope == "" {
-		scope = "org"
+	return Refusal(outcome)
+}
+
+// CheckRoom asks the meter, before a model call is sent, whether any scope is
+// already at its cap: nil when the call may be sent or there is no meter, a
+// [Refusal] when a scope has no room, and the read's own error when it could
+// not be made.
+//
+// The loop stops a round on an unreadable counter, as it does on an
+// unreachable [charge], and for the same pair of reasons: it is not a refusal,
+// so it is not reported as one, and it is not a yes, because a call sent on a
+// budget nobody could read is spend the counter exists to bound. A caller for
+// whom it is not worth stopping over reads the error and decides.
+func CheckRoom(ctx context.Context, meter BudgetMeter) error {
+	if meter == nil {
+		return nil
 	}
-	return &BudgetError{Scope: scope, Used: outcome.Used, Limit: outcome.Limit}
+	outcome, err := meter.Room(ctx)
+	if err != nil {
+		return fmt.Errorf("toolloop: read the budget's room: %w", err)
+	}
+	if outcome.OK {
+		return nil
+	}
+	return Refusal(outcome)
 }
 
 // ranTerminator reports whether this round ran a tool that ends the loop.
