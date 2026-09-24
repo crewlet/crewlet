@@ -60,8 +60,11 @@ type writeRig struct {
 	publisher *statelog.Publisher
 
 	// node is the rig's NODE writer, built as `internal/engine` builds a
-	// running node's own — see [nodeWriter].
-	node *iamdomain.Writer
+	// running node's own — see [nodeWriter] — and nodeDeps what it was
+	// built from, so a case can build another at a clock of its own rather
+	// than moving this one's under a case running beside it.
+	node     *iamdomain.Writer
+	nodeDeps iamdomain.WriterDeps
 
 	drainMu sync.Mutex
 }
@@ -190,12 +193,13 @@ func newWriteRigWith(t *testing.T,
 	// never derived with As — because the two differ in more than their
 	// grants: a party derived from a principal carries that principal's
 	// credential, and the node acts on nobody's.
-	node, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+	nodeDeps := iamdomain.WriterDeps{
 		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
 		Events: announced, Actor: "node-a", ActorKind: iam.KindMachine,
 		Grants: []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant},
 		Now:    func() time.Time { return brokerAt },
-	})
+	}
+	node, err := iamdomain.NewWriter(nodeDeps)
 	if err != nil {
 		t.Fatalf("build the node's writer: %v", err)
 	}
@@ -203,7 +207,7 @@ func newWriteRigWith(t *testing.T,
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events:   announced,
 		verifier: testVerifier(t),
-		keys:     keys, publisher: publisher, node: node,
+		keys:     keys, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
 	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
 	// told this node its seats' standing may have moved.

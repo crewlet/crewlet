@@ -52,11 +52,21 @@ func (r bootstrapRig) mint(id string, expires time.Time) error {
 	return err
 }
 
-// nodeAt is the node's own writer — the party every founding and re-issue is
+// nodeAt is a node's own writer — the party every founding and re-issue is
 // published by — with its clock at now.
+//
+// A WRITER OF ITS OWN, built as the rig's node writer was: moving the clock of
+// the rig's shared one raced every case that reaches for it from two
+// goroutines at once, and left the next gesture in the case at somebody
+// else's instant. Errorf rather than Fatalf, because the cases that race two
+// foundings call it from goroutines of their own.
 func (r bootstrapRig) nodeAt(now time.Time) *iamdomain.Writer {
-	w := nodeWriter(r.writeRig)
-	w.Now = func() time.Time { return now }
+	deps := r.nodeDeps
+	deps.Now = func() time.Time { return now }
+	w, err := iamdomain.NewWriter(deps)
+	if err != nil {
+		r.t.Errorf("build a node writer at %s: %v", now, err)
+	}
 	return w
 }
 
