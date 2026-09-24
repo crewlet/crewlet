@@ -552,12 +552,33 @@ function gestureKey(node: string, evict: boolean): string {
  * once the node reads evicted, a readmission once it no longer does. A node
  * the report no longer lists has no row to mislabel, so its gesture is shown
  * too.
+ *
+ * A READMISSION IS SHOWN ONLY BY A REPORT THAT READ EVERY LOG'S EVICTIONS the
+ * gesture wrote. The report marks a node evicted only where every log holds
+ * its tombstone, so one log it could not read hides the eviction whatever
+ * happened, and "not evicted" from that report is no evidence the readmission
+ * applied: releasing on it offered "Evict…" for a node still evicted, and the
+ * next report that did read the logs offered "Readmit…" again — a second
+ * record on every log. An eviction needs no such check, because an unread log
+ * can only ever hide a tombstone, never show one.
  */
-function reflected(g: GateGesture, key: string, nodes: RetentionNode[]): boolean {
-  if (!g.answer?.complete) return false;
+function reflected(
+  g: GateGesture,
+  key: string,
+  nodes: RetentionNode[],
+  domains: RetentionDomain[],
+): boolean {
+  const answer = g.answer;
+  if (!answer?.complete) return false;
   const [node, sign] = key.split(":") as [string, string];
   const row = nodes.find((n) => n.node_id === node);
-  return !row || Boolean(row.evicted) === (sign === "evict");
+  if (!row) return true;
+  if (sign === "evict") return Boolean(row.evicted);
+  const read = answer.domains.every((d) => {
+    const log = domains.find((r) => r.domain === d.domain);
+    return log !== undefined && !log.evictions_unreadable;
+  });
+  return read && !row.evicted;
 }
 
 /**
@@ -618,7 +639,7 @@ export function heldGestures(
   return Object.fromEntries(
     Object.entries(gestures).filter(
       ([key, g]) =>
-        !reflected(g, key, report.nodes) &&
+        !reflected(g, key, report.nodes, report.domains) &&
         !overtaken(g, report.nodes, report.domains, report.node_id),
     ),
   );

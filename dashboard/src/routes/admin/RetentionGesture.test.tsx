@@ -244,6 +244,36 @@ test("a complete eviction is held while the serving node could not read the evic
   }
 });
 
+// NOR DOES IT PROVE A READMISSION. The operator readmits node-4 and the answer
+// is complete but `pending` on the serving node; the next report cannot read
+// one log's evictions, so node-4 reads as not evicted there. Letting go of the
+// readmission then offered "Evict…" for a node still evicted, and the report
+// after that — reading every log again — offered "Readmit…": a second record.
+test("a complete readmission is held while the serving node could not read the evictions", () => {
+  const gestures = {
+    "node-4:readmit": {
+      opId: "op",
+      force: false,
+      answer: { ...golden.answers["pending"]!, evicted: false },
+    },
+  };
+  // BEHIND BOTH RECORDS, so only the node's own row could release it.
+  const behind = servingNode({ tracker: 1, pages: 1 });
+  expect(held(gestures, [node(), behind], "node-1")).toEqual({});
+  for (const [why, domains] of [
+    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
+    [
+      "the tracker log unread",
+      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
+    ],
+    ["no row for a log the gesture wrote", [logRow("tracker")]],
+  ] as const) {
+    expect(Object.keys(held(gestures, [node(), behind], "node-1", [...domains])), why).toEqual([
+      "node-4:readmit",
+    ]);
+  }
+});
+
 test("a log whose evictions could not be read says so above the node block", () => {
   query.data = report(
     [node()],
