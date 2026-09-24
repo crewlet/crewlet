@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -61,7 +64,12 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 // whose author field is chosen by the writer is not an audit trail.
 func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "ops-bot")
+	// A TIER A TOKEN, composed as the guard composes one.
+	ctx := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops-bot")),
+		Login: iam.TokenLogin("ops-bot"), Kind: iam.KindMachine,
+		Stage: iam.StageActive,
+	})
 
 	actor, err := builtin.PrincipalActor(ctx, nil)
 	if err != nil {
@@ -124,8 +132,8 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, ctx := range map[string]context.Context{
-		"no operator on the context": context.Background(),
-		"an empty operator id":       auth.WithOperator(context.Background(), ""),
+		"no operator on the context":   context.Background(),
+		"a resolver that found nobody": iam.WithAnonymous(context.Background()),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := builtin.PrincipalActor(ctx, nil); err == nil {

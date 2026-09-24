@@ -207,8 +207,8 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 // shapes: a Tier A token (resolve.go), a machine token (tokens.go) and a
 // session cookie (sessions.go).
 //
-// THE THREE ARMS ARE THE POINT, and they are not the same as the two
-// [Guard.Presented] answers:
+// THE THREE ARMS ARE THE POINT, and they are not the two a bare token
+// comparison answers ([Guard.entry]: matched, or not):
 //
 //   - a credential that names somebody is [iam.Resolved];
 //   - no credential at all, or one this node refuses, is [iam.Anonymous] — a

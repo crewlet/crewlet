@@ -208,10 +208,12 @@ func TestAValidTokenAuthenticatesAsItsOperator(t *testing.T) {
 		config.APIToken{ID: "founder", Token: "secret-a"},
 		config.APIToken{ID: "ci", Token: "secret-b"},
 	))
+	// THROUGH THE MIDDLEWARE, which is the only path a bearer takes: each
+	// token resolves to its own login, and never to its neighbour's.
 	for id, token := range map[string]string{"founder": "secret-a", "ci": "secret-b"} {
-		got, ok := g.Operator(token)
-		if !ok || got != id {
-			t.Errorf("token for %q resolved to %q/%v", id, got, ok)
+		res, seen := serve(t, g, "POST", "/agents", "Bearer "+token)
+		if res.StatusCode != http.StatusOK || seen != iam.TokenLogin(id) {
+			t.Errorf("token for %q resolved to %q (%d)", id, seen, res.StatusCode)
 		}
 	}
 }
@@ -220,8 +222,9 @@ func TestAWrongOrMissingTokenAuthenticatesAsNobody(t *testing.T) {
 	t.Parallel()
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 	for _, candidate := range []string{"", "wrong", "secre", "secrett", "SECRET"} {
-		if _, ok := g.Operator(candidate); ok {
-			t.Errorf("%q authenticated", candidate)
+		res, seen := serve(t, g, "POST", "/agents", "Bearer "+candidate)
+		if res.StatusCode != http.StatusUnauthorized || seen != "" {
+			t.Errorf("%q authenticated as %q (%d)", candidate, seen, res.StatusCode)
 		}
 	}
 }
@@ -419,25 +422,12 @@ func TestTheGuardReportsItsOwnPosture(t *testing.T) {
 	}
 }
 
-func TestASocketCanAttachItsOwnOperator(t *testing.T) {
+// A BARE CONTEXT IS UNKNOWN, not anonymous: a handler nobody wired through the
+// guard looks exactly like one whose resolver found nobody, and reading either
+// as the other is how a surface decides it is safe to serve because nothing
+// told it otherwise.
+func TestABareContextIsUnknownRatherThanAnonymous(t *testing.T) {
 	t.Parallel()
-	// The dashboard's socket carries its credential as a query parameter
-	// rather than a header, so the stream handler authenticates it itself
-	// and hands the id down the same way the middleware does.
-	ctx := auth.WithOperator(t.Context(), "founder")
-	principal, how := iam.From(ctx)
-	if how != iam.Resolved || iam.ActorFor(principal).OperatorID != "token:founder" {
-		t.Errorf("operator = %q/%v", iam.ActorFor(principal).OperatorID, how)
-	}
-	// AND IT CARRIES NO AUTHORITY, which is what makes attaching one
-	// outside the guard safe: it names a writer and opens nothing.
-	if len(principal.Grants) != 0 {
-		t.Errorf("an attributed principal carries grants: %v", principal.Grants)
-	}
-	// A BARE CONTEXT IS UNKNOWN, not anonymous: a handler nobody wired
-	// through the guard looks exactly like one whose resolver found
-	// nobody, and reading either as the other is how a surface decides it
-	// is safe to serve because nothing told it otherwise.
 	if _, how := iam.From(t.Context()); how != iam.Unknown {
 		t.Errorf("a bare context resolved as %q, want unknown", how)
 	}
@@ -472,9 +462,6 @@ func TestAnEmptyConfiguredTokenIsNotABypass(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: ""}}
 	g := auth.New(&b)
 
-	if _, ok := g.Operator(""); ok {
-		t.Error("an empty candidate authenticated against an empty token")
-	}
 	res, seen := serve(t, g, "POST", "/config/revisions", "")
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", res.StatusCode)

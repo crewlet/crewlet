@@ -56,8 +56,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -374,38 +372,20 @@ func (g *Guard) Client(r *http.Request) string { return g.clients.Of(r) }
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
 
-// Operator returns the operator id a bare token authenticates as.
-//
-// THE TOKEN COMPARISON, IN ONE PLACE. The HTTP middleware and the socket
-// handshake reach it through [Guard.Presented], which peels the credential
-// off the request first, and the dashboard's WebSocket query channel calls it
-// directly, because an operator-only query arrives as a field on a socket
-// frame rather than as a header. All three therefore accept exactly the same
-// tokens, honour disabled identically, and compare in constant time.
-func (g *Guard) Operator(candidate string) (string, bool) {
-	// An empty candidate never authenticates, and the check is not
-	// redundant with the compare below: config refuses an empty token
-	// value, but Bootstrap is an exported struct an embedder can build
-	// directly, and a token configured as "" would otherwise match a
-	// request that presented no credential at all. A total bypass, from
-	// one unset environment variable.
-	if candidate == "" {
-		return "", false
-	}
-	// Every token is compared, and the loop does not stop at the first
-	// match: an early exit makes the time taken depend on WHICH id
-	// matched, which is exactly the leak the constant-time compare below
-	// exists to close.
-	matched, _ := g.entry(candidate)
-	return matched.ID, matched.ID != ""
-}
-
-// entry is the Tier A token a candidate matches, compared in constant time.
+// entry is the Tier A token a candidate matches, compared in constant time —
+// THE TOKEN COMPARISON, IN ONE PLACE: every bearer the guard resolves, on a
+// header or on the socket's query, is decided here.
 //
 // EVERY TOKEN IS COMPARED, and the loop does not stop at the first match: an
 // early exit makes the time taken depend on WHICH id matched, which is exactly
 // the leak the constant-time compare exists to close.
 func (g *Guard) entry(candidate string) (config.APIToken, bool) {
+	// AN EMPTY CANDIDATE NEVER MATCHES, and the check is not redundant with
+	// the compare below: config refuses an empty token value, but Bootstrap
+	// is an exported struct an embedder can build directly, and a token
+	// configured as "" would otherwise match a request that presented no
+	// credential at all. A total bypass, from one unset environment
+	// variable.
 	if candidate == "" {
 		return config.APIToken{}, false
 	}
@@ -448,14 +428,6 @@ func (g *Guard) Credential(r *http.Request) string {
 	return ""
 }
 
-// Presented returns the operator id for the credential a request presented.
-func (g *Guard) Presented(r *http.Request) (string, bool) {
-	return g.Operator(g.Credential(r))
-}
-
-// operatorKey carries the authenticated operator id down the handler chain.
-type operatorKey struct{}
-
 // AttributionOf is who a write on this request is ATTRIBUTED to, and it is
 // total: a request nobody resolved answers [iam.AnonymousActor] rather than an
 // empty name.
@@ -489,35 +461,6 @@ func AttributionOf(ctx context.Context) iam.Actor {
 		return iam.Actor{Name: iam.AnonymousActor, Kind: iam.ActorOperator}
 	}
 	return iam.ActorFor(principal)
-}
-
-// WithOperator attaches a principal carrying one operator id and NO GRANTS.
-//
-// ATTRIBUTION, NEVER AUTHORITY, and the empty grant set is the whole of what
-// makes that safe: it names who a write is recorded as and opens nothing. The
-// real resolution is [Guard.Resolve], which composes a principal from the Tier
-// A entry it matched — its grants, its colleague level, its freshness — and
-// every request through [Guard.Middleware] takes that path.
-//
-// What is left for this is a caller that already knows the id and needs the
-// row it writes to say so: a test standing a handler up directly, and any
-// surface that authenticated by some other means and has nothing to look the
-// entry up with. A principal from here can be recorded and can do nothing.
-func WithOperator(ctx context.Context, operatorID string) context.Context {
-	// AN EMPTY ID IS NOBODY, and it attaches the FINDING rather than a
-	// principal with no name. Attached as one, every reader asking "is
-	// somebody there" is told yes and then writes a row whose author
-	// column is the bare class prefix — which is the failure the whole
-	// three-valued resolution exists to make impossible.
-	if operatorID == "" {
-		return iam.WithAnonymous(ctx)
-	}
-	return iam.WithPrincipal(ctx, iam.Principal{
-		ID:    uuid.NewSHA1(TokenNamespace, []byte(operatorID)),
-		Login: iam.TokenLogin(operatorID),
-		Kind:  iam.KindMachine,
-		Stage: iam.StageActive,
-	})
 }
 
 // Middleware wraps a handler with the guard.

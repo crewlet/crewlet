@@ -5,6 +5,8 @@ import (
 	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // The token comparison has two properties a behavioural test cannot see,
@@ -22,12 +24,13 @@ import (
 // comparison lives.
 //
 // IT FOLLOWED THE COMPARISON. This read Guard.Operator while that function
-// held the loop; it now composes an answer from `entry`, and a walk left
-// pointing at it would have found no compare and no loop and reported the
-// absence as a failure — or, had it been written to tolerate that, would have
-// certified a comparison it was no longer reading. Which function is walked is
-// the one thing this suite cannot get wrong quietly, so it fails loudly when
-// the name is gone.
+// held the loop; the loop moved into `entry`, and Operator — which nothing but
+// tests called — is gone. A walk left pointing at a function that no longer
+// compares would have found no compare and no loop and reported the absence as
+// a failure — or, had it been written to tolerate that, would have certified a
+// comparison it was no longer reading. Which function is walked is the one
+// thing this suite cannot get wrong quietly, so it fails loudly when the name
+// is gone.
 func comparisonBody(t *testing.T) *ast.FuncDecl {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -97,5 +100,22 @@ func TestTheTokenLoopDoesNotStopAtTheFirstMatch(t *testing.T) {
 	if early {
 		t.Error("Guard.entry leaves its comparison loop early: the time it " +
 			"takes then depends on which token matched")
+	}
+}
+
+// AN EMPTY CANDIDATE MATCHES NOTHING, not even a token configured as "".
+//
+// Config refuses an empty token value, but Bootstrap is an exported struct an
+// embedder can build directly, and a token whose environment variable was
+// unset resolves to "" — so without this check a request presenting no
+// credential at all would match it. Every path into the comparison today
+// passes a non-empty candidate, which is exactly why the check is held here
+// rather than trusted to the callers. Mutation: drop the check and the empty
+// candidate matches the empty token.
+func TestAnEmptyCandidateMatchesNoTokenEvenAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	g := &Guard{tokens: map[string]config.APIToken{"founder": {ID: "founder", Token: ""}}}
+	if entry, ok := g.entry(""); ok {
+		t.Errorf("an empty candidate matched %q", entry.ID)
 	}
 }
