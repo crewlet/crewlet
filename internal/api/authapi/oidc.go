@@ -391,9 +391,14 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 // deployment: no scheme, no host, and a leading single slash.
 // `//evil.example.com` is a protocol-relative URL that browsers follow
 // off-site, which is exactly the shape a naive "starts with /" check admits.
+//
+// AND IT IS BOUNDED at [maxReturnPath], a longer one taking the default as any
+// other path this deployment will not honour does: the value rides in the
+// flight cookie, and one too long for it is a sign-in that fails a whole
+// provider round trip later with nothing to say why.
 func returnPath(raw string) string {
 	want := strings.TrimSpace(raw)
-	if want == "" {
+	if want == "" || len(want) > maxReturnPath {
 		return "/dashboard"
 	}
 	if !strings.HasPrefix(want, "/") || strings.HasPrefix(want, "//") {
@@ -405,6 +410,26 @@ func returnPath(raw string) string {
 	}
 	return want
 }
+
+// maxReturnPath bounds a return path, in bytes as the caller sent it.
+//
+// THE FLIGHT COOKIE IS WHAT IT HAS TO FIT. The path is sealed into the flight
+// beside the state, the nonce and the verifier (43 characters each), an
+// invitation's id and a login of up to [iam.MaxLogin], and RFC 6265 §6.1 asks a
+// browser to keep a cookie of 4096 bytes — name, value and attributes — and
+// promises nothing past it. Past it a browser DROPS the cookie without a word:
+// the start answers, the person goes round the provider, and the callback
+// refuses them for carrying no flight. It was unbounded, so a return path of a
+// few kilobytes — a dashboard link carrying a long search in its fragment — was
+// exactly that failure.
+//
+// 400 is what still fits at its worst: every byte one the flight's JSON writes
+// as six (`<`, `&`, a byte that is not UTF-8) and the whole envelope base64,
+// sealed beside the longest invitation id and login under a keyring id of
+// sixty-four characters, leaves the cookie under the floor with room to spare —
+// the case a test seals. And it is several times the longest address the
+// dashboard routes to, fragment and query included.
+const maxReturnPath = 400
 
 // flightCookie builds the sealed login-in-progress cookie.
 //
