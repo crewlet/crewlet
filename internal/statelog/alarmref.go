@@ -33,10 +33,13 @@ func AlarmReference() string {
 // this is prose: "apply.lag.seconds > StallGrace" is precise and says nothing
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
-	KindApplyLag: "This node is more than a minute behind the log. Its seats " +
-		"move if it stays behind for thirty.",
-	KindReadRefusals: "Reads are being refused for something other than " +
-		"ordinary lag, and have been for longer than a heartbeat.",
+	KindApplyLag: "The oldest record this node has not applied is more than a " +
+		"minute old. A node whose applied prefix stands still that long with " +
+		"records waiting refuses reads as `stalled` and gives its seats to a " +
+		"peer; one that is still applying keeps them.",
+	KindReadRefusals: "Reads at one level have been refused for something other " +
+		"than ordinary lag, with none served at that level, for longer than " +
+		"fifteen seconds.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
 		"waits on — is spending a quarter of the whole read budget.",
 	KindLogHeadroom: "The log is within a tenth of its byte ceiling. A full " +
@@ -47,8 +50,17 @@ var alarmMeaning = map[Kind]string{
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
 		"longer than the deferral grace. Its seats have moved.",
-	KindFloorUnknown: "The trim floor has been unreadable for four " +
-		"heartbeats, so every read on this node refuses.",
+	KindDeferredCoverage: "This node has been holding records it cannot apply " +
+		"for longer than the deferral grace, in a domain whose gaps cost " +
+		"coverage rather than seats. Its seats stay; that domain's answers on " +
+		"it are missing what those records carry.",
+	KindFloorUnknown: "The trim floor has been unreadable from this node for " +
+		"longer than a minute. Every read that checks this node's health " +
+		"refuses while it is.",
+	KindGenerationLeft: "The trim floor is published at a generation this " +
+		"node's rows are not on: the fleet re-anchored the domain and this node " +
+		"did not follow. Every read that checks this node's health refuses, and " +
+		"a domain that gates seats gives them to a peer.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
 		"turn on this node pays it before its first token.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
@@ -83,8 +95,8 @@ about it.
 An alarm reaches you two ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, and a named
 ` + "`WARN`" + ` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — alarms are evaluated on ticks
-the engine already runs.
+was up. Nothing has to be polled for either — every node evaluates its own
+table every fifteen seconds, whether or not it holds any fleet duty.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table

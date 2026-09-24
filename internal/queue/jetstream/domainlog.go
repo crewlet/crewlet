@@ -298,6 +298,45 @@ func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	return msg.Subject, msg.Data, msg.Time, true, nil
 }
 
+// NextAt reads the first record the log still holds at or after seq: seq
+// itself, or the next record above it when seq is gone.
+//
+// # Why [DomainLog.At] cannot answer this
+//
+// On a strict log the two are the same question above the trim, because
+// nothing removes an interior sequence. A COMPACTED log keeps one record per
+// subject, so the sequence after a node's checkpoint is routinely gone —
+// superseded by a later record on its subject — and the record that node owes
+// next is the first survivor above it, which may be anywhere. Found by asking
+// sequence by sequence it is one round trip per superseded record; asked this
+// way the broker finds it.
+//
+// THE MESSAGE GET WITH `next_by_subj`, which answers the first message at or
+// after a sequence whose subject matches a filter. The filter is the full
+// wildcard, because every record a stream holds is on a subject the stream
+// carries: it is the stream's own subject space with no per-domain spelling
+// to keep in step. The get is the leader's rather than a direct one, because
+// a domain log allows no direct gets — see [DomainStream.spec].
+//
+// It reports (false, nil) when nothing survives at or after seq, as [At] does
+// for a sequence the stream no longer holds.
+func (l *DomainLog) NextAt(ctx context.Context, seq uint64) (subject string,
+	at uint64, storedAt time.Time, ok bool, err error) {
+
+	msg, err := l.stream.GetMsg(ctx, seq, jetstream.WithGetMsgSubject(fullWildcard))
+	switch {
+	case errors.Is(err, jetstream.ErrMsgNotFound):
+		return "", 0, time.Time{}, false, nil
+	case err != nil:
+		return "", 0, time.Time{}, false,
+			fmt.Errorf("jetstream: read %q's first record at or after %d: %w", l.name, seq, err)
+	}
+	return msg.Subject, msg.Sequence, msg.Time, true, nil
+}
+
+// fullWildcard is NATS's filter matching every subject.
+const fullWildcard = ">"
+
 // LogStats is everything the retention gate reads about a log, in ONE answer.
 //
 // # Why it is one call and not four

@@ -83,8 +83,10 @@ func TestTheShiftDoesNotMutateTheLoopsOwnSnapshot(t *testing.T) {
 	t.Parallel()
 	execs := []toolloop.Execution{{Round: 1, Name: "search"}}
 	narr := []toolloop.Narration{{Round: 1, Content: "hello"}}
+	abandoned := []toolloop.Narration{{Round: 1, Content: "given up on"}}
 	partial := &toolloop.Partial{Round: 1, Abandoned: []toolloop.Narration{{Round: 1}}}
-	live := toolloop.Result{RoundsUsed: 1, Executions: execs, Narration: narr, Partial: partial}
+	live := toolloop.Result{RoundsUsed: 1, Executions: execs, Narration: narr,
+		Abandoned: abandoned, Partial: partial}
 
 	_ = offsetRounds(live, 8)
 
@@ -93,6 +95,9 @@ func TestTheShiftDoesNotMutateTheLoopsOwnSnapshot(t *testing.T) {
 	}
 	if narr[0].Round != 1 {
 		t.Errorf("the loop's own narration was renumbered to %d", narr[0].Round)
+	}
+	if abandoned[0].Round != 1 {
+		t.Errorf("the loop's own abandoned attempt was renumbered to %d", abandoned[0].Round)
 	}
 	if partial.Round != 1 || partial.Abandoned[0].Round != 1 {
 		t.Errorf("the loop's own partial was renumbered to %d (abandoned %d)",
@@ -148,6 +153,41 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 	// and a record with no model reads as a phase that never reached one.
 	if got.Model != "test/model" {
 		t.Errorf("Model = %q, want the model the phase already had", got.Model)
+	}
+}
+
+// AN EXTENSION'S ABANDONED ATTEMPTS JOIN THE PHASE'S, ON THE PHASE'S SCALE.
+//
+// Each attempt is numbered with the round it was an attempt at, and a reader
+// puts it beside that round's narration and calls — so an extension's
+// attempts are renumbered with the rest of the invocation, and the attempts
+// the phase made before it stay on the record ahead of them. Left unshifted,
+// an extension's attempt at its round 1 would sit under the phase's round 1;
+// left unprefixed, every attempt before the extension would be gone.
+func TestAnInvocationsAbandonedAttemptsAreFoldedOntoThePhases(t *testing.T) {
+	t.Parallel()
+	done := phaseResult{Rounds: 2, Result: toolloop.Result{
+		RoundsUsed: 2,
+		Abandoned:  []toolloop.Narration{{Round: 2, Content: "before the extension"}},
+	}}
+	live := toolloop.Result{
+		RoundsUsed: 1,
+		Abandoned:  []toolloop.Narration{{Round: 1, Content: "during the extension"}},
+	}
+
+	got := foldOnto(done, live).Abandoned
+
+	want := []toolloop.Narration{
+		{Round: 2, Content: "before the extension"},
+		{Round: 3, Content: "during the extension"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the phase holds %d abandoned attempts, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("abandoned attempt %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 

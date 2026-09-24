@@ -565,6 +565,72 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 }
 
 // firedKind reports whether an evaluation raised one alarm.
+// THE ALARM TABLE IS EVALUATED ON EVERY PASS, AND THE TRIM ON THE PASSES A TRIM
+// INTERVAL APART.
+//
+// An alarm is only as prompt as the look that raises it, so no threshold the
+// table fires at may be shorter than the interval it is evaluated on — a
+// condition that held for its whole threshold would otherwise go unseen until
+// the next pass. The trim is a burst of purges behind a duty claim, sized in
+// quarter hours; taken on every alarm pass it would ask for the lease every
+// fifteen seconds for nothing the lease allows.
+//
+// Mutation: evaluate only on the passes that trim and the second and third
+// observe nothing; trim on every pass, or stamp a pass only when the claim is
+// won, and a node holding no duty asks for it on every pass.
+func TestTheAlarmTableIsEvaluatedOnEveryPassAndTheTrimOnItsOwnInterval(t *testing.T) {
+	t.Parallel()
+	for condition, threshold := range map[string]time.Duration{
+		"a run of refused reads (read_refusals)":          coord.ReconcileInterval,
+		"an unapplied record (apply_lag)":                 statelog.StallGrace,
+		"an unreadable floor (floor_unknown)":             statelog.FloorCacheStale,
+		"a record this node cannot decode (deferred_old)": statelog.DeferralGrace,
+		"an open capacity operation (maintenance_open)":   statelog.MaintenanceAlarmAfter,
+	} {
+		if AlarmInterval > threshold {
+			t.Errorf("the table is evaluated every %s and fires on %s at %s, so "+
+				"it can be raised up to %s after the condition it names",
+				AlarmInterval, condition, threshold, AlarmInterval-threshold)
+		}
+	}
+
+	evaluations, claims := 0, 0
+	r := &retention{
+		fleet:  coordmem.NewFleet(),
+		state:  &stateLog{},
+		nodeID: "node-a",
+		// THE TRACKER'S CLOCK IS READ ONCE PER OBSERVATION, which is what
+		// counts the evaluations.
+		alarms: statelog.NewTracker(nil, func() time.Time {
+			evaluations++
+			return time.Now().UTC()
+		}),
+		pooled: map[string]poolCounters{},
+		claim: func(context.Context) (bool, error) {
+			claims++
+			return false, nil
+		},
+	}
+	for range 3 {
+		r.tick(t.Context())
+	}
+	if evaluations != 3 {
+		t.Errorf("three passes evaluated the table %d time(s), want 3", evaluations)
+	}
+	if claims != 1 {
+		t.Errorf("three passes inside one trim interval asked for the duty %d "+
+			"time(s), want 1 — on the first", claims)
+	}
+
+	// ONE TRIM INTERVAL AFTER THE PASS THAT TOOK IT, the next pass trims.
+	r.trimmedAt = r.trimmedAt.Add(-RetentionInterval)
+	r.tick(t.Context())
+	if claims != 2 {
+		t.Errorf("a pass a trim interval after the last one asked for the duty %d "+
+			"time(s) in all, want 2", claims)
+	}
+}
+
 func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 	for _, a := range alarms {
 		if a.Kind == want {

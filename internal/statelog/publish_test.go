@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -775,5 +776,298 @@ func sealProbeStream(t *testing.T, h *harness) {
 	t.Helper()
 	updateProbeStream(t, h, "seal the log", func(cfg *jetstream.StreamConfig) {
 		cfg.Sealed = true
+	})
+}
+
+// brokerSays is an API error in the shape the client hands back for a
+// refused acknowledgement.
+func brokerSays(code jetstream.ErrorCode, description string) error {
+	return fmt.Errorf("nats: %w", &jetstream.APIError{
+		Code: 400, ErrorCode: code, Description: description,
+	})
+}
+
+// The two answers the broker gives a publish that are not a decision about the
+// record, as the server words them. A full ingest queue drops the message
+// before it is stored; a message id still being proposed belongs to a record
+// that may yet commit.
+var (
+	tooManyRequests   = brokerSays(10167, "too many requests")
+	idStillInProgress = brokerSays(10158, "duplicate message id is in process")
+)
+
+// scripted answers each append from a script, in order, and delegates to the
+// real log once the script is spent — which is how a case puts one broker
+// answer the embedded broker cannot be driven into in front of a real one.
+type scripted struct {
+	log  statelog.Appender
+	mu   sync.Mutex
+	next []func(ctx context.Context, subject, msgID string, expect *uint64,
+		body []byte) (uint64, bool, error)
+	// always, when set, answers every append the script does not.
+	always error
+}
+
+func (s *scripted) Append(ctx context.Context, subject, msgID string, expect *uint64,
+	body []byte) (uint64, bool, error) {
+
+	s.mu.Lock()
+	var step func(context.Context, string, string, *uint64, []byte) (uint64, bool, error)
+	if len(s.next) > 0 {
+		step, s.next = s.next[0], s.next[1:]
+	}
+	always := s.always
+	s.mu.Unlock()
+	switch {
+	case step != nil:
+		return step(ctx, subject, msgID, expect, body)
+	case always != nil:
+		return 0, false, always
+	}
+	return s.log.Append(ctx, subject, msgID, expect, body)
+}
+
+func (s *scripted) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	return s.log.LastSeq(ctx, subject)
+}
+
+// answer is a script step that stores nothing and says err.
+func answer(err error) func(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	return func(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+		return 0, false, err
+	}
+}
+
+// established writes the object this case writes over, so the next write forms
+// its expectation from the anchor and asks the broker nothing before its own
+// append — which is what lets a case count the broker calls a refusal makes.
+func established(t *testing.T, h *harness) statelog.Result {
+	t.Helper()
+	first, err := h.write(probeSubject("a"), "op-0", "one")
+	if err != nil {
+		t.Fatalf("the first write: %v", err)
+	}
+	h.anchorAt(probeSubject("a"), first.Position.Seq)
+	return first
+}
+
+// A FULL INGEST QUEUE IS WAITED OUT, NOT ANSWERED.
+//
+// The broker drops a record its stream's ingest queue cannot take and says so,
+// and the same record is taken once the queue drains. So the write pauses and
+// retakes its snapshot, and the caller hears only that it landed. The pause is
+// the half that is easy to lose: retaken at once, the write meets the same
+// queue in the same millisecond, and a queue that stays full spends every round
+// on nothing and ends in a conflict a model reads as a colleague editing.
+//
+// Mutation: file the queue's answer as a refusal and the write is refused on
+// its first attempt; drop the pause and it lands inside the first beat.
+func TestAFullIngestQueueIsWaitedOutBeforeTheWriteRetakes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	established(t, h)
+	appended := h.appends.appends.Load()
+	h.appends.probes.Store(0)
+	h.appends.fail(tooManyRequests, true)
+
+	started := time.Now()
+	res, err := h.write(probeSubject("a"), "op-1", "two")
+	took := time.Since(started)
+	if err != nil {
+		t.Fatalf("a write the queue refused once answered %v, want it landed", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("outcome = %q, want applied", res.Outcome)
+	}
+	if got := h.appends.appends.Load() - appended; got != 2 {
+		t.Errorf("the write appended %d times, want 2 — the refused one and the "+
+			"retake that landed", got)
+	}
+	// THE PAUSE HAPPENED: its first beat is ApplyRetryBeat, jittered by a
+	// fifth either way.
+	if floor := statelog.ApplyRetryBeat * 4 / 5; took < floor {
+		t.Errorf("the write retook after %s, inside the %s the first pause takes "+
+			"at least — so it met the same full queue", took, floor)
+	}
+	if got := h.appends.probes.Load(); got != 0 {
+		t.Errorf("the write probed the subject %d time(s) — a record the broker "+
+			"said it did not store is not one whose outcome anybody has to "+
+			"discover", got)
+	}
+}
+
+// A QUEUE THAT STAYS FULL PAST THE BUDGET IS REFUSED AS BUSY, NAMING IT.
+//
+// Nothing was stored, and the refusal says so and says why — rather than
+// holding the caller for as long as the broker stays saturated, or ending in a
+// conflict after sixteen immediate retakes.
+//
+// Mutation: retake without pausing and the write ends in ErrConflict.
+func TestAQueueThatStaysFullIsRefusedBusyWithinTheBudget(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	established(t, h)
+	appended := h.appends.appends.Load()
+	h.appends.inner = &scripted{log: h.log, always: tooManyRequests}
+
+	started := time.Now()
+	res, err := h.write(probeSubject("a"), "op-1", "two")
+	took := time.Since(started)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a write against a queue that stayed full answered %v (%+v), want "+
+			"an Unavailable", err, res)
+	}
+	if refusal.Reason != statelog.ReasonBusy {
+		t.Fatalf("reason = %q, want %q: %v", refusal.Reason, statelog.ReasonBusy, err)
+	}
+	for _, says := range []string{"stored nothing", "ingest queue", "too many requests"} {
+		if !strings.Contains(refusal.Detail, says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	if refusal.OpID != "op-1" {
+		t.Errorf("the refusal carries op id %q, want the write's own", refusal.OpID)
+	}
+	if got := h.appends.appends.Load() - appended; got < 2 {
+		t.Errorf("the write appended %d time(s) — a full queue is retaken after a "+
+			"pause, not answered on its first refusal", got)
+	}
+	// THE HARNESS'S BUDGET IS A QUARTER OF A SECOND; a write held for
+	// several of them is one the budget did not bound.
+	if took > 2*time.Second {
+		t.Errorf("the write was held %s against a full queue", took)
+	}
+}
+
+// A QUEUE THAT REFUSES A WRITE ONE OF WHOSE ATTEMPTS WENT UNANSWERED LEAVES IT
+// UNKNOWN, NOT REFUSED.
+//
+// The unanswered attempt's record may still arrive, so "stored nothing" is not
+// something this write can say about itself: the honest answer is the third
+// value, with the op id the retry collapses it by.
+//
+// Mutation: answer busy whatever came before, and a write whose record may yet
+// land is reported as one that never will.
+func TestAFullQueueAfterAnUnansweredAttemptLeavesTheWriteUnknown(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	established(t, h)
+	h.appends.inner = &scripted{log: h.log,
+		next:   []func(context.Context, string, string, *uint64, []byte) (uint64, bool, error){answer(errors.New("nats: timeout"))},
+		always: tooManyRequests,
+	}
+
+	res, err := h.write(probeSubject("a"), "op-1", "two")
+	if err != nil {
+		t.Fatalf("write = %v, want the third value rather than a refusal", err)
+	}
+	if res.Outcome != statelog.OutcomeUnknown || res.OpID != "op-1" {
+		t.Fatalf("result = %+v, want unknown carrying op-1", res)
+	}
+}
+
+// A MESSAGE ID STILL BEING PROPOSED IS RESOLVED, NOT REFUSED — BY THE LEDGER,
+// OR BY THE DUPLICATE ACKNOWLEDGEMENT A LATER APPEND GETS.
+//
+// A clustered leader answers a publish carrying a message id it is still
+// proposing with a conflict, and the first proposal may still commit. Filed
+// as a refusal, the caller is told nothing landed about a record that will.
+func TestAMessageIDStillBeingProposedIsResolvedRatherThanRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the ledger, when the first record has landed", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		established(t, h)
+		// THE FIRST PROPOSAL COMMITTED AND THIS NODE APPLIED IT; this
+		// attempt's own answer was the conflict.
+		h.appends.fail(idStillInProgress, false)
+
+		res, err := h.write(probeSubject("a"), "op-1", "two")
+		if err != nil {
+			t.Fatalf("write = %v, want it resolved from the ledger", err)
+		}
+		if res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("outcome = %q, want applied", res.Outcome)
+		}
+		last, _, err := h.log.LastSeq(t.Context(), probePrefix+".object.a")
+		if err != nil {
+			t.Fatalf("read the subject: %v", err)
+		}
+		if res.Position.Seq != last {
+			t.Errorf("the write answered position %d and its record is at %d",
+				res.Position.Seq, last)
+		}
+	})
+
+	t.Run("the duplicate acknowledgement, when it lands during the pause", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first := established(t, h)
+		subject := probePrefix + ".object.a"
+		landedAt := uint64(0)
+		h.appends.inner = &scripted{log: h.log,
+			next: []func(context.Context, string, string, *uint64, []byte) (uint64, bool, error){
+				// THE PROPOSAL IS STILL IN FLIGHT: nothing has landed.
+				answer(idStillInProgress),
+				// AND IT COMMITS BEFORE THE RETAKE ARRIVES, which then
+				// meets it.
+				func(ctx context.Context, subj, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
+					at := first.Position.Seq
+					seq, _, err := h.log.Append(ctx, subj, msgID, &at, body)
+					if err != nil {
+						return 0, false, err
+					}
+					landedAt = seq
+					return h.log.Append(ctx, subj, msgID, expect, body)
+				},
+			},
+		}
+
+		res, err := h.write(probeSubject("a"), "op-1", "two")
+		if err != nil {
+			t.Fatalf("write = %v, want it resolved to the first record", err)
+		}
+		if res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("outcome = %q, want applied", res.Outcome)
+		}
+		if landedAt == 0 {
+			t.Fatal("the in-flight record never landed, so this case is not the " +
+				"shape it names")
+		}
+		if res.Position.Seq != landedAt {
+			t.Errorf("the write answered position %d, want %d — the record the "+
+				"first proposal committed, which the duplicate acknowledgement names",
+				res.Position.Seq, landedAt)
+		}
+		last, _, err := h.log.LastSeq(t.Context(), subject)
+		if err != nil {
+			t.Fatalf("read the subject: %v", err)
+		}
+		if last != landedAt {
+			t.Errorf("the subject's last record is %d and the operation's is %d — "+
+				"one operation landed twice", last, landedAt)
+		}
+	})
+
+	t.Run("the third value, when it is still pending at the budget", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		established(t, h)
+		h.appends.inner = &scripted{log: h.log, always: idStillInProgress}
+
+		res, err := h.write(probeSubject("a"), "op-1", "two")
+		if err != nil {
+			t.Fatalf("write = %v, want the third value rather than a refusal", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown || res.OpID != "op-1" {
+			t.Fatalf("result = %+v, want unknown carrying op-1 — a record under "+
+				"this op id may still commit", res)
+		}
+		if res.Position.Seq != 0 {
+			t.Errorf("an unknown write names position %d, and nothing was "+
+				"established about one", res.Position.Seq)
+		}
 	})
 }

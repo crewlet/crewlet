@@ -217,9 +217,10 @@ type BridgeCall struct {
 	// the record could not hold it whole, and then it ends in "…" — and, when
 	// the call's whole could not be kept in parts either, in a note after
 	// the mark saying so. In the record's least form an output longer than
-	// that mark is the mark alone. A call read back whole whose parts do not
-	// reassemble ends in a note saying why, whether or not its output was
-	// cut. See [MaxBridgeCallBytes].
+	// its mark is replaced by it: "…" alone when the whole is kept in parts,
+	// and "…" followed by [RefusedWholeNotKept] when it is not. A call read
+	// back whole whose parts do not reassemble ends in a note saying why,
+	// whether or not its output was cut. See [MaxBridgeCallBytes].
 	Output string `json:"output,omitempty"`
 
 	Failed bool      `json:"failed,omitempty"`
@@ -380,9 +381,9 @@ func ArgsUnreadable(bytes int) string {
 
 // RefusedArgsNotKept is [ArgsNotKept] for a call's LEAST form, the record
 // filed once a server refused one the contract's ceiling admits (see
-// [MaxBridgeCallBytes]). Its arguments were not too large for a record; they
-// were set aside because that server refused the record, and this marker, like
-// [RefusedArgsInParts] and [RefusedArgsUnreadable], says that instead.
+// [MaxBridgeCallBytes]). Its arguments were set aside because that server
+// refused the record, whether or not they were also too large for one, and
+// this marker, like [RefusedArgsInParts] and [RefusedArgsUnreadable], says so.
 func RefusedArgsNotKept(bytes int) string {
 	return argsMarker(bytes, argsRefused, argsNotKept)
 }
@@ -458,8 +459,8 @@ func WholeNotKept(bytes int) string {
 }
 
 // RefusedWholeNotKept is [WholeNotKept] for a call's least form, whose output
-// was set aside because a server refused its record rather than because it
-// was too large for one; see [RefusedArgsNotKept].
+// was set aside because a server refused its record, whether or not it was
+// also too large for one; see [RefusedArgsNotKept].
 func RefusedWholeNotKept(bytes int) string {
 	return "\n[the whole of this call, " + strconv.Itoa(bytes) + " bytes, was set aside when a " +
 		"server refused its record, and could not be kept anywhere else]"
@@ -709,17 +710,18 @@ type PendingRun struct {
 	// than resuming into nothing.
 	//
 	// A CONVERSATION THE ROW CANNOT HOLD IS NOT HERE. The row is one
-	// coordination record, and a conversation grows with its turn: past
-	// half the transport's ceiling — or refused by a server set below it —
-	// its whole goes to part records filed under the run's launch, first,
-	// and this holds a REFERENCE to them in its place: one key, naming the
-	// whole's length and how many parts hold it. [PendingStore.Suspension]
-	// is what reads a run's conversation whole, from either. The reference
-	// is in this field rather than one of its own because a build that
-	// predates it carries this map whole through every write it makes to
-	// the row, and hands a resume it cannot decode back for a node that
-	// can; a field it did not know it would drop on its first write, and
-	// an empty map here it would fail as a run with no conversation.
+	// coordination record, and a conversation grows with its turn: when the
+	// row holding it would be past half the transport's ceiling — or a
+	// server set below that ceiling refuses it — its whole goes to part
+	// records filed under the run's launch, first, and this holds a
+	// REFERENCE to them in its place: one key, naming the whole's length and
+	// how many parts hold it. [PendingStore.Suspension] is what reads a
+	// run's conversation whole, from either. The reference is in this field
+	// rather than one of its own because a build that predates it carries
+	// this map whole through every write it makes to the row, and hands a
+	// resume it cannot decode back for a node that can; a field it did not
+	// know it would drop on its first write, and an empty map here it would
+	// fail as a run with no conversation.
 	ExecuteState map[string]any `json:"execute_state"`
 
 	// BridgeCalls is OLDER BUILDS' BOUNDED VIEW of what a run made through

@@ -106,18 +106,26 @@ var _ tools.SeatCallable = (*searchKnowledge)(nil)
 
 func (t *searchKnowledge) Name() string { return SearchKnowledgeTool }
 
+// Description names BOTH readers, each by what it is. The native knowledge
+// base's is this engine's own `get_page`, which takes the page id a hit
+// renders; a vendor wiki's is that vendor's server tool, which this engine does
+// not name, because a prompt describes a capability and the model picks the
+// tool (docs/concepts/tool-capabilities.md). One description for both, because
+// one tool serves whichever backend answers the search.
 func (t *searchKnowledge) Description() string {
 	return "Search your team's knowledge base — the shared docs, runbooks " +
 		"and conventions the company has written down. Returns the best " +
 		"matches, most relevant first: each page's title, its container, " +
 		"its page id and a one-line snippet, so you can decide what to " +
-		"open; read a page in full by passing its page id to your knowledge " +
-		"base's page-read tool. Your prompt already carries what a search " +
-		"on the trigger found at turn start, so use this once you know what " +
-		"the task actually needs — above all when the trigger was a bare " +
-		"pointer (a webhook naming an item, a thread reply) and that block " +
-		"came back empty. For a procedure you distilled from your own turns, " +
-		"use `use_skill` instead: those are yours, not the team's."
+		"open. To read one in full, pass its page id to `get_page` — or, " +
+		"where your company's knowledge base is a vendor wiki such as " +
+		"Confluence, to that wiki's own page-read tool. Your prompt already " +
+		"carries what a search on the trigger found at turn start, so use " +
+		"this once you know what the task actually needs — above all when " +
+		"the trigger was a bare pointer (a webhook naming an item, a thread " +
+		"reply) and that block came back empty. For a procedure you " +
+		"distilled from your own turns, use `use_skill` instead: those are " +
+		"yours, not the team's."
 }
 
 func (t *searchKnowledge) Parameters() map[string]any {
@@ -182,11 +190,17 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// CanSearch does no I/O, and a seat whose search could not hit anything
 	// is told so instead of waiting on a round trip that was always going
 	// to be empty.
+	//
+	// ONE SENTENCE FOR BOTH CALLERS, and it names the two causes without
+	// saying "this seat": an operator's search has no seat, and on
+	// Confluence it runs on the org credential, which searches only a
+	// declared `knowledge.scope`.
 	if !t.search.CanSearch(seat, company) {
-		return tools.Result{Output: "Your team's knowledge base is not searchable from " +
-			"this seat — either no knowledge backend is configured, or this seat has " +
-			"no read scope and no credential of its own. Ask a colleague, or work " +
-			"from what you have."}, nil
+		return tools.Result{Output: "The team's knowledge base is not searchable " +
+			"here — either no knowledge backend is configured, or no read scope " +
+			"(`knowledge.scope`) is declared and this search has no credential of " +
+			"its own to search unscoped with. Ask a colleague, or work from what " +
+			"you have."}, nil
 	}
 
 	hits := t.search.Search(ctx, knowledge.Query{

@@ -5,12 +5,11 @@ package statelog
 // its job", and every subsystem above it asks the same question.
 //
 
-// The package's own doc is in doc.go and is NOT restated here. It was, and
-// `go doc` concatenates every package comment in file order — so this file's
-// copy, sorting first, told a reader that the ordered stream is "the
-// write-ahead log" twelve lines before doc.go's own heading told them "This is
-// NOT the store's write-ahead log". Two package comments are ADR-0008's
-// failure inside one package: one rule, written twice, disagreeing.
+// The package's own doc is in doc.go and is NOT restated here. `go doc`
+// concatenates every package comment in file order, so a copy in this file
+// would sort first and be read before doc.go's own heading — and two package
+// comments are ADR-0008's failure inside one package: one rule, written twice,
+// free to disagree.
 
 import (
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // The thresholds an alarm fires at.
@@ -29,10 +29,10 @@ import (
 // grace is what sheds a node, a deferral grace is what moves its seats, a read
 // budget is what a caller was promised. An alarm that invented its own
 // threshold would be a second opinion about the same event, and the two would
-// drift: the plan this replaces tinted a dashboard row `caution` past one
-// apply linger (250 ms) on a position refreshed every 15 seconds, so every row
-// was lit always, and `critical` past `min_age` — seven days, which is 10 080
-// times the grace that actually does something.
+// drift: a row tinted `caution` past one apply linger (250 ms), on a position
+// refreshed every 15 seconds, is lit always; one tinted `critical` past
+// `min_age` — seven days — waits 10 080 times the grace that actually does
+// something.
 //
 // So an alarm fires at the threshold that MATTERS, and where the constant
 // belongs to another package it is taken from there.
@@ -150,7 +150,9 @@ const (
 	KindBackupAge        Kind = "backup_age"
 	KindTrimBlocked      Kind = "trim_blocked"
 	KindDeferredOld      Kind = "deferred_old"
+	KindDeferredCoverage Kind = "deferred_coverage"
 	KindFloorUnknown     Kind = "floor_unknown"
+	KindGenerationLeft   Kind = "generation_left"
 	KindPrefetchSlow     Kind = "prefetch_slow"
 	KindSearchSlow       Kind = "search_slow"
 	KindSearchDegraded   Kind = "search_degraded"
@@ -185,8 +187,10 @@ type Reading struct {
 	// on a quiet log is named as surely as a slow one on a busy log.
 	ApplyLag time.Duration
 
-	// RefusalsSince is how long reads have been refused for a reason other
-	// than ordinary lag. Zero when nothing is being refused.
+	// RefusalsSince is how long reads at one level have been refused for a
+	// reason other than ordinary lag with none served at that level — the
+	// longest such run on this node, from [Reader.FaultRefusingSince]. Zero
+	// when no run is current.
 	RefusalsSince time.Duration
 
 	// BarrierP95 is the read barrier's 95th percentile.
@@ -213,12 +217,24 @@ type Reading struct {
 	TrimBlockedFor time.Duration
 	TrimBlockedBy  string
 
-	// DeferredAge is how old the oldest record this node could not apply
-	// is.
+	// DeferredAge is how long this node has been holding back records it
+	// could not apply, in the domains whose health decides whether it keeps
+	// its seats ([Domain.ReadinessInput]) — so past [DeferralGrace] its seats
+	// move.
 	DeferredAge time.Duration
+
+	// CoverageDeferredAge is the same age in the domains whose health
+	// decides nothing about seats, because their gaps are coverage rather
+	// than a fault. Past the grace nothing moves; the domain's answers on
+	// this node are simply missing what the held records carry.
+	CoverageDeferredAge time.Duration
 
 	// FloorUnknownFor is how long the trim floor has been unreadable.
 	FloorUnknownFor time.Duration
+
+	// GenerationLeftFor is how long the trim floor has been published at a
+	// generation above the one this node's rows are on.
+	GenerationLeftFor time.Duration
 
 	// PrefetchP95 and SearchP95 are the two latencies a turn waits on.
 	PrefetchP95, SearchP95 time.Duration
@@ -315,18 +331,29 @@ var table = []rule{
 				r.ApplyLag > StallGrace
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
-			"domain and its position. A node that stays behind past the deferral " +
-			"grace loses its seats to a peer.",
+			"domain and this node's position in it, and a `statelog_apply_faulted` " +
+			"or `statelog_applier_stopped` line in its log names any error holding " +
+			"it. A node whose applied prefix stands still for a minute with records " +
+			"waiting refuses reads as `stalled` and gives its seats to a peer until " +
+			"it moves again.",
 	},
 	{
+		// THE RUN, NOT THE COUNT. A refusal counter over a day says a
+		// fault-class refusal happened and cannot say when it started or
+		// whether it has stopped: read as an alarm it latches for the day
+		// on one refusal during a rolling restart. [Reader.FaultRefusingSince]
+		// is how long reads at one level have gone unserved, which a read
+		// served at that level ends.
 		kind: KindReadRefusals,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("reads have been refused for %s for a reason other "+
 					"than ordinary lag", round(r.RefusalsSince)),
 				r.RefusalsSince > coord.ReconcileInterval
 		},
-		remedy: "Read the refusal code in the logs. Anything other than " +
-			ordinaryLagCodes() + " is a fault rather than a wait.",
+		remedy: "The `code` attribute on `" + metrics.StatelogReadRefusals + "` names " +
+			"what is refusing them. Anything other than " + ordinaryLagCodes() +
+			" is a fault rather than a wait, and each refusal's own detail says " +
+			"what it needs.",
 	},
 	{
 		kind: KindBarrierSlow,
@@ -353,11 +380,10 @@ var table = []rule{
 			"advancing. A full log refuses writes; it does not drop records.",
 	},
 	{
-		// ONE THRESHOLD. The form this replaces set a blocked flag once
-		// the newest backup passed backup_max_age and then alarmed once
-		// THAT had been true for backup_max_age again — so a 24-hour
-		// policy alarmed at 48 hours, eight missed six-hourly runs after
-		// the first one that mattered.
+		// ONE THRESHOLD. An alarm that set a blocked flag once the newest
+		// backup passed backup_max_age, and fired once THAT had held for
+		// backup_max_age again, would page a 24-hour policy at 48 hours —
+		// eight missed six-hourly runs after the first one that mattered.
 		kind: KindBackupAge,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the newest verified backup is %s old, and the "+
@@ -388,13 +414,46 @@ var table = []rule{
 			"are writing. Upgrade it; its seats have already moved.",
 	},
 	{
+		// THE SAME GRACE, AND NO SEAT MOVE TO PROMISE. A domain whose
+		// health gates no seat holds records it cannot decode past the
+		// grace without anything moving, and folded into `deferred_old`
+		// that alarm would tell an operator the seats had moved when none
+		// will.
+		kind: KindDeferredCoverage,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("the oldest record this node cannot apply, in a "+
+					"domain that gates no seat, is %s old, past the %s grace; its "+
+					"seats stay", round(r.CoverageDeferredAge), round(DeferralGrace)),
+				r.CoverageDeferredAge > DeferralGrace
+		},
+		remedy: "This node is running a build that cannot decode records its peers " +
+			"are writing to a domain whose gaps cost coverage rather than seats. " +
+			"Upgrade it: nothing moves on its own, and until then that domain's " +
+			"answers on this node lack what those records carry.",
+	},
+	{
 		kind: KindFloorUnknown,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the trim floor has been unreadable for %s",
 				round(r.FloorUnknownFor)), r.FloorUnknownFor > FloorCacheStale
 		},
-		remedy: "Coordination cannot be reached from this node. Every read is " +
-			"refused until it can be.",
+		remedy: "Coordination cannot be reached from this node. Its reads refuse " +
+			"until it can be.",
+	},
+	{
+		// NO GRACE. An unreadable floor is waited out for four heartbeats
+		// because one failed read during an election is not a fault; a
+		// floor at another generation was read perfectly well, every read
+		// on this node refuses from the first one that sees it, and nothing
+		// clears it but this node adopting the generation the fleet is on.
+		kind: KindGenerationLeft,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("the trim floor has named a generation this node has "+
+				"left for %s", round(r.GenerationLeftFor)), r.GenerationLeftFor > 0
+		},
+		remedy: "The fleet re-anchored this domain and this node did not follow, " +
+			"so its rows are keyed to the generation before. Restart it: its boot " +
+			"asks the fleet for a snapshot of the current generation and adopts it.",
 	},
 	{
 		kind: KindPrefetchSlow,
@@ -609,20 +668,3 @@ func ordinaryLagCodes() string {
 	}
 	return strings.Join(codes, " or ")
 }
-
-// RefusalAlarmFloor is what a surface reports when it can see that reads are
-// being refused for a fault but cannot say for how long.
-//
-// # Why a floor rather than a duration
-//
-// The condition is written in time — reads refused for longer than one
-// reconcile interval — because a single refusal during an election is not a
-// fault and a sustained one is. A recorder holds a COUNT, not an age: it can
-// say a fault-class refusal happened, and cannot say when it started.
-//
-// So a surface with only the count reports this floor, which is one interval
-// past the threshold: the alarm fires, and the detail says what was measured.
-// The alternative — reporting zero because the age is unknown — is the
-// three-valued mistake this whole engine is organised against, and it silences
-// the alarm on exactly the fault it exists for.
-const RefusalAlarmFloor = 2 * coord.ReconcileInterval

@@ -12,16 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// A RECORD REFUSED FOR ITS SIZE IS A REFUSAL OF ITS OWN, whichever side made
-// it, and never the third value.
+// EVERY ANSWER A PUBLISH CAN GET READS AS WHAT IT IS.
 //
-// The client's refusal carries no API error, so without the sentinel it reads
-// as an append that may or may not have landed — and the write path answers
-// that by reading the subject back and deciding again, round after round, to
-// a conflict. The broker's carries one, and filed with the full log it would
-// send an operator to raise a byte ceiling that is not the limit in the way.
-// The other answers are here as the control: each must still read as itself.
-func TestASizeRefusalIsTooLargeFromEitherSide(t *testing.T) {
+// A record refused for its size is a refusal of its own, whichever side made
+// it, and never the third value: the client's refusal carries no API error, so
+// without the sentinel it reads as an append that may or may not have landed,
+// and the broker's, filed with the full log, would send an operator to raise a
+// byte ceiling that is not the limit in the way. The broker's two answers that
+// are not a decision about the record — a full ingest queue, and a message id
+// still being proposed — read as neither a refusal nor silence. Each other
+// answer is the control, and must still read as itself.
+func TestEveryPublishAnswerIsClassifiedAsWhatItIs(t *testing.T) {
 	t.Parallel()
 	api := func(code jetstream.ErrorCode, description string) error {
 		// Wrapped the way the client returns a refused acknowledgement.
@@ -54,6 +55,16 @@ func TestASizeRefusalIsTooLargeFromEitherSide(t *testing.T) {
 			want: faultRefused, says: "sealed stream"},
 		{name: "a server at its storage limit", err: api(10023, "insufficient resources"),
 			want: faultRefused, says: "insufficient resources"},
+		// TWO API ERRORS ARE NOT A DECISION ABOUT THIS RECORD. A full ingest
+		// queue stored nothing and clears on its own, so filed as refused it
+		// would end a write the next attempt would land; a message id still
+		// being proposed may yet commit, so filed as refused it would tell a
+		// caller nothing landed about a record that will.
+		{name: "a full ingest queue", err: api(codeStreamTooManyRequests, "too many requests"),
+			want: faultBusy, says: "too many requests"},
+		{name: "this message id still being proposed",
+			err:  api(codeDuplicateInProcess, "duplicate message id is in process"),
+			want: faultInFlight, says: "in process"},
 		{name: "no answer", err: errors.New("nats: timeout"), want: faultUnknown},
 		{name: "a PubAck", err: nil, want: faultNone},
 	} {

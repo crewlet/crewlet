@@ -64,14 +64,37 @@ import (
 // would make the alarm coarser for no saving that matters at this cost.
 const RetentionInterval = 15 * time.Minute
 
+// AlarmInterval is how often every node evaluates its own alarm table: the
+// loop's own cadence, with the trim taken on the passes a [RetentionInterval]
+// apart.
+//
+// [coord.ReconcileInterval] — FIFTEEN SECONDS — because an alarm is only as
+// prompt as the look that raises it, and the tightest threshold in the table
+// is that same interval: `read_refusals` fires on a run of refusals longer than
+// it, and `apply_lag` and `floor_unknown` at a minute. Evaluated on the trim's
+// quarter-hour, each would be raised up to fifteen minutes after the state it
+// names — for a node that has stopped applying, fifteen minutes of seats
+// answering from rows that no longer move before anybody is told.
+//
+// THE COST is one report assembly per node per interval, the same one
+// `crewlet retention status` makes: reads of the fleet register, the presence
+// leases, the published floors and the backup points; per domain the stream's
+// info, a health read, the open maintenance operation and — only on a domain
+// with records waiting — one lookup of the oldest of them; and the sizes and
+// free space of this node's store files. Nothing in it walks a table or a
+// corpus: the vector coverage, the one input that does, is cached for a
+// [RetentionInterval] ([retention.semanticCoverage]), and the hardware gauges
+// are measured on the trim's passes rather than on every one.
+const AlarmInterval = coord.ReconcileInterval
+
 // retentionDutyName is the fleet singleton the trim claims.
 const retentionDutyName = "retention"
 
 // retentionDutyTTL is how long the duty survives without a re-claim.
 //
-// Three ticks, the ratio every other duty here uses: one missed tick must not
-// hand the trim to a peer, because two nodes purging and publishing at once is
-// exactly what the singleton avoids.
+// Three trim intervals, the ratio every other duty here uses: one missed pass
+// must not hand the trim to a peer, because two nodes purging and publishing
+// at once is exactly what the singleton avoids.
 const retentionDutyTTL = 3 * RetentionInterval
 
 // retention is the trim loop.
@@ -119,16 +142,20 @@ type retention struct {
 	// coverAt, coverFraction and coverKnown are the last coverage
 	// measurement and when it was taken.
 	//
-	// CACHED FOR ONE TICK, because the measurement is a scan of the whole
-	// source corpus and a report is assembled on every operator request
-	// and every dashboard poll — where the trim's own inputs are read once
-	// per tick by construction. One [RetentionInterval] is also the
-	// resolution every other alarm input here has, so a fresher coverage
-	// number would be the only one on the reading that could disagree with
-	// its neighbours about which tick it describes.
+	// CACHED FOR ONE [RetentionInterval], because the measurement is a scan
+	// of the whole source corpus and a report is assembled on every
+	// [AlarmInterval] pass, every operator request and every dashboard
+	// poll. The alarm it feeds compares a fraction of the corpus against a
+	// floor, so the figure it is judged on is at most one trim interval
+	// old.
 	coverAt       time.Time
 	coverFraction float64
 	coverKnown    bool
+
+	// trimmedAt is when this node last took the trim's pass — asked for
+	// the duty, whatever the answer. Read and written by the loop's own
+	// goroutine alone.
+	trimmedAt time.Time
 
 	// pooled is the last `sql.DBStats` wait counters seen per store file,
 	// so the histogram is fed the DELTA rather than the process's
@@ -180,7 +207,8 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	go r.run(loop)
 }
 
-// stopRetention ends the trim, waiting for an in-flight tick.
+// stopRetention ends the loop — the trim and this node's alarm evaluation
+// alike — waiting for an in-flight pass.
 func (e *Engine) stopRetention() {
 	if e.retention == nil {
 		return
@@ -202,7 +230,11 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 	return e.retention.Report(ctx), true
 }
 
-// run ticks until the context ends.
+// run ticks every [AlarmInterval] until the context ends.
+//
+// ONE LOOP FOR BOTH CADENCES, the alarm table's and the trim's, so stopping it
+// stops both and nothing about their order can race: a pass that trims
+// evaluates first, on the same goroutine.
 //
 // IT TICKS IMMEDIATELY, which matters more here than the usual reason: the
 // published floor is what every other surface reads a blocked trim from, and a
@@ -210,7 +242,7 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
 func (r *retention) run(ctx context.Context) {
 	defer close(r.done)
-	ticker := time.NewTicker(RetentionInterval)
+	ticker := time.NewTicker(AlarmInterval)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
@@ -229,9 +261,27 @@ func (r *retention) run(ctx context.Context) {
 	}
 }
 
-// tick evaluates every domain once, if this node holds the duty.
+// tick is one pass: this node's alarm table on every one, and the trim — every
+// domain once, if this node holds the duty — on the first, and then on the
+// first a [RetentionInterval] after the last pass that took it.
 func (r *retention) tick(ctx context.Context) {
-	// FIRST, AND ON EVERY NODE — before the duty claim, deliberately.
+	now := time.Now()
+	trim := r.trimmedAt.IsZero() || now.Sub(r.trimmedAt) >= RetentionInterval
+	if trim {
+		// THE HARDWARE, ON THE TRIM'S CADENCE AND ON EVERY NODE. Its
+		// gauges are per-pass samples a collector reads over hours,
+		// and the connection-pool wait is one observation per pass by
+		// design — see [retention.poolWait] — so sampling them every
+		// alarm pass would change what their percentiles mean rather
+		// than make them more current.
+		//
+		// MEASURED BEFORE THE TABLE IS EVALUATED, because the reading
+		// reads the pool wait back: a pass that evaluated first would
+		// judge the previous interval's queueing.
+		r.capacity(ctx)
+	}
+	// THE TABLE ON EVERY PASS AND ON EVERY NODE — before the duty claim,
+	// deliberately.
 	//
 	// The trim is a fleet singleton because two nodes purging one log is
 	// waste; the ALARMS are the opposite. [statelog.Reading] describes ONE
@@ -241,6 +291,15 @@ func (r *retention) tick(ctx context.Context) {
 	// one nobody hears from. It is also what makes this loop useful on a
 	// node that never wins the lease at all.
 	r.evaluate(ctx)
+	if !trim {
+		return
+	}
+	// THE PASS IS TAKEN WHATEVER THE CLAIM ANSWERS, so a node that does
+	// not hold the duty asks for it once a trim interval, as the holder
+	// renews it, rather than on every alarm pass: the lease is sized in
+	// trim intervals ([retentionDutyTTL]), so a failover is measured in
+	// them already.
+	r.trimmedAt = now
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
 		if err != nil {
@@ -270,14 +329,9 @@ func (r *retention) tick(ctx context.Context) {
 	}
 }
 
-// evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware.
-//
-// THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
-// against reads three of these back: a tick that observed before it measured
-// would evaluate the previous tick's disk against this tick's log.
+// evaluate observes this node's alarms: the report's own, so the gauge, the log
+// line and every screen that renders a report judge one table the same way.
 func (r *retention) evaluate(ctx context.Context) {
-	r.capacity(ctx)
 	if r.alarms == nil {
 		return
 	}

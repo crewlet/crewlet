@@ -26,13 +26,14 @@ roles:
 
 // A SECOND STOP TEARS NOTHING DOWN.
 //
-// The first teardown closes the broker and the coordination store its own
-// stops reach — the admission withdrawn, the duties released, the node
-// stopped — so a second pass would run each of them again against closed ones. Two callers reaching Stop is ordinary — this package's own
-// tests stop an engine explicitly and again in their cleanup — so a later
-// caller must wait for the first and then do nothing. Counted on the teardown
-// itself rather than read off the log, whose sink is the process's and shared
-// with every parallel test.
+// The first teardown closes the broker and the coordination store that its
+// own steps write through — the admission withdrawn, the duties released, the
+// node stopped — so a second pass would run each of them again against closed
+// ones. Two callers reaching Stop is ordinary — this package's own tests stop
+// an engine explicitly and again in their cleanup — so a later caller must
+// wait for the first and then do nothing. Counted on the teardown itself
+// rather than read off the log, whose sink is the process's and shared with
+// every parallel test.
 func TestASecondStopTearsNothingDown(t *testing.T) {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")

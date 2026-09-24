@@ -84,12 +84,10 @@ type PageDeps struct {
 	// how a company on the native knowledge base publishes both, and
 	// write_page is the only thing that creates a native page.
 	//
-	// A FUNCTION, read per call, and nil reserves nothing. Both containers
-	// are named in Tier B config, so an apply can move either, and a
-	// seat's tools are cloned into its lease and not rebuilt by an apply:
-	// a list captured when the surface was built would go on closing a
-	// container that is now ordinary and opening the one that now holds
-	// the skills.
+	// A FUNCTION, asked at every write and never cached by the tools, and
+	// nil reserves nothing. Both containers are named in Tier B config, so
+	// an apply can move either, and what a write is refused on is whatever
+	// the wiring answers at the moment of the write.
 	Reserved func() []string
 
 	// Actor decides who a write is attributed to. Nil takes the turn's

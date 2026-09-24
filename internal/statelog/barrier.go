@@ -257,9 +257,16 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 // majority that did not agree — a read told to wait out an election, about a
 // log only an operator can empty.
 //
+// A FULL INGEST QUEUE IS ITS OWN REFUSAL, because it is the one broker answer
+// here that waiting clears: nothing was stored, and the same barrier is taken
+// once the queue drains. The barrier does not retry it itself — a read is
+// holding a request open, and the caller is better told how long to wait than
+// held for it.
+//
 // NO ANSWER STAYS AN ERROR rather than a refusal: an append nobody answered
 // within the barrier's budget is the one a quorum did not commit, which is
-// what [barrierRefusal] names it.
+// what [barrierRefusal] names it. A barrier carries no message id, so the one
+// ambiguous answer a message id can draw never reaches here.
 func (r *ReadIndex) refusal(err error) error {
 	switch f, detail := classify(err); f {
 	case faultFull:
@@ -268,6 +275,11 @@ func (r *ReadIndex) refusal(err error) error {
 	case faultTooLarge:
 		return &Unavailable{Reason: ReasonTooLarge, Detail: fmt.Sprintf(
 			"the barrier on %s was refused for its size: %s", r.subject, detail)}
+	case faultBusy:
+		return &Unavailable{Reason: ReasonBusy, Detail: fmt.Sprintf(
+			"the broker could not take the barrier on %s, and stored nothing: %s — "+
+				"the stream's ingest queue is full, which clears as it drains",
+			r.subject, detail)}
 	case faultRefused:
 		return &Unavailable{Reason: ReasonRefused, Detail: fmt.Sprintf(
 			"the broker refused the barrier on %s: %s", r.subject, detail)}

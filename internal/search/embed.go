@@ -87,23 +87,20 @@ const (
 
 	// EmbedChunkBytes is the window one vector represents.
 	//
-	// A DOCUMENT IS EMBEDDED WHOLE, IN WINDOWS. It used to be cut at its
-	// first 8 KiB, defended on the grounds that refusing the document
-	// outright would be worse — true, and the wrong comparison: the third
-	// option is to embed all of it and keep a vector per window, which is
-	// what this is. On a page longer than the old cut the tail was never
-	// sent to the provider, so it was not in the vector, so no query could
-	// reach it: a handbook whose rate-limit section is on its fourth page
-	// answered nothing to "how do we handle rate limits", from a corpus
-	// that holds the answer.
+	// A DOCUMENT IS EMBEDDED WHOLE, IN WINDOWS — neither refused nor cut to
+	// its opening. A vector over a document's first few kilobytes leaves
+	// everything after them unsent to the provider, so in no vector and
+	// reachable by no query: a handbook whose rate-limit section is on its
+	// fourth page would answer nothing to "how do we handle rate limits",
+	// from a corpus that holds the answer.
 	//
 	// FOUR KIBIBYTES, and the two directions bound it from both sides. A
 	// window is one vector, and a vector represents its window's SUBJECT —
 	// so a window holding four unrelated sections represents none of them,
 	// which is the failure a bigger one has. A smaller one costs vectors:
 	// the median page is well under this and stays exactly one, so the
-	// provider bill and the stream rise only for the long documents that
-	// were not indexed at all before. It is also far inside every
+	// provider bill and the stream rise only for the long documents, and
+	// only by the windows past their first. It is also far inside every
 	// embedding model's own input limit — roughly a thousand tokens of
 	// English against the eight thousand the narrowest takes — so nothing
 	// here has to know which model a company wired.
@@ -112,9 +109,9 @@ const (
 	// both corpora are already bounded where a bound belongs, at the write
 	// that refuses an over-long body — 512 KiB for a page, 32 KiB for a
 	// task, each REFUSED naming the field rather than stored short. So the
-	// worst document this duty can be handed is ~147 windows, and adding a
-	// cap here would reintroduce the silent cut this replaced, one
-	// magnitude further out where nobody would find it.
+	// worst document this duty can be handed is ~147 windows, and a cap
+	// here would be a silent cut of the document's tail, one magnitude
+	// further out where nobody would find it.
 	EmbedChunkBytes = 4 << 10
 
 	// EmbedChunkOverlap is how much of the previous window each one repeats.
@@ -128,13 +125,10 @@ const (
 	EmbedChunkOverlap = 512
 )
 
-// THERE IS NO STALL WINDOW HERE, deliberately, and the constant that used to
-// declare one is gone rather than wired up.
-//
-// It named thirty minutes of no progress as the point an alarm fires, and no
-// alarm read it — there is no progress timer on this duty at all, so the value
-// promised a surface that did not exist. Wiring one is what the alarm table's
-// own rule forbids: `recall_below_floor` already reports a duty that has
+// THERE IS NO STALL WINDOW HERE, deliberately: no progress timer on this duty
+// and no threshold of no progress for an alarm to fire at. A threshold of its
+// own is what the alarm table's rule forbids: `recall_below_floor` already
+// reports a duty that has
 // stopped, from the coverage the corpora themselves are counted at, and a
 // second threshold over the same event is a second opinion that drifts from
 // the first. A duty that embeds nothing shows up as coverage that stops
@@ -142,16 +136,12 @@ const (
 // window cannot tell those apart, which is why the reading is the fraction and
 // not the clock.
 
-// # Two corpora, and the seam is why there was ever one
+// # Two corpora behind one seam
 //
-// [Corpus] had one implementation — the tracker's tasks — because
-// `tracker_tasks` and `kb_vectors` are both in the replicated estate and the
-// selection is one anti-join, while pages were this node's own projection and
-// no statement may name a table in both. A page arm then would have been a
-// bounded cursor sweep whose whole shape existed to work around that boundary.
-// The pages domain removed it: `pages_heads` is written by an applier into the
-// replicated estate, so [PageCorpus] is the same single anti-join and the duty
-// itself did not change by a line — which is what this seam was for.
+// [TaskCorpus] and [PageCorpus] are one shape: `tracker_tasks`, `pages_heads`
+// and `kb_vectors` are all written into the replicated estate by an applier,
+// so each corpus answers with anti-joins inside that one estate — no statement
+// may name a table in both — and the duty below knows neither corpus by name.
 
 // Corpus is where the sources this duty embeds come from.
 //
@@ -359,12 +349,10 @@ func wordEdge(text string, from, to int) int {
 
 // sha is the digest of the whole text this document's windows cover.
 //
-// OF THE WHOLE TEXT, which it can be now that the whole text is embedded. It
-// answers the question it exists for — a source rewritten into the same words,
-// a re-file, a label, a parent move, produces the same digest and is not paid
-// for again — and it used to be a digest of the CUT text, which was the only
-// honest choice while everything past the cut was text the provider never saw:
-// a change below it moved nothing that was embedded.
+// OF THE WHOLE TEXT, because every byte of it is in some window: a change
+// anywhere in it moves what is embedded. It answers the question it exists
+// for — a source rewritten into the same words, a re-file, a label, a parent
+// move, produces the same digest and is not paid for again.
 //
 // PER DOCUMENT rather than per window, because that is the granularity the
 // duty re-embeds at: every window of a document is recomputed together or none
@@ -525,11 +513,10 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	// [Document.Body] holds the WHOLE body, so N x 1 024 whole documents
 	// are live for the length of the tick and a third corpus is a 50 %
 	// rise in this duty's peak footprint before it embeds anything new.
-	// That is the figure to weigh when adding one — and it did not change
-	// when chunking landed, because the body was already held whole: what
-	// used to be cut at send time is now split there instead. None of it
-	// is lost WORK — the selection is derived from the rows, so the next
-	// tick asks again.
+	// That is the figure to weigh when adding one; the windows are cut
+	// from that same whole body at send time and add nothing to it. None
+	// of it is lost WORK — the selection is derived from the rows, so the
+	// next tick asks again.
 	//
 	// TWO SHAPES THAT WOULD BOUND THE READ WERE WEIGHED AND NOT TAKEN,
 	// because each buys it back with something load-bearing:

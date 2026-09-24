@@ -395,12 +395,33 @@ type AgentPhaseCompleted struct {
 	// RoundNarration is Response split back into the rounds that produced
 	// it, so a reader can put a round's thinking beside the calls it asked
 	// for. See [RoundNarration].
-	RoundNarration  []RoundNarration `json:"round_narration,omitempty"`
-	InputTokens     int              `json:"input_tokens"`
-	OutputTokens    int              `json:"output_tokens"`
-	TotalTokens     int              `json:"total_tokens"`
-	RoundsUsed      int              `json:"rounds_used"`
-	ExhaustedRounds bool             `json:"exhausted_rounds"`
+	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
+	// AbandonedAttempts is what the model wrote in this phase that no round
+	// kept, oldest first, one `{round, reasoning, content}` each — the shape
+	// of [RoundNarration], numbered with the round it was an attempt at:
+	//
+	//   - an attempt a provider or a credential gave up on partway through,
+	//     after which another attempt at the same round began;
+	//   - on a failed record, the last attempt at the round the phase failed
+	//     in: as far as it had streamed when its provider call failed, or the
+	//     whole answer when the call returned and its token charge failed.
+	//
+	// A live frame shows each of these while its round is open, as
+	// `partial_round`'s `abandoned` and the round in flight; this is where
+	// they are whole once it closes. SEPARATE from RoundNarration, which is
+	// what the model committed to. Set on the turn's own phases —
+	// onboarding, execute, review — and on no nested one.
+	//
+	// An executor that suspended carries only the attempts since it last
+	// resumed: the pending-run row that carries its earlier rounds into this
+	// record holds none, so each earlier one is logged whole, once, when it
+	// suspends (abandoned_attempt_suspended).
+	AbandonedAttempts []RoundNarration `json:"abandoned_attempts,omitempty"`
+	InputTokens       int              `json:"input_tokens"`
+	OutputTokens      int              `json:"output_tokens"`
+	TotalTokens       int              `json:"total_tokens"`
+	RoundsUsed        int              `json:"rounds_used"`
+	ExhaustedRounds   bool             `json:"exhausted_rounds"`
 	// DurationMS is how long the work this record reports actually took,
 	// measured by the process that published it.
 	//
@@ -489,7 +510,8 @@ type AgentPhaseCompleted struct {
 	// Error is the failure's message, whole on a record published whole.
 	// On a record published cut it is the LAST text any form shortens —
 	// only once every other text is at its mark and every row is given up,
-	// counted in [AgentPhaseCompleted.ToolExecutionsOmitted] and
+	// counted in [AgentPhaseCompleted.AbandonedAttemptsOmitted],
+	// [AgentPhaseCompleted.ToolExecutionsOmitted] and
 	// [AgentPhaseCompleted.RoundNarrationOmitted] — and the record's whole
 	// carries it as the phase returned it, unless a part of that whole
 	// could not be published, which Notes then says. Empty unless Failed.
@@ -512,11 +534,12 @@ type AgentPhaseCompleted struct {
 	//
 	// A record the transport refuses as too large is published in the largest
 	// form it accepts: its longest texts shortened to a common level, each
-	// ending in "…" and, on a tool call or a round, with its whole length
-	// beside it as `<field>_bytes` — a text no longer than that mark is left
-	// as it is; past that every other text reduced to its mark; past that its
-	// later rows counted rather than carried
-	// ([AgentPhaseCompleted.ToolExecutionsOmitted],
+	// ending in "…" and, on a tool call, a round or an abandoned attempt,
+	// with its whole length beside it as `<field>_bytes` — a text no longer
+	// than that mark is left as it is; past that every other text reduced to
+	// its mark; past that its later rows counted rather than carried
+	// ([AgentPhaseCompleted.AbandonedAttemptsOmitted],
+	// [AgentPhaseCompleted.ToolExecutionsOmitted],
 	// [AgentPhaseCompleted.RoundNarrationOmitted]); and only with no row
 	// left, its Error shortened too. Every form carries the scalars whole —
 	// the tokens, the cost, the model, the decision — and Notes says which
@@ -531,13 +554,14 @@ type AgentPhaseCompleted struct {
 	// and on a cut one whose whole was not kept, whose Notes say why.
 	WholeParts int `json:"whole_parts"`
 
-	// ToolExecutionsOmitted and RoundNarrationOmitted count the rows of each
-	// list a cut record does not carry: it keeps the FIRST rows, as many as
-	// fit, and counts the rest here. The whole, when WholeParts says it was
-	// kept, holds every one of them. Zero on every record whose lists are
-	// complete.
-	ToolExecutionsOmitted int `json:"tool_executions_omitted"`
-	RoundNarrationOmitted int `json:"round_narration_omitted"`
+	// AbandonedAttemptsOmitted, ToolExecutionsOmitted and
+	// RoundNarrationOmitted count the rows of each list a cut record does
+	// not carry: it keeps the FIRST rows, as many as fit, and counts the rest
+	// here. The whole, when WholeParts says it was kept, holds every one of
+	// them. Zero on every record whose lists are complete.
+	AbandonedAttemptsOmitted int `json:"abandoned_attempts_omitted"`
+	ToolExecutionsOmitted    int `json:"tool_executions_omitted"`
+	RoundNarrationOmitted    int `json:"round_narration_omitted"`
 }
 
 // EventType is the "agent_phase_completed" wire type.
@@ -679,8 +703,10 @@ type AgentTurnProgress struct {
 	// is republished several times a second for the length of the phase, so
 	// it carries a window of the newest calls, each with its result and
 	// error cut to their tails and arguments past a bound replaced by a
-	// one-member object keyed "…" saying where they are whole. The
-	// phase's completed record carries every call whole.
+	// one-member object keyed "…" saying where they are whole. Every call is
+	// whole on the phase's completed record — on a record published cut, in
+	// the whole GET /phases/{id} reassembles from its parts, unless a part
+	// could not be published, which the record's notes then say.
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
 	// ToolExecutionsEarlier is how many of the phase's calls come BEFORE the
 	// first one ToolExecutions carries. Zero while the window holds every
@@ -689,21 +715,26 @@ type AgentTurnProgress struct {
 	// RoundNarration is what the model said in its latest rounds, each text
 	// cut to its tail. Free on this event in storage terms — nothing
 	// persists it — and it is what lets the live view append a round rather
-	// than redraw one blob. The completed record carries every round whole.
+	// than redraw one blob. Every round is whole on the phase's completed
+	// record, by the route ToolExecutions names.
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// RoundNarrationEarlier is how many narrated rounds come BEFORE the first
 	// one RoundNarration carries. Zero while the window holds every round.
 	RoundNarrationEarlier int `json:"round_narration_earlier,omitempty"`
 	// PartialRound is the round being written RIGHT NOW: `round`,
-	// `reasoning`, `content`, and `abandoned` for attempts a provider gave
-	// up on partway through.
+	// `reasoning`, `content`, and `abandoned` for the attempts at it a
+	// provider gave up on partway through — every text cut to its tail.
 	//
 	// SEPARATE from RoundNarration on purpose — a reader must be able to
 	// tell text that is still arriving from text the model has committed
 	// to, and merging them would make an in-flight fragment
 	// indistinguishable from a finished round. It appears only while a
-	// round is open, and only on this live-only event: nothing persists a
-	// half-written sentence.
+	// round is open. Its texts are whole on the phase's completed record,
+	// by the route ToolExecutions names: the round as its RoundNarration
+	// once it commits, and each abandoned attempt, and the last attempt at a
+	// round the phase failed in, among its
+	// [AgentPhaseCompleted.AbandonedAttempts], save the executor's attempts
+	// before a suspension, which that field says where to find.
 	PartialRound map[string]any `json:"partial_round,omitempty"`
 	A2AContext   map[string]any `json:"a2a_context,omitempty"`
 }

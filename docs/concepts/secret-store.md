@@ -109,7 +109,7 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 
 ### Which store the CLI writes
 
-`crewlet secrets` reaches the fleet's rows through a **running node's authenticated API**, because on the default topology the coordination KV lives inside the engine's own process and listens on no socket. There is nothing to guess about which route it takes: the engine holds an exclusive lock on its database for as long as it runs, so a locked store means "the engine is up, write through it" with a pid attached, and an unlocked one means it is not.
+`crewlet secrets` reaches the fleet's rows through a **running node's authenticated API**, because on the default topology the coordination KV lives inside the engine's own process and listens on no socket. There is nothing to guess about which route it takes: the engine holds an exclusive lock on each of its two store files for as long as it runs, so a locked store means "the engine is up, write through it" with a pid attached, and an unlocked one means it is not.
 
 | The engine on this node is | `crewlet secrets` writes | Reaches |
 |---|---|---|
@@ -174,13 +174,15 @@ The re-activations are **coalesced**: the first in a quiet period runs at once, 
 **A write reaches every node, and the value is a value rather than a file to copy.** `crewlet secrets set` against a running node puts one sealed record on the coordination KV; every peer reads that same record at its next boot or activation. Nothing has to be run once per node, and nothing has to be copied to a node that scales up at 3am.
 
 > **The node-local table is still there, and it is the bootstrap path.** The
-> engine takes an exclusive lock on its database for as long as it runs — the
-> store is **one file, one process**, and the driver does not reliably refuse a
-> second writer, so before the lock existed a `crewlet secrets` against a live
-> node corrupted the database silently. That lock is now also the *routing*
-> signal: a locked store sends the command to the node's API, and an unlocked
-> one means the engine is stopped and the local table is the only place a value
-> can go until it starts.
+> engine takes an exclusive lock on each of the store's two files — its own
+> estate, where this table lives, and the replicated estate — for as long as
+> it runs, and a second crewlet process opening either is refused, naming the
+> process that holds it. The driver does not reliably refuse a second process
+> on its own, and two processes on one file corrupt it between them, which is
+> what the lock prevents. It is also the *routing* signal: a locked store sends
+> the command to the node's API, and an unlocked one means the engine is
+> stopped and the local table is the only place a value can go until it
+> starts.
 >
 > The lock is released by the kernel when the engine exits, however it exits —
 > a crash, a `kill -9` and an OOM all free it, and there is no stale lock to

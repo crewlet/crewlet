@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
@@ -15,12 +16,10 @@ import (
 
 // THE COMPANY'S COALESCING KNOBS REACH THE VALUE EVERY SEAT READS.
 //
-// The regression this exists for: node.Config.BatchOptions was never set, so
-// every seat attachment took queue.DefaultBatchOptions and both knobs —
-// notification_coalesce_window_seconds and notification_coalesce_max_batch —
-// were declared, defaulted, schema'd, validated and documented while being
-// read by nothing. Setting either produced a revision that changed nothing an
-// operator could observe.
+// notification_coalesce_window_seconds and notification_coalesce_max_batch are
+// validated, documented settings; a seat attachment that took
+// queue.DefaultBatchOptions instead would make setting either a revision that
+// changes nothing an operator can observe.
 func TestTheCompanysCoalescingKnobsReachTheInbox(t *testing.T) {
 	t.Parallel()
 	e := &Engine{batch: queue.DefaultBatchOptions()}
@@ -73,15 +72,12 @@ func TestTuningBatchingWithoutAnythingToTuneIsHarmless(t *testing.T) {
 	(&Engine{batch: queue.DefaultBatchOptions()}).tuneBatching(&Company{})
 }
 
-// THE GATE READS CONFIG; THE SEARCHER IS RESOLVED PER CALL.
+// THE GATE READS THE EPOCH'S BACKEND.
 //
-// Those cannot be the same read. equip runs BEFORE an apply reconciles the
-// knowledge base, so a searcher captured here is the PREVIOUS epoch's — its
-// lead map is the old org chart and its credential is the pre-rotation one.
-// Capturing it would give a seat a tool that reads the company it used to be,
-// silently, since a stale-credential search returns an empty result exactly
-// like a real one.
-func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
+// A company with no knowledge base gets no search tool at all, and every other
+// company gets one — including the one that declares nothing, which runs the
+// native knowledge base.
+func TestSearchKnowledgeIsGatedOnTheBackend(t *testing.T) {
 	t.Parallel()
 	// A NIL INTERFACE when the company runs NO knowledge base, not a live
 	// adapter over a nil searcher: the tool is omitted rather than
@@ -119,6 +115,59 @@ func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 	}
 	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}); hits != nil {
 		t.Errorf("an unstarted knowledge base returned %v", hits)
+	}
+}
+
+// THE SEARCHER IS RESOLVED AT THE CALL, never captured when the tool is built.
+//
+// equip runs BEFORE an apply reconciles the knowledge base and before the new
+// epoch is published, so a searcher captured there is the PREVIOUS epoch's —
+// its backend may be one the company has left, its lead map the old org chart
+// and its credential the pre-rotation one. Captured, a seat's tool would read
+// the company it used to be, silently, since a stale search returns an empty
+// result exactly like a real one. So one adapter, built while the node answers
+// from its native pages, must answer the very next call from Confluence once
+// the epoch moves there.
+func TestSearchKnowledgeIsResolvedAtTheCall(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	index := search.NewIndexerOver(db, []search.LexicalSource{search.PageSource{}})
+	pagesSearcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+	e := &Engine{native: &native{searcher: pagesSearcher}}
+	onNative := &Company{Config: &config.Company{}}
+	e.epoch.current.Store(onNative)
+	adapter := knowledgeSearch(e, onNative)
+	chart := &org.Organization{Name: "Acme"}
+
+	// THE PREMISE: the native searcher can always search, and this node's
+	// index has built nothing yet.
+	if !adapter.CanSearch(nil, chart) || !adapter.Building(t.Context()) {
+		t.Fatal("the adapter does not answer from the native searcher to begin with")
+	}
+
+	// THE EPOCH MOVES TO CONFLUENCE, whose searcher keeps no index and, with
+	// no read scope and no seat credential, can search nothing — so both
+	// answers flip only if the same adapter asks the searcher the node holds
+	// now.
+	e.notify.confluence = confluenceParts{
+		searcher: confluence.NewSearcher(confluence.SearcherOptions{}),
+	}
+	e.epoch.current.Store(&Company{Config: &config.Company{
+		Knowledge:    config.Knowledge{Backend: config.KnowledgeConfluence},
+		Integrations: config.Integrations{Confluence: &config.Confluence{}},
+	}})
+	if adapter.CanSearch(nil, chart) {
+		t.Error("after the move the adapter still answers CanSearch from the native searcher")
+	}
+	if adapter.Building(t.Context()) {
+		t.Error("after the move the adapter still reports the native index building")
 	}
 }
 

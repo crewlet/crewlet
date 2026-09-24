@@ -438,9 +438,9 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		Trigger:   e.turn.Trigger,
 		// NO PROMPT. It is sent once, on the opening frame, and the live
 		// projection carries it forward from there — exactly as it already
-		// carries the trigger. It is the one thing on this event that never
-		// changes over a phase, and a seat with a 30 KB system prompt would
-		// republish the whole of it with every frame.
+		// carries the trigger. It is the largest thing on this event that
+		// never changes over a phase, and a seat with a 30 KB system prompt
+		// would republish the whole of it with every frame.
 		//
 		// EVERYTHING ELSE HERE IS BOUNDED, because past
 		// [queue.MaxPayloadBytes] the publish is refused outright, this
@@ -713,24 +713,28 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		return
 	}
 	ev := types.AgentPhaseCompleted{
-		Agent:           e.turn.AgentID,
-		RoleName:        e.role,
-		TurnID:          e.turn.RunID,
-		WorkKey:         e.turn.WorkKey,
-		Iteration:       rec.Iteration,
-		Phase:           types.Phase(rec.Phase),
-		Model:           rec.Result.Model,
-		Trigger:         e.turn.Trigger,
-		SystemPrompt:    rec.System,
-		UserPrompt:      rec.User,
-		Response:        rec.Result.Text,
-		ToolExecutions:  toolExecutions(rec.Result.Executions),
-		RoundNarration:  roundNarration(rec.Result.Narration),
-		InputTokens:     rec.Result.InputTokens,
-		OutputTokens:    rec.Result.OutputTokens,
-		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
-		RoundsUsed:      rec.Result.RoundsUsed,
-		ExhaustedRounds: rec.Exhausted,
+		Agent:          e.turn.AgentID,
+		RoleName:       e.role,
+		TurnID:         e.turn.RunID,
+		WorkKey:        e.turn.WorkKey,
+		Iteration:      rec.Iteration,
+		Phase:          types.Phase(rec.Phase),
+		Model:          rec.Result.Model,
+		Trigger:        e.turn.Trigger,
+		SystemPrompt:   rec.System,
+		UserPrompt:     rec.User,
+		Response:       rec.Result.Text,
+		ToolExecutions: toolExecutions(rec.Result.Executions),
+		RoundNarration: roundNarration(rec.Result.Narration),
+		// WHOLE, like the narration beside them: what the model wrote that
+		// no round kept is still part of what the phase did, and this
+		// record is where it outlives the live frames that showed its tail.
+		AbandonedAttempts: roundNarration(rec.Result.Abandoned),
+		InputTokens:       rec.Result.InputTokens,
+		OutputTokens:      rec.Result.OutputTokens,
+		TotalTokens:       rec.Result.InputTokens + rec.Result.OutputTokens,
+		RoundsUsed:        rec.Result.RoundsUsed,
+		ExhaustedRounds:   rec.Exhausted,
 		// WHICH ROUND WAS EXPENSIVE, which is the question the token total
 		// makes a reader ask and could not answer. Zero where the phase ran
 		// no loop in this process — see [types.AgentPhaseCompleted].
@@ -878,9 +882,11 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 // is open", and an empty object would read as "a round is open and has said
 // nothing", which is a different fact.
 //
-// The attempts a provider gave up on partway through ride along, each cut to
-// its tail like the round itself: one for each member of the provider chain,
-// or each credential rotated to, that abandoned a stream in this round.
+// The attempts at this round that a provider gave up on partway through ride
+// along, each cut to its tail like the round itself: one for every attempt —
+// a member of the provider chain, or one of its credentials — that streamed
+// text in this round and was then abandoned. Where each whole is kept is
+// [partialTail]'s to say.
 func partialRound(p *toolloop.Partial) map[string]any {
 	if p == nil {
 		return nil
@@ -982,7 +988,9 @@ func tailedNarration(narr []toolloop.Narration) []types.RoundNarration {
 }
 
 // partialTail bounds, in BYTES, how much of any one text a live frame carries:
-// the round in flight, a committed round's narration, a call's result.
+// the joined response, the round in flight and the attempts at it a provider
+// abandoned, each committed round's narration, and each call's result and
+// error.
 //
 // The whole accumulated text of a round in flight is republished five times a
 // second — deltas cannot be sent instead, because the socket hub drops the
@@ -992,14 +1000,24 @@ func tailedNarration(narr []toolloop.Narration) []types.RoundNarration {
 // also quadratic in the length of the round.
 //
 // The tail is what a reader is actually watching — text appears at the END —
-// and every text is kept on the phase's completed record: whole there, or, on
-// a record too large for one event, whole in its parts when every part landed
-// — when one did not, the record's notes say its whole was not kept. At four
-// thousand bytes, each field this cuts adds at most that much (plus the
-// three-byte marker) to a frame, however long the text runs. Bytes rather than
-// characters because that cost is what the bound is for, so a text written in
-// a script whose characters take three bytes each shows a third as many of
-// them.
+// and the whole of each of these texts is on the phase's completed record.
+// The round in flight is there as its narration once it commits; an attempt
+// at it that does not — one given up on for another, or the last one when the
+// phase fails during it — is among the record's abandoned attempts, with
+// every attempt a frame carries as abandoned; the rest are the record's own
+// response, narration and calls. On a record too large for one event the
+// whole is in its parts, which GET /phases/{id} reassembles, unless a part
+// could not be published, which the record's notes then say. The one text
+// the record does not hold is an attempt the executor abandoned before it
+// suspended: the pending-run row that carries the earlier rounds into the
+// resumed phase's record has no field for one, so it is logged whole when
+// the executor suspends ([Runner.recordSuspension]).
+//
+// At four thousand bytes, each field this cuts adds at most that much (plus
+// the three-byte marker) to a frame, however long the text runs. Bytes rather
+// than characters because that cost is what the bound is for, so a text
+// written in a script whose characters take three bytes each shows a third as
+// many of them.
 const partialTail = 4000
 
 // tail is the last [partialTail] bytes of text, with a leading "…" when it

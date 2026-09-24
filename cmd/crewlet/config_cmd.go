@@ -634,8 +634,8 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		if !errors.Is(err, store.ErrLocked) {
 			return err
 		}
-		// The engine holds its database, so this is the live case rather
-		// than a failure: go through the node that is holding it.
+		// The engine holds its store files, so this is the live case
+		// rather than a failure: go through the node that is holding them.
 		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 	defer closeStore()

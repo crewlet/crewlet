@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -343,6 +344,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	}
 
 	gen := p.generation()
+	var pace pacing
 	for round := 1; round <= casRounds; round++ {
 		snap, err := p.rows.Snapshot(ctx, req.Subject, req.Scope, req.Decide)
 		if err != nil {
@@ -388,7 +390,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			continue
 		}
 
-		res, disp, err := p.attempt(ctx, req, snap, expect, gen, round)
+		res, disp, err := p.attempt(ctx, req, snap, expect, gen, round, &pace)
 		if err != nil || disp == dispDone {
 			return res, err
 		}
@@ -406,7 +408,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		if zero == nil {
 			continue
 		}
-		res, disp, err = p.attempt(ctx, req, snap, zero, gen, round)
+		res, disp, err = p.attempt(ctx, req, snap, zero, gen, round, &pace)
 		if err != nil || disp == dispDone {
 			return res, err
 		}
@@ -436,8 +438,59 @@ const (
 	dispRetake
 )
 
+// pacing is what one write has spent waiting on the broker's own say-so, and
+// whether any attempt of it went unanswered.
+//
+// PER WRITE, and carried across its rounds: the budget it is held to is the
+// write path's [Publisher.resolveBudget], the bound every other wait on this
+// path takes, so a write meeting sustained backpressure is answered within it
+// rather than after one pause per round.
+type pacing struct {
+	// waited is the pause this write has taken so far, and pauses how many.
+	waited time.Duration
+	pauses int
+
+	// unanswered reports that an attempt of this write ended without an
+	// answer and was retaken — so a record under its op id may land after
+	// every later attempt was refused, and "nothing was stored" is not
+	// something the write can say about itself any more.
+	unanswered bool
+}
+
+// backpressureSpread is how widely a pause is jittered: a fifth, the spread
+// this tree's other retries take, so writers one full queue refused together
+// do not return to it together.
+const backpressureSpread = 0.2
+
+// pause waits before a retake the broker asked for — a full ingest queue, or a
+// proposal under this op id still in flight — and reports false, having waited
+// nothing, once the next pause would take the write past its budget.
+//
+// THE APPLIER'S OWN RETRY PACING, [ApplyRetryBeat] doubling to
+// [ApplyRetryCeiling], because this is the same event seen from the writer: a
+// broker that answered and could not take the record just now. A retake with
+// no pause meets the same queue, or the same proposal, in the same
+// millisecond, and spends the write's rounds on nothing.
+func (p *Publisher) pause(ctx context.Context, pace *pacing) (bool, error) {
+	next := backoff.Doubling(pace.pauses+1, ApplyRetryBeat, ApplyRetryCeiling)
+	if pace.waited+next > p.resolveBudget {
+		return false, nil
+	}
+	t := time.NewTimer(backoff.Jitter(next, backpressureSpread))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-t.C:
+	}
+	pace.waited += next
+	pace.pauses++
+	return true, nil
+}
+
 // attempt publishes once and reads the answer.
-func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
+func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64,
+	gen uint32, round int, pace *pacing) (Result, disposition, error) {
 	// FENCE 0 AGAIN, because a round is not free of it: a write that has
 	// spent fifteen rounds losing races has been running for as long as
 	// those races took, and the eviction it must not publish under may have
@@ -503,14 +556,73 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 			OpID:   req.OpID,
 		}
 
+	case faultBusy:
+		// NOTHING WAS STORED, AND IT IS NOT THE BROKER'S LAST WORD: the
+		// stream's ingest queue could not take the record, and the same
+		// record is taken once it drains. So the write pauses and retakes
+		// its snapshot rather than answering — nothing about the refusal
+		// says the decision it made is stale, and a fresh snapshot is
+		// what every retake decides from.
+		ok, err := p.pause(ctx, pace)
+		switch {
+		case err != nil:
+			return Result{Rounds: round}, dispDone, err
+		case ok:
+			return Result{Rounds: round}, dispRetake, nil
+		case pace.unanswered:
+			// AN EARLIER ATTEMPT OF THIS WRITE WENT UNANSWERED, so its
+			// record may still land: what this write can say is the
+			// third value, with the op id a retry collapses it by.
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, dispDone, nil
+		}
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonBusy,
+			Detail: fmt.Sprintf("the broker could not take the record for %s for %s "+
+				"of retrying, and stored nothing: %s — the stream's ingest queue is "+
+				"full, which clears as it drains; retry under the same op id",
+				req.Subject, pace.waited, detail),
+			OpID: req.OpID,
+		}
+
+	case faultInFlight:
+		// A RECORD UNDER THIS OP ID IS STILL BEING PROPOSED — an earlier
+		// attempt of this same write, whose answer never arrived. The
+		// ambiguous path's own question comes first: if it has landed, the
+		// ledger answers for it.
+		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res.Rounds = round
+		if err != nil || res.Outcome != "" {
+			return res, dispDone, err
+		}
+		// NOT YET. The proposal commits, or a change of leader abandons it
+		// and clears the id, and a retake under the same op id learns
+		// which: inside the stream's duplicate window a committed first
+		// record answers it with a duplicate acknowledgement naming that
+		// record's position, and a cleared id lets it append. So the write
+		// pauses first — retaken at once, it meets the same proposal and
+		// spends its rounds on it — and a proposal still pending when the
+		// budget runs out leaves the write the third value.
+		pace.unanswered = true
+		ok, err := p.pause(ctx, pace)
+		switch {
+		case err != nil:
+			return Result{Rounds: round}, dispDone, err
+		case !ok:
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, dispDone, nil
+		}
+		return Result{Rounds: round}, dispRetake, nil
+
 	case faultUnknown:
 		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
 		res.Rounds = round
 		if err != nil || res.Outcome != "" {
 			return res, dispDone, err
 		}
-		// Nothing landed, or somebody else's record did. Either way
-		// there is no rejection to discriminate: take a fresh snapshot.
+		// Nothing landed yet, or somebody else's record did. Either way
+		// there is no rejection to discriminate: take a fresh snapshot. The
+		// attempt went unanswered, though, and a record under its op id may
+		// still arrive — which the pacing remembers.
+		pace.unanswered = true
 		return Result{Rounds: round}, dispRetake, nil
 
 	default:
@@ -538,10 +650,9 @@ func (p *Publisher) refuseFromSnapshot(req Request, snap Snap) error {
 	if snap.Deferred {
 		return &Unavailable{
 			Reason: ReasonDeferred,
-			Detail: fmt.Sprintf("this node holds a record at version %d it cannot "+
-				"decode, at %s, whose scope covers %s — its rows are stale here "+
-				"and another node can serve this write",
-				snap.Deferral.Version, snap.Deferral.Position, req.Subject),
+			Detail: fmt.Sprintf("this node retains %s, whose scope covers %s — its "+
+				"rows are stale here and another node can serve this write",
+				snap.Deferral.Describe(p.domain.RecordVersion()), req.Subject),
 			Position: snap.Deferral.Position,
 			OpID:     req.OpID,
 		}
@@ -706,8 +817,8 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uin
 // classifyAmbiguous is the ordered classification of a publish whose outcome
 // nobody knows, and it answers in ONE of four ways.
 //
-// A zero Outcome with a nil error means nothing landed and the caller should
-// retake its snapshot.
+// A zero Outcome with a nil error means nothing of this write's had landed as
+// of this look, and the caller should retake its snapshot.
 func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Snap, detail string) (Result, error) {
 	subject := p.subjectOf(req.Subject)
 	seq, found, err := p.log.LastSeq(ctx, subject)
@@ -724,7 +835,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 
 	case !found, seq <= snap.Anchor.Seq:
 		// At or below the anchor this write decided against, so the
-		// subject holds nothing this write put there. Nothing landed:
+		// subject holds nothing this write put there as of this look:
 		// retake the snapshot and re-decide.
 		return Result{}, nil
 

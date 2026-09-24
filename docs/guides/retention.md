@@ -181,7 +181,7 @@ answer rather than a silence:
 |---|---|
 | `sole_node` | fewer than two counted nodes; nothing to donate to |
 | `lagging` | this node is more than 1 000 records behind |
-| `unhydrated` | this node has not established a complete copy of some domain |
+| `unhydrated` | this node has not drained some domain's log since its applier last started or last stalled, so what it holds is a prefix rather than a state |
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
@@ -648,8 +648,8 @@ which:
 
 - **[Replication](replication.md)** — the two regimes, the write outcomes and
   what the design does not promise.
-- **[Read consistency](consistency.md)** — what a full log costs, and the
-  twelve refusals.
+- **[Read consistency](consistency.md)** — what a full log costs, and every
+  refusal code.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
 - **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
   flags and refusals.

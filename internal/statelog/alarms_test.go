@@ -62,10 +62,20 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{DeferredAge: 31 * time.Minute},
 			"seats move",
 		},
+		"a deferral past the grace in a domain that gates no seat": {
+			statelog.KindDeferredCoverage,
+			statelog.Reading{CoverageDeferredAge: 31 * time.Minute},
+			"seats stay",
+		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
 			statelog.Reading{FloorUnknownFor: 2 * time.Minute},
 			"unreadable",
+		},
+		"a floor at a generation this node has left": {
+			statelog.KindGenerationLeft,
+			statelog.Reading{GenerationLeftFor: time.Second},
+			"generation this node has left",
 		},
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,

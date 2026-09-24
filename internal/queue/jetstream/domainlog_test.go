@@ -196,6 +196,92 @@ func TestAnEmptySubjectIsAFactRatherThanAnError(t *testing.T) {
 	}
 }
 
+// THE FIRST RECORD AT OR AFTER A SEQUENCE IS FOUND WHEREVER IT SURVIVES.
+//
+// On a compacted log the record after a node's checkpoint is routinely gone —
+// superseded on its subject — and the one it owes next is the first survivor
+// above it. Read by sequence alone, the answer is "nothing here": true of that
+// sequence, and no help to a caller asking which record comes next. The strict
+// log is the control: nothing removes an interior sequence there, so the first
+// record at or after a sequence is that sequence.
+//
+// Mutation: read the sequence alone and the superseded one answers "gone".
+func TestNextAtFindsTheFirstRecordTheLogStillHolds(t *testing.T) {
+	t.Parallel()
+	compacted := DomainStream{
+		Name:          "CREWLET_COMPACTED_LOG",
+		Subjects:      []string{"crewlet.compacted.log.>"},
+		MaxBytes:      16 << 20,
+		Duplicates:    2 * time.Minute,
+		MaxPerSubject: 1,
+	}
+	q := domainQueue(t, compacted)
+	log, err := q.DomainLog(t.Context(), compacted.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	// a at 1, b at 2, a again at 3 — which supersedes 1.
+	for i, subject := range []string{"a", "b", "a"} {
+		if _, _, err := log.Append(t.Context(), "crewlet.compacted.log.object."+subject,
+			"", nil, []byte{byte(i)}); err != nil {
+			t.Fatalf("append %d: %v", i+1, err)
+		}
+	}
+	if _, _, _, held, err := log.At(t.Context(), 1); err != nil || held {
+		t.Fatalf("At(1) = (held %v, %v), want the superseded record gone — the "+
+			"stream is not compacting, so this case is not the shape it names", held, err)
+	}
+
+	for _, tc := range []struct {
+		from    uint64
+		want    uint64
+		subject string
+		found   bool
+	}{
+		{from: 1, want: 2, subject: "crewlet.compacted.log.object.b", found: true},
+		{from: 2, want: 2, subject: "crewlet.compacted.log.object.b", found: true},
+		{from: 3, want: 3, subject: "crewlet.compacted.log.object.a", found: true},
+		{from: 4, found: false},
+	} {
+		subject, at, storedAt, found, err := log.NextAt(t.Context(), tc.from)
+		if err != nil {
+			t.Fatalf("NextAt(%d): %v", tc.from, err)
+		}
+		if found != tc.found {
+			t.Fatalf("NextAt(%d) found = %v, want %v", tc.from, found, tc.found)
+		}
+		if !found {
+			continue
+		}
+		if at != tc.want || subject != tc.subject {
+			t.Errorf("NextAt(%d) = %d on %q, want %d on %q", tc.from, at, subject,
+				tc.want, tc.subject)
+		}
+		if storedAt.IsZero() {
+			t.Errorf("NextAt(%d) carries no stored instant, which is what the "+
+				"apply age is read from", tc.from)
+		}
+	}
+
+	// THE CONTROL: on a strict log the first record at or after a sequence is
+	// that sequence, and it agrees with At.
+	strict := domainQueue(t, probeDomain())
+	plog, err := strict.DomainLog(t.Context(), probeDomain().Name)
+	if err != nil {
+		t.Fatalf("open the strict log: %v", err)
+	}
+	for i := range 3 {
+		if _, _, err := plog.Append(t.Context(), "crewlet.probe.log.object.a", "", nil,
+			[]byte{byte(i)}); err != nil {
+			t.Fatalf("append to the strict log: %v", err)
+		}
+	}
+	_, at, _, found, err := plog.NextAt(t.Context(), 2)
+	if err != nil || !found || at != 2 {
+		t.Fatalf("NextAt(2) on a strict log = (%d, %v, %v), want (2, true, nil)", at, found, err)
+	}
+}
+
 // A CONDITIONAL APPEND IS ARBITRATED BY THE BROKER, and a nil expectation is
 // no expectation at all.
 //

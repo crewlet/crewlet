@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -11,26 +12,27 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A NODE WITH NO CHECKPOINT TAKES THE FLEET'S GENERATION, AND ADOPTS.
+// A NODE BELOW THE FLEET'S GENERATION TAKES THE FLEET'S GENERATION, AND ADOPTS
+// — WHETHER IT HOLDS NO CHECKPOINT OR ONE AT THE GENERATION THE FLEET LEFT.
 //
-// An absent checkpoint row used to be read as `{generation 0, sequence 0}`,
-// which in a fleet that has never re-anchored is exactly right: a fresh node
-// has the whole log ahead of it. In one that HAS re-anchored it is a lie in
-// the direction nothing recovers from.
+// In a fleet that has re-anchored, the records before the re-anchor are not on
+// the log. A node that replayed from the new stream's sequence 1 would stamp
+// every row at its own generation while its peers hold the same records at N,
+// report itself caught up over a database holding only what was published
+// since, and block the fleet's trim, whose applied term reads a counted node
+// at a lower generation as unknown. And the floor comparison made at its own
+// generation against a floor published at N fails the boot on the call that
+// exists to send it to adopt — so the decision below is either an adoption or
+// an error, and an error here is a node that can never come up.
 //
-// The stream still begins at sequence 1, so the behind test passed and the
-// node replayed — stamping every row it wrote at generation 0 while its peers
-// held the same records at N, reporting itself caught up over a database
-// holding only what was published since the re-anchor, and blocking the
-// fleet's trim, whose applied term reads a counted node at a lower generation
-// as unknown. Then the first floor published at N failed the node's own boot
-// on the floor comparison, which is the call that would have sent it to adopt:
-// the state is terminal, and this test would have reported it as the error
-// below rather than as a decision.
-func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
+// Mutation: compare a found checkpoint's own generation against the floor and
+// the second case fails its boot; read an absent checkpoint as generation zero
+// and the first asks for an artefact no peer holds.
+func TestANodeBelowTheFleetsGenerationTakesItAndAdopts(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -73,6 +75,55 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		t.Fatalf("publish a floor at the fleet's generation: %v", err)
 	}
 
+	logs := map[string]*jetstream.DomainLog{}
+	for _, domain := range registeredDomains() {
+		running := s.Domain(domain.Name())
+		if running == nil {
+			t.Fatalf("%s is not running", domain.Name())
+		}
+		logs[domain.Name()] = running.log
+	}
+	decides := func(t *testing.T, what string) {
+		t.Helper()
+		behind, want, err := s.replayable(t.Context(), logs)
+		if err != nil {
+			t.Fatalf("replayable with %s: %v — the node compared its own "+
+				"generation against the fleet's floor and failed its boot on the "+
+				"call that would have sent it to adopt", what, err)
+		}
+		if got := want.Generations[name]; got != 3 {
+			t.Errorf("with %s the node would ask for a generation-%d artefact, "+
+				"want 3 — every donor refuses an artefact from another "+
+				"generation, so a request below it is one no peer can satisfy",
+				what, got)
+		}
+		if !slices.Contains(behind, name) {
+			t.Errorf("with %s the node judged itself able to replay %s in a "+
+				"fleet at generation 3 — the records before the re-anchor are "+
+				"not on the log", what, name)
+		}
+	}
+
+	// THIS NODE HOLDS A CHECKPOINT AT THE GENERATION THE FLEET LEFT — a
+	// peer of the node that re-anchored, restarted to follow it. Written
+	// here, because a company that has published nothing to this log has
+	// no checkpoint on it yet.
+	const left = 1
+	running := s.Domain(name)
+	if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (stream) DO UPDATE SET
+				generation = excluded.generation, seq = excluded.seq`,
+			stream, left, 0, store.EncodeTime(running.createdAt),
+			store.EncodeTime(time.Now()))
+		return err
+	}); err != nil {
+		t.Fatalf("write a checkpoint at generation %d: %v", left, err)
+	}
+	decides(t, fmt.Sprintf("a checkpoint at generation %d", left))
+
 	// AND THIS NODE HOLDS NO CHECKPOINT AT ALL — a machine added to the
 	// company, or one whose replicated estate was lost and rebuilt.
 	if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
@@ -82,31 +133,5 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear the checkpoint: %v", err)
 	}
-
-	logs := map[string]*jetstream.DomainLog{}
-	for _, domain := range registeredDomains() {
-		running := s.Domain(domain.Name())
-		if running == nil {
-			t.Fatalf("%s is not running", domain.Name())
-		}
-		logs[domain.Name()] = running.log
-	}
-
-	behind, want, err := s.replayable(t.Context(), logs)
-	if err != nil {
-		t.Fatalf("replayable: %v — a node with no checkpoint compared its "+
-			"absent generation against the fleet's and failed its own boot on "+
-			"the call that would have sent it to adopt", err)
-	}
-	if got := want.Generations[name]; got != 3 {
-		t.Errorf("the node would ask for a generation-%d artefact, want 3 — "+
-			"every donor refuses an artefact from another generation, so a "+
-			"request at 0 is one no peer can ever satisfy", got)
-	}
-	if !slices.Contains(behind, name) {
-		t.Errorf("the node judged itself able to replay %s from nothing in a "+
-			"fleet at generation 3 — the records before the re-anchor are not "+
-			"on the log, so what it would build is a database holding only "+
-			"what came after, reporting itself caught up", name)
-	}
+	decides(t, "no checkpoint")
 }

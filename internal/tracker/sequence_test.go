@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -396,9 +399,9 @@ func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
 //
 // The admission's lease is taken for the NODE, and a lease asked for again by
 // the owner that holds it is renewed rather than refused — so on the lease
-// alone every bulk edit a node's seats made was admitted whatever else that
-// node was applying, which on a single node is every bulk edit there is. The
-// second is refused while the first applies, and admitted once it has.
+// alone every bulk edit a node's seats made would be admitted whatever else
+// that node was applying, which on a single node is every bulk edit there is.
+// The second is refused while the first applies, and admitted once it has.
 //
 // The occupancy counter is the fleet's read-degradation budget, so a refused
 // bulk, which applies nothing, adds nothing to it.
@@ -454,7 +457,7 @@ func TestOneBulkEditAppliesAtATimeOnOneNode(t *testing.T) {
 // projects from; this pins the measured path, end to end from the call to the
 // recorder.
 //
-// Mutation: make [tracker.Writer]'s drainRows ignore the measured rate and the
+// Mutation: make [tracker.Writer]'s drain ignore the measured rate and the
 // occupancy reads the floor's 2 s; hand the projection to the recorder as a
 // whole number and it reads 0.
 func TestABulkEditProjectsItsOccupancyFromTheMeasuredDrain(t *testing.T) {
@@ -489,6 +492,142 @@ func TestABulkEditProjectsItsOccupancyFromTheMeasuredDrain(t *testing.T) {
 	if got := bulkOccupancy(r); got != 0.5 {
 		t.Errorf("the occupancy counter reads %v seconds, want 0.5: two records "+
 			"over a measured four a second", got)
+	}
+}
+
+// A BULK'S LEASE IS A WALK'S, HEARTBEATED: A HOLDER THAT DIES STOPS BLOCKING
+// THE COMPANY'S BULKS WITHIN [tracker.ClaimTTL], HOWEVER LONG ITS BULK WAS
+// PROJECTED TO TAKE — AND A CALLER REFUSED WHILE IT RUNS IS TOLD THE
+// PROJECTION.
+//
+// At a hundredth of a record a second two tasks project to 200 s. A lease sized
+// from that projection would hold a dead holder's claim for as long, refusing
+// every peer's bulk while nothing applies; a heartbeated lease is renewed only
+// while its holder runs, so it lapses one claim TTL after the last renewal.
+// The projection still answers the question a refused caller has, so it rides
+// the lease rather than sizing it.
+//
+// Mutation: size the lease from the projection and the claim is still held a
+// claim TTL after its holder stopped renewing; leave the projection off the
+// lease and the refused caller is told the lease's minute rather than the
+// bulk's 200 s.
+func TestABulkLeaseOutlivesADeadHolderByNoMoreThanTheClaimTTL(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2", "t-3"} {
+		filedTask(t, r, id)
+	}
+	// THE STORE'S CLOCK IS THE CASE'S, so a lease outlasts its TTL without
+	// the case sleeping through it.
+	claims := memory.New()
+	writerOn := func(node string) *tracker.Writer {
+		t.Helper()
+		w, err := tracker.NewWriter(tracker.WriterDeps{
+			Publisher: r.publisher, DB: r.db, NodeID: node, Claims: claims,
+			Drain: func() float64 { return 0.01 },
+			Actor: "ana", ActorKind: tracker.AuthorHuman,
+			Now: func() time.Time { return r.at },
+		})
+		if err != nil {
+			t.Fatalf("NewWriter on %s: %v", node, err)
+		}
+		return w
+	}
+	holder, peer := writerOn("node-a"), writerOn("node-b")
+
+	var refused error
+	var held []coord.Lease
+	var lapsed *coord.Lease
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" }, func() {
+		ctx := context.WithoutCancel(t.Context())
+		_, refused = peer.UpdateTasks(ctx, "op-peer", []string{"t-3"}, "ENG",
+			tracker.TaskPatch{Title: ptr("peer")}, tracker.ChangeFields, nil)
+		held, _ = claims.ListLive(ctx, coord.Class("bulk"))
+		// THE HOLDER STOPS RENEWING, as a node that died does, and one
+		// claim TTL passes on the store's clock.
+		claims.Advance(tracker.ClaimTTL + time.Second)
+		for _, lease := range held {
+			lapsed, _ = claims.TryAcquire(ctx, lease.Resource, coord.AcquireOptions{
+				Owner: "node-b", TTL: tracker.ClaimTTL,
+			})
+		}
+	})
+
+	done := tracker.StatusDone
+	if _, err := holder.UpdateTasks(t.Context(), "op-bulk", []string{"t-1", "t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if !hooked.didFire() || len(held) != 1 {
+		t.Fatalf("mid-bulk the store held %d bulk lease(s) (hook fired: %v), so "+
+			"this case is not the shape it names", len(held), hooked.didFire())
+	}
+	if !errors.Is(refused, tracker.ErrBulkInFlight) {
+		t.Fatalf("a peer's bulk while the first applied answered %v, want it "+
+			"refused as in flight", refused)
+	}
+	var wait int
+	if _, err := fmt.Sscanf(refused.Error()[strings.Index(refused.Error(), "retry in about "):],
+		"retry in about %d seconds", &wait); err != nil {
+		t.Fatalf("the refusal names no wait: %v (%v)", refused, err)
+	}
+	if wait < 190 || wait > 200 {
+		t.Errorf("the refused caller was told to wait %d seconds, want the bulk's "+
+			"projected 200 — two tasks at a hundredth of a record a second", wait)
+	}
+	if lapsed == nil {
+		t.Errorf("a claim TTL after its holder stopped renewing, the bulk lease "+
+			"(expiring %s) still refused a peer — a dead holder is blocking the "+
+			"company's bulks", held[0].ExpiresAt)
+	}
+}
+
+// A BULK THAT RUNS PAST A HEARTBEAT KEEPS ITS LEASE.
+//
+// The other half of [TestABulkLeaseOutlivesADeadHolderByNoMoreThanTheClaimTTL]:
+// a lease that lapses within a claim TTL of its holder dying must not lapse
+// under a holder that is alive and slow, or a second bulk is admitted beside
+// the first. The holder renews every [tracker.ClaimHeartbeat] for as long as
+// the bulk runs, so this case holds one bulk open across a heartbeat — on the
+// real clock, because the heartbeat is a real ticker — and reads the lease's
+// expiry either side of it.
+//
+// Mutation: take the bulk's lease without its heartbeat and the expiry a
+// heartbeat later is the one it was acquired with.
+func TestABulkThatRunsPastAHeartbeatKeepsItsLease(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		filedTask(t, r, id)
+	}
+	claims := memory.New()
+	holder, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: r.publisher, DB: r.db, NodeID: "node-a", Claims: claims,
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Now: func() time.Time { return r.at },
+	})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	var before, after []coord.Lease
+	hooked.arm(func(_, opID string) bool { return opID == "op-bulk.b0" }, func() {
+		ctx := context.WithoutCancel(t.Context())
+		before, _ = claims.ListLive(ctx, coord.Class("bulk"))
+		time.Sleep(tracker.ClaimHeartbeat + 2*time.Second)
+		after, _ = claims.ListLive(ctx, coord.Class("bulk"))
+	})
+	done := tracker.StatusDone
+	if _, err := holder.UpdateTasks(t.Context(), "op-bulk", []string{"t-1", "t-2"},
+		"ENG", tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTasks: %v", err)
+	}
+	if len(before) != 1 || len(after) != 1 {
+		t.Fatalf("the store held %d bulk lease(s) before the heartbeat and %d "+
+			"after, want one throughout", len(before), len(after))
+	}
+	if !after[0].ExpiresAt.After(before[0].ExpiresAt) {
+		t.Errorf("a heartbeat into the bulk its lease still expires at %s, as it "+
+			"was acquired — the holder is not renewing it", after[0].ExpiresAt)
 	}
 }
 

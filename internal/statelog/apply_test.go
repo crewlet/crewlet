@@ -2051,3 +2051,45 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 		t.Errorf("the applier reports itself stopped after recovering: %v", err)
 	}
 }
+
+// A RUNNER APPLIES AT ITS CHECKPOINT'S GENERATION, NOT AT THE ONE IT WAS BUILT
+// WITH.
+//
+// An adoption replaces the estate under a runner that keeps running, and the
+// checkpoint it installs may be a peer's at a newer generation. The loop that
+// starts again over it resumes from that checkpoint, so it must stamp what it
+// applies — and read every anchor — in that checkpoint's number space: a
+// generation copied at construction would key new rows to the space the fleet
+// left, where every peer holds the same records at the new one.
+//
+// Mutation: stamp records at the generation the runner was built with and
+// every record packs below the adopted checkpoint, so the loop takes each for
+// a redelivery and applies none of them; read anchors at it and a fresh
+// subject's anchor names generation 1.
+func TestARunnerAppliesAtItsCheckpointsGeneration(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{}) // built at generation 1
+	// THE ADOPTED CHECKPOINT, at generation 2 and sequence 4.
+	seedCursor(t.Context(), t, h.db, 2, 4)
+	h.fetch.offer(5, env(5, "edit", "a", "op-1", 1))
+	if err := h.run(5); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 1 || seen[0].Generation != 2 || seen[0].Seq != 5 {
+		t.Fatalf("the runner applied %v, want one record at generation 2 sequence 5 "+
+			"— the generation of the checkpoint it resumed from", seen)
+	}
+	if got := h.runner.Committed(); got.Generation != 2 || got.Seq != 5 {
+		t.Errorf("the checkpoint reads %s, want generation 2 sequence 5", got)
+	}
+	anchor, err := h.runner.Anchor(t.Context(), "object.fresh")
+	if err != nil {
+		t.Fatalf("Anchor: %v", err)
+	}
+	if anchor.Generation != 2 || anchor.Seq != 0 {
+		t.Errorf("a subject with no anchor reads as %s, want generation 2 at "+
+			"sequence 0 — the expectation a first write at this generation forms",
+			anchor)
+	}
+}

@@ -4,8 +4,10 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 
 > **Confluence is one of two knowledge backends, and it is not the default.**
 > The engine ships its own — `knowledge.backend: native`, which is what a
-> company that says nothing gets — with pages held as fleet documents and a
-> BM25 search over each node's own index. Set `knowledge.backend: confluence`
+> company that says nothing gets — where every change to a page is one record
+> on the knowledge base's own ordered log (the [state log](../guides/replication.md)'s
+> third domain), applied into each node's own database, and search is BM25
+> over each node's own index. Set `knowledge.backend: confluence`
 > (or declare this block, which derives it) to run Confluence instead. It
 > buys one thing the native backend does not have: search runs **as the
 > agent's own Atlassian user**, so Confluence's page permissions are the
@@ -233,9 +235,9 @@ Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identi
 
 ## Query-Time Confluence Search
 
-Crewlet keeps no local copy of Confluence content. Shared knowledge is searched **live at query time**: the auxiliary model turns a turn's trigger into a short text query — once per turn — and the searcher runs it as CQL against `/rest/api/content/search`. There is no startup walk, no vector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+Crewlet keeps no local copy of Confluence content. Shared knowledge is searched **live at query time**: the auxiliary model turns a turn's trigger into a short plain-text keyword query — once per turn — and the searcher wraps it into CQL (`confluence.BuildCQL`) and runs it against `/rest/api/content/search`. There is no startup walk, no vector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
 
-The query text is **capped and escaped** before it reaches the CQL literal. A pathologically long fragment is both a slow query and a sign the auxiliary model misbehaved, and an unescaped quote would end the literal early — turning a search into a query nobody wrote.
+The query text is **escaped, never shortened**, before it reaches the CQL literal: an unescaped quote would end the literal early and turn a search into a query nobody wrote, and a shortened query is a different search — plausible pages for terms nobody asked about, with nothing saying so. Each caller bounds its own text instead: the prefetch's query is one line of the auxiliary model's output, the `search_knowledge` tool refuses a query longer than 400 bytes and names the limit, and the dashboard's knowledge search sends what a person typed. A query the site refuses is logged (`confluence_search_failed`) and answers with no hits.
 
 The search backs the `## Relevant knowledge` prefetch and the `search_knowledge` builtin (see [Knowledge System](../concepts/knowledge-system.md#relevant-knowledge-prefetch)). Agents that want to search or read Confluence directly use the `confluence_search` and `confluence_get_page` MCP tools.
 
@@ -276,13 +278,15 @@ units:
 
 Read scope is computed at query time from the normalised `knowledge.scope`, so a live config edit to the scope takes effect with no restart and no refresh hook. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `knowledge.scope` omitted it searches across everything its Atlassian account can read).
 
-**Unreviewed auto-drafted skills never reach an agent.** A hit whose ancestor chain includes `Auto-Drafted Skills` is dropped, and so is one whose title still carries the `[Auto-draft] ` prefix — two tests, because the first can silently stop matching (an instance that answered without the ancestor expand) and an exclusion that quietly matches nothing looks exactly like a knowledge base with no drafts in it. A lead publishes a draft by **moving it out** of that parent, which is the review gesture; the prefix is cleared with it.
+**Unreviewed auto-drafted skills never reach an agent.** A draft is filed under a page titled `Auto-Drafted Skills` in its unit's space, and its title starts with `[Auto-draft] `. The search asks Confluence for every hit's ancestor chain (the `ancestors` expand), and **the chain decides**: a hit with `Auto-Drafted Skills` anywhere in its chain is dropped, and a hit whose chain came back without it is kept — an empty chain included, which is a page at the top of its space. The title prefix is only the backstop for an answer that came back with **no** chain at all: such a hit is dropped while its title carries the prefix, because an exclusion that quietly stopped matching would look exactly like a knowledge base with no drafts in it. The native backend applies the same rule, through the same function (`knowledge.Excludes`).
+
+A lead publishes a draft by **moving it out** of that parent in Confluence, which is the review gesture. The move does not rename the page, so the `[Auto-draft] ` prefix stays on its title until somebody edits it — and it hides nothing there, because the page's chain came back and no longer names the parent.
 
 **The tool-skills space is not knowledge.** Pages in `knowledge.skills_container` (default `TS`) are machinery — a seat told to read one would follow an instruction written for a different phase of a different turn — so they are excluded from search and from routing alike, while still being indexed into the skill registry.
 
 ### When Confluence search is unavailable
 
-The `## Relevant knowledge` prefetch stays empty — logged, never an error — whenever the search cannot run: no `confluence` block, an org token that did not resolve, an unreachable instance, a refused query. **A turn must not die because a wiki was slow**, so every failure path is an empty result.
+The `## Relevant knowledge` block carries no pages — logged, never an error — whenever the search cannot run. With no searcher wired (an org token that did not resolve, an integration that failed to start) the block is left out; with a search that failed (an unreachable instance, a query the site refused) it carries the sentence that nothing surfaced at turn start and that a focused search is the next step. **A turn must not die because a wiki was slow**, so every failure path is an empty result.
 
 There is also a cheap **no-I/O pre-gate**: when a search is a guaranteed no-op (no scope AND no per-seat credential), the turn-start prefetch skips the auxiliary model call that would have generated the query. That call is the expensive half, so a gate that had to reach the network to answer would cost more than it saves.
 
@@ -478,7 +482,7 @@ Each unit's Confluence space can host an `Onboarding` page that fresh agents are
 
 ### 3. Query-time Confluence search (engine side)
 
-The `## Relevant knowledge` block runs a live Confluence search for the seat: the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.scope` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). The `search_knowledge` builtin runs the same search on a query the executor writes itself. See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
+The `## Relevant knowledge` block runs a live Confluence search for the seat: the seat's auxiliary LLM writes a short plain-text keyword query from the trigger, and the Confluence searcher wraps it into a CQL `text ~ "…"` clause (`confluence.BuildCQL`) — narrowed by `space IN (…)` to the org-wide `knowledge.scope` when one is set — and runs it against the Confluence REST API. With no scope, a seat holding its own Confluence credential searches unscoped, bounded by its own account's ACLs, and a seat on the org token searches nothing. The `search_knowledge` builtin runs the same search on a query the executor writes itself. See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
 
 This approach keeps tool guidance **configurable per-org** and **per-role** rather than hardcoded in the engine. The same Confluence MCP tools are available to all agents, but each agent's prompt scaffolding and accessible spaces determine how they use them.
 

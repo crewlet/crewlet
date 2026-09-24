@@ -532,11 +532,11 @@ const bodyLimit = 600
 //
 // A POINTER THAT SAYS SO. The bound above is one of the few cuts here that
 // earns its place — the page is re-readable through the seat's own tools and
-// most recipients will read this and drop it — but it used to be applied by a
-// helper that cut at the first newline or ". " BEFORE any limit, so a page was
-// decapitated to its opening sentence whatever the budget, silently and
-// mid-rune. A seat that could not tell an excerpt from the whole page acts on
-// the opening line as though nothing followed it.
+// most recipients will read this and drop it — and [knowledge.Snippet] makes
+// it by length alone, rune-safely and marked, never at the first newline or
+// sentence. The line appended to a cut says where the whole page is, because a
+// seat that could not tell an excerpt from the whole page acts on the opening
+// line as though nothing followed it.
 func excerpt(text string) string {
 	out := knowledge.Snippet(text, bodyLimit)
 	if out == "" || out == strings.Join(strings.Fields(text), " ") {

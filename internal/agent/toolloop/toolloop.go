@@ -233,6 +233,10 @@ type Progress struct {
 	// publishes that text — so it has to say so too.
 	truncated    bool
 	emptyAnswers int
+
+	// abandoned is what [Result.Abandoned] reports: every attempt at a
+	// round the loop did not commit, the round it died in included.
+	abandoned []Narration
 }
 
 // Snapshot freezes the partial state into a Result.
@@ -249,12 +253,22 @@ func (p *Progress) Snapshot() Result {
 		OutputTokens: p.outputTokens,
 		Executions:   append([]Execution(nil), p.executions...),
 		Narration:    append([]Narration(nil), p.narration...),
+		Abandoned:    append([]Narration(nil), p.abandoned...),
 		RoundsUsed:   p.roundsUsed,
 		Model:        p.model,
 		Messages:     append([]llm.Message(nil), p.messages...),
 		Truncated:    p.truncated,
 		EmptyAnswers: p.emptyAnswers,
 	}
+}
+
+// abandon records the attempts the loop did not commit, for a return that no
+// publish follows: a provider call that failed while its round was being
+// written adds that round's last attempt, and nothing else has changed.
+func (p *Progress) abandon(abandoned []Narration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.abandoned = append([]Narration(nil), abandoned...)
 }
 
 // rounds records the loop's round-level facts as they change, rather than at
@@ -278,17 +292,20 @@ func (p *Progress) start(msgs []llm.Message) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append([]llm.Message(nil), msgs...)
-	p.executions, p.narration = nil, nil
+	p.executions, p.narration, p.abandoned = nil, nil, nil
 	p.inputTokens, p.outputTokens, p.roundsUsed, p.model = 0, 0, 0, ""
 	p.truncated, p.emptyAnswers = false, 0
 }
 
-func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
+func (p *Progress) record(msgs []llm.Message, execs []Execution, narr, abandoned []Narration,
+	in, out, rounds int, model string,
+) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append([]llm.Message(nil), msgs...)
 	p.executions = append([]Execution(nil), execs...)
 	p.narration = append([]Narration(nil), narr...)
+	p.abandoned = append([]Narration(nil), abandoned...)
 	p.inputTokens, p.outputTokens = in, out
 	p.roundsUsed, p.model = rounds, model
 }
@@ -306,6 +323,26 @@ type Result struct {
 	// Text is what every existing consumer and every already-stored event
 	// reads, and the envelope evolves additive-only.
 	Narration []Narration
+
+	// Abandoned is every attempt at a round that the loop did not commit,
+	// oldest first, each numbered with the round it was an attempt at:
+	//
+	//   - an attempt a provider or a credential gave up on partway through,
+	//     after which another attempt at the same round began (see
+	//     [Partial]);
+	//   - on a snapshot of a loop that failed during a round
+	//     ([Progress.Snapshot]), that round's last attempt: as far as it had
+	//     streamed when the provider call failed, or the whole answer when
+	//     the call returned and its token charge failed.
+	//
+	// SEPARATE from Narration, for the reason [Partial] is: a round's
+	// narration is what the model committed to, and these are what it wrote
+	// that nothing took up. A live frame shows each of them while its round
+	// is open; this is what keeps them once it closes. Only a streamed call
+	// leaves text behind when it fails, so a loop without
+	// [Config.StreamPartials] can hold one entry here at most: the answer
+	// whose charge failed.
+	Abandoned []Narration
 
 	// Partial is the round being written RIGHT NOW, present only on a live
 	// snapshot and never on a finished Result. It is deliberately separate
@@ -374,12 +411,13 @@ const partialInterval = 200 * time.Millisecond
 
 // Partial is a round in the middle of being written.
 //
-// Abandoned holds attempts that a provider or credential gave up on partway
-// through, oldest first. They are KEPT rather than erased because a reader has
-// already seen that text: making it vanish reads as a glitch, and "this model
-// wrote four hundred characters and then died" is exactly what an operator
-// debugging a flaky provider needs. They live only as long as the round does —
-// once it completes, the authoritative narration replaces the whole thing.
+// Abandoned holds the attempts at THIS round that a provider or credential
+// gave up on partway through, oldest first. They are KEPT rather than erased
+// because a reader has already seen that text: making it vanish reads as a
+// glitch, and "this model wrote four hundred characters and then died" is
+// exactly what an operator debugging a flaky provider needs. The partial goes
+// when its round commits, and the loop keeps each of these attempts on
+// [Result.Abandoned], which outlives the round.
 type Partial struct {
 	Round     int
 	Reasoning string
@@ -394,6 +432,15 @@ func (p *Partial) clone() *Partial {
 	dup := *p
 	dup.Abandoned = append([]Narration(nil), p.Abandoned...)
 	return &dup
+}
+
+// attempt is what the round in flight has streamed since its latest attempt
+// began, and false when that is nothing.
+func (p *Partial) attempt() (Narration, bool) {
+	if p == nil || (p.Content == "" && p.Reasoning == "") {
+		return Narration{}, false
+	}
+	return Narration{Round: p.Round, Reasoning: p.Reasoning, Content: p.Content}, true
 }
 
 // Config is one loop run.
@@ -501,7 +548,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		cfg.Progress.start(msgs)
 	}
 	var execs []Execution
-	var narration []Narration
+	var narration, abandoned []Narration
 	var inTokens, outTokens int
 	var model string
 	// served distinguishes the model a COMPLETION named from the configured
@@ -519,7 +566,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var partial *Partial
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, rounds, model)
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(Result{
@@ -528,6 +575,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				OutputTokens: outTokens,
 				Executions:   append([]Execution(nil), execs...),
 				Narration:    append([]Narration(nil), narration...),
+				Abandoned:    append([]Narration(nil), abandoned...),
 				Partial:      partial.clone(),
 				RoundsUsed:   rounds,
 				Model:        model,
@@ -601,14 +649,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			onDelta = func(d llm.Delta) {
 				if d.Restart {
 					// The attempt so far was abandoned. Kept rather than
-					// erased — see [Partial] — and the replacement starts
-					// from empty so two half-answers never concatenate.
-					if partial.Content != "" || partial.Reasoning != "" {
-						partial.Abandoned = append(partial.Abandoned, Narration{
-							Round:     partial.Round,
-							Reasoning: partial.Reasoning,
-							Content:   partial.Content,
-						})
+					// erased — on the partial for the live view, and on
+					// the list the Result reports (see [Partial]) — and
+					// the replacement starts from empty so two
+					// half-answers never concatenate.
+					if attempt, ok := partial.attempt(); ok {
+						partial.Abandoned = append(partial.Abandoned, attempt)
+						abandoned = append(abandoned, attempt)
 					}
 					partial.Reasoning, partial.Content = "", ""
 					publish(roundsUsed)
@@ -643,6 +690,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if err != nil {
 			tracing.Fail(roundSpan, err)
 			roundSpan.End()
+			// THE ATTEMPT IN FLIGHT joins the abandoned ones: its round
+			// will never commit it, and the snapshot the caller publishes
+			// on this error is the only record that can hold it.
+			if attempt, ok := partial.attempt(); ok {
+				abandoned = append(abandoned, attempt)
+				if cfg.Progress != nil {
+					cfg.Progress.abandon(abandoned)
+				}
+			}
 			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 		}
 		roundSpan.SetAttributes(
@@ -687,6 +743,21 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// effects — the refusal is the whole point, and tools are where
 		// the irreversible things happen.
 		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
+			// THE ROUND IS NOT COMMITTED, and what it said and what it cost
+			// are still facts about the phase: the provider answered and
+			// billed its tokens, and the counter refusing them, or not
+			// answering, changes neither. So the answer joins the abandoned
+			// attempts and the tokens stay counted, in the snapshot the
+			// caller publishes on this error — recorded here, because no
+			// publish follows this return.
+			if narrated(completion.ReasoningContent, completion.Content) {
+				abandoned = append(abandoned, Narration{
+					Round: roundsUsed, Reasoning: completion.ReasoningContent, Content: completion.Content,
+				})
+			}
+			if cfg.Progress != nil {
+				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model)
+			}
 			return nil, err
 		}
 
@@ -816,6 +887,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				OutputTokens:      outTokens,
 				Executions:        execs,
 				Narration:         narration,
+				Abandoned:         abandoned,
 				RoundsUsed:        roundsUsed,
 				Model:             model,
 				Messages:          msgs,
@@ -839,6 +911,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		OutputTokens:    outTokens,
 		Executions:      execs,
 		Narration:       narration,
+		Abandoned:       abandoned,
 		RoundsUsed:      roundsUsed,
 		Model:           model,
 		Messages:        msgs,
@@ -996,6 +1069,13 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 	"response and called no tool. Whatever you worked out, write it in the response " +
 	"itself, or call a tool to act on it."
 
+// narrated reports whether a round's turn said anything worth recording. A
+// round that only emitted tool calls has no narration, and an empty entry
+// would render as a blank paragraph above its own tools.
+func narrated(reasoning, content string) bool {
+	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
+}
+
 // assistantText renders a conversation's assistant turns as ONE displayable
 // string, reasoning included, wrapped so a reader can tell it apart.
 //
@@ -1005,13 +1085,6 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 // the same text — they were assembled separately once, so a reasoning model
 // streamed its tool calls against an empty response and its thinking appeared
 // only when the phase ended.
-// narrated reports whether a round's turn said anything worth recording. A
-// round that only emitted tool calls has no narration, and an empty entry
-// would render as a blank paragraph above its own tools.
-func narrated(reasoning, content string) bool {
-	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
-}
-
 func assistantText(msgs []llm.Message) string {
 	var parts []string
 	for _, m := range msgs {

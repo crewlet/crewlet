@@ -60,9 +60,10 @@ Classify before you size the job:
   from the beginning and arrives at exactly the same rows — but only if the
   logs still hold them. Past the trim floor the records are gone, and the node
   fetches a peer's verified snapshot instead, which it does automatically at
-  boot. That fallback needs a **peer**: a single-node company that loses this
-  file and whose logs have been trimmed has lost the trimmed history, which is
-  the case `retention.backup_max_age` exists to keep from arising.
+  boot. That fallback needs a **peer**; a single-node company that loses this
+  file after its logs were trimmed restores it from a backup instead, because
+  the trim deletes nothing a recorded backup does not cover — see
+  [Where to put it, and how often](#where-to-put-it-and-how-often).
 - **Authoritative, with no other copy:** the event log's history, the config
   revision history, the sealed credential bucket, the budget counters, and
   each detached sandbox-run record, which is the only thing that knows a
@@ -247,13 +248,19 @@ artefact, because that is the only process whose disk the manifests are on; a
 node that has never taken one publishes nothing rather than a zero, since zero
 is the freshest backup imaginable.
 
-**The backup interval IS the recovery point for history below the trim
-floor.** Above that floor the log holds every record on R replicas and every
-node holds the applied rows, so losing a node loses nothing. Below it the log
-holds nothing, and each node's replicated estate is the only copy of that
-history — N of them, independent, none replicated. A schedule of six hours is
-therefore a six-hour RPO for that half of the company's past, and no replica
-count changes it. See [Retention](retention.md).
+**A backup is where history below the trim floor is kept.** Above that floor
+the log holds every record on R replicas and every node holds the applied
+rows, so losing a node loses nothing. Below it the log holds nothing, and the
+trim only ever gets there past a backup: it deletes a record only once the
+newest backup the fleet has recorded covers it, and `retention.backup_max_age`
+stops it once that backup is stale. So that history is in each node's
+replicated estate and in that backup — a `crewlet backup`'s
+`store-replicated.db`, or the copy an operator acknowledged with
+`crewlet retention ack`, the only kind `backup_floor: operator` counts — and a
+restore from a `crewlet backup` replays the log from the copy's own position.
+Losing it takes every node's replicated estate and the backups that cover it.
+The schedule decides how far the trim may go, and so how large the log grows.
+See [Retention](retention.md).
 
 **A finished backup announces itself to the fleet.** When the manifest is
 written, the taker publishes what the copy reaches — per stream, with the
@@ -303,12 +310,15 @@ down anyway.
    `store.replicated_path` (by default `crewlet-replicated.db` beside
    `store.path`). Committed data lives in a database file and its `-wal`
    both, while the `-shm`, `-tshm` and `.lock` sidecars are transient. Leave
-   the replicated estate out and a restore has only the logs to rebuild it
-   from, which hold nothing below their trim floor: the tracker's and the
-   knowledge base's older history would come back only from a peer's copy,
-   and on a single node from nowhere. Copy `stream.store_dir` for every
-   embedded member too. Copying all of it out of one instant is what keeps
-   the node's local state and the fleet's shared state telling one story.
+   the replicated estate out and a restore rebuilds it from the logs, which
+   hold nothing below their trim floor: the tracker's and the knowledge base's
+   older history then comes back from a peer, whose snapshot a node without
+   the file adopts on its own, or — on a single node — from a backup, since
+   the trim deletes nothing the newest recorded backup does not cover (see
+   [Where to put it, and how often](#where-to-put-it-and-how-often)). Copy
+   `stream.store_dir` for every embedded member too. Copying all of it out of
+   one instant is what keeps the node's local state and the fleet's shared
+   state telling one story.
 3. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
    names — and record where the keyring material comes from. **Keep the
    keyring out of the data's backup domain**

@@ -120,8 +120,11 @@ type RunnerDeps struct {
 	// node.
 	DB Estate
 
-	// Generation is the estate's generation, read once per loop
-	// generation because only an operator's reanchor moves it.
+	// Generation is the generation of the checkpoint the runner starts
+	// from, and only that: from its first run on, the loop's generation is
+	// its checkpoint's, read from the estate each time it starts — an
+	// adoption can install a peer's checkpoint at a newer generation under
+	// a runner that keeps running, and the reanchor verb moves it too.
 	Generation uint32
 
 	// StreamCreatedAt is the broker's own creation instant for this
@@ -133,8 +136,7 @@ type RunnerDeps struct {
 	//
 	// It must come from the broker, never from the checkpoint row: a
 	// value read back out of the row is compared against itself and
-	// detects nothing, which is exactly what the engine did until the
-	// wiring was tested. The zero value declares no identity at all, which
+	// detects nothing. The zero value declares no identity at all, which
 	// skips the comparison; the engine never passes it, and a caller that
 	// cannot say which stream it is on is one that should refuse to run.
 	StreamCreatedAt time.Time
@@ -176,17 +178,25 @@ type Runner struct {
 	now     func() time.Time
 	opts    ApplyOptions
 	created time.Time
-	gen     uint32
 
 	waiters waiters
 
+	// cursor is the checkpoint this loop has reached, and ITS GENERATION IS
+	// THE LOOP'S: every record it applies is stamped with it and every
+	// anchor is read at it. One field rather than a generation beside it,
+	// because an adoption replaces the checkpoint under a runner that keeps
+	// running — the file it resumes from may be a peer's at a newer
+	// generation — and a copy taken at construction would go on stamping
+	// the old one over rows keyed to the new.
 	mu     sync.Mutex
 	cursor Position
 
-	// deferred is the earliest record this node holds and cannot decode,
-	// and retained how many it holds — zero when it holds none. Read
-	// together in one transaction and kept together under mu, so no
-	// reader pairs a count from one refresh with an earliest from another.
+	// deferred is the earliest record this node has retained, and retained
+	// how many it holds — zero when it holds none. A record is retained
+	// when this build cannot decode it, or when its scope meets a record
+	// already retained. Read together in one transaction and kept together
+	// under mu, so no reader pairs a count from one refresh with an earliest
+	// from another.
 	deferred Deferral
 	retained uint64
 
@@ -217,7 +227,8 @@ type Runner struct {
 	// A record backlog divided by it — through [BacklogTime] — is how this
 	// node states a backlog as a TIME: against a stale read's staleness
 	// bound, in a refusal's `retry_after_seconds`, and in a bulk edit's
-	// projected occupancy and the lease that follows from it. Divided by a
+	// projected occupancy and the wait a caller refused behind it is told
+	// to take. Divided by a
 	// constant instead, every one of those is wrong wherever the real rate
 	// differs from it: at [DrainFloor], a node two thousand records behind
 	// states itself over half an hour behind whatever its real rate, and
@@ -262,14 +273,16 @@ const DrainSmoothing = 0.25
 // the conversion — a refused read's retry hint ([RetryHint]) that sends its
 // caller back after the backlog rather than into a second refusal, a staleness
 // bound ([Query.MaxLag]) that refuses rather than serves past what its caller
-// accepts, and a bulk edit's projection in the tracker, whose lease must
-// outlive the bulk it admits.
+// accepts, and a bulk edit's projection in the tracker, which a bulk refused
+// behind it is told to wait out and which counts against the fleet's read
+// budget: overstated, a caller waits longer than it had to; understated, it
+// comes back into a second refusal and the budget reads healthier than it is.
 //
 // THE UNMEASURED ZERO ONLY. A MEASURED rate below one record a second is used
 // as measured, for the same reason: flooring it would state a slow applier's
 // backlog as shorter than that applier will take — a hint that sends its
-// caller back early, a bound that serves a read past it, a lease that expires
-// before its bulk has applied.
+// caller back early, a bound that serves a read past it, a bulk projected to
+// end before it has applied.
 const DrainFloor = 1.0
 
 // maxBacklog is the longest time [BacklogTime] states: the largest whole
@@ -350,7 +363,6 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		logger:  logger,
 		now:     now,
 		created: d.StreamCreatedAt,
-		gen:     d.Generation,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -369,9 +381,11 @@ func (r *Runner) Committed() Position {
 // Stopped is the error that halted this applier, or nil.
 //
 // A STOP IS PERMANENT and only [ErrStopped] is one: a gate this build cannot
-// read, a hole that will not close, a recreated stream, an envelope no build
-// could decode. Every other failure is retried in place — see [Runner.Run] —
-// and is reported through [Runner.Fault] instead.
+// read, a hole that will not close, a recreated stream, and a record whose
+// envelope no build could read or that declares no scope. Every other failure
+// is retried in place — see [Runner.Run] — and is reported through
+// [Runner.Fault] instead; a cancellation of the loop's own context is returned
+// from Run and recorded here not at all.
 func (r *Runner) Stopped() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -402,8 +416,10 @@ func (r *Runner) Fault(now time.Time) (string, bool) {
 		r.faultSince.UTC().Format(time.RFC3339)), true
 }
 
-// Deferred is the earliest record this node holds and cannot decode, and how
-// many it holds; the count is zero when it holds none.
+// Deferred is the earliest record this node has retained, and how many it
+// retains; the count is zero when it retains none. The count covers every
+// retained record — those this build cannot decode, and those held back behind
+// one because their scopes meet — so it is not a count of undecodable records.
 //
 // THE COUNT IS THE RETAINED TABLE'S OWN rather than a flag: it is what the
 // register row and the `deferred.count` gauge publish, and a flag would state
@@ -460,9 +476,8 @@ func (r *Runner) WaitApplied(ctx context.Context, s ScopeSet, p Position) error 
 	if hit {
 		return &Unavailable{
 			Reason: ReasonDeferred,
-			Detail: fmt.Sprintf("this node holds a record at version %d it cannot "+
-				"decode, at %s, whose scope covers what this operation is about",
-				d.Version, d.Position),
+			Detail: fmt.Sprintf("this node retains %s, whose scope covers what "+
+				"this operation is about", d.Describe(r.domain.RecordVersion())),
 			Position: d.Position,
 		}
 	}
@@ -472,10 +487,11 @@ func (r *Runner) WaitApplied(ctx context.Context, s ScopeSet, p Position) error 
 // Anchor reads a subject's arbitration anchor, which is what the publisher
 // forms its expectation from.
 func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
+	gen := r.Committed().Generation
 	var p Position
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		p, err = r.tables.anchor(ctx, tx, subject, r.gen)
+		p, err = r.tables.anchor(ctx, tx, subject, gen)
 		return err
 	})
 	return p, err
@@ -1014,6 +1030,7 @@ func (r *Runner) budgetWouldBind(run []Record) bool {
 // decode turns broker messages into records, with the envelope the domain can
 // always read.
 func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) {
+	gen := r.Committed().Generation
 	out := make([]Record, 0, len(batch))
 	for _, m := range batch {
 		env, err := r.domain.Envelope(m.Payload)
@@ -1036,7 +1053,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		}
 		out = append(out, Record{
 			Envelope: env,
-			Position: Position{Stream: r.spec.Name, Generation: r.gen, Seq: m.Seq},
+			Position: Position{Stream: r.spec.Name, Generation: gen, Seq: m.Seq},
 			Payload:  m.Payload,
 			StoredAt: m.StoredAt,
 			ack:      m.Ack,
@@ -1359,8 +1376,8 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 	return n, false, nil
 }
 
-// anyDeferred reports whether this node holds any record it cannot decode, so
-// the per-record probe is skipped entirely on the ordinary path.
+// anyDeferred reports whether this node retains any record, so the per-record
+// probe is skipped entirely on the ordinary path.
 func (r *Runner) anyDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
 	_, ok, err := r.tables.oldestDeferred(ctx, tx)
 	return ok, err
@@ -1395,8 +1412,8 @@ func (r *Runner) ack(ctx context.Context, consumed []Record) {
 	}
 }
 
-// refreshDeferred re-reads the earliest record this node cannot decode and how
-// many it holds.
+// refreshDeferred re-reads the earliest record this node retains and how many
+// it retains.
 func (r *Runner) refreshDeferred(ctx context.Context) error {
 	return r.db.Read(ctx, func(tx *sql.Tx) error {
 		d, held, err := r.tables.retainedState(ctx, tx)

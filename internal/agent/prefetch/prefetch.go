@@ -368,15 +368,12 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 
 // joinBullets renders a block's bullets, dropping the empty ones.
 //
-// NO CHARACTER BUDGET. There used to be one per block, and it was not the
-// upper bound its name claimed: it admitted the first bullet whatever its
-// size and then dropped every later one, unmarked — so a block was not
-// shortened, it was silently emptied of everything after its first entry, and
-// a counterparty profile of the second sender in a conversation simply never
-// rendered. What actually bounds these blocks is the ITEM cap each one
+// NO CHARACTER BUDGET. What bounds these blocks is the ITEM cap each one
 // already has (the candidate pool the memory filter picks from, the episodes
 // recalled, the knowledge hits searched for), every one of which is a number a
-// reader can reason about — unlike a character ceiling that lands mid-list.
+// reader can reason about. A character ceiling lands mid-list instead, and one
+// that drops the bullets past it unmarked empties a block of everything after
+// its first entry while it still looks like a block.
 //
 // The empty-drop is load-bearing: renderEpisode and renderSkill both return
 // "" for an entry with nothing to say, and joining those blindly leaves blank

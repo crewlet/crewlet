@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // stubSearcher is a knowledge backend with a scripted answer and a record of
@@ -147,19 +148,34 @@ func TestSearchKnowledgeRendersPointersNotPages(t *testing.T) {
 	}
 }
 
-// THE READER IS WHATEVER THE BACKEND SERVES, and the description says so
-// without naming one: the native reader is the engine's own page tool, not an
-// MCP server's, and a description that sent a native seat to "your
-// knowledge-base MCP tools" sent it looking for a server it does not have.
+// THE DESCRIPTION NAMES THE NATIVE READER, AND WHAT IT TAKES.
+//
+// On the engine's own knowledge base a hit is opened with `get_page`, which
+// takes the page id every hit renders; a description that sent a native seat
+// to "your knowledge-base MCP tools" would send it looking for a server it does
+// not have. A vendor wiki's reader is that vendor's own tool, described by what it
+// does rather than by a name this engine does not own.
 func TestSearchKnowledgeDescribesTheReaderByWhatItTakes(t *testing.T) {
 	t.Parallel()
 	desc := (&searchKnowledge{}).Description()
+	if !strings.Contains(desc, "`"+GetPageTool+"`") {
+		t.Errorf("the description does not name %s, the native backend's "+
+			"reader: %s", GetPageTool, desc)
+	}
+	if !strings.Contains(desc, "page id") {
+		t.Errorf("the description does not say what opens a hit: %s", desc)
+	}
 	if strings.Contains(desc, "MCP") {
 		t.Errorf("the description sends a seat to MCP tools, which the native "+
 			"backend's reader is not: %s", desc)
 	}
-	if !strings.Contains(desc, "page id") {
-		t.Errorf("the description does not say what opens a hit: %s", desc)
+	// AND WHAT A HIT CARRIES IS WHAT get_page TAKES: the id, beside the
+	// container it lives in.
+	bullet := prefetch.KnowledgeBullet(knowledge.Hit{Title: "Deploy runbook",
+		Container: "ENG", PageID: "p-17"})
+	if !strings.Contains(bullet, "ENG, page id p-17") {
+		t.Errorf("a hit renders %q, which does not carry the page id get_page "+
+			"takes", bullet)
 	}
 }
 
@@ -188,24 +204,41 @@ func TestSearchKnowledgeExcludesAutoDrafts(t *testing.T) {
 	}
 }
 
-// THE CHEAP GATE FIRST. A seat whose search could not hit anything is told
-// so, rather than waiting on a round trip that was always going to be empty —
-// and the message says which of the two states it is in, because "no backend"
-// and "no scope" send an operator to different places.
+// THE CHEAP GATE FIRST. A search that could not hit anything is told so,
+// rather than waiting on a round trip that was always going to be empty — and
+// the message names both causes it can be, because "no backend" and "no scope"
+// send an operator to different places. The same sentence answers a seat and
+// an operator's own assistant, which has no seat, so it never says "this
+// seat".
 func TestAnUnsearchableSeatIsToldSoWithoutASearch(t *testing.T) {
 	t.Parallel()
-	backend := &stubSearcher{can: false}
-	tool := &searchKnowledge{search: backend}
-	res, err := tool.CallForTurn(context.Background(), searchTurn(),
-		map[string]any{"query": "anything"})
-	if err != nil {
-		t.Fatalf("CallForTurn: %v", err)
-	}
-	if len(backend.queries) != 0 {
-		t.Error("a search ran behind a closed gate")
-	}
-	if !strings.Contains(res.Output, "not searchable") {
-		t.Errorf("the answer does not say why: %s", res.Output)
+	for name, call := range map[string]func(*searchKnowledge) (tools.Result, error){
+		"a seat": func(tool *searchKnowledge) (tools.Result, error) {
+			return tool.CallForTurn(context.Background(), searchTurn(),
+				map[string]any{"query": "anything"})
+		},
+		"an operator": func(tool *searchKnowledge) (tools.Result, error) {
+			tool.org = func() *org.Organization { return searchTurn().Org }
+			return tool.Call(context.Background(), map[string]any{"query": "anything"})
+		},
+	} {
+		backend := &stubSearcher{can: false}
+		res, err := call(&searchKnowledge{search: backend})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(backend.queries) != 0 {
+			t.Errorf("%s: a search ran behind a closed gate", name)
+		}
+		for _, want := range []string{"not searchable", "no knowledge backend",
+			"`knowledge.scope`"} {
+			if !strings.Contains(res.Output, want) {
+				t.Errorf("%s: the answer does not say %q: %s", name, want, res.Output)
+			}
+		}
+		if strings.Contains(res.Output, "this seat") {
+			t.Errorf("%s: the answer speaks of a seat: %s", name, res.Output)
+		}
 	}
 }
 
@@ -252,10 +285,10 @@ func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 
 // A LONG QUERY IS REFUSED, NEVER CUT, and NOTHING reaches the backend.
 //
-// The cut this replaced searched on the first four hundred bytes of whatever
-// was pasted in and answered with real, ranked pages about it — a plausible
-// answer to a question the model never asked, and one it had no way to spot,
-// because the hits look exactly like hits for the query it sent.
+// A cut would search on the first four hundred bytes of whatever was pasted in
+// and answer with real, ranked pages about it — a plausible answer to a
+// question the model never asked, and one it has no way to spot, because the
+// hits look exactly like hits for the query it sent.
 func TestALongQueryIsRefusedRatherThanCut(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}

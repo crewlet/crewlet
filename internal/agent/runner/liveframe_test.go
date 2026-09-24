@@ -111,6 +111,49 @@ func TestALiveFrameCarriesTheLatestCallsAndCountsTheRest(t *testing.T) {
 	}
 }
 
+// A LIVE FRAME CARRIES THE TAIL OF EACH ABANDONED ATTEMPT.
+//
+// The attempts a provider gave up on ride the round in flight, which is
+// republished five times a second for the life of the round, and a stream
+// that failed late holds as much text as the model managed to write. Each one
+// is cut to its marked tail like every other text on the frame — the end of
+// it, where a reader watching it die was looking — and its whole is on the
+// phase's completed record.
+func TestALiveFrameCarriesTheTailOfEachAbandonedAttempt(t *testing.T) {
+	t.Parallel()
+	long := func(i int) string {
+		return strings.Repeat("то, что было написано ", 600) + fmt.Sprintf("[end of attempt %d]", i)
+	}
+	partial := &toolloop.Partial{Round: 3, Reasoning: "third try", Content: "going"}
+	for i := range 3 {
+		partial.Abandoned = append(partial.Abandoned, toolloop.Narration{
+			Round: 3, Reasoning: long(i) + " (reasoning)", Content: long(i),
+		})
+	}
+	res := toolloop.Result{RoundsUsed: 2, Model: "claude-sonnet-5", Partial: partial}
+
+	frame, _ := progressFrame(t, &transport{refuse: tooLargeAbove(queue.MaxPayloadBytes)}, res)
+	abandoned, _ := frame.PartialRound["abandoned"].([]any)
+	if len(abandoned) != len(partial.Abandoned) {
+		t.Fatalf("the frame carries %d abandoned attempts; want every one of the %d",
+			len(abandoned), len(partial.Abandoned))
+	}
+	for i, raw := range abandoned {
+		row, _ := raw.(map[string]any)
+		whole := partial.Abandoned[i]
+		for key, text := range map[string]string{"reasoning": whole.Reasoning, "content": whole.Content} {
+			got, _ := row[key].(string)
+			if len(got) > partialTail+len("…") || !strings.HasPrefix(got, "…") {
+				t.Errorf("abandoned attempt %d carries %d bytes of %s; want its marked tail, at most %d",
+					i, len(got), key, partialTail+len("…"))
+			}
+			if !strings.HasSuffix(text, strings.TrimPrefix(got, "…")) {
+				t.Errorf("abandoned attempt %d's %s on the frame is not the end of the attempt", i, key)
+			}
+		}
+	}
+}
+
 // A LIVE FRAME AT EVERY BOUND STAYS UNDER THE CEILING.
 //
 // The window and the per-text bounds are what keep a frame publishable,

@@ -968,10 +968,9 @@ const recordHeadroom = 64 << 10
 // ADDRESS: numbered from 1 beneath the call's number. That placement is the
 // whole design. Every purge of a launch removes the launch's calls and so the
 // parts beneath them, and a reader of a launch's calls is never handed a part
-// as a call or counts one, on this build or on a build that predates parts:
-// on the KV backend a part's key is one segment longer than its call's, and
-// every build decodes a call's key at exactly its call's depth
-// (internal/coord/kv/bridgecalls.go).
+// as a call or counts one: on the KV backend a part's key is one segment
+// longer than its call's, and a call's key is decoded at exactly its call's
+// depth (internal/coord/kv/bridgecalls.go).
 //
 // THE PARTS ARE FILED FIRST and the record after them, so a record that names
 // parts is never visible before they are, and a record whose parts could not
@@ -988,9 +987,9 @@ const recordHeadroom = 64 << 10
 // the right address because a suspension belongs to one launch — a relaunch
 // starts without it. Filed under the launch, the parts go with every purge of
 // it, and a reader of calls or of a call's parts is never handed one: on the
-// KV backend a suspension part sits at a call's depth plus one, where a call
-// part does, behind a segment no call is ever numbered by, and every build
-// that has this log reads that segment as a call's number.
+// KV backend a suspension part is a key of a call part's depth whose segment
+// in the place of a call's number is a word, which the decoder of a call's
+// number refuses.
 //
 // # No retention
 //

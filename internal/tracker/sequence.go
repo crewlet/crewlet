@@ -811,16 +811,31 @@ func (w *Writer) claim(ctx context.Context, resource string) (*held, error) {
 	if !w.local.take(resource) {
 		return nil, nil
 	}
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: w.nodeID, TTL: ClaimTTL,
-	})
+	h, err := w.lease(ctx, resource, nil)
 	switch {
 	case err != nil:
 		w.local.give(resource)
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
-	case lease == nil:
+	case h == nil:
 		w.local.give(resource)
 		return nil, nil
+	}
+	return h, nil
+}
+
+// lease takes the fleet's half of a claim whose node half this goroutine
+// already holds, and heartbeats it — in [Claims]' three values: the claim, nil
+// when a peer holds it, and an error when the coordination store could not
+// say. Neither of the last two gives the node half back; that is the caller's,
+// because what a failure means is the caller's too.
+//
+// meta rides the lease for whoever reads the holder with [Claims.Get].
+func (w *Writer) lease(ctx context.Context, resource string, meta map[string]any) (*held, error) {
+	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+		Owner: w.nodeID, TTL: ClaimTTL, Meta: meta,
+	})
+	if err != nil || lease == nil {
+		return nil, err
 	}
 	h := &held{
 		claims: w.claims, local: w.local, resource: resource, owner: w.nodeID,
@@ -1546,7 +1561,7 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // reports why it did not.
 //
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
-// held lease runs, a peer's lease refuses with the holder's remaining time as
+// held lease runs, a peer's lease refuses with the holder's projected end as
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
 // see the sequence's own doc for why those last two must differ.
 //
@@ -1555,6 +1570,22 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // it rather than refuse ([localClaims]). That holds with the store unreachable
 // too, because a bulk running here is something this node knows rather than
 // something the store has to say.
+//
+// # The lease is a walk's, heartbeated, and never sized to the projection
+//
+// It is held on [ClaimTTL] and renewed every [ClaimHeartbeat] for as long as
+// the bulk runs, like every other claim a sequence takes. A lease sized to the
+// projection instead is wrong in both directions at once, because a projection
+// is a guess about a rate: a bulk that runs slower than projected outlives its
+// lease and a second one is admitted beside it, which is the concurrency the
+// claim exists to stop; and a holder that crashes blocks every bulk in the
+// company for as long as the lease was sized, which at [statelog.DrainFloor]
+// is seconds for every task the bulk named. Heartbeated, the lease is held
+// while its holder is alive and lapses within [ClaimTTL] of the holder dying.
+//
+// THE PROJECTION RIDES THE LEASE instead, as the instant the bulk is projected
+// to have applied ([bulkUntilMeta]), because it is still the best answer a
+// refused caller can be given about when to come back.
 func (w *Writer) admit(ctx context.Context, records int) (func(), error) {
 	if w.claims == nil {
 		return func() {}, nil
@@ -1565,45 +1596,41 @@ func (w *Writer) admit(ctx context.Context, records int) (func(), error) {
 	// [statelog.BacklogTime]: the conversion a refused read's retry hint
 	// and a stale read's staleness bound take too, so one backlog is one
 	// time wherever it is stated, and a drain nobody has measured reads at
-	// [statelog.DrainFloor] — long, which is the direction a lease must
-	// err in.
-	//
-	// THE LEASE IS TWICE IT, so it outlives the work it admits without
-	// outliving it by so much that a crashed holder blocks the company:
-	// the projection of twice the records, which is twice the time and
-	// takes the conversion's own ceiling rather than overflowing past it.
-	drain := w.drain()
-	projected := statelog.BacklogTime(uint64(records), drain).Seconds()
-	ttl := statelog.BacklogTime(2*uint64(records), drain)
-	if ttl < ClaimHeartbeat {
-		ttl = ClaimHeartbeat
-	}
+	// [statelog.DrainFloor] — long, which sends a refused caller back after
+	// the bulk rather than into a second refusal.
+	projected := statelog.BacklogTime(uint64(records), w.drain())
 	if !w.local.take(resource) {
 		return nil, w.bulkInFlight(ctx, resource)
 	}
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: w.nodeID, TTL: ttl,
+	h, err := w.lease(ctx, resource, map[string]any{
+		bulkUntilMeta: time.Now().Add(projected).UTC().Format(time.RFC3339Nano),
 	})
 	switch {
 	case err != nil:
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
-		w.occupy(projected)
+		// This node's half is kept, so a second bulk HERE is still
+		// refused.
+		w.occupy(projected.Seconds())
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
 		return func() { w.local.give(resource) }, nil
-	case lease == nil:
+	case h == nil:
 		w.local.give(resource)
 		return nil, w.bulkInFlight(ctx, resource)
 	}
-	w.occupy(projected)
-	epoch := lease.Epoch
-	return func() {
-		// THE LEASE FIRST, for [held.release]'s reason.
-		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, w.nodeID, epoch)
-		w.local.give(resource)
-	}, nil
+	w.occupy(projected.Seconds())
+	return func() { h.release(ctx) }, nil
 }
+
+// bulkUntilMeta is the bulk lease's [coord.Lease.Meta] key for the instant its
+// holder projected the bulk to have applied, written as RFC 3339.
+//
+// A STRING, because a lease's meta values survive a backend as values and not
+// as Go types ([coord.Lease.Meta]). SHARED BETWEEN BUILDS, like every lease
+// field: a holder that writes none reads as a bulk with no projection, whose
+// caller is told the lease's own remaining time.
+const bulkUntilMeta = "bulk_until"
 
 // occupy records the applier occupancy an ADMITTED bulk is about to impose.
 //
@@ -1617,16 +1644,38 @@ func (w *Writer) occupy(projected float64) {
 	}
 }
 
-// bulkInFlight refuses a bulk while another applies, with the time left on the
-// holder's lease as the caller's hint.
+// bulkInFlight refuses a bulk while another applies, with the holder's
+// projected end as the caller's hint.
+//
+// A PROJECTED END ALREADY PASSED is a bulk running slower than projected,
+// which says nothing about when it will finish — so the hint is then the time
+// left on the holder's lease: the longest the lease can outlive its holder,
+// and a heartbeat's worth of it while the holder is alive. The same for a
+// holder that published no projection. Both clocks are the holders' and this
+// node's, compared only to shape a hint and never to decide who holds what.
 func (w *Writer) bulkInFlight(ctx context.Context, resource string) error {
 	remaining := time.Duration(0)
 	if holder, err := w.claims.Get(ctx, resource); err == nil && holder != nil {
 		remaining = time.Until(holder.ExpiresAt)
+		if end, ok := projectedEnd(holder.Meta); ok && time.Until(end) > 0 {
+			remaining = time.Until(end)
+		}
 	}
 	return fmt.Errorf("%w; retry in about %d seconds: %w",
 		ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
 		statelog.ErrUnavailable)
+}
+
+// projectedEnd is the instant a bulk lease's holder projected its bulk to have
+// applied, and false for a holder that wrote none or one this build cannot
+// read — which is the same answer to a caller: no projection.
+func projectedEnd(meta map[string]any) (time.Time, bool) {
+	until, ok := meta[bulkUntilMeta].(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	end, err := time.Parse(time.RFC3339Nano, until)
+	return end, err == nil
 }
 
 // drain is the applier's measured drain in RECORDS a second, and zero when

@@ -72,11 +72,27 @@ const (
 	// setting.
 	faultTooLarge
 
+	// faultBusy is the stream refusing the record because its ingest queue
+	// is full. Nothing was stored, as with the refusals above, and unlike
+	// them it is TRANSIENT: the queue drains, and the same record is taken
+	// once it has.
+	faultBusy
+
+	// faultInFlight is the broker saying a record under this message id is
+	// still being proposed. It is NOT a refusal of this write: the earlier
+	// proposal carries the same operation id and may still commit, so the
+	// record may be on the stream in a moment and may never be. It is the
+	// third value with one fact added — something of this operation's is in
+	// flight — and it is resolved the ambiguous path's way: the ledger, or
+	// the duplicate acknowledgement a later append under the same id gets.
+	faultInFlight
+
 	// faultRefused is every other decision the broker made and named: an
 	// API error this framework has no remedy of its own for. It is as
-	// definitive as the two above and apart from both, because filed with
-	// either it would carry that one's remedy — a byte ceiling to raise, a
-	// size limit to lift — for a refusal neither setting causes.
+	// definitive as faultFull and faultTooLarge — the broker decided before
+	// anything was stored — and apart from both, because filed with either
+	// it would carry that one's remedy, a byte ceiling to raise or a size
+	// limit to lift, for a refusal neither setting causes.
 	faultRefused
 
 	// faultUnknown is no answer: the append may or may not have landed,
@@ -146,12 +162,16 @@ func classify(err error) (fault, string) {
 			// handed on verbatim instead of being turned into a
 			// second enum this build would have to keep matching.
 			return faultFull, apiErr.Description
+		case codeStreamTooManyRequests:
+			return faultBusy, apiErr.Description
+		case codeDuplicateInProcess:
+			return faultInFlight, apiErr.Description
 		}
-		// ANY OTHER API ERROR is a decision the server made and named,
-		// so it is not ambiguous — and it is not one this framework has
-		// a remedy for either, so it is reported in the server's own
-		// words rather than retried or filed under a remedy that is not
-		// its own.
+		// ANY OTHER API ERROR is a decision the server made and named
+		// before anything was stored, so it is not ambiguous — and it is
+		// not one this framework has a remedy for either, so it is
+		// reported in the server's own words rather than retried or filed
+		// under a remedy that is not its own.
 		return faultRefused, apiErr.Description
 	}
 	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
@@ -170,3 +190,18 @@ const codeStreamStoreFailed jetstream.ErrorCode = 10077
 // allowed", which it answers for a record larger than the stream's own
 // max_msg_size. Not exported by the client either.
 const codeMessageExceedsMaximum jetstream.ErrorCode = 10054
+
+// codeStreamTooManyRequests is the server's "too many requests"
+// (JSStreamTooManyRequests), which a stream answers when its ingest queue
+// cannot take the message: the server drops it before it is stored and says
+// so. Not exported by the client.
+const codeStreamTooManyRequests jetstream.ErrorCode = 10167
+
+// codeDuplicateInProcess is the server's "duplicate message id is in process"
+// (JSStreamDuplicateMessageConflict). A clustered stream's leader records a
+// message id when it proposes the record and learns the record's sequence only
+// when the proposal commits, and a publish carrying that id in between is
+// answered with this — so the first record may still commit. A single-member
+// stream stores before it answers and never sends it. Not exported by the
+// client.
+const codeDuplicateInProcess jetstream.ErrorCode = 10158

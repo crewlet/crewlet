@@ -80,19 +80,37 @@ type Decision struct {
 // Empty reports a decision with nothing to publish.
 func (d Decision) Empty() bool { return len(d.Payload) == 0 }
 
-// Deferral is a deferred record whose declared scope intersects the closure a
+// Deferral is a retained record whose declared scope intersects the closure a
 // write or a read is about.
+//
+// RETAINED IS NOT THE SAME AS UNDECODABLE. The apply loop retains every record
+// its build cannot decode, and also every record it could decode whose scope
+// meets one already retained — so the record a probe finds may be either, and
+// [Deferral.Describe] is how a refusal says which.
 type Deferral struct {
-	// Position is where the deferred record sits.
+	// Position is where the retained record sits.
 	Position Position
 
-	// Version is the record version this build could not decode, which
-	// is the one number an operator needs to know which build to run.
+	// Version is the record version it was written at. Above the build's
+	// own, it is the number an operator picks a build by; at or below it,
+	// the record is held back behind one the build cannot decode.
 	Version int
 
-	// Scope is the deferred record's own declared scope, so a refusal can
+	// Scope is the retained record's own declared scope, so a refusal can
 	// name what is actually stale rather than the whole domain.
 	Scope ScopeSet
+}
+
+// Describe names a retained record the way a refusal states it, given the
+// record version this build reads: by the version it cannot decode, or as
+// held back behind one — never as undecodable at a version the build reads.
+func (d Deferral) Describe(reads int) string {
+	if d.Version > reads {
+		return fmt.Sprintf("a record at version %d this build cannot decode, at %s",
+			d.Version, d.Position)
+	}
+	return fmt.Sprintf("a record at %s that is held back behind one this build "+
+		"cannot decode", d.Position)
 }
 
 // Snap is one committed state, seen once. Every field was read inside the

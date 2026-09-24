@@ -81,8 +81,9 @@ const (
 	// save a joiner the replay it would cost to transfer.
 	SkipLagging SkipReason = "lagging"
 
-	// SkipUnhydrated — this node has not drained the log even once, so
-	// what it holds is a prefix rather than a state.
+	// SkipUnhydrated — this node has not drained the log since its applier
+	// last started or last stalled, so what it holds is a prefix rather than
+	// a state.
 	SkipUnhydrated SkipReason = "unhydrated"
 
 	// SkipSoleNode — there is nobody to donate to. The recovery artefact
@@ -556,10 +557,11 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 		name := reg.Domain.Name()
 		if h.Deferred > 0 {
 			return &ErrSkipped{Reason: SkipDeferred, Detail: fmt.Sprintf(
-				"this node holds %d record(s) of %s it cannot decode, from "+
-					"sequence %d — the deferred table is scrubbed out of every "+
-					"artefact, so a checkpoint above a retained record would hand "+
-					"an adopter a resume point above bytes it never received",
+				"this node retains %d record(s) of %s from sequence %d rather than "+
+					"applying them — records its build cannot decode, and records "+
+					"held back behind one — and the deferred table is scrubbed out "+
+					"of every artefact, so a checkpoint above a retained record would "+
+					"hand an adopter a resume point above bytes it never received",
 				h.Deferred, name, h.DeferredFrom)}
 		}
 		// BEFORE THE CAUGHT-UP TERM, because in this state that term is
@@ -576,8 +578,9 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 		}
 		if !h.CaughtUp {
 			return &ErrSkipped{Reason: SkipUnhydrated, Detail: fmt.Sprintf(
-				"this node has never drained %s, so what it holds is a prefix "+
-					"rather than a state", name)}
+				"this node has not drained %s since its applier last started or "+
+					"last stalled, so what it holds is a prefix rather than a state",
+				name)}
 		}
 		if h.Lag != nil && *h.Lag > SnapshotLagSlack {
 			return &ErrSkipped{Reason: SkipLagging, Detail: fmt.Sprintf(

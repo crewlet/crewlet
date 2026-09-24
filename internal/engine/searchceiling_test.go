@@ -22,11 +22,12 @@ import (
 // log line on every call.
 //
 // Every caller's ask is an AGREEMENT BETWEEN CONSTANTS IN SEVERAL PACKAGES,
-// none of which mentions the others, and this is where it is held, because
-// this package is where the searchers and their callers are wired together.
-// The knowledge seam's callers reach the fan-out through the native page
-// reader, which over-fetches by [pages.SearchOverfetch] to leave room for what
-// it drops after the ranking; the tracker's reach it with their own limit.
+// and this is where it is held, because this package is where the searchers
+// and their callers are wired together. The knowledge seam's callers reach the
+// fan-out through the native page searcher, which over-fetches by
+// [pages.SearchOverfetch] to leave room for what it drops after the ranking;
+// the tracker's callers reach it through the tracker's searcher, which refuses
+// any ask past [tracker.MaxSearchLimit].
 //
 // If a ceiling legitimately has to rise, raise FuseN with it — and read
 // [search.Stage1Depth] first, which is derived from it.

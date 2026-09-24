@@ -69,7 +69,7 @@ Flags:
   -config PATH   Tier A config carrying the keyring (default %q)
   -api URL       The running node to write through; default is its own api.host:port
 
-A running engine holds its database, so these commands go through its
+A running engine holds its store files, so these commands go through its
 authenticated /secrets surface — which is what puts a value on every node.
 Export CREWLET_API_TOKEN to authenticate as a specific operator; without it
 the first api.auth.tokens entry in the Tier A config is used.
@@ -209,10 +209,10 @@ type secretTarget struct {
 // the engine migrates it at the next start.
 //
 // The STORE LOCK is what tells the two apart, and it is a fact rather than a
-// guess: the engine holds an OS advisory lock on its database file for
-// exactly as long as it is running, so [store.ErrLocked] means "the engine is
-// up" with a pid attached, and a successful open means it is not. Probing the
-// API instead would confuse "the node is stopped" with "the node is up but
+// guess: the engine holds an OS advisory lock on each of its two store files
+// for exactly as long as it is running, so [store.ErrLocked] means "the engine
+// is up" with a pid attached, and a successful open means it is not. Probing
+// the API instead would confuse "the node is stopped" with "the node is up but
 // its HTTP port is bound elsewhere", and those need opposite answers.
 func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
 	boot, err := loadBootstrapForStore(bootstrapPath)
@@ -270,12 +270,12 @@ func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err err
 	client, cerr := newSecretsClient(boot, "")
 	if cerr != nil {
 		// BOTH FACTS, because either alone is misleading. "The engine
-		// holds the database" without "and here is why I could not go
+		// holds its store files" without "and here is why I could not go
 		// through its API" reads as a refusal with no way forward, and
 		// the API's own complaint without the lock reads as though the
 		// local store were never an option.
 		return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds "+
-			"its database, so this has to go through its API — and it cannot: "+
+			"its store files, so this has to go through its API — and it cannot: "+
 			"%w\n\nEither stop `crewlet run` on this node and re-run, or "+
 			"supply the value through the process environment instead: the "+
 			"resolver falls back to it, so a rotation needs no downtime that way",
@@ -294,14 +294,14 @@ func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err err
 // route around the lock, and every caller has a different one.
 //
 // A REFUSAL RATHER THAN A WARNING, which is the whole reason the lock exists:
-// before it, these commands printed a caution and opened the file anyway, so
-// an operator who did not read it corrupted the database.
+// a caution printed before opening the file anyway protects only an operator
+// who reads it, and two processes on one store file corrupt it between them.
 func engineHoldsTheStore(err error, bootstrapPath, remedy string) error {
 	if !errors.Is(err, store.ErrLocked) {
 		return err
 	}
 	return fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
-		"database; the driver allows only one process on a file. %s",
+		"store files; the driver supports one process on a file. %s",
 		err, bootstrapPath, remedy)
 }
 

@@ -3,9 +3,8 @@
 //
 // # What it is for
 //
-// A company running Crewlet needs somewhere to write things down, and until
-// now that somewhere had to be Confluence. This is the first-party
-// alternative, on exactly the terms
+// A company running Crewlet needs somewhere to write things down, and this is
+// the engine's own — the alternative to Confluence — on exactly the terms
 // [github.com/crewlet/crewlet/internal/tracker] is the tracker's: every change
 // is ONE RECORD on an ordered stream, arbitrated at the broker on the subject
 // of the object it changes and applied into N identical SQL copies with the
@@ -44,39 +43,36 @@
 // instruction written for a different phase of a different turn. The ROOT
 // container holds the organisation's own pages, starting with the Onboarding
 // page every seat reads first, and is searched like any other. Both are
-// refused as a unit's own space by the config loader, and both are named there
-// rather than here so an operator can move either.
+// refused as a unit's or a seat's own space by the config loader, and both are
+// named there rather than here so an operator can move either.
 //
 // Neither is closed by this package: a seat's page tools refuse to write into
 // either, and an operator's own assistant writes both — which is how a
 // company on this knowledge base publishes its skills and its root Onboarding
 // page. See [github.com/crewlet/crewlet/internal/agent/builtin.PageDeps].
 //
-// # The two-key sequences this no longer has
+// # One record per gesture, one transaction per record
 //
-// Under the coordination bucket this domain grew up on, a page's identity was
-// TWO keys — its title claim and the page itself — and no write spanned two
-// keys. So a create, a save and a rename were each a SEQUENCE with a window
-// between the halves, and each carried its own account of what a crash in that
-// window left behind: an orphan claim, an orphan revision above the page's own
-// version, an old claim still held. Stepping over that debris needed a GRACE
-// RULE — a refusal older than an hour is an orphan, overwrite it — which is a
-// rule about time rather than about ordering, and the one shape a reader can
+// A create is ONE record whose apply writes the title claim, the head, the
+// first revision and the history entry in ONE TRANSACTION; so is a save, and so
+// is a rename, which takes the new claim and releases the old inside the same
+// transaction. There is no half-applied state to name, no orphan to step over,
+// and no grace rule anywhere in this package. A crash mid-apply rolls the
+// transaction back and the record is re-applied from the checkpoint, which is
+// the framework's own guarantee rather than this domain's.
+//
+// That is what keeping a page's identity on keys with no write spanning them
+// cannot give. With the title claim and the page as two keys, a create, a save
+// and a rename are each a SEQUENCE with a window between the halves, and what a
+// crash in the window leaves — an orphan claim, an orphan revision above the
+// page's own version, an old claim still held — can only be stepped over by a
+// GRACE RULE about time rather than ordering, the one shape a reader can
 // neither derive nor check.
 //
-// Adopting the log removed all three, and that is the clearest thing the
-// adoption bought. A create is ONE record whose apply writes the title claim,
-// the head, the first revision and the history entry in ONE TRANSACTION; so is
-// a save, and so is a rename, which takes the new claim and releases the old
-// inside the same transaction. There is no half-applied state to name, no
-// orphan to step over, and no grace rule anywhere in this package. A crash
-// mid-apply rolls the transaction back and the record is re-applied from the
-// checkpoint, which is the framework's own guarantee rather than this domain's.
-//
-// A RENAME IS STILL ITS OWN OPERATION rather than a field of a save, and for a
-// reason the transaction does not remove: one record has one subject, and a
-// record carrying both an address change and a content change could arbitrate
-// only one of them.
+// A RENAME IS ITS OWN OPERATION rather than a field of a save, for a reason the
+// transaction does not remove: one record has one subject, and a record
+// carrying both an address change and a content change could arbitrate only
+// one of them.
 package pages
 
 import (
