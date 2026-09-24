@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -146,8 +147,12 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	// The spend, on every path out of here: the call happened whatever the
 	// answer was, and the caller is the only frame that can charge it.
 	spent := Decision{
-		Asked:        true,
-		Model:        completion.Model,
+		Asked: true,
+		Model: completion.Model,
+		// The completion's own entry when a chain named one, and the key
+		// this judge was built over otherwise — a single backend never
+		// knows the key it was configured under.
+		ProviderKey:  cmp.Or(completion.ProviderKey, j.key),
 		InputTokens:  completion.InputTokens,
 		OutputTokens: completion.OutputTokens,
 		CacheRead:    completion.CacheRead,

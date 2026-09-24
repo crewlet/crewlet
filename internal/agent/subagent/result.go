@@ -272,8 +272,11 @@ type Result struct {
 	// answer exists.
 	Elapsed time.Duration
 
-	// Model is what actually served the calls; ProviderKey is the config
-	// key its chain was resolved under.
+	// Model is what actually served the calls, and ProviderKey the
+	// configured entry that did — the member of the worker's chain that
+	// answered, which after a fallback is not the head it was resolved
+	// under. Both follow the tool loop's one precedence, so a worker that
+	// never reached a round names neither.
 	Model       string
 	ProviderKey string
 
