@@ -86,6 +86,7 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 	req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
 		ID: owner, Login: "jane.doe", Kind: iam.KindPerson,
 		Stage: iam.StageActive, ReauthAt: clock.Add(time.Minute),
+		SensitiveReauthAt: clock.Add(time.Minute),
 	}))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

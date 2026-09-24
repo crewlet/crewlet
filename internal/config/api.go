@@ -528,8 +528,9 @@ type APISession struct {
 	StepUpRaw string `yaml:"step_up,omitempty" json:"step_up,omitempty" desc:"How long a proof of identity authorises administrative action (default 1h, 5m..24h)."`
 
 	// StepUpSensitiveRaw is the same for the gestures that hand out
-	// something that cannot be taken back: revealing a secret, minting a
-	// credential, changing who holds authority. Default 15m.
+	// something that cannot be taken back: revealing a secret, changing
+	// what somebody already enrolled may do or how they prove who they
+	// are, and ending every session in the company. Default 15m.
 	//
 	// SHORTER THAN StepUp BY CONSTRUCTION — validation refuses the other
 	// ordering rather than clamping, because a file saying the sensitive

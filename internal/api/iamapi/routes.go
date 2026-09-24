@@ -82,7 +82,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
 	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
-	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryWrite), s.PatchPerson)
+	// AN EDIT OF AN ENROLLED PERSON is the directory's SENSITIVE write —
+	// it changes what they may do or how they sign in — where creating,
+	// removing and inviting ask the ordinary window.
+	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryAuthority), s.PatchPerson)
 	mount("DELETE /iam/people/{id}", at(authz.ActionDirectoryWrite), s.DeletePerson)
 	// AN INVITATION IS ADDRESSED TO AN ADDRESS, not to a person, so it is
 	// its own collection rather than a verb on somebody's row. The design
@@ -98,11 +101,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
-		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+		at(authz.ActionDirectoryAuthority), s.PostMFAReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
 		ofSubject(authz.ActionCredentialWrite), s.PostCredentials)
+	// A REVOCATION IS ADMITTED ON THE ORDINARY VERB and asks the
+	// sensitive one from inside once it has read which credential the id
+	// names: a machine token's is an ordinary write, and a password's, a
+	// second factor's, the recovery codes' or a provider link's changes
+	// how somebody proves who they are — which the pattern cannot see.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
 	// THE FLEET'S OWN GRANT, not the directory's. sessions.go argues it:

@@ -1568,8 +1568,15 @@ proof its verb asks for, and there are three answers:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, and the deployment's own controls — a budget reset, a backup, the retention and capacity gestures |
-| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; every identity-directory write that changes who holds authority or how they prove it, hands over a bearer value or cannot be taken back — enrolling, editing or removing somebody, an invitation, a second-factor reset, the bootstrap code, minting or revoking a credential; and ending every session in the company |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, the bootstrap code, minting or revoking a machine token, and ending somebody else's sessions |
+| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor, the recovery codes or a provider link, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
+
+The two windows are the design's: every identity-directory write asks the
+ordinary one, and the sensitive one is kept for the gestures that hand over a
+value or an authority somebody already holds. Changing how somebody proves who
+they are is one of those whichever door it comes through — the `/iam` reset,
+revoking a factor through `/iam/credentials`, or replacing your own factor
+through `/auth/totp` — because each is the others by another name.
 
 It is decided **on the row**, beside the grant, for the same reason the grant
 is: a REST route and a tool asking about one verb get one answer. A row may ask

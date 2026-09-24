@@ -238,18 +238,19 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
+	// A PASSWORD STEP-UP PROVES INSIDE BOTH WINDOWS, so a refusal of it
+	// names the stricter one it would have satisfied: every
+	// `step_up_required` this surface answers carries its window.
 	if principal.Kind != iam.KindPerson {
 		// A MACHINE HAS NOTHING TO CONFIRM WITH, which is the point of
 		// the step-up rather than a gap in it: a credential in a config
 		// file cannot prove a person is at the keyboard.
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			map[string]string{
-				"detail": "a machine credential cannot confirm a person's identity",
-			})
+		refuseStepUp(w, iam.RecencySensitive,
+			"a machine credential cannot confirm a person's identity")
 		return
 	}
 	// NOR CAN A TOKEN ACTING AS A PERSON, which the kind above cannot see.
-	if machineToken(w, r) {
+	if machineToken(w, r, iam.RecencySensitive) {
 		return
 	}
 

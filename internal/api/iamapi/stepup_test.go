@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // recordingMux mounts on a real mux and remembers every pattern, so a walk
@@ -31,31 +32,35 @@ func (m *recordingMux) Handle(pattern string, h http.Handler) {
 //
 // Walked over every route the surface mounts, with a caller holding every
 // grant whose proof is two hours old: a write is refused `step_up_required`
-// naming its window before its handler runs, a read is served. Every directory
-// write asks inside `step_up_sensitive` — each changes who holds authority or
-// how they prove it, hands over a bearer value, or cannot be taken back —
-// except ending your own sessions, which asks for nothing because it is the
-// first thing somebody does on finding an intruder in their account. The map
-// is held against the mount in BOTH directions, so a route added without
+// naming its window before its handler runs, a read is served. The windows are
+// the design's: every directory write asks `step_up`, and `step_up_sensitive`
+// is kept for the gestures that change an authority somebody already holds or
+// how they prove it — an edit of their row, a second-factor reset — and for
+// ending every session in the company. Ending your own sessions asks for
+// nothing, because it is the first thing somebody does on finding an intruder
+// in their account (the other arm of that route has a case of its own below),
+// and revoking a credential asks the sensitive window from inside once it has
+// read that the credential is how somebody signs in (a case below, too). The
+// map is held against the mount in BOTH directions, so a route added without
 // deciding its window fails here.
 func TestEveryDirectoryWriteAsksForAProofInItsWindow(t *testing.T) {
 	t.Parallel()
 	want := map[string]iam.Recency{
 		"GET /iam/people":                  iam.RecencyAny,
-		"POST /iam/people":                 iam.RecencySensitive,
+		"POST /iam/people":                 iam.RecencyStepUp,
 		"GET /iam/people/{id}":             iam.RecencyAny,
 		"PATCH /iam/people/{id}":           iam.RecencySensitive,
-		"DELETE /iam/people/{id}":          iam.RecencySensitive,
-		"POST /iam/invitations":            iam.RecencySensitive,
+		"DELETE /iam/people/{id}":          iam.RecencyStepUp,
+		"POST /iam/invitations":            iam.RecencyStepUp,
 		"GET /iam/people/{id}/sessions":    iam.RecencyAny,
 		"DELETE /iam/people/{id}/sessions": iam.RecencyAny,
 		"POST /iam/people/{id}/mfa/reset":  iam.RecencySensitive,
 		"GET /iam/credentials":             iam.RecencyAny,
-		"POST /iam/credentials":            iam.RecencySensitive,
-		"DELETE /iam/credentials/{id}":     iam.RecencySensitive,
+		"POST /iam/credentials":            iam.RecencyStepUp,
+		"DELETE /iam/credentials/{id}":     iam.RecencyStepUp,
 		"POST /iam/invalidate-all":         iam.RecencySensitive,
 		"GET /iam/check":                   iam.RecencyAny,
-		"POST /iam/bootstrap-code":         iam.RecencySensitive,
+		"POST /iam/bootstrap-code":         iam.RecencyStepUp,
 		"GET /iam/audit":                   iam.RecencyAny,
 	}
 	r := newRig(t)
@@ -150,6 +155,84 @@ func TestAProofFortyMinutesOldMayNotChangeAnybodysGrants(t *testing.T) {
 		t.Errorf("the same edit a minute after proving answered %d %v with "+
 			"writes %v, so the refusal above says nothing", got.status,
 			got.body, calls)
+	}
+}
+
+// REVOKING HOW SOMEBODY SIGNS IN ASKS THE SENSITIVE WINDOW; REVOKING A TOKEN
+// ASKS THE ORDINARY ONE.
+//
+// `DELETE /iam/credentials/{id}` is mounted on the ordinary credential write,
+// and once it has read which credential the id names it asks the sensitive
+// verb for a password, a second factor, the recovery codes or a provider link:
+// each of those is a second-factor reset by another door, and the reset
+// itself asks the quarter-hour. So a proof forty minutes old withdraws a
+// machine token and is refused a second factor naming `step_up_sensitive`,
+// with nothing written; the control is the same caller a minute after proving.
+// And a credential this node could not name when it chose the verb is not
+// revoked on the ordinary one: the snapshot revokes a non-token only for a
+// request the sensitive verb admitted.
+//
+// Mutation: drop the inner admission and the forty-minute proof revokes the
+// factor; drop the snapshot's condition and the unnamed factor is revoked.
+func TestRevokingHowSomebodySignsInAsksTheSensitiveWindow(t *testing.T) {
+	t.Parallel()
+	const factor, token = "018f3a9c-0000-7000-8000-0000000000f1",
+		"018f3a9c-0000-7000-8000-0000000000f2"
+	fortyMinutes := administrator()
+	proof := time.Now().Add(-40 * time.Minute)
+	fortyMinutes.ReauthAt, fortyMinutes.SensitiveReauthAt = proof.Add(time.Hour),
+		proof.Add(15*time.Minute)
+	revoke := func(p iam.Principal, id string, listed bool) (answered, *rig) {
+		r := newRig(t)
+		r.writer.held = []iamdomain.Credential{
+			{ID: factor, Method: iamdomain.MethodTOTP},
+			{ID: token, Method: iamdomain.MethodToken},
+		}
+		if listed {
+			r.directory.creds = map[string][]iamdomain.CredentialRow{
+				bob.String(): {
+					{ID: factor, PersonID: bob.String(), Method: iamdomain.MethodTOTP},
+					{ID: token, PersonID: bob.String(), Method: iamdomain.MethodToken},
+				},
+			}
+		}
+		got := r.as(p, http.MethodDelete,
+			"/iam/credentials/"+id+"?person="+bob.String(), nil)
+		return got, r
+	}
+	revokedIn := func(r *rig, id string) bool {
+		for _, c := range r.writer.held {
+			if c.ID == id {
+				return !c.RevokedAt.IsZero()
+			}
+		}
+		return false
+	}
+
+	got, r := revoke(fortyMinutes, factor, true)
+	if got.status != http.StatusForbidden ||
+		got.body["error"] != string(httpjson.CodeStepUpRequired) ||
+		got.body[authz.DetailWindow] != string(iam.RecencySensitive) {
+		t.Errorf("revoking a second factor on a proof forty minutes old "+
+			"answered %d %v, want 403 step_up_required naming %s", got.status,
+			got.body, iam.RecencySensitive)
+	}
+	if len(r.writer.calls) != 0 || revokedIn(r, factor) {
+		t.Errorf("the refused revocation reached the writer: %v", r.writer.calls)
+	}
+	if got, r := revoke(fortyMinutes, token, true); got.status != http.StatusOK ||
+		!revokedIn(r, token) {
+		t.Errorf("revoking a machine token on the same proof answered %d %v, "+
+			"want it revoked on the ordinary window", got.status, got.body)
+	}
+	if got, r := revoke(administrator(), factor, true); got.status != http.StatusOK ||
+		!revokedIn(r, factor) {
+		t.Errorf("revoking the factor a minute after proving answered %d %v, "+
+			"so the refusal above says nothing", got.status, got.body)
+	}
+	if got, r := revoke(fortyMinutes, factor, false); revokedIn(r, factor) {
+		t.Errorf("a factor this node could not name when it chose the verb was "+
+			"revoked on the ordinary one (%d %v)", got.status, got.body)
 	}
 }
 

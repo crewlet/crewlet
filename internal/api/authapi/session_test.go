@@ -68,26 +68,82 @@ func TestASignInIsAProofAStepUpSurfaceAccepts(t *testing.T) {
 
 	mux := http.NewServeMux()
 	r.svc.Routes(mux)
-	enrol := func(reauth time.Time) int {
-		req := httptest.NewRequest(http.MethodPost, "/auth/totp", nil)
-		req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+	// THE GUARD'S COMPOSITION: a proof taken at `proved` stops counting an
+	// hour later for an ordinary gesture and a quarter-hour later for a
+	// sensitive one, and the zero instant proved nothing.
+	enrol := func(proved time.Time) int {
+		p := iam.Principal{
 			ID:    uuid.MustParse(r.estate.person.ID),
 			Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,
-			ReauthAt: reauth,
-		}))
+		}
+		if !proved.IsZero() {
+			p.ReauthAt = proved.Add(time.Hour)
+			p.SensitiveReauthAt = proved.Add(15 * time.Minute)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/auth/totp", nil)
+		req = req.WithContext(iam.WithPrincipal(req.Context(), p))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	if got := enrol(clock.Add(time.Minute)); got != http.StatusOK {
-		t.Errorf("a proof a minute from lapsing answered %d, want 200", got)
+	if got := enrol(clock.Add(-time.Minute)); got != http.StatusOK {
+		t.Errorf("a proof a minute old answered %d, want 200", got)
 	}
-	for name, reauth := range map[string]time.Time{
-		"a lapsed proof": clock.Add(-time.Minute),
+	for name, proved := range map[string]time.Time{
+		"a lapsed proof": clock.Add(-2 * time.Hour),
 		"no proof":       {},
 	} {
-		if got := enrol(reauth); got != http.StatusForbidden {
+		if got := enrol(proved); got != http.StatusForbidden {
 			t.Errorf("%s answered %d, want 403 step_up_required", name, got)
+		}
+	}
+}
+
+// CHANGING HOW YOU PROVE WHO YOU ARE ASKS THE SENSITIVE WINDOW, AND THE
+// REFUSAL NAMES IT.
+//
+// Enrolling or replacing a second factor and regenerating the recovery codes
+// are the second-factor reset's gesture by another door, and `/iam` asks the
+// reset and a factor's revocation inside `step_up_sensitive`: a proof forty
+// minutes old — inside the hour, outside the quarter-hour — could swap the
+// factor for a stranger's and read back fresh codes here while the same
+// cookie was refused taking one away there. The refusal carries the reason and
+// the window in the envelope every step-up refusal on this API carries, which
+// is what a client needs to ask the person to confirm and replay; it used to
+// be a bare code. The control is the same person a minute after proving.
+//
+// Mutation: ask the ordinary window and the forty-minute proof is served;
+// answer the refusal without its detail and the window goes missing.
+func TestChangingHowYouProveWhoYouAreAsksTheSensitiveWindow(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	mux := http.NewServeMux()
+	r.svc.Routes(mux)
+	ask := func(path string, proved time.Time) *httptest.ResponseRecorder {
+		p := iam.Principal{
+			ID:    uuid.MustParse(r.estate.person.ID),
+			Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,
+			ReauthAt: proved.Add(time.Hour), SensitiveReauthAt: proved.Add(15 * time.Minute),
+		}
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req = req.WithContext(iam.WithPrincipal(req.Context(), p))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, path := range []string{"/auth/totp", "/auth/totp/recovery"} {
+		rec := ask(path, clock.Add(-40*time.Minute))
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusForbidden || body["error"] != "step_up_required" ||
+			body["reason"] != "step_up" || body["window"] != string(iam.RecencySensitive) {
+			t.Errorf("%s on a proof forty minutes old answered %d %v, want 403 "+
+				"step_up_required with reason step_up naming %s", path, rec.Code,
+				body, iam.RecencySensitive)
+		}
+		if rec := ask(path, clock.Add(-time.Minute)); rec.Code != http.StatusOK {
+			t.Errorf("%s a minute after proving answered %d %s, so the refusal "+
+				"above says nothing", path, rec.Code, rec.Body)
 		}
 	}
 }

@@ -211,7 +211,8 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 }
 
 // asPerson posts one request as the rig's person, signed in with a fresh
-// step-up, straight to the surface.
+// step-up — inside both windows, as a proof taken this instant is —
+// straight to the surface.
 func (r *signInRig) asPerson(method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.RemoteAddr = "203.0.113.9:4711"
@@ -219,6 +220,7 @@ func (r *signInRig) asPerson(method, path, body string) *httptest.ResponseRecord
 		ID:    uuid.MustParse(r.estate.person.ID),
 		Login: r.estate.person.Login, Kind: iam.KindPerson,
 		Stage: iam.StageActive, ReauthAt: clock.Add(time.Hour),
+		SensitiveReauthAt: clock.Add(15 * time.Minute),
 	}))
 	rec := httptest.NewRecorder()
 	mux := http.NewServeMux()

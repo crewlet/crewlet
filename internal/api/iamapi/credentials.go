@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -283,42 +284,35 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		})
 }
 
-// linkCredential reports whether a credential id names one person's LIVE
-// provider link, and the link it names.
-func (s *Service) linkCredential(r *http.Request, person, id string) (
-	iamdomain.Link, bool, error) {
-
-	held, err := s.directory.Credentials(r.Context(), person)
-	if err != nil {
-		return iamdomain.Link{}, false, err
-	}
-	for _, row := range held {
-		if row.ID == id && row.Method == iamdomain.MethodOIDC &&
-			row.RevokedAt.IsZero() {
-			return iamdomain.Link{Issuer: row.Issuer, Blind: row.SubjectBlind},
-				true, nil
-		}
-	}
-	return iamdomain.Link{}, false, nil
-}
-
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
 //
 // IT REVOKES RATHER THAN DELETES, which is the same choice the session rows
 // make: "this token was withdrawn on the 3rd by Ana" is the sentence an
 // investigation is looking for, and a row that vanished carries none of it.
 //
+// # Two verbs, and the credential decides which
+//
+// The route is admitted on the ordinary credential write, which is what
+// revoking a MACHINE TOKEN is — a leaked one withdrawn from wherever it was
+// found. Revoking anything else changes how its owner proves who they are: a
+// password, a second factor, the recovery codes or a provider link, each of
+// them a second-factor reset by another door. So once the id is read, such a
+// revocation asks the SENSITIVE verb as well ([authz.ActionCredentialProof]),
+// the one `/auth`'s own second-factor routes ask. The method of a credential
+// id never changes, so the read that picks the verb and the snapshot that
+// revokes agree about it — and the snapshot revokes a credential that is not a
+// token only for a request that verb admitted, so an id this node could not
+// read yet is never a way round it.
+//
 // # A machine token revokes machine tokens and nothing else
 //
 // A token acts as its owner, so the authority table admits it here as it
 // admits the owner. What it may NOT do is withdraw the proof the owner signs
-// in with — a password, a second factor, the recovery codes — because a token
-// proves nobody is present, and a leaked one that could strip its owner's
-// second factor would be the first half of taking the account. Revoking a
-// token, itself included, is what somebody who finds one leaked should be able
-// to do from wherever they found it. Decided INSIDE the snapshot, on the
-// method the row holds, since that is the only frame that knows which
-// credential the id names.
+// in with, because a token proves nobody is present, and a leaked one that
+// could strip its owner's second factor would be the first half of taking the
+// account. Revoking a token, itself included, is what somebody who finds one
+// leaked should be able to do from wherever they found it. It is refused
+// BEFORE anything is written, on the credential the id names.
 func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {
@@ -333,30 +327,45 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	now := s.now()
-	_, fromToken := auth.PresentedToken(r.Context())
-	// A PROVIDER LINK IS NOT IN THE PERSON'S CREDENTIAL SET: it is its
-	// claim's row, and a set rewritten without it would leave it exactly
-	// where it was while answering "nothing changed". So an id naming one
-	// is an UNLINK — which a token may not make, for the same reason it may
-	// not withdraw a password: it is how the owner signs in.
-	if held, ok, err := s.linkCredential(r, person, id); err != nil {
+	held, err := s.directory.Credentials(r.Context(), person)
+	if err != nil {
 		s.unavailable(w, r, "read a person's credentials", err)
 		return
-	} else if ok {
-		if fromToken {
+	}
+	named, found := credentialByID(held, id)
+	proof := found && named.RevokedAt.IsZero() &&
+		named.Method != iamdomain.MethodToken
+	if proof {
+		if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
 				map[string]string{"detail": "a machine token revokes machine " +
-					"tokens and nothing else: an identity provider link is how " +
-					"its owner signs in"})
+					"tokens and nothing else: a password, a second factor, the " +
+					"recovery codes and an identity provider link are how its " +
+					"owner signs in, and are withdrawn by the person, signed in"})
 			return
 		}
+		if !authz.Admit(w, r, guard, authz.Policy{
+			Action: authz.ActionCredentialProof,
+			Object: func(*http.Request) authz.Object {
+				return authz.Object{Kind: authz.KindPerson, Owner: person}
+			},
+		}) {
+			return
+		}
+	}
+	// A PROVIDER LINK IS NOT IN THE PERSON'S CREDENTIAL SET: it is its
+	// claim's row, and a set rewritten without it would leave it exactly
+	// where it was while answering "nothing changed". So an id naming a live
+	// one is an UNLINK.
+	if proof && named.Method == iamdomain.MethodOIDC {
 		unlinkOp := s.opIDFor(r, "credentials:unlink:"+id)
-		unlinked, err := writer.Unlink(r.Context(), person, held, unlinkOp,
-			"a provider link was revoked")
+		unlinked, err := writer.Unlink(r.Context(), person, iamdomain.Link{
+			Issuer: named.Issuer, Blind: named.SubjectBlind,
+		}, unlinkOp, "a provider link was revoked")
 		s.answerWrite(w, r, unlinkOp, unlinked, err, map[string]any{"id": id})
 		return
 	}
-	found, withheld := false, false
+	found = false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"
 	opID := s.opIDFor(r, "credentials:revoke:"+id)
@@ -365,16 +374,17 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			// RESET PER RUN: the decide may run again against a fresh
 			// snapshot, and the verdict is the last run's.
-			found, withheld, method = false, false, ""
+			found, method = false, ""
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
-				if c.ID == id && c.RevokedAt.IsZero() {
-					if fromToken && c.Method != iamdomain.MethodToken {
-						withheld = true
-					} else {
-						c.RevokedAt = now
-						found, method = true, c.Method
-					}
+				// ONLY WHAT WAS ADMITTED: anything but a token is
+				// revoked only by a request the sensitive verb admitted
+				// above, so a credential this node could not name when
+				// it chose the verb is not revoked on the ordinary one.
+				if c.ID == id && c.RevokedAt.IsZero() &&
+					(proof || c.Method == iamdomain.MethodToken) {
+					c.RevokedAt = now
+					found, method = true, c.Method
 				}
 				out = append(out, c)
 			}
@@ -385,17 +395,9 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil || !landed(revoked) {
 		// NOTHING IS SAID OF A REVOCATION NOTHING CAN CONFIRM — neither
-		// the withheld refusal, nor "nothing changed", nor the event:
-		// each is a verdict the decide reached in a run whose record
-		// may not be on the log.
+		// "nothing changed" nor the event: each is a verdict the decide
+		// reached in a run whose record may not be on the log.
 		s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})
-		return
-	}
-	if withheld {
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			map[string]string{"detail": "a machine token revokes machine " +
-				"tokens and nothing else: a password, a second factor or the " +
-				"recovery codes are withdrawn by the person, signed in"})
 		return
 	}
 	if !found {
@@ -418,4 +420,17 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		Reason: reason,
 	})
 	s.answerWrite(w, r, opID, revoked, nil, map[string]any{"id": id})
+}
+
+// credentialByID is the row one id names among a person's credentials, live or
+// not.
+func credentialByID(held []iamdomain.CredentialRow, id string) (
+	iamdomain.CredentialRow, bool) {
+
+	for _, row := range held {
+		if row.ID == id {
+			return row, true
+		}
+	}
+	return iamdomain.CredentialRow{}, false
 }

@@ -765,10 +765,11 @@ api:
       absolute: 168h          # 1h..720h (default 168h)
       rotate_after: 1h        # 5m..24h  (default 1h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
-                              #   identity a config, chart, setup, credential
-                              #   or deployment write asks for
+                              #   identity a config, chart, setup, credential,
+                              #   deployment or /iam write asks for
       step_up_sensitive: 15m  # 1m..step_up (default 15m): the same for
-                              #   revealing a secret, an /iam write and
+                              #   revealing a secret, changing what somebody
+                              #   may do or how they prove who they are, and
                               #   ending every session. A token is fresh
                               #   by construction in both
     audit:

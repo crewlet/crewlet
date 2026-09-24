@@ -54,8 +54,12 @@
 // for ([iam.Recency]) — none, `step_up` (an hour by default: the company's
 // configuration, chart, integrations and credential writes, the identity
 // directory's writes and the deployment's own controls) or `step_up_sensitive`
-// (fifteen minutes: revealing a secret, changing anybody's authority or how
-// they prove it, ending every session in the company).
+// (fifteen minutes: revealing a secret, changing what somebody already
+// enrolled may do or how they prove who they are — whichever surface the
+// change comes through — and ending every session in the company). Those are
+// the design's windows: the sensitive one is kept for the gestures that hand
+// over a value or an authority somebody holds, and asking it of every
+// directory write sent an administrator back to re-prove for each invitation.
 //
 // IT IS DECIDED HERE, ON THE ROW, and nowhere else. It was a setting nothing
 // read: the sign-in surface could record a proof and no surface outside it ever

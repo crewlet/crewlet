@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -16,13 +17,16 @@ import (
 
 // THE SECOND FACTOR, enrolled and recovered.
 //
-// # Both routes are guarded AND require a step-up
+// # Both routes are guarded AND ask for a SENSITIVE step-up
 //
 // Adding a second factor and replacing the codes that bypass it are the two
 // gestures that decide whether a stolen session can be turned into a permanent
 // hold on somebody's account. A session alone is not enough for either: what
 // is being changed is the thing that would stop the person holding that
-// session, so the person has to be at the keyboard.
+// session, so the person has to be at the keyboard — within the quarter-hour
+// window, not the ordinary hour, because this is the second-factor reset's
+// gesture by another door and `/iam` asks the reset and a factor's revocation
+// the same (see [Service.mayChangeProof]).
 //
 // # A machine token is refused both, whoever it acts as
 //
@@ -81,7 +85,7 @@ type totpRecoveryResponse struct {
 
 // EnrolTOTP mints a seed, or stores one a code has proved.
 func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.steppedUp(w, r)
+	principal, ok := s.mayChangeProof(w, r)
 	if !ok {
 		return
 	}
@@ -173,7 +177,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 // move after a set is lost or printed somewhere it should not have been: a set
 // that merely grew would leave whatever leaked still working.
 func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.steppedUp(w, r)
+	principal, ok := s.mayChangeProof(w, r)
 	if !ok {
 		return
 	}
@@ -220,13 +224,26 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, totpRecoveryResponse{Codes: codes})
 }
 
-// steppedUp resolves the caller and refuses one whose proof of identity is
-// stale.
+// mayChangeProof resolves the caller and refuses one who may not change how
+// they prove who they are now — a machine, a machine token, or a person whose
+// proof of identity is older than the gesture's window.
 //
-// THE SAME THRESHOLD THE CLIENT IS WARNED AT, read from the one setting: a
-// gate that refused at a different number from the one a screen says would
-// either nag early or surprise late, and both read as a bug in the engine.
-func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Principal, bool) {
+// # The window is the authority table's, and it is the SENSITIVE one
+//
+// Enrolling a second factor, replacing it and regenerating the recovery codes
+// are [authz.ActionCredentialProof] — the verb `/iam` asks of revoking a
+// factor, so the two surfaces that change how somebody proves who they are
+// cannot answer differently about it. It was the ordinary hour here, read off
+// the session's own deadline, while the same person revoking their factor
+// through `/iam` was asked the quarter-hour: a cookie proved forty minutes ago
+// could swap the factor for a stranger's and read back fresh recovery codes,
+// and was refused only the gesture that took one away.
+//
+// DECIDED AT THIS SURFACE'S OWN INSTANT and rendered in the router's own
+// envelope, so the refusal names its `reason` and its `window` — which is
+// what a client needs to ask the person to confirm who they are and replay
+// the request, and what this route used to leave out.
+func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Principal, bool) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
 	case iam.Resolved:
@@ -237,18 +254,19 @@ func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Princip
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return iam.Principal{}, false
 	}
+	window, _ := authz.RecencyOf(authz.ActionCredentialProof)
 	if principal.Kind != iam.KindPerson {
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			map[string]string{
-				"detail": "a machine credential holds no second factor",
-			})
+		refuseStepUp(w, window, "a machine credential holds no second factor")
 		return iam.Principal{}, false
 	}
-	if machineToken(w, r) {
+	if machineToken(w, r, window) {
 		return iam.Principal{}, false
 	}
-	if s.stepUpDue(principal) {
-		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeStepUpRequired)
+	d := authz.Decide(r.Context(), principal, authz.ActionCredentialProof,
+		authz.Object{Kind: authz.KindPerson, Owner: principal.ID.String()},
+		authz.NoChart{}, s.now())
+	if d.Unknown() || !d.Allowed {
+		authz.EnvelopeRefusal(w, r, authz.Policy{}, d)
 		return iam.Principal{}, false
 	}
 	return principal, true
@@ -256,23 +274,39 @@ func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Princip
 
 // machineToken refuses a request that presented a machine token, on a gesture
 // that manages the proof its owner signs in with, and says whether it did.
+// window is the proof the gesture asks for, named on the refusal as every
+// `step_up_required` here names it.
 //
 // ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: a token
 // acts as its owner, so the principal is a person with a fresh step-up clock,
 // and both checks [Service.steppedUp] makes around this one pass it. The one
 // thing on it that says nobody is present is what it came THROUGH — its
 // [iam.Principal.Via], which the guard stamps and [auth.PresentedToken] reads.
-func machineToken(w http.ResponseWriter, r *http.Request) bool {
+func machineToken(w http.ResponseWriter, r *http.Request, window iam.Recency) bool {
 	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
 		return false
 	}
-	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-		map[string]string{
-			"detail": "a machine token proves nobody is present, so it cannot " +
-				"confirm its owner's identity or change how they prove it; " +
-				"sign in as the person",
-		})
+	refuseStepUp(w, window, "a machine token proves nobody is present, so it "+
+		"cannot confirm its owner's identity or change how they prove it; sign "+
+		"in as the person")
 	return true
+}
+
+// refuseStepUp answers `403 step_up_required` in the ONE envelope every such
+// refusal on this API carries — the authority table's own ([authz.StepUpDetail]):
+// the reason, the window the gesture asks a proof inside, the (empty) grants —
+// with a sentence saying why this caller cannot give that proof here.
+//
+// ONE SHAPE, because a client branches on it: the dashboard's confirmation
+// asks the person for the proof the window names and replays the request,
+// and a refusal that named no window left it guessing which of the two to
+// ask for.
+func refuseStepUp(w http.ResponseWriter, window iam.Recency, detail string) {
+	fields := authz.StepUpDetail(authz.Decision{
+		Reason: authz.ReasonStepUp, Recency: window,
+	})
+	fields["detail"] = detail
+	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired, fields)
 }
 
 // issuerLabel is what an authenticator app shows beside the account.

@@ -267,7 +267,7 @@ func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return oidc.Flight{}, false
 	}
-	if machineToken(w, r) {
+	if machineToken(w, r, iam.RecencyStepUp) {
 		return oidc.Flight{}, false
 	}
 	// THE ORDINARY WINDOW, which is the design's: the provider is asked

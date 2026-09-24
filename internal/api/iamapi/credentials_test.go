@@ -266,6 +266,16 @@ func TestATokenRevokesTokensAndNotItsOwnersProof(t *testing.T) {
 					Method: iamdomain.MethodPassword},
 				{ID: tokenID, Method: iamdomain.MethodToken},
 			}
+			// THE DIRECTORY HOLDS WHAT THE SNAPSHOT HOLDS: the route reads
+			// which credential the id names before it chooses a verb.
+			r.directory.creds = map[string][]iamdomain.CredentialRow{
+				alice.String(): {
+					{ID: "018f3a9c-0000-7000-8000-00000000000a",
+						PersonID: alice.String(), Method: iamdomain.MethodPassword},
+					{ID: tokenID, PersonID: alice.String(),
+						Method: iamdomain.MethodToken},
+				},
+			}
 			presented, row := aliceToken(t)
 			rec := throughTheGuard(t, r, row, http.MethodDelete,
 				"/iam/credentials/"+tc.target, presented)

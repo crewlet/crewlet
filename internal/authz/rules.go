@@ -172,13 +172,29 @@ const (
 
 	// --- the identity directory -------------------------------------- //
 	//
-	// FOUR VERBS FOR SIXTEEN ROUTES, because the routes differ in what
+	// SIX VERBS FOR SIXTEEN ROUTES, because the routes differ in what
 	// they do and not in how they are decided. What separates them is the
-	// pair of questions this estate actually asks: is this about a person
-	// or about the directory, and does it CHANGE anything.
-	ActionDirectoryRead   Action = "iam.read"
-	ActionDirectoryWrite  Action = "iam.write"
-	ActionCredentialWrite Action = "iam.credential.write"
+	// three questions this estate actually asks: is this about a person or
+	// about the directory, does it CHANGE anything, and — for a change —
+	// does it hand over an authority or a way to prove who somebody is,
+	// which is what the sensitive step-up window exists for.
+	ActionDirectoryRead  Action = "iam.read"
+	ActionDirectoryWrite Action = "iam.write"
+	// ActionDirectoryAuthority changes what somebody ALREADY ENROLLED may
+	// do or how they prove who they are: an edit of their row (grants,
+	// stage, seat, login, reach, provider link) and a second-factor reset.
+	// Its own verb beside [ActionDirectoryWrite] because it asks for the
+	// SENSITIVE window where every other directory write asks the ordinary
+	// one.
+	ActionDirectoryAuthority Action = "iam.authority.write"
+	ActionCredentialWrite    Action = "iam.credential.write"
+	// ActionCredentialProof changes how ONE PERSON PROVES WHO THEY ARE:
+	// enrolling or replacing a second factor, regenerating the recovery
+	// codes, and revoking a password, a second factor, the recovery codes
+	// or a provider link. It is asked from both surfaces that make those
+	// changes — `/auth` for a person's own, `/iam` for anybody's — so one
+	// row decides them whichever route a request took.
+	ActionCredentialProof Action = "iam.credential.proof"
 	ActionSessionEnd      Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
@@ -454,27 +470,44 @@ var rules = map[Action]rule{
 	// refuses conferring what the caller does not hold, and this refuses
 	// the gesture before it gets there.
 	//
-	// THE SENSITIVE WINDOW, for every one of its routes, because every one
-	// of them hands over an authority or cannot be taken back: an
-	// enrolment and an invitation confer grants (internal/iamdomain holds
-	// both to the writer's own for exactly that reason — each is a grant
-	// change from nothing), an edit changes them, a second-factor reset
-	// changes how somebody proves who they are, a removal destroys a key
-	// and with it every copy of a name, and a bootstrap code is a way into
-	// an engine with no other way in.
-	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage, recency: iam.RecencySensitive},
-	// MINTING AND REVOKING A CREDENTIAL, and ENDING SESSIONS, are the two
-	// gestures a person legitimately makes about themselves — a personal
-	// access token, signing out everywhere — so they carry the self path
-	// the write above refuses.
+	// THE ORDINARY WINDOW for enrolling somebody, inviting them, removing
+	// them and issuing the bootstrap code — the design's own: every
+	// identity-directory write asks `step_up`, and the sensitive window is
+	// kept for the gestures that hand over a value or change an authority
+	// somebody already holds, below. Each of these is bounded another way:
+	// an enrolment and an invitation confer only what their writer holds
+	// (internal/iamdomain), a removal is announced and audited, and the
+	// bootstrap code opens only an engine nobody is enrolled in. Asking the
+	// sensitive window of all of them sent an administrator who proved half
+	// an hour ago to re-prove for every invitation they sent.
+	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage, recency: iam.RecencyStepUp},
+	// AND THE SENSITIVE WINDOW FOR CHANGING WHAT AN ENROLLED PERSON MAY DO
+	// OR HOW THEY PROVE IT — one PATCH of their row, whatever fields it
+	// carries, and a second-factor reset — which are the design's two
+	// sensitive directory gestures: changing somebody's grants hands them
+	// an authority, and resetting their second factor is how a phished
+	// password becomes an account.
+	ActionDirectoryAuthority: {class: ClassOperator, grant: iam.GrantPeopleManage,
+		recency: iam.RecencySensitive},
+	// MINTING AND REVOKING A MACHINE TOKEN, CHANGING HOW SOMEBODY PROVES
+	// WHO THEY ARE, and ENDING SESSIONS are the gestures a person
+	// legitimately makes about themselves — a personal access token, a
+	// second factor, signing out everywhere — so they carry the self path
+	// the writes above refuse.
 	//
-	// AND THEY ASK OPPOSITE PROOFS. A credential write is SENSITIVE both
-	// ways it goes: a mint hands over a bearer value that acts as its
-	// owner with nobody present, and a revocation can take away the
-	// password or second factor somebody proves themselves with — which is
-	// the second-factor reset's reason, and `api.auth.session`'s own
-	// description of the window.
-	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencySensitive},
+	// AND THEY ASK DIFFERENT PROOFS. A machine token's mint and revocation
+	// ask the ordinary window, as every directory write does: what a token
+	// carries is cut to its owner's own grants on every request and never
+	// includes a grant that needs a person present, so a mint hands over
+	// no authority the owner does not already exercise.
+	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencyStepUp},
+	// A CHANGE TO HOW SOMEBODY PROVES WHO THEY ARE asks the SENSITIVE
+	// window, the second-factor reset's reason whichever route it takes:
+	// replacing a factor or revoking one is a reset by another name, a
+	// fresh set of recovery codes is a set of values that bypass the
+	// factor and are shown once, and enrolling a first factor on a stolen
+	// session is a hold on the account its owner cannot shake off.
+	ActionCredentialProof: {class: ClassDirectorySelf, recency: iam.RecencySensitive},
 	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS ([rule.selfRecency]).
 	// The person themselves asks for NONE: it is the first thing somebody
 	// does on finding somebody else in their account — and it ends every
