@@ -656,6 +656,30 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 			stdout)
 	}
 
+	// AN UNKNOWN THIS NODE CANNOT SETTLE IS SENT TO ANOTHER NODE, and not
+	// round the loop: its ledger may have lost the row the operation needs,
+	// so the same command through it answers `unknown` again every time.
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: gesture + ".evict.pages",
+			Outcome: statelog.OutcomeUnknown, Unvouched: true}}}
+	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	if err == nil {
+		t.Fatalf("an unvouched gesture exited zero:\n%s", stdout)
+	}
+	for _, want := range []string{
+		"pages: unknown — this node cannot tell",
+		"run it through another node the fleet still counts: -url <that node> -op-id " + gesture,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the unvouched log's output never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "The gesture has not reached every log. Run it again") {
+		t.Errorf("an unvouched log was advised the same command through the "+
+			"node that cannot settle it:\n%s", stdout)
+	}
+
 	// A READMISSION HAS NO -force: it is refused as a flag rather than sent.
 	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
 		"-confirm", "node-4", "-force"); err == nil {

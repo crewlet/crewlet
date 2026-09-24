@@ -53,6 +53,8 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		"pending": result(engine.DomainGate{
 			Outcome: statelog.OutcomePending, Position: at}),
 		"unknown": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown}),
+		"unvouched": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
+			Unvouched: true}),
 		"log_full": result(engine.DomainGate{Err: fmt.Errorf("pages: %w",
 			&statelog.Unavailable{Reason: statelog.ReasonLogFull,
 				Detail: "the broker refused to store it"})}),
@@ -191,6 +193,18 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 	}
 	if tracker.Actions != nil || tracker.Hint != "" {
 		t.Errorf("the applied log carries a remedy: %v %q", tracker.Actions, tracker.Hint)
+	}
+
+	// AN UNKNOWN THIS NODE CANNOT SETTLE SAYS SO, and is sent elsewhere:
+	// the same gesture here answers the same way every time.
+	unvouched := api.RenderGate(true, scenarios["unvouched"]).Domains[1]
+	if !unvouched.Unvouched || unvouched.Position != nil ||
+		!slices.Equal(unvouched.Actions, []statelog.GateAction{statelog.GateOtherNode}) {
+		t.Errorf("the unvouched log rendered %+v, want unvouched, no position and "+
+			"only another node", unvouched)
+	}
+	if pages.Unvouched {
+		t.Error("a lost acknowledgement renders as unvouched")
 	}
 
 	full := api.RenderGate(true, scenarios["log_full"]).Domains[1]

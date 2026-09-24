@@ -16,6 +16,9 @@
  *   - `unknown` — no acknowledgement; it may or may not be on the log, so it
  *     has NO position, and the same gesture under the same operation id is
  *     what finishes it: a log that holds the record answers from its own rows.
+ *     Except where it is `unvouched`: this node's ledger may have lost the row
+ *     the operation needs, so it answers the same way every time, and the log
+ *     says so and sends the gesture to another node instead.
  *   - not written — a refusal, with its reason and what to do instead.
  *
  * **A dialog that rendered `pending` as success would be the browser half of
@@ -587,6 +590,13 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     return (
       <span className="t-caption">
         not written{d.reason && <> ({d.reason})</>} — {d.error}
+      </span>
+    );
+  }
+  if (d.outcome === "unknown" && d.unvouched) {
+    return (
+      <span className="t-caption">
+        <Tag variant="danger">unknown</Tag> this node cannot tell whether the record is on the log
       </span>
     );
   }

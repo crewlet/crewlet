@@ -542,6 +542,13 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
   (`-url`).
+- `unknown` that **this node cannot tell** — its operation ledger may have
+  lost the row the operation needs, because the id was minted before the node
+  adopted a peer's snapshot or before the ledger's sweep reached it. The node
+  published nothing and answers the same gesture the same way every time, so
+  it is not offered as a retry: run it, under the same `-op-id`, through a node
+  whose ledger reaches back that far (`-url`). The dashboard says the same and
+  sends you to another node's dashboard.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
   gesture again with the same `-op-id`.

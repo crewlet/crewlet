@@ -1415,6 +1415,13 @@ export interface RetentionGateDomain {
    * may or may not be on the log.
    */
   outcome?: "applied" | "pending" | "unknown";
+  /**
+   * Set on an `unknown` THIS node cannot settle: its operation ledger may
+   * have lost the row the operation needs, so it published nothing and
+   * answers the same gesture the same way every time. Its remedy is another
+   * node (`other_node`), never Finish here.
+   */
+  unvouched?: boolean;
   /** Where the record is durable — ABSENT for `unknown`, which has none: a
    *  zero position would read as a record at the log's origin. */
   position?: { stream: string; generation: number; seq: number };

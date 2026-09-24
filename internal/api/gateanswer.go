@@ -57,6 +57,14 @@ type GateDomainAnswer struct {
 	// whose write answered with an error.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 
+	// Unvouched is set on an `unknown` this node CANNOT settle: its
+	// operation ledger may have lost the row the operation needs, so it
+	// published nothing and answers the same way to the same gesture every
+	// time. Absent otherwise. A surface says so beside the outcome — "the
+	// record may or may not be on the log" is true of both, and only this
+	// one is not finished here.
+	Unvouched bool `json:"unvouched,omitempty"`
+
 	// Position is where the record is durable, and NIL FOR UNKNOWN — which
 	// is the whole content of unknown: a zero position reads as a record
 	// at the log's origin, and the gesture may never have reached the log.
@@ -97,7 +105,7 @@ func RenderGate(evict bool, result engine.GateResult) GateAnswer {
 			// THE THREE-VALUED OUTCOME, whole. A gate the caller believes
 			// landed and which is only `pending` is the difference between
 			// a node that has stopped writing and one that is about to.
-			entry.Outcome = d.Outcome
+			entry.Outcome, entry.Unvouched = d.Outcome, d.Unvouched
 			if d.Outcome != statelog.OutcomeUnknown {
 				position := d.Position
 				entry.Position = &position

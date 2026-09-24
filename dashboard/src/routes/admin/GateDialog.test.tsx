@@ -107,6 +107,21 @@ test("an unknown log shows no position and offers finishing under the gesture's 
   expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
 });
 
+// AN UNKNOWN THIS NODE CANNOT SETTLE IS SENT TO ANOTHER NODE: its ledger may
+// have lost the row the operation needs, so the same gesture here answers the
+// same way every time — and a dialog offering it as the remedy sent the
+// operator round that loop.
+test("an unvouched log says this node cannot tell and sends the gesture elsewhere", () => {
+  const result = answer("unvouched");
+  render(<GateOutcome result={result} evict />);
+  expect(screen.getByText(/this node cannot tell whether the record is on the log/)).toBeTruthy();
+  expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
+  expect(screen.getByText(/Open this dashboard on a node the fleet still counts/)).toBeTruthy();
+  expect(screen.queryByText(/Finish it under the same operation id: a log/)).toBeNull();
+  expect(screen.queryByText(/Finish this gesture sends it again/)).toBeNull();
+  expect(screen.queryByText(/may or may not be on the log/)).toBeNull();
+});
+
 // A FULL LOG IS NOT TOLD TO RETRY — the same request is refused the same way
 // until its ceiling moves — and it shows the engine's own sentence. But its
 // gesture is still finished under its OWN id once there is room, so it is kept.

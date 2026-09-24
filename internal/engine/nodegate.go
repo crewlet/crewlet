@@ -213,6 +213,14 @@ type DomainGate struct {
 	Outcome  statelog.Outcome
 	Position statelog.Position
 
+	// Unvouched says an `unknown` Outcome was answered because this node's
+	// operation ledger cannot vouch for the operation — it was minted
+	// before the point this node's ledger may have lost rows to, so this
+	// node published nothing and cannot tell whether the record landed
+	// ([statelog.Result.Unvouched]). It decides the remedy: the same
+	// gesture here answers the same way every time.
+	Unvouched bool
+
 	// Err is why this log gave no outcome: a refusal naming its reason
 	// (a [*statelog.Unavailable]), or a failure before the write could
 	// answer. Whether running the gesture again can clear it is
@@ -261,6 +269,22 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 	}
 	only := func(action statelog.GateAction, detail string) statelog.GateRemedy {
 		return statelog.GateRemedy{Actions: []statelog.GateAction{action}, Detail: detail}
+	}
+	if d.Err == nil && d.Unvouched {
+		// UNKNOWN, AND NOT FOR THIS NODE TO SETTLE. The operation was
+		// minted before the point this node's ledger may have lost rows
+		// to — a snapshot adopted since, the ledger's own sweep — so it
+		// published nothing, and the same gesture here answers `unknown`
+		// again every time: the row the answer needs is the one the loss
+		// took. Offered `retry_same_op`, every Finish and every -op-id
+		// rerun went round that loop for ever. A node whose ledger
+		// reaches back that far can answer it under the same id.
+		return only(statelog.GateOtherNode, "this node cannot tell whether "+
+			"the record landed: its operation ledger may have lost the record "+
+			"of this operation, which was minted before it adopted a snapshot "+
+			"or swept its ledger, so the same gesture here answers the same way "+
+			"every time. Run it through a node whose ledger reaches back that "+
+			"far, under the same operation id")
 	}
 	if d.Err == nil {
 		// UNKNOWN: the record may or may not be on the log, and nothing
@@ -601,6 +625,7 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) Gat
 			d.Err = err
 		} else {
 			d.Outcome, d.Position = res.Outcome, res.Position
+			d.Unvouched = res.Outcome == statelog.OutcomeUnknown && res.Unvouched
 		}
 		out.Domains = append(out.Domains, d)
 	}

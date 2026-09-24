@@ -534,6 +534,11 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			detail: "from_a_newer_build"},
 		"too large": {gate: DomainGate{Err: fmt.Errorf("statelog: record: %w",
 			queue.ErrTooLarge)}, detail: "max_payload"},
+		// AN UNKNOWN THIS NODE'S LEDGER CANNOT VOUCH FOR is answered the
+		// same way to the same gesture every time here, so it is sent to a
+		// node whose ledger reaches back that far — never round the loop.
+		"unvouched": {gate: DomainGate{Outcome: statelog.OutcomeUnknown, Unvouched: true},
+			actions: []statelog.GateAction{other}, detail: "cannot tell"},
 	} {
 		remedy := tc.gate.Remedy()
 		if !slices.Equal(remedy.Actions, tc.actions) {
@@ -689,5 +694,41 @@ func publishCaughtUp(t *testing.T, back *Backends, identity []*runningDomain, no
 	}
 	if err := back.Fleet.PutPositions(t.Context(), row); err != nil {
 		t.Fatalf("publish %s's position: %v", node, err)
+	}
+}
+
+// AN UNVOUCHED UNKNOWN REACHES THE ANSWER AS ONE. The gate kept only a log's
+// outcome and position, so the state log's own "this node cannot vouch for the
+// operation" was dropped between the write and the remedy, and the answer
+// advised the same gesture here — which answers `unknown` again for ever.
+func TestAnUnvouchedGateLogIsSentToAnotherNode(t *testing.T) {
+	t.Parallel()
+	answer := func(unvouched bool) func(context.Context, string, string, string,
+		bool) (statelog.Result, error) {
+		return func(context.Context, string, string, string, bool) (statelog.Result, error) {
+			return statelog.Result{Outcome: statelog.OutcomeUnknown, Unvouched: unvouched}, nil
+		}
+	}
+	g := &NodeGate{
+		logs: []gateLog{
+			{domain: "tracker", stream: "CREWLET_TRACKER_LOG", write: answer(false)},
+			{domain: "pages", stream: "CREWLET_PAGES_LOG", write: answer(true)},
+		},
+		live: func(context.Context) ([]statelog.Presence, error) { return nil, nil },
+	}
+	got, err := g.Evict(t.Context(), GateRequest{Node: "node-4", By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "evict-node-4")})
+	if err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	lost, unvouched := got.Domains[0], got.Domains[1]
+	if lost.Unvouched || !lost.Retry() {
+		t.Errorf("a lost acknowledgement is %+v and offers %v, want the same "+
+			"gesture again", lost, lost.Remedy().Actions)
+	}
+	if !unvouched.Unvouched || unvouched.Retry() ||
+		!unvouched.Remedy().Offers(statelog.GateOtherNode) {
+		t.Errorf("the unvouched log is %+v and offers %v, want another node and "+
+			"no retry here", unvouched, unvouched.Remedy().Actions)
 	}
 }

@@ -43,7 +43,9 @@ const (
 
 	// GateOtherNode — run the gesture through another node the fleet still
 	// counts, under the same operation id: this one cannot write the log
-	// (it is evicted, holds a record it cannot decode, or is adopting).
+	// (it is evicted, holds a record it cannot decode, or is adopting), or
+	// cannot tell whether its record landed (its operation ledger may have
+	// lost the row this operation needs — [Result.Unvouched]).
 	GateOtherNode GateAction = "other_node"
 
 	// GateReanchor — re-anchor the log first: it is not the one this node's

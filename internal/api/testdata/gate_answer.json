@@ -148,6 +148,36 @@
           "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"
         }
       ]
+    },
+    "unvouched": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "unknown",
+          "unvouched": true,
+          "actions": [
+            "other_node"
+          ],
+          "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
+        }
+      ]
     }
   },
   "refusals": {

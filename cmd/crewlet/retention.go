@@ -748,6 +748,12 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	pending, retry, keep := false, false, false
 	for _, d := range answer.Domains {
 		switch {
+		case d.Outcome == string(statelog.OutcomeUnknown) && d.Unvouched:
+			// NOT FOR THIS NODE TO SETTLE: its line below sends the
+			// gesture elsewhere, because asking this node again answers
+			// the same way every time.
+			fmt.Fprintf(stdout, "  %s: unknown — this node cannot tell whether "+
+				"the record is on the log\n", d.Domain)
 		case d.Outcome == string(statelog.OutcomeUnknown):
 			// NO POSITION, which is the whole content of unknown: printed
 			// as "at 0" it read as a record landed at the log's origin.
@@ -859,6 +865,11 @@ type gateDomain struct {
 	Stream  string `json:"stream"`
 	OpID    string `json:"op_id"`
 	Outcome string `json:"outcome"`
+
+	// Unvouched marks an `unknown` this node cannot settle: its operation
+	// ledger may have lost the row the operation needs, so the same
+	// gesture through it answers the same way every time.
+	Unvouched bool `json:"unvouched"`
 
 	// Position is ABSENT for an unknown outcome, and a pointer so that
 	// absence is observable rather than a zero position that reads as a
