@@ -50,14 +50,15 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext)
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_history
 			(id, class, object_kind, object_id, person_id, op, actor,
-			 actor_kind, reason, summary, created_at, broker_at, bucket,
-			 version, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 actor_kind, operator_id, reason, summary, created_at, broker_at,
+			 bucket, version, document)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO NOTHING`,
 		historyID(at), string(class), string(at.record.Subject.Kind),
 		at.record.Subject.ID, at.record.Person, string(at.record.Op),
-		at.record.Actor, string(at.record.ActorKind), at.record.Reason,
-		summary, at.unix(), at.unix(), at.bucket(), at.packed, document)
+		at.record.Actor, string(at.record.ActorKind), at.record.OperatorID,
+		at.record.Reason, summary, at.unix(), at.unix(), at.bucket(),
+		at.packed, document)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: write the trail row for %s: %w",
 			at.position, err)

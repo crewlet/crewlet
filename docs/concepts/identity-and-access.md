@@ -848,7 +848,10 @@ filed themselves. A configuration revision and a stored secret record the same
 two — the owner as `created_by` / `updated_by`, with its kind beside it, and
 `pat:<credential id>` as `operator_id` — where they used to have room for one
 name and gave it to the credential, which named nobody once the token's own
-row was swept. The identity estate's audit events carry it beside `by`. The `pat` class is
+row was swept. The identity estate's audit events carry it beside `by`, and
+its own trail, `GET /iam/audit`, beside the actor — which used to name the
+owner alone, so whatever a token did to the directory read there as done by
+them. The `pat` class is
 reserved for exactly this: no service account may enrol under a login that
 starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
@@ -1616,6 +1619,17 @@ Identity has **two trails**, and they answer different questions.
 - **`iam_history`** is the *record*. The identity applier writes a row for
   every identity write on every node, from the log, so it is the same on all of
   them and survives any node — see [Two retention horizons](#two-retention-horizons-and-one).
+  Each row names its **actor** and, beside it, the **credential** the actor
+  acted through (`operator_id`): a machine token's `pat:<id>`, a browser
+  session's `session:<lineage>`, a Tier A token's own login. A token acts as
+  its owner, so the actor is the owner either way, and the credential is what
+  says their token did it. Three kinds of row name none: what the sign-in
+  surface and the duties write, since the node acts on nobody's credential; a
+  **removal** and a company-wide **invalidation**, whose records are gates
+  pinned at their first version for ever — the events announcing them
+  (`iam_session_ended` with `person_removed`, `iam_session_generation_bumped`)
+  carry the credential instead; and every row written before the field
+  existed.
 - **The `auth` category** of the ordinary event feed is what *this node saw*:
   who signed in here and how, what ended a session, which token was used, how
   many attempts failed and from where. Each row is published through the
@@ -1856,7 +1870,7 @@ Rotating it is a migration, not a setting.
 | `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
-| `iam_history` | The authentication trail: who did what to whom, and why |
+| `iam_history` | The authentication trail: who did what to whom, through which credential, and why |
 
 Beside those sit three **gate** tables — `iam_evictions`, `iam_log_generations`
 and `iam_removed` — which are not objects a record writes but the state an

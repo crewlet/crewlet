@@ -11,6 +11,12 @@ import (
 )
 
 // auditView is one entry of the identity estate's own trail.
+//
+// THE CREDENTIAL BESIDE THE ACTOR: `operator_id` is what the actor acted
+// through — `pat:<id>` for a machine token acting as its owner,
+// `session:<lineage>` for one of their browser sessions — and absent where the
+// entry names none ([iamdomain.HistoryRow.OperatorID]). A token acts as its
+// owner, so without it the actor alone read a token's gesture as the owner's.
 type auditView struct {
 	ID         string                 `json:"id"`
 	Class      iamdomain.HistoryClass `json:"class"`
@@ -20,6 +26,7 @@ type auditView struct {
 	Op         iamdomain.OpKind       `json:"op"`
 	Actor      string                 `json:"actor,omitempty"`
 	ActorKind  iam.Kind               `json:"actor_kind,omitempty"`
+	OperatorID string                 `json:"operator_id,omitempty"`
 	Reason     string                 `json:"reason,omitempty"`
 	Summary    string                 `json:"summary,omitempty"`
 	At         time.Time              `json:"at,omitzero"`
@@ -100,7 +107,8 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 		events = append(events, auditView{
 			ID: row.ID, Class: row.Class, ObjectKind: row.ObjectKind,
 			ObjectID: row.ObjectID, Person: row.PersonID, Op: row.Op,
-			Actor: row.Actor, ActorKind: row.ActorKind, Reason: row.Reason,
+			Actor: row.Actor, ActorKind: row.ActorKind,
+			OperatorID: row.OperatorID, Reason: row.Reason,
 			Summary: row.Summary, At: row.At, Position: row.Version,
 		})
 	}

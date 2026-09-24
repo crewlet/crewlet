@@ -87,17 +87,19 @@ type Writer struct {
 
 	// OperatorID is the credential this writer's party acts THROUGH —
 	// [iam.Actor.OperatorID], a machine token's `pat:<id>` beside the owner
-	// it acts as — announced beside Actor on every event this writer
-	// publishes, so a token's gesture is told apart from its owner's on the
-	// audit feed.
+	// it acts as, a browser session's `session:<lineage>` — so a token's
+	// gesture is told apart from its owner's in both trails: on every
+	// event this writer announces, and on every record that writes an
+	// `iam_history` row ([MutationRecord.OperatorID]).
 	//
-	// ON THE EVENTS AND NOT ON THE RECORD. The record carries its actor
-	// alone, because `iam_history` is re-encoded from the record and is in
-	// this domain's identity claim — a field an older build carries rather
-	// than knows re-encodes to different bytes on the two builds mid-upgrade
-	// — and the three gate records are pinned at [GateRecordVersion] for
-	// ever. Carrying it on the log is a record version of its own, with the
-	// deferral on older nodes that buys.
+	// NOT ON A GATE. A removal and an invalidation are pinned at
+	// [GateRecordVersion] for ever, so their trail rows name the actor
+	// alone and the events announcing them carry the credential; and a
+	// record that carries one is written at [OperatorRecordVersion], which
+	// an older node defers — see there for what that buys and costs.
+	//
+	// EMPTY ON THE NODE'S OWN WRITER, which acts through no credential, so
+	// the sign-in surface's and the duties' records stay at the base.
 	//
 	// Set on a party [Writer.As] derived, and never carried by As from the
 	// writer it cloned: it is the party's, like the grants.
@@ -460,23 +462,31 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 			"trail beside the op that caused it, so it says WHICH cause fired "+
 			"rather than narrating", ErrInvalid, op, len(reason), MaxReason)
 	}
+	// THE CREDENTIAL RIDES ONLY WHERE IT IS READ — a record that writes a
+	// trail row and is not a gate — and only where there is one.
+	operator := ""
+	if namesOperator(op) {
+		operator = w.OperatorID
+	}
 	return MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			// THE LOWEST VERSION THAT CARRIES THE OP'S MEANING — a
 			// gate pinned for ever, a sweep at the version whose
-			// predicate it states, everything else at the base. See
+			// predicate it states, a credential at the version that
+			// names it, everything else at the base. See
 			// [RecordVersion] for why never the ceiling.
-			V:         writeVersion(op),
+			V:         writeVersion(op, operator != ""),
 			Subject:   subject,
 			Op:        op,
 			CreatedAt: w.Now().UTC(),
 			Scope:     scope,
 		},
-		Mutation:  mutation,
-		Person:    person,
-		Actor:     w.Actor,
-		ActorKind: w.ActorKind,
-		Reason:    reason,
+		Mutation:   mutation,
+		Person:     person,
+		Actor:      w.Actor,
+		ActorKind:  w.ActorKind,
+		OperatorID: operator,
+		Reason:     reason,
 	}, nil
 }
 

@@ -529,7 +529,7 @@ variable at all.
 | `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step; the Tier A tokens in the config file are untouched |
 | `bootstrap-code` | Re-issue the one-time founder code. Withdraws every live code and ends a founding in progress in the one gesture the new code is minted in, so where that lands it is the one code that works, and prints the file's path **and the node** it is on — on a fleet that is whichever node served the command. The code lasts 24 hours. Refused (`409 bootstrap_closed`) once anybody is enrolled; where `api.auth.bootstrap` is closed the node serves no such route and answers `404 not_found` saying so |
 | `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps, duplicated and orphaned claims, removed people whose key still lives. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
-| `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit` |
+| `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
 
 ### Flags
 

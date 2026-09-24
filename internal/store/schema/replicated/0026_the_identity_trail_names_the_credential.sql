@@ -1,0 +1,24 @@
+-- `iam_history.operator_id`: the credential a trail row's actor acted through.
+--
+-- The trail named its actor alone, so whatever a person's machine token did to
+-- the directory — minted a token, suspended somebody, changed their grants —
+-- read in `GET /iam/audit` as done by the person. A token acts AS its owner, so
+-- the owner is the right actor; what was missing is the column every other
+-- trail already has beside the author, which says it was the token
+-- (`pat:<id>`), or which of the person's browser sessions (`session:<lineage>`).
+--
+-- EMPTY WHERE THE RECORD NAMED NONE, which is three different things and none
+-- of them a missing value: the node's own writer, which acts through no
+-- credential (every sign-in, sign-out and enrolment the sign-in surface writes,
+-- and every duty); a gate — a removal or an invalidation, whose record is
+-- pinned at version 1 for ever and whose announcing event carries the
+-- credential instead; and every row written before this column, whose record
+-- carried no credential to read.
+--
+-- NO BACKFILL, and there is nothing to backfill from: the rows already here
+-- were applied from records that carried no credential, so `document` holds
+-- none either. The value arrives on a record at version 3
+-- (`internal/iamdomain`, `OperatorRecordVersion`), which an older node defers
+-- rather than applying without this column — so no node ever holds a row that
+-- should have named a credential and does not.
+ALTER TABLE iam_history ADD COLUMN operator_id TEXT NOT NULL DEFAULT '';

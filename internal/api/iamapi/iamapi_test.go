@@ -181,6 +181,9 @@ type fakeDirectory struct {
 	unowned   []iamdomain.UnownedKey
 	// prefix is how much of the identity log the census's snapshot holds.
 	prefix statelog.Prefix
+
+	// history is the trail `GET /iam/audit` pages.
+	history []iamdomain.HistoryRow
 }
 
 func (d *fakeDirectory) People(_ context.Context, q iamdomain.PeopleQuery) (
@@ -236,7 +239,7 @@ func (d *fakeDirectory) Sessions(context.Context, string) (
 func (d *fakeDirectory) History(context.Context, iamdomain.HistoryQuery) (
 	iamdomain.HistoryPage, error) {
 
-	return iamdomain.HistoryPage{}, d.err
+	return iamdomain.HistoryPage{Entries: d.history}, d.err
 }
 
 func (d *fakeDirectory) PositionAt(context.Context, time.Time) (uint64, error) {
@@ -1270,5 +1273,46 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 	}
 	if again := patch("retry-7", []iam.Grant{iam.GrantStateRead}); again != "retry-7" {
 		t.Errorf("a request carrying an Idempotency-Key was published as %q", again)
+	}
+}
+
+// THE TRAIL SERVES THE CREDENTIAL BESIDE THE ACTOR.
+//
+// A token acts as its owner, so an entry's actor is the owner whether they made
+// the gesture or their token did — and `operator_id` is the one field that says
+// which. An entry that names none (a gate, the node's own writer, a row older
+// than the field) carries none, rather than an empty string a client would
+// have to learn to ignore. Mutation: drop the field from the view and the
+// token's entry reads as the owner's own.
+func TestTheTrailServesTheCredentialBesideTheActor(t *testing.T) {
+	t.Parallel()
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	r := newRig(t)
+	r.directory.history = []iamdomain.HistoryRow{
+		{ID: "e2", Class: iamdomain.ClassChange, Op: iamdomain.OpStatus,
+			PersonID: bob.String(), Actor: "alice.admin",
+			ActorKind: iam.KindPerson, OperatorID: via, Version: 2},
+		{ID: "e1", Class: iamdomain.ClassChange, Op: iamdomain.OpRemove,
+			PersonID: bob.String(), Actor: "alice.admin",
+			ActorKind: iam.KindPerson, Version: 1},
+	}
+	got := r.as(auditor(), http.MethodGet, "/iam/audit", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("the trail answered %d to an auditor (body %v)", got.status,
+			got.body)
+	}
+	events, _ := got.body["events"].([]any)
+	if len(events) != 2 {
+		t.Fatalf("the trail served %d entries, want 2: %v", len(events), got.body)
+	}
+	through, _ := events[0].(map[string]any)
+	if through["actor"] != "alice.admin" || through["operator_id"] != via {
+		t.Errorf("the token's entry is served as %v through %v, want "+
+			"alice.admin through %s", through["actor"], through["operator_id"], via)
+	}
+	own, _ := events[1].(map[string]any)
+	if _, present := own["operator_id"]; present {
+		t.Errorf("an entry naming no credential serves operator_id %v",
+			own["operator_id"])
 	}
 }

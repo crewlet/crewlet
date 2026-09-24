@@ -775,10 +775,13 @@ func (p *iamPrinter) audit(answer map[string]any, err error) error {
 	fmt.Fprintln(tw, "POSITION\tAT\tOP\tACTOR\tPERSON\tSUMMARY")
 	for _, raw := range rows {
 		row, _ := raw.(map[string]any)
+		// THE CREDENTIAL BESIDE THE ACTOR, in the words every other
+		// trail this CLI prints uses: a token acts as its owner, so the
+		// actor alone reads a token's gesture as the owner's own.
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			str(row["position"]), stamp(row["at"]), str(row["op"]),
-			dash(str(row["actor"])), dash(str(row["person"])),
-			dash(str(row["summary"])))
+			dash(describeAuthor(str(row["actor"]), str(row["operator_id"]))),
+			dash(str(row["person"])), dash(str(row["summary"])))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

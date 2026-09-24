@@ -270,6 +270,37 @@ func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
 	}
 }
 
+// THE TRAIL PRINTS A TOKEN'S GESTURE AS ONE.
+//
+// A token acts as its owner, so an entry's actor is the owner either way, and
+// the credential beside it is what says their token did it — printed in the
+// words every other trail this command prints uses. Mutation: print the actor
+// alone and the two rows read the same.
+func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	p := &iamPrinter{w: &out}
+	if err := p.audit(map[string]any{"events": []any{
+		map[string]any{"position": float64(2), "op": "status",
+			"actor": "ana.admin", "operator_id": "pat:0192f00d-0000-7000-8000-00000000000a"},
+		map[string]any{"position": float64(1), "op": "status", "actor": "ana.admin"},
+	}}, nil); err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("printed %d line(s), want a header and two rows:\n%s",
+			len(lines), out.String())
+	}
+	if !strings.Contains(lines[1],
+		"ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)") {
+		t.Errorf("the token's gesture printed as %q", lines[1])
+	}
+	if strings.Contains(lines[2], "through") {
+		t.Errorf("the owner's own gesture printed a credential: %q", lines[2])
+	}
+}
+
 // A KEY NOBODY COULD JUDGE IS SAID BEFORE NOTHING TO REPORT, for the binding
 // rule's reason: a node behind the identity log names no unowned key and
 // counts them instead, and printing "nothing to report" over that count would

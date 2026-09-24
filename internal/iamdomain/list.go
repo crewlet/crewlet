@@ -495,9 +495,15 @@ type HistoryRow struct {
 	Op         OpKind
 	Actor      string
 	ActorKind  iam.Kind
-	Reason     string
-	Summary    string
-	At         time.Time
+
+	// OperatorID is the credential Actor acted through, and empty where
+	// the record named none: the node's own writer, a gate, and every row
+	// written before [OperatorRecordVersion].
+	OperatorID string
+
+	Reason  string
+	Summary string
+	At      time.Time
 
 	// Version is the log POSITION this entry was derived at, which is
 	// what the read pages on.
@@ -554,7 +560,7 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	query := strings.Builder{}
 	query.WriteString(`
 		SELECT id, class, object_kind, object_id, person_id, op, actor,
-		       actor_kind, reason, summary, broker_at, version
+		       actor_kind, operator_id, reason, summary, broker_at, version
 		FROM iam_history WHERE 1 = 1`)
 	var args []any
 	if q.Before > 0 {
@@ -593,8 +599,8 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 				version    int64
 			)
 			if err := rows.Scan(&row.ID, &class, &objectKind, &row.ObjectID,
-				&row.PersonID, &op, &row.Actor, &actorKind, &row.Reason,
-				&row.Summary, &at, &version); err != nil {
+				&row.PersonID, &op, &row.Actor, &actorKind, &row.OperatorID,
+				&row.Reason, &row.Summary, &at, &version); err != nil {
 				return fmt.Errorf("iamdomain: scan a trail entry: %w", err)
 			}
 			row.Class = HistoryClass(class)

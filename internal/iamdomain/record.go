@@ -21,11 +21,13 @@ import (
 // written at the lowest version that carries its meaning ([writeVersion]),
 // because a record a peer cannot read is deferred on that peer: written at the
 // ceiling for no reason, every record of a rolling upgrade would be deferred on
-// every older node. Two is [SweepRecordVersion] and nothing else.
-const RecordVersion = 2
+// every older node. Two is [SweepRecordVersion], three is
+// [OperatorRecordVersion], and nothing else has moved.
+const RecordVersion = 3
 
 // BaseRecordVersion is what every record carries whose meaning has not changed
-// since this domain landed, which is every op but a sweep.
+// since this domain landed: every op but a sweep, written by a party that
+// acted through no credential of its own.
 const BaseRecordVersion = 1
 
 // SweepRecordVersion is what a sweep record carries.
@@ -45,16 +47,74 @@ const BaseRecordVersion = 1
 // as version 1, because replay is the one reader that meets both.
 const SweepRecordVersion = 2
 
+// OperatorRecordVersion is what a record carries that names the credential its
+// actor acted THROUGH ([MutationRecord.OperatorID]).
+//
+// VERSION 3 NAMES THE CREDENTIAL, so the trail row a gesture writes tells a
+// machine token's gesture, or a browser session's, from the person's own —
+// where it used to record the owner alone, and `GET /iam/audit` showed
+// whatever somebody's token did to the directory as done by them.
+//
+// A VERSION AND NOT JUST A FIELD, for [SweepRecordVersion]'s reason one table
+// over. The trail row is in this domain's identity claim, and an older build
+// cannot write the field it does not know: it has no column to put it in, and
+// it carries the field into the row's document in a different key order from a
+// build that knows it. The same record would leave two different rows on two
+// builds, and a record is never applied twice, so the copies would stay
+// different after the upgrade. At version 3 an older node DEFERS the record,
+// holds back what follows it in its bucket, and applies it once upgraded.
+//
+// ONLY A RECORD THAT HAS A CREDENTIAL TO NAME, which is the lowest-version rule
+// again: the node's own writer acts through none — every sign-in, sign-out,
+// step-up and enrolment the sign-in surface writes, and every duty — so those
+// stay at the base, and what a rolling upgrade defers is the administrative
+// gestures somebody made through `/iam`. See [namesOperator] for which records
+// carry one.
+const OperatorRecordVersion = 3
+
 // writeVersion is the version a record of op is written at: the lowest that
-// carries its meaning.
-func writeVersion(op OpKind) int {
+// carries its meaning, given whether it names the credential its actor acted
+// through.
+//
+// THE VERSIONS ARE CUMULATIVE: a version-3 sweep is applied with version 2's
+// collection, because 3 is what 2 was plus the credential.
+func writeVersion(op OpKind, operated bool) int {
 	switch op {
 	case OpRemove, OpEviction, OpInvalidate:
 		return GateRecordVersion
-	case OpSweep:
-		return SweepRecordVersion
 	}
-	return BaseRecordVersion
+	version := BaseRecordVersion
+	if op == OpSweep {
+		version = SweepRecordVersion
+	}
+	if operated {
+		version = max(version, OperatorRecordVersion)
+	}
+	return version
+}
+
+// namesOperator reports whether a record of op carries the credential its actor
+// acted through: every record that writes a trail row, except a gate.
+//
+// THE TRAIL IS WHAT THE FIELD IS FOR, so a record that writes no row carries
+// none — a sweep, a barrier, an eviction and a generation are facts about the
+// log, and a credential on one would be read by nothing while still deferring
+// it on every older node.
+//
+// AND A GATE CARRIES NONE, because a gate is pinned at [GateRecordVersion] for
+// ever and a field it cannot have belongs somewhere else: a removal's and an
+// invalidation's trail rows name their actor alone, and the events announcing
+// them — `iam_session_ended` (reason `person_removed`) and
+// `iam_session_generation_bumped` — carry the credential.
+func namesOperator(op OpKind) bool {
+	if _, recorded := ClassOf(op); !recorded {
+		return false
+	}
+	switch op {
+	case OpRemove, OpEviction, OpInvalidate:
+		return false
+	}
+	return true
 }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
@@ -386,6 +446,18 @@ type MutationRecord struct {
 	Actor     string   `json:"actor,omitempty"`
 	ActorKind iam.Kind `json:"actor_kind,omitempty"`
 
+	// OperatorID is the credential Actor acted THROUGH — a machine token's
+	// `pat:<id>`, a browser session's `session:<lineage>`, a Tier A token's
+	// own login — which is what tells a token's gesture from its owner's
+	// when Actor names the owner either way. Empty where the party acted
+	// through none, which is the node's own writer.
+	//
+	// ONLY AT [OperatorRecordVersion] AND ABOVE, and never on a gate: see
+	// there, and [namesOperator]. [Decode] carries one found on a record
+	// below that version exactly as a build that predates the field would,
+	// rather than reading it.
+	OperatorID string `json:"operator_id,omitempty"`
+
 	// Reason is why, in at most [MaxReason] bytes, for the operations
 	// whose motive is not recoverable from their effect.
 	//
@@ -493,8 +565,30 @@ func Decode(payload []byte) (MutationRecord, error) {
 			"decode the record on %s: %w", env.Subject, err)
 	}
 	rec.Extra = extra
+	if rec.V < OperatorRecordVersion && rec.OperatorID != "" {
+		// A FIELD IS READ AT THE VERSION THAT DEFINED IT. No writer puts
+		// a credential on a record below [OperatorRecordVersion], and
+		// one that did would be applied by a build that predates the
+		// field — every node of the rolling upgrade that version exists
+		// to protect — as an unknown key it carries. So this build does
+		// exactly that, rather than writing a column those nodes do not
+		// have and a document in a key order they do not write.
+		var all map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &all); err != nil {
+			return MutationRecord{RecordEnvelope: env}, fmt.Errorf("iamdomain: "+
+				"decode the record on %s: %w", env.Subject, err)
+		}
+		if rec.Extra == nil {
+			rec.Extra = map[string]json.RawMessage{}
+		}
+		rec.Extra[operatorField] = all[operatorField]
+		rec.OperatorID = ""
+	}
 	return rec, nil
 }
+
+// operatorField is [MutationRecord.OperatorID]'s name on the wire.
+const operatorField = "operator_id"
 
 // Encode renders a record, carrying back whatever a newer build wrote.
 //

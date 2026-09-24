@@ -958,6 +958,21 @@ route resolves it **once**, against the rows' own instants. The answer carries
 the position this node had applied when it answered, so a reader can tell a
 quiet directory from a lagging node.
 
+Each entry names its `actor` and `actor_kind`, and — where there is one —
+`operator_id`, the credential the actor acted through: `pat:<id>` for a
+machine token acting as its owner, `session:<lineage>` for one of their
+browser sessions, a Tier A token's own login. A token acts as its owner, so
+`actor` is the owner either way, and `operator_id` is what tells their token's
+gesture from their own. It is absent from an entry the sign-in surface or a
+duty wrote (the node acts on nobody's credential), from a removal and a
+company-wide invalidation (their records are gates, pinned at their first
+version for ever; `iam_session_ended` and `iam_session_generation_bumped`
+carry it), and from every entry written before the field existed. During a
+rolling upgrade an older node **defers** a record that names a credential —
+it has no column to write it into — and applies it once upgraded, so the
+directory changes somebody made through `/iam` reach an older node late
+rather than without their credential.
+
 ### `/config/*` — live config management (auth-gated)
 
 Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
@@ -3114,10 +3129,11 @@ lapses while a revision is kept for ever. A Tier A token is recorded as
 writes (the reconcile loop, a boot import, a key the engine minted) record
 their own name, of kind `system`, and no credential. The identity estate's own audit events
 (`iam_credential_revoked`, `iam_session_ended`,
-`iam_session_generation_bumped`, …) carry it as `operator_id` beside `by`; the
-`iam_history` rows `GET /iam/audit` reads name the actor alone, because they
-are re-encoded from the identity log's own records and those carry no
-`operator_id`.
+`iam_session_generation_bumped`, …) carry it as `operator_id` beside `by`, and
+the trail `GET /iam/audit` reads carries it beside `actor` — except on a
+removal and a company-wide invalidation, whose records are gates pinned at
+their first version for ever, so the event announcing each carries it instead
+(see [`GET /iam/audit`](#get-iamaudit-pages-by-position-never-by-time)).
 
 There is deliberately **no way for the caller to name a seat to act as**. That
 would let anybody holding the token write as anybody, and a tracker whose

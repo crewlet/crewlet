@@ -21,12 +21,11 @@ import (
 // the same rule, and hold the two enrolments that are NOT the writer's to
 // authorise — the first person and a redemption — to the basis each names.
 
-// nodeWriter is the party a running node's own writer acts as: the grants
-// `internal/engine` gives it and nothing else.
-func nodeWriter(rig *writeRig) *iamdomain.Writer {
-	return rig.writer.As(principalNamed("node-a", iam.KindMachine,
-		[]iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}))
-}
+// nodeWriter is a running node's own writer: the grants `internal/engine`
+// gives it and nothing else, and — because it is built rather than derived
+// from a principal — no credential, which is what keeps the sign-in surface's
+// records at the base record version and off every token's name.
+func nodeWriter(rig *writeRig) *iamdomain.Writer { return rig.node }
 
 // narrowAdmin manages people and holds nothing else.
 func narrowAdmin(rig *writeRig) *iamdomain.Writer {
