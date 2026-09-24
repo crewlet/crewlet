@@ -196,3 +196,33 @@ func TestAWriteSetRebuiltFromAParkContinuesIt(t *testing.T) {
 		t.Errorf("an empty carry rebuilt %v, %v", items, many)
 	}
 }
+
+// A PHASE-BOUND TURN IS A COPY THAT SHARES WHAT THE TURN SHARES.
+//
+// The phase is what lets a tool say which leg of the turn acted, and binding
+// it must not become a write every leg sees: the executor and a delegate
+// worker hold the same turn at once. What the copy points at stays shared,
+// or a write a worker committed would be missing from the set the turn is
+// charged by.
+func TestAPhaseBoundTurnIsACopySharingItsWriteSet(t *testing.T) {
+	t.Parallel()
+	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk", Written: &turnctx.Written{}}
+	bound := turn.InPhase(types.PhaseSubagent)
+	if bound == turn {
+		t.Fatal("InPhase returned the turn itself; binding a phase wrote every leg's view")
+	}
+	if bound.Phase != types.PhaseSubagent || bound.RunID != "run-1" || bound.WorkKey != "wk" {
+		t.Errorf("bound turn = %+v; want the turn's values naming the subagent phase", bound)
+	}
+	if turn.Phase != "" {
+		t.Errorf("the original turn reads phase %q after a bind; want none", turn.Phase)
+	}
+	bound.Written.Add(item("9"))
+	if got, ok := turn.Written.Sole(); !ok || got.Ref() != "native:9" {
+		t.Error("a write recorded through the phase-bound turn is missing from the turn's own set")
+	}
+	var none *turnctx.Turn
+	if none.InPhase(types.PhaseExecute) != nil {
+		t.Error("binding a phase to no turn produced one")
+	}
+}

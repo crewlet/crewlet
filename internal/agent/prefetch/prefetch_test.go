@@ -792,8 +792,8 @@ func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
 		}},
 		Models: models{provider: &aux{answers: []string{"q"}}},
 	}, request(t))
-	if found.RelevantKnowledgeHits != 2 {
-		t.Errorf("two pages rendered as %d hits", found.RelevantKnowledgeHits)
+	if len(found.RelevantKnowledgePages) != 2 {
+		t.Errorf("two pages rendered as %d hits", len(found.RelevantKnowledgePages))
 	}
 
 	empty := fetch(t, prefetch.Sources{
@@ -802,8 +802,9 @@ func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
 	if empty.RelevantKnowledge == "" {
 		t.Fatal("the empty search rendered no hint, so this case proves nothing")
 	}
-	if empty.RelevantKnowledgeHits != 0 {
-		t.Errorf("the empty hint reported %d hits", empty.RelevantKnowledgeHits)
+	if len(empty.RelevantKnowledgePages) != 0 || empty.RelevantKnowledgeQuery != "" {
+		t.Errorf("the empty hint reported a read of %d pages for %q",
+			len(empty.RelevantKnowledgePages), empty.RelevantKnowledgeQuery)
 	}
 }
 

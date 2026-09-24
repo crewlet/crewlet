@@ -206,8 +206,20 @@ type SkillUsed struct {
 	// SkillID is empty for a registry-loaded skill.
 	SkillID    string          `json:"skill_id"`
 	SourceKind SkillSourceKind `json:"source_kind"`
-	// FileLoaded is a bundled file path, empty when loading the skill body.
+	// FileLoaded was meant to name a bundled file a load read instead of
+	// the body. No skill in any build carries bundled files, so nothing
+	// writes it and it is always empty; it stays on the wire because
+	// ADR-0006 never removes a key a peer may still send.
 	FileLoaded string `json:"file_loaded"`
+
+	// SourcePageID and SourceContainer name the knowledge-base page a
+	// REGISTRY skill was read from, so a load is attributable to the page
+	// an author edits rather than only to a key — a key is inside the page
+	// and moves when the page is edited, and two pages can declare one.
+	// Empty for a synthesized skill, which lives in this node's own store
+	// and has no page, and absent on a record an older build wrote.
+	SourcePageID    string `json:"source_page_id,omitempty"`
+	SourceContainer string `json:"source_container,omitempty"`
 }
 
 // EventType is the "skill_used" wire type.

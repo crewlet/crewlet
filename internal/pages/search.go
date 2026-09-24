@@ -118,8 +118,13 @@ const soloNode = "self"
 
 var _ knowledge.Searcher = (*Searcher)(nil)
 
+// Backend is what this knowledge base calls itself wherever a reader has to
+// know which backend a page id is an address in — the searcher's own answer,
+// and every record of a seat reading one of these pages.
+const Backend = "native"
+
 // Backend names the integration answering.
-func (s *Searcher) Backend() string { return "native" }
+func (s *Searcher) Backend() string { return Backend }
 
 // CanSearch is the cheap, no-I/O pre-gate.
 //
@@ -197,6 +202,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 			Container: hit.Container,
 			PageID:    hit.ID,
 			Snippet:   hit.Snippet,
+			Backend:   Backend,
 		})
 		if len(out) == q.Hits() {
 			break

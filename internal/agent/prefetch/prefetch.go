@@ -67,13 +67,17 @@ type Blocks struct {
 	// agent's behalf, so the block always reflects current content.
 	RelevantKnowledge string
 
-	// RelevantKnowledgeHits is how many pages went into that block.
+	// RelevantKnowledgePages are the pages that went into that block, in
+	// rank order, and RelevantKnowledgeQuery the query that found them.
 	//
 	// Carried out because the block alone cannot say: a search that ran
 	// and matched nothing renders EmptyKnowledgeHint, which is non-empty
-	// prose. Telemetry needs the two apart — the prefetch_summary event
-	// reports both.
-	RelevantKnowledgeHits int
+	// prose, and prose names a title rather than a page. Telemetry needs
+	// both — the prefetch_summary event counts the pages, and the
+	// knowledge_read event names each one, so which pages a company's
+	// turns start from is answerable without re-running a search.
+	RelevantKnowledgePages []knowledge.Hit
+	RelevantKnowledgeQuery string
 
 	// EpisodeRecall is similar work this seat has done before.
 	EpisodeRecall string
@@ -103,7 +107,7 @@ type Blocks struct {
 
 	// ThreadContextPosts is how many messages went into that block.
 	//
-	// Carried out for the reason [Blocks.RelevantKnowledgeHits] is: the
+	// Carried out for the reason [Blocks.RelevantKnowledgePages] is: the
 	// block alone cannot say. It answers HOW MUCH was handed over, and
 	// nothing else — which of the block's states produced a zero is
 	// [Blocks.ThreadContextRead].
@@ -341,8 +345,10 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	// Its own goroutine, like the skills block, because it reports a count
 	// alongside its prose.
 	wg.Go(func() {
-		defer recoverCounted(&blocks.RelevantKnowledge, &blocks.RelevantKnowledgeHits)
-		blocks.RelevantKnowledge, blocks.RelevantKnowledgeHits = f.relevantKnowledge(ctx, r)
+		defer recoverKnowledge(&blocks)
+		read := f.relevantKnowledge(ctx, r)
+		blocks.RelevantKnowledge = read.text
+		blocks.RelevantKnowledgePages, blocks.RelevantKnowledgeQuery = read.pages, read.query
 	})
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
@@ -381,15 +387,15 @@ func recoverInto(into *string) {
 	}
 }
 
-// recoverCounted is [recoverInto] for a block that reports a count beside its
-// prose — the knowledge search's pages.
+// recoverKnowledge is [recoverInto] for the knowledge block, which reports the
+// pages it surfaced and the query that found them beside its prose.
 //
-// The COUNT is cleared with the prose, so a panicked render can never report
-// what it did not surface.
-func recoverCounted(into *string, count *int) {
+// ALL OF IT is cleared with the prose, so a panicked render can never report a
+// read of pages the turn was never shown.
+func recoverKnowledge(b *Blocks) {
 	if r := recover(); r != nil {
 		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
-		*into, *count = "", 0
+		b.RelevantKnowledge, b.RelevantKnowledgePages, b.RelevantKnowledgeQuery = "", nil, ""
 	}
 }
 

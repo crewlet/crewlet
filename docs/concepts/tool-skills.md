@@ -205,7 +205,9 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 Within a phase, catalogue entries are sorted in **alphabetical key order** so the prompt prefix stays byte-stable across turns (LLM prefix-cache stability).
 
-Catalogue position: skills land **immediately before the `## Available tools` block** in Execute — one conceptual section, how-to then names — and **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against.
+Catalogue position: skills land **immediately before the `## Available tools` block** in Execute — one conceptual section, how-to then names — and **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against. Review's catalogue has its own header: it asks the reviewer to weigh the work against the conventions listed and names no loader, because the reviewer's only tool is its submission.
+
+**Every rendered catalogue is recorded.** Each prompt that carries a catalogue — the executor's, the reviewer's, and each delegate worker's — publishes one [`knowledge_read`](knowledge-system.md#what-agents-read) with `via: skill_injected`, naming the page behind every skill it listed, so "which skill pages reach our agents" counts the pages a catalogue shows as well as the ones a model loads.
 
 ---
 
@@ -222,6 +224,8 @@ Available in **Execute** (always-on: it is a builtin, so it needs no `activate_t
 Review intentionally doesn't have it — Review's contract is the decision enum, not domain action.
 
 The engine deliberately does **not** auto-inject skill bodies. All loads are LLM-driven so the prompt prefix stays small and the model's tool-call log is the complete record of what guidance it consulted.
+
+Each load publishes a `skill_used` naming the page the skill was read from (`source_page_id`, `source_container`) — a key lives inside a page and moves when the page is edited, so the page is what a load is attributed to — and, beside it, a [`knowledge_read`](knowledge-system.md#what-agents-read) with `via: skill_loaded` against the same page.
 
 ---
 

@@ -188,12 +188,12 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 	with.Body = "the ${tenant} workspace keeps its runbooks in TS"
 	publish(t, n, with)
 
-	body, ok := n.engine.Skills().Body("recall-conventions")
+	loaded, ok := n.engine.Skills().Load("recall-conventions")
 	if !ok {
 		t.Fatal("the skill has no body")
 	}
-	if !strings.Contains(body, "the nimbus workspace") {
-		t.Fatalf("the variable was not substituted:\n%s", body)
+	if !strings.Contains(loaded.Body, "the nimbus workspace") {
+		t.Fatalf("the variable was not substituted:\n%s", loaded.Body)
 	}
 	offered := n.engine.Skills().SkillsFor(prompts.PhaseExecute,
 		prompts.Surface{Tools: []string{"query_episodes"}})

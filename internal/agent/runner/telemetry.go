@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -381,6 +382,48 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 	}, e.traceFor(ctx)))
 
 	e.promptSize(ctx, ph, iteration, system, user, seed, surface)
+}
+
+// skillsInjected records what a prompt's tool-skill catalogue offered: one
+// `knowledge_read` with `via: skill_injected` per rendered catalogue, naming
+// the page behind each skill it listed.
+//
+// A READ, because the catalogue line IS page content — the summary an author
+// wrote on the skill's page, in front of the model — and a knowledge base that
+// counted only the bodies loaded would report the pages every phase is shown
+// as the ones nobody reads.
+//
+// ONE EVENT PER RENDER, listing its pages, and never one per skill: the
+// catalogue's size belongs in the event's page list rather than in the event
+// stream, which is the reason internal/learning keeps its own per-offer stamp
+// off the stream entirely. Rendered nothing, recorded nothing. Nothing is
+// recorded for a runner with no publisher — a sub-agent's own runner, a test —
+// or with no turn to name a seat by.
+func (e emitter) skillsInjected(ctx context.Context, ph phase.Phase, offerings [][]skills.Skill) {
+	if !e.on() || e.turn.Context == nil {
+		return
+	}
+	for _, offered := range offerings {
+		pages := make([]types.KnowledgeReadPage, 0, len(offered))
+		for _, s := range offered {
+			if s.SourcePageID == "" {
+				continue
+			}
+			pages = append(pages, types.KnowledgeReadPage{
+				ID: s.SourcePageID, Container: s.SourceContainer, Title: s.SourceTitle,
+			})
+		}
+		if len(pages) == 0 {
+			continue
+		}
+		e.publish(ctx, events.New(types.KnowledgeRead{
+			Agent: e.turn.AgentID, AgentHandle: e.turn.Context.Handle(), RoleName: e.role,
+			TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey, Phase: types.Phase(ph),
+			Via:     types.ReadViaSkillInjected,
+			Backend: offered[0].SourceBackend,
+			Pages:   pages,
+		}, e.traceFor(ctx)))
+	}
 }
 
 // openingRound is the RoundNum of the update published before a phase's first

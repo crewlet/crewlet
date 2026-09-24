@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -337,7 +338,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 	surface = built
 
-	system, user := r.executorPrompt(round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
@@ -383,9 +384,16 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // nobody re-reads. The `round` is unused today and taken anyway, so a prompt
 // that ever needs to know which iteration it is does not change this
 // signature at two call sites.
-func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
-	snapshot tools.Snapshot,
+//
+// It also RECORDS what the prompt's tool-skill catalogue offered, as a
+// `knowledge_read` with `via: skill_injected` (see [emitter.skillsInjected]):
+// here, once, because this is the one frame that renders the catalogue for
+// both runtimes, and a record made anywhere else would describe a catalogue
+// matched a second time against a live registry rather than the one sent.
+func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
+	history []ledger.Iteration, snapshot tools.Snapshot,
 ) (system, user string) {
+	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
@@ -402,8 +410,9 @@ func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
 		// phase actually has — and nil where a company has published
 		// none, which keeps the prompt free of skill scaffolding rather
 		// than rendering an empty section.
-		Skills: r.catalogue(),
+		Skills: offer.Catalogue(),
 	})
+	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
 		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
@@ -502,6 +511,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	// VERBATIM. Review's evidence log takes the zero FormatOptions: the
 	// budgets belong to the cross-round ledger, and a reviewer judging an
 	// elided log is judging a summary and calling it evidence.
+	offer := r.cfg.Skills.Offer()
 	system := prompts.BuildReview(r.cfg.Seat, prompts.ReviewInput{
 		Intent:            w.Summary,
 		Outcome:           string(w.Outcome),
@@ -511,7 +521,12 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Produced:          reviewArtifact(w),
 		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
+		// parser and the docs all supported and nothing ever passed: a
+		// skill authored with `phases: [review]` reached no reviewer.
+		Skills: offer.Catalogue(),
 	})
+	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
@@ -1234,7 +1249,10 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	}
 	// Bound to the turn, which is what lets a seat-scoped tool know who is
 	// calling it without the seat travelling through the model's arguments.
-	surface = tools.NewSurface(ph.String(), snapshot, active).ForTurn(r.cfg.Turn.Context)
+	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
+	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
+	surface = tools.NewSurface(ph.String(), snapshot, active).
+		ForTurn(r.cfg.Turn.Context.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"
@@ -1307,18 +1325,6 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []strin
 		guard: guard,
 		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph},
 	}
-}
-
-// catalogue is the tool-skill registry as the prompt sees it, or nil.
-//
-// A TYPED NIL WOULD NOT BE NIL here either: prompts.injectSkillCatalogue
-// checks its interface against nil, and a non-nil interface wrapping a nil
-// registry would take the catalogue path and render a header over nothing.
-func (r *Runner) catalogue() prompts.SkillCatalogue {
-	if r.cfg.Skills == nil {
-		return nil
-	}
-	return r.cfg.Skills
 }
 
 // promptPhase maps a runner phase onto the prompt package's own.

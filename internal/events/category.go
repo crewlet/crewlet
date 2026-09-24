@@ -120,6 +120,11 @@ var categories = map[string]string{
 	"skill_revived":                "learning",
 	"compaction_requested":         "learning",
 	"compaction_completed":         "learning",
+
+	// A seat reading the knowledge base, stored beside the skill loads it
+	// generalises: which pages the company's staff actually open is the
+	// question a knowledge base is curated against.
+	"knowledge_read": "learning",
 }
 
 // excluded are the types deliberately kept OUT of the event store, each with

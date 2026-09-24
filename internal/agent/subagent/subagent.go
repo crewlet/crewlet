@@ -689,10 +689,12 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 	surface = tools.NewSurface(phase.Subagent.String(), universe, active)
 	// BOUND to the parent turn, or every seat-scoped tool in the grant
-	// fails at call time — see Config.Turn. On this task's own fork of the
-	// run's call log, never the parent's — see [runGraph].
+	// fails at call time — see Config.Turn. AS A WORKER, so a tool reporting
+	// what it did names the phase that did it rather than the executor that
+	// delegated; and on this task's own fork of the run's call log, never
+	// the parent's — see [runGraph].
 	if cfg.Turn != nil {
-		surface = surface.ForTurn(cfg.Turn.WithCalls(calls))
+		surface = surface.ForTurn(cfg.Turn.InPhase(types.PhaseSubagent).WithCalls(calls))
 	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the

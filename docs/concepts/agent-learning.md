@@ -458,7 +458,8 @@ The harness lives in:
 | Surface | What's tracked | Where it lands |
 |---|---|---|
 | `synthesized_skills.use_count` / `last_used_at` | Per-skill use count + most-recent-use timestamp | Bumped by `learning.Skills.MarkUsed`, called from the `use_skill` builtin after a successful resolution and from the `SkillUse` reflection worker for every skill a turn was offered. |
-| `skill_used` event | One per `use_skill(name)` resolution | Published on `crewlet.events.skill_used`; correlated to the host turn via `trace_id` / `span_id`. |
+| `skill_used` event | One per `use_skill(name)` resolution (`source_kind: synthesized`) and one per `load_tool_skill(key)` (`source_kind: registry`, naming the tool skill's page in `source_page_id` / `source_container`) | Published on `crewlet.events.skill_used`; correlated to the host turn via `trace_id` / `span_id`. |
+| `knowledge_read` event | One per read of the knowledge base — a `get_page`, a `search_knowledge`, the turn-start knowledge block, a tool-skill load, a phase's tool-skill catalogue — naming the pages it reached. See [Knowledge System § What agents read](knowledge-system.md#what-agents-read). | Published on `crewlet.events.knowledge_read`. |
 | `skill_synthesized` / `skill_refined` / `skill_promoted` events | Lifecycle markers: induction, refinement, cross-agent promotion | Published on `crewlet.events.skill_*`; the dashboard groups them by trace. |
 | `prefetch_summary` event | One per turn after the seven context prefetches resolve, recording per-block `hit` (bool) + `bytes` (rendered size), the knowledge `selection_count`, the chat thread's `thread_context_posts` / `_read` / `_stopped_short`, and the `trigger_requires_recon` gate decision. Every block degrades to empty rather than failing, so this is the only signal that tells an unreachable store from one with nothing to say. | Published on `crewlet.events.prefetch_summary` once per turn. |
 | `persist_decider_completed` `classification` / `ttl_until` | Tier label (`LONG` / `SHORT` / `DOC` / `NOOP`) + TTL on `SHORT` writes | Existing event extended so dashboards can plot the per-agent tier distribution. |
@@ -479,7 +480,7 @@ A new agent will sit at zero until it has been alive long enough to retrieve. Co
 
 ### Best-effort rule
 
-Every telemetry write (`Skills.MarkUsed`, the `skill_used` publish, the `prefetch_summary` publish) is best-effort: a failure is logged once and swallowed so the host path (skill load, turn) is never broken by measurement. Test mode (no event queue / no DB) is a silent no-op.
+Every telemetry write (`Skills.MarkUsed`, the `skill_used` and `knowledge_read` publishes, the `prefetch_summary` publish) is best-effort: a failure is logged once and swallowed so the host path (skill load, turn) is never broken by measurement. Test mode (no event queue / no DB) is a silent no-op.
 
 ---
 
@@ -491,7 +492,7 @@ Every telemetry write (`Skills.MarkUsed`, the `skill_used` publish, the `prefetc
 | `internal/agent/prompts` | The executor's prompt builder injects conditional guidance blocks gated on tool availability. |
 | `internal/knowledge`, `internal/confluence` | The knowledge-search seam and its one backend, the Confluence searcher (CQL), backing the `## Relevant knowledge` prefetch and `search_knowledge`; the org-wide read scope narrows it by space. See [Knowledge System](knowledge-system.md). |
 | `internal/agent/builtin` | Builtins, registered into `internal/tools`: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
-| `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `prefetch_summary`, `compaction_requested`, `compaction_completed`. |
+| `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `prefetch_summary`, `knowledge_read`, `compaction_requested`, `compaction_completed`. |
 | `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |
 | `internal/learning/memsync` | Makes that file a cache rather than the only copy: every memory row is published to a compacted changelog on the stream, and a node acquiring a seat replays it into its own store before the mailbox attaches. Without it a seat that moved node would run its next turn having forgotten everything. See [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it). |
 | `internal/learning` | The reflect dispatcher (`Reflector`) and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`, `Synthesizer`, `Refiner`), the background passes behind `Background` (episode `Lifecycle`, the skill curator, clustered synthesis, cross-agent `Promoter`), `Skills` for synthesis and refinement, `Diary`, and the onboarding marker store. The turn-start prefetches are `internal/agent/prefetch`. |

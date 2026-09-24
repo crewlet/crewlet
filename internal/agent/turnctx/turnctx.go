@@ -185,14 +185,42 @@ type Turn struct {
 	Task  string
 	Reply string
 
+	// Phase is the phase session this value was bound for, and empty on
+	// the Turn the engine built for the whole turn. Set only through
+	// [Turn.InPhase], by the frame that builds a phase's tool surface, so
+	// a tool reporting what it did can say WHICH phase did it — a read in
+	// the executor and one in a delegate worker are different acts — without
+	// the phase travelling ambiently, which is exactly what this package
+	// refuses (an ambient phase attributes a call to whichever phase last
+	// wrote the context).
+	Phase types.Phase
+
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
 	//
-	// THE ONE PART OF A TURN THAT CHANGES, and only by growing: the tool
-	// surface appends each call it made, and nothing can rewrite or drop an
-	// entry, so no authorization decision reads it and nothing a model says
-	// reaches it but the calls it actually made.
+	// One of the two parts of a turn that change, and only by growing: the
+	// tool surface appends each call it made, and nothing can rewrite or
+	// drop an entry, so no authorization decision reads it and nothing a
+	// model says reaches it but the calls it actually made.
 	Calls *CallLog
+}
+
+// InPhase derives the Turn a phase session's tools see: this one, naming the
+// phase.
+//
+// A COPY rather than a write, because a Turn is immutable and the executor, the
+// reviewer and every delegate worker of one turn hold it at once. Everything
+// the copy points at is shared with the original — [Turn.Written] above all,
+// which is one set for the whole turn however many phases write into it, and
+// [Turn.Calls], which is one log for the run. Nil in, nil out, for a surface
+// built outside a turn.
+func (t *Turn) InPhase(phase types.Phase) *Turn {
+	if t == nil {
+		return nil
+	}
+	bound := *t
+	bound.Phase = phase
+	return &bound
 }
 
 // CallLog is this run's call log, or nil outside a turn — see [Turn.Calls].

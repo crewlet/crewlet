@@ -57,6 +57,8 @@ func catalogue() []events.Payload {
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// toolskill.go
 		ToolSkillPageChanged{},
+		// knowledge.go
+		KnowledgeRead{},
 		// webhook.go
 		RawWebhook{},
 		// operator.go
@@ -90,6 +92,7 @@ var wireTypes = []string{
 	"counterparty_profile_updated",
 	"episode_written",
 	"external_notification",
+	"knowledge_read",
 	"llm_unavailable",
 	"notification_skipped",
 	"notifications_coalesced",
@@ -306,7 +309,8 @@ var wireTags = map[string][]string{
 	"subagent_batched":                {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
 	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},
-	"skill_used":                      {"agent_handle", "agent_id", "file_loaded", "role", "skill_id", "skill_name", "source_kind", "turn_id", "work_key"},
+	"skill_used":                      {"agent_handle", "agent_id", "file_loaded", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
+	"knowledge_read":                  {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
 	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "onboarding_hint_bytes", "onboarding_hint_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
 	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},

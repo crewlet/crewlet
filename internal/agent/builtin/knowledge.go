@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -68,6 +69,10 @@ type searchKnowledge struct {
 	// company's own account rather than somebody's". Nil here means a
 	// caller that must bring a turn, which is every seat registry.
 	org func() *org.Organization
+
+	// events receives the `knowledge_read` a seat's search records. Nil
+	// records nothing, which is a registry built outside an engine.
+	events Telemetry
 }
 
 var _ tools.SeatCallable = (*searchKnowledge)(nil)
@@ -166,6 +171,13 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"No team documents match %q. Try different keywords, or work from what "+
 				"you have — not everything is written down.", clip(query))}, nil
 	}
+	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
+	// search is a read of titles and snippets rather than of pages, and
+	// recorded as such (`via: search`) — which pages a company's searches
+	// surface is a different question from which ones get opened, and a
+	// knowledge base is curated against both.
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
+		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))

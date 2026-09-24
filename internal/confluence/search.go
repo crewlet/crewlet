@@ -137,7 +137,7 @@ func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 		}
 		out = append(out, knowledge.Hit{
 			Title: page.Title, URL: s.link(page), Container: page.Space,
-			PageID: page.ID, Ancestors: page.Ancestors,
+			PageID: page.ID, Ancestors: page.Ancestors, Backend: Backend,
 			Snippet: knowledge.Snippet(Flatten(page.Body), knowledge.SnippetLimit),
 		})
 	}
