@@ -111,6 +111,9 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	}
 	at := w.Now()
 	var out DependencyResult
+	// authored is the position of step 2's commit on this task's own
+	// subject, which the mirror onto that same subject waits behind.
+	var authored statelog.Position
 
 	// STEP 2 — THE AUTHORED EDGES.
 	//
@@ -125,7 +128,8 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		if err != nil {
 			return out, err
 		}
-		out.WriteResult = result
+		out.fold(result, true)
+		authored = result.Position
 	}
 	for i, id := range append(slices.Clone(change.BlockingAdd), change.BlockingRemove...) {
 		other, held := found.byID[id]
@@ -149,12 +153,14 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		if adding {
 			notify = found.wakeFor(other, nil, leads)
 		}
-		if _, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+		result, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
-			ChangeRelations, notify); err != nil {
+			ChangeRelations, notify)
+		if err != nil {
 			return out, fmt.Errorf("tracker: %d of this call's edges were "+
 				"written before task %s refused its own: %w", i, id, err)
 		}
+		out.fold(result, false)
 	}
 
 	// STEP 3 — THE MIRRORS, best effort.
@@ -164,18 +170,46 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	// for its own `waiting_on` edges, and once here for the dependents it
 	// gains. See [Writer.After] for what the second one would otherwise
 	// spend discovering that the first had moved it.
-	var last WriteResult
-	out.Mirrored, out.OneSided, last = w.mirror(ctx, opID, change, found, leads,
-		out.Position)
-	// THE POSITION IS THE LAST COMMIT THIS CALL MADE, whatever its shape.
-	// A `blocking`-only change writes nothing on its own subject, so the
-	// authored branch above never ran — and a caller that settled at the
-	// zero position would barrier at nothing and read its own write back
-	// missing.
-	if last.Position.Seq > out.Position.Seq {
-		out.WriteResult = last
-	}
+	out.Mirrored, out.OneSided = w.mirror(ctx, opID, change, found, leads,
+		authored, &out)
 	return out, nil
+}
+
+// fold is how every commit this call made reaches the one answer it returns.
+//
+// THE CALL ANSWERS FOR EVERY RECORD, never for the first or the last:
+//
+//   - the POSITION is the latest of them, because a caller barriers on it
+//     before its next read. A `blocking`-only change writes nothing on its
+//     own subject before the mirror, and a waiting-on change's mirrors land
+//     after its authored commit — either earlier position is a floor below a
+//     record this call made, and a read at it comes back without the edge;
+//   - the OUTCOME is the least certain of them, so an authored commit whose
+//     outcome is `unknown` is never reported `applied` because a mirror after
+//     it was confirmed (the rule [statelog.LessCertain] states);
+//   - the VERSION is this task's OWN, from the latest commit on its subject.
+//     A caller reads it as the item's version and passes it back as an
+//     If-Match, so a counterparty's version — which the latest-position rule
+//     used to hand over whenever a mirror landed last — refused that caller's
+//     very next edit.
+//
+// own says whether the commit is on the call's own task.
+func (out *DependencyResult) fold(result WriteResult, own bool) {
+	if !result.Wrote() {
+		return
+	}
+	out.Outcome = statelog.LessCertain(out.Outcome, result.Outcome)
+	out.Position = statelog.Later(out.Position, result.Position)
+	if out.OpID == "" {
+		out.OpID = result.OpID
+	}
+	out.Rounds += result.Rounds
+	if own {
+		if result.Version > out.Version {
+			out.Version = result.Version
+		}
+	}
+	out.Warnings = append(out.Warnings, result.Warnings...)
 }
 
 // edgesOn is the `waiting_on` gesture for one task, or nil when this call does
@@ -212,7 +246,7 @@ func edgesOn(add, remove []string, actor, note string, at time.Time) *RelationIn
 // the session mark for the ONE mirror that lands on that same subject.
 func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChange,
 	found parties, leads Leads,
-	authored statelog.Position) (mirrored, oneSided []string, last WriteResult) {
+	authored statelog.Position, out *DependencyResult) (mirrored, oneSided []string) {
 
 	type edit struct {
 		add, remove []string
@@ -284,14 +318,12 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 			oneSided = append(oneSided, id)
 			continue
 		}
-		if result.Position.Seq > last.Position.Seq {
-			last = result
-		}
+		out.fold(result, id == change.Task)
 		mirrored = append(mirrored, id)
 	}
 	slices.Sort(mirrored)
 	slices.Sort(oneSided)
-	return mirrored, oneSided, last
+	return mirrored, oneSided
 }
 
 // parties is the pre-flight read: every counterparty this call names, and the

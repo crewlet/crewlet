@@ -15,11 +15,11 @@
 //
 // The catalogue (catalogue.go) is the tool set, resolved against this
 // company's backends by [builtin.OperatorTools] ONCE, in [New]. A transport
-// (MCP at [MCPPath], for an assistant) adapts a request into a call through
-// the catalogue's own dispatch and nothing else: it does not decide which
-// tools exist, what a schema says, which hints a tool carries or how a
-// refusal is worded. A
-// transport that built its own catalogue would be a second call to the same
+// — MCP at [MCPPath] for an assistant, and the act transport at [ActPattern]
+// for a person at the dashboard (act.go) — adapts a request into a call
+// through the catalogue's own dispatch and nothing else: it does not decide
+// which tools exist, what a schema says, which hints a tool carries or how a
+// refusal is worded. A transport that built its own catalogue would be a second call to the same
 // constructor with a second chance to pass it different deps — and the
 // difference would surface as a verb that works from one surface and is
 // missing from the other, which nobody tests for because each surface looks
@@ -39,16 +39,17 @@
 // separate facts on the record and an audit can tell an operator's edit from
 // an agent's. See [WorkActor] in actor.go.
 //
-// # A retry is one write
+// # A retry is the same operations
 //
 // A person has no turn and nothing redelivers their call, but they RETRY: a
 // write whose answer never arrived is sent again. A transport that knows the
 // caller's own request identity puts it on the context with
-// [WithRequestKey], and the actor carries it into every derived operation id
-// ([builtin.Actor.RequestKey]) — so the operation ledger collapses the retry
-// into the first attempt exactly as it collapses a redelivered turn. A call
-// that names no request (an MCP client's) writes fresh every time, which is
-// what two calls from an assistant mean.
+// [WithRequestKey], and the actor carries it into every id the write derives
+// ([builtin.Actor.RequestKey], [builtin.PageDeps.RequestKey]) — each record's
+// operation, a created item's, view's or page's own id, a comment's — so the
+// retry is the first attempt's operations rather than new ones, exactly as a
+// redelivered turn's are. A call that names no request (an MCP client's)
+// writes fresh every time, which is what two calls from an assistant mean.
 //
 // # It is ALWAYS authenticated
 //
@@ -58,6 +59,21 @@
 // guarded by the ordinary operator bearer token — the same one /config and
 // /secrets take. It WRITES to the company, so `allow_anonymous_read` does not
 // reach it: a write is a write whatever reads are open.
+//
+// # The act transport admits a PERSON, and nobody else (ADR-0024)
+//
+// The two transports differ in exactly one rule. MCP admits any token, bound
+// or not, because an assistant connected with a CI token is a credential
+// acting as itself. The act transport — the dashboard's buttons — admits only
+// a token `contact.crewlet_operator_id` binds to a human seat, and refuses
+// every other caller `unbound`: a disabled guard's anonymous caller, and a
+// credential nobody bound. A button is pressed by somebody, and the only
+// somebody a browser session can honestly claim to be is the person the token
+// names; a write attributed to "the dashboard" would be the one actor an audit
+// cannot ask why. The attribution itself does not change — the author is still
+// the token, the kind still `operator`, and the person rides beside it as the
+// actor's seat — so an audit reads a dashboard write exactly as it reads the
+// same person's assistant. See [ActPattern].
 package operator
 
 import (
@@ -116,6 +132,11 @@ type Options struct {
 type Server struct {
 	catalogue catalogue
 	mcp       mcpTransport
+
+	// chart is [Options.Org], kept for the one decision a transport makes
+	// about the caller rather than the tool: whether the token is bound to
+	// a person, which is the whole of the act transport's admission rule.
+	chart func() *org.Organization
 }
 
 // catalogue is the tool set every transport serves, in the order
@@ -173,7 +194,7 @@ func New(opts Options) *Server {
 	if len(callables) == 0 {
 		return nil
 	}
-	s := &Server{catalogue: newCatalogue(callables)}
+	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org}
 	s.mcp = newMCPTransport(s.catalogue, opts.Company)
 	return s
 }

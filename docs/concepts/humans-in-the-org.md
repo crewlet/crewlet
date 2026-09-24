@@ -89,9 +89,13 @@ empty one, naming the line of company configuration that would give it a
 person. `#/me` is the same person's own work, and it is absent for the same
 reason when the token names nobody.
 
-Read and snooze marks are the assistant's to write, not the screen's: the
-dashboard is read-only, and every write in this engine is attributed to
-somebody. What it shows is what the engine recorded.
+Read and snooze marks are the **person's own**, and they are written as that
+person: by their assistant over `/operator/mcp`, or from the dashboard over
+`/operator/act`, which admits a token bound to a seat and nobody else. Every
+write in this engine is attributed to somebody, and a button in a browser
+writes as the person whose token it holds — never as "the dashboard", which is
+nobody. A token bound to no seat has no inbox to mark and is refused there;
+what the screen shows is what the engine recorded.
 
 **Your own writes count as yours — and the record still names the token.**
 A work item you file through your assistant is attributed to the **credential**

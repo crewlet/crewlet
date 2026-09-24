@@ -20,10 +20,12 @@ type requestKey struct{}
 // ONE request — the identity a retry of that request repeats.
 //
 // A TRANSPORT SETS IT, never a tool argument: the key decides which writes
-// the operation ledger collapses into one, and a caller who could put it in
-// the arguments of an ordinary call could collapse somebody else's write by
-// guessing theirs. A transport that knows no request identity — MCP, whose
-// calls name none — sets nothing, and every write it makes is fresh.
+// are one operation, and a caller who could put it in the arguments of an
+// ordinary call could collapse somebody else's write by guessing theirs. The
+// act transport sets it from its envelope's `request_id`, SCOPED TO THE TOKEN
+// that sent it, so a request id names only that credential's own writes. A transport that knows no request
+// identity — MCP, whose calls name none — sets nothing, and every write it
+// makes is fresh.
 //
 // An empty key is no key: stored as given and read back as "", which every
 // consumer treats exactly as a request that named none.

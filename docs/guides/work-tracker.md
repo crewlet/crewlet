@@ -999,6 +999,14 @@ answer for, whose watch a `watch: true` records, and which projects it may
 re-route work out of. See
 [A person's own state](#a-persons-own-state).
 
+**The dashboard writes through the same tools**, at `/operator/act/{tool}` —
+one tool per request, as the person your token is bound to. It admits a bound
+token and nobody else: an unbound token and a disabled guard's caller are
+refused `unbound`, and keep the MCP surface. The record is the same either way,
+so a change you make on screen and one your assistant makes read alike in
+every history. See the
+[API reference](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface).
+
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody.
@@ -1285,8 +1293,9 @@ written over a date that exists.
 The **Priorities** tab is numbered, in the order it was stored. That order is
 the content — it is what somebody decided — so nothing re-sorts it, and the
 place is drawn rather than left for a reader to count. There is no drag: a rank
-is a value on the task, and the dashboard writes nothing, so `set_priorities`
-is the gesture and it is somebody's own.
+is a value on the task, so `set_priorities` is the gesture and it is
+somebody's own — called by their assistant, or through `/operator/act` as the
+person their token is bound to.
 
 **Your own writes count as yours, under either name.** A write you make
 through your token is attributed to the **token**, with author kind
@@ -1341,12 +1350,13 @@ when you name none is your team's. And the questions `list_work_items` asks
 about you — `preset=my_queue`, `preset=priorities` — are asked under both of
 your names, exactly as `my_work` is.
 
-The marks are the ASSISTANT'S. The dashboard is read-only, because every write
-here is attributed to somebody and a button in a browser would write as "the
-dashboard", which is nobody — so `mark_inbox` is what an assistant calls when
-you ask it to, and the screen shows what the engine recorded. Each notice
-offers the call that would mark it, pre-filled and copyable, rather than a
-control that pretends to send it.
+The marks are the PERSON'S, written as that person. Every write here is
+attributed to somebody, and a write as "the dashboard" would be attributed to
+nobody — so `mark_inbox` is called either by your assistant over
+`/operator/mcp`, or through `/operator/act`, which admits only a token bound
+to a seat and records the write exactly as your assistant's would be. The
+screen shows what the engine recorded. Each notice offers the call that would
+mark it, pre-filled and copyable.
 
 **And the same rows answer the other way round.** `work_inbox` reads them by
 recipient — one person, every change. `work_routing` reads them by *record* —

@@ -81,6 +81,59 @@ type Result struct {
 	Rounds int
 }
 
+// Wrote reports whether this result speaks for a record a caller has to
+// account for: one that was appended (a position is set) or may have been
+// (`unknown`, whose position is zero by definition). A write that decided it
+// had nothing to append answers neither, and folding its outcome into a
+// call's answer would claim a record that does not exist.
+func (r Result) Wrote() bool {
+	return !r.Position.IsZero() || r.Outcome == OutcomeUnknown
+}
+
+// LessCertain is the weaker of two write outcomes: `unknown` over `pending`
+// over `applied`, and an empty outcome — nothing appended — under all three,
+// since it claims nothing a caller must wait for.
+//
+// # Why a call that appended several records needs it
+//
+// A tool call, a dependency sequence, a save followed by a rename: each is ONE
+// answer over several records, and that answer is read as "may I stop looking
+// at this write?". It has to be the outcome a caller can rely on for EVERY
+// record the call made — `applied` over a record the broker never confirmed
+// tells a caller it is done with a write nobody can vouch for, and the rule
+// every transport documents is that an unknown write is never reported
+// applied. Taking the first record's outcome, or the last's, breaks that the
+// moment the records disagree.
+func LessCertain(a, b Outcome) Outcome {
+	rank := func(o Outcome) int {
+		switch o {
+		case OutcomeUnknown:
+			return 3
+		case OutcomePending:
+			return 2
+		case OutcomeApplied:
+			return 1
+		}
+		return 0
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// Later is the later of two positions on one stream, the zero position losing
+// to any other. It is the position a call that appended several records must
+// answer, because a caller barriers on it before its next read: the earlier
+// one is a floor BELOW a record the call made, and a read at it can come back
+// without that record.
+func Later(a, b Position) Position {
+	if b.Packed() > a.Packed() {
+		return b
+	}
+	return a
+}
+
 // Reason says why a write was refused, and each value names a different thing
 // for the caller to do.
 type Reason string

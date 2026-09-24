@@ -52,9 +52,9 @@ type PageReader interface {
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool, key pages.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
-	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
+	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string, key pages.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -87,9 +87,10 @@ type PageDeps struct {
 	// request key is not attribution: nothing about it is written to a
 	// history row. Nil, which is every seat's surface, reads "".
 	//
-	// What it buys is that a person's retried comment is ONE comment: the
-	// comment's operation id is derived from it exactly as from a turn's
-	// key (see [callSeed]).
+	// What it buys is that a person's retried write is ONE write: every
+	// page write's operation id — a create's, a save's, a rename's, a
+	// comment's and a comment edit's — is derived from it exactly as from a
+	// turn's key (see [PageDeps.callKey]).
 	RequestKey func(ctx context.Context) string
 
 	// Await blocks until this node's projection has applied a revision.
@@ -106,6 +107,13 @@ func (d PageDeps) requestKey(ctx context.Context) string {
 		return ""
 	}
 	return d.RequestKey(ctx)
+}
+
+// callKey is the key every page write this call makes is derived from: the
+// turn's, or the caller's request key, or none — [callSeed]'s one rule, typed
+// for the store ([pages.CallKey]).
+func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn) pages.CallKey {
+	return pages.CallKey(callSeed(turn, d.requestKey(ctx)))
 }
 
 // settle waits for a write to reach this node's own applied rows. Best effort;
@@ -367,6 +375,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Labels:    argStrings(args, "labels"),
 		Message:   strings.TrimSpace(argString(args, "message")),
+		CallKey:   t.deps.callKey(ctx, turn),
 	}
 	if in.Container == "" {
 		if t.deps.DefaultContainer != nil {
@@ -393,6 +402,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
 		"revision": got.Revision,
+		"outcome":  string(got.Outcome.Outcome), "position": positionOf(got.Outcome.Position),
 	})
 }
 
@@ -477,7 +487,11 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return pageReadFailure(SavePageTool, err), nil
 	}
 
-	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
+	key := t.deps.callKey(ctx, turn)
+	save := pages.Save{
+		BaseVersion: base, Message: strings.TrimSpace(argString(args, "message")),
+		CallKey: key,
+	}
 	if _, ok := args["body"]; ok {
 		body := argString(args, "body")
 		save.Body = &body
@@ -499,6 +513,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return pageWriteFailure(SavePageTool, err), nil
 	}
 	at := got.Outcome.Position
+	outcome := got.Outcome.Outcome
 	revision := got.Revision
 	// A RENAME IS ITS OWN WRITE, and it goes SECOND. An address change
 	// contends for the address and a content change contends for the page,
@@ -514,7 +529,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// as stale. See [PageDeps.Await], which exists for exactly this.
 		t.deps.settle(ctx, at)
 		want := strings.TrimSpace(fmt.Sprint(title))
-		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
+		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false, key)
 		if err != nil {
 			// THE RENAME'S CLASS, because the rename is the half that
 			// failed: the save already landed and nothing about it is
@@ -536,14 +551,20 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		if renamed.Revision > revision {
 			revision = renamed.Revision
 		}
-		if renamed.Outcome.Position.Packed() > at.Packed() {
-			at = renamed.Outcome.Position
+		at = statelog.Later(at, renamed.Outcome.Position)
+		// AND THE LESS CERTAIN OF THE TWO OUTCOMES, where the rename
+		// appended anything: the call answers for both records, and
+		// `applied` over a rename the broker never confirmed would tell
+		// a caller it can stop looking at a write it cannot vouch for.
+		if renamed.Outcome.Wrote() {
+			outcome = statelog.LessCertain(outcome, renamed.Outcome.Outcome)
 		}
 	}
 	t.deps.settle(ctx, at)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": revision,
+		"outcome": string(outcome), "position": positionOf(at),
 	})
 }
 
@@ -627,7 +648,8 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// — lives in the store either way.
 	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
+		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body,
+			t.deps.callKey(ctx, turn))
 		if err != nil {
 			return pageWriteFailure(CommentOnPageTool, err), nil
 		}
@@ -635,13 +657,15 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return jsonResult(map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
 			"edited": true, "revision": written.Revision,
+			"outcome":  string(written.Outcome.Outcome),
+			"position": positionOf(written.Outcome.Position),
 		})
 	}
 
 	in := pages.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		CallKey: callSeed(turn, t.deps.requestKey(ctx)),
+		CallKey: t.deps.callKey(ctx, turn),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
@@ -654,6 +678,8 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,
+		"outcome":  string(written.Outcome.Outcome),
+		"position": positionOf(written.Outcome.Position),
 	})
 }
 

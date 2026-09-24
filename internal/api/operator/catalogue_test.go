@@ -241,7 +241,7 @@ func (p *recordingPages) Comment(_ context.Context, _ pages.Actor, _ string,
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.callKeys = append(p.callKeys, in.CallKey)
+	p.callKeys = append(p.callKeys, in.CallKey.String())
 	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
 }
 

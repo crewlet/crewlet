@@ -24,6 +24,11 @@ type fakeKB struct {
 	edits    []commentEdit
 	actors   []pages.Actor
 
+	// keys is the call key every write arrived with, in order, so a tool
+	// that derived its operation from something other than the caller's
+	// own key — or forgot to pass one — is visible.
+	keys []pages.CallKey
+
 	readErr  error
 	writeErr error
 
@@ -85,6 +90,7 @@ func (f *fakeKB) Create(_ context.Context, actor pages.Actor, in pages.NewPage) 
 	}
 	f.created = append(f.created, in)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, in.CallKey)
 	return pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
 		Title: in.Title, Version: 1}, Revision: 10}, nil
 }
@@ -95,6 +101,7 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, save.CallKey)
 	return pages.Written{
 		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
 		Outcome: landedAt(11),
@@ -110,7 +117,7 @@ type renamed struct {
 }
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool) (pages.Written, error) {
+	_ bool, key pages.CallKey) (pages.Written, error) {
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
@@ -120,6 +127,7 @@ func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title stri
 		awaitedBefore: slices.Clone(f.awaited),
 	})
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, key)
 	return f.renameResult(pageID, title), nil
 }
 
@@ -129,6 +137,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 	}
 	f.comments = append(f.comments, in)
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, in.CallKey)
 	return pages.Comment{ID: "m1", Mentions: in.Mentions},
 		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}, nil
 }
@@ -136,12 +145,14 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 // commentEdit is one EditComment call the fake took.
 type commentEdit struct{ commentID, body string }
 
-func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string) (pages.Comment, pages.Written, error) {
+func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string,
+	key pages.CallKey) (pages.Comment, pages.Written, error) {
 	if f.writeErr != nil {
 		return pages.Comment{}, pages.Written{}, f.writeErr
 	}
 	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
 	f.actors = append(f.actors, actor)
+	f.keys = append(f.keys, key)
 	return pages.Comment{ID: commentID, Body: body},
 		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}, nil
 }
@@ -611,5 +622,45 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 		t.Errorf("the turn waited for %v — the rename is the second write, so "+
 			"a re-read in this turn has to be past ITS position, not the "+
 			"save's", kb.awaited)
+	}
+}
+
+// A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
+// they are what a caller outside a turn — a person's assistant, the dashboard —
+// hands back as `min_position` so the read after its write includes it. And a
+// save that also renames answers for BOTH records: its position is the later
+// one, and its outcome the less certain, because `applied` over a rename the
+// broker never confirmed would tell a caller it can stop looking at a write
+// nobody can vouch for.
+func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.rename = func(pageID, title string) pages.Written {
+		return pages.Written{
+			Page: pages.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
+			Outcome: statelog.Result{
+				Outcome:  statelog.OutcomePending,
+				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 13},
+			},
+		}
+	}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+
+	saved := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten",
+	})
+	if !strings.Contains(saved.Output, `"outcome": "applied"`) ||
+		!strings.Contains(saved.Output, `"position": "CREWLET_PAGES_LOG@0:11"`) {
+
+		t.Errorf("a save answered %s, want its applied outcome at its own position", saved.Output)
+	}
+	both := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Guide",
+	})
+	if !strings.Contains(both.Output, `"outcome": "pending"`) ||
+		!strings.Contains(both.Output, `"position": "CREWLET_PAGES_LOG@0:13"`) {
+
+		t.Errorf("a save that also renamed answered %s, want the rename's pending "+
+			"outcome at the rename's position", both.Output)
 	}
 }

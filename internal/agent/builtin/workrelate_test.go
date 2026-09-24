@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -264,4 +265,94 @@ func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 	if len(trk.patched) != 0 {
 		t.Error("a refused answer still posted its comment")
 	}
+}
+
+// A WRITE THAT ALSO DEPENDS ANSWERS FOR BOTH RECORDS, never for the first.
+//
+// create_work_item with `waiting_on` and update_work_item with a field and a
+// dependency each append the item's own record and THEN the dependency
+// sequence. Answering only the first record's outcome and position — which
+// both tools did — handed a caller a floor BELOW the edge it had just written,
+// so the read after the write showed the item without its blocker, and
+// reported a dependency whose outcome was `unknown` as `applied`, which every
+// transport promises never to do. The version moves too: the authored edge is
+// a commit on the item, and an If-Match with the older version is refused.
+func TestAWriteThatAlsoDependsAnswersForBothRecords(t *testing.T) {
+	t.Parallel()
+	later := tracker.DependencyResult{WriteResult: tracker.WriteResult{
+		Result: statelog.Result{
+			Outcome:  statelog.OutcomePending,
+			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 41},
+			Version:  41,
+		},
+	}}
+	unknown := tracker.DependencyResult{WriteResult: tracker.WriteResult{
+		Result: statelog.Result{Outcome: statelog.OutcomeUnknown},
+	}}
+	calls := map[string]struct {
+		tool string
+		args map[string]any
+		// first is the position the item's own record answers.
+		first string
+	}{
+		"a create waiting on a blocker": {builtin.CreateWorkItemTool, map[string]any{
+			"title": "A task", "project": "ENG", "waiting_on": []any{"ENG-2"},
+		}, "S@1:11"},
+		"an update that also depends": {builtin.UpdateWorkItemTool, map[string]any{
+			"item": "ENG-1", "title": "renamed",
+			"waiting_on": map[string]any{"add": []any{"ENG-2"}},
+		}, "S@1:12"},
+	}
+	for name, call := range calls {
+		t.Run(name+", the dependency later", func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.dependResult = &later
+			reg := workRegistry(t, builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, Dependencies: trk.depends,
+			})
+			answer := decodeAnswer(t, callWork(t, reg, call.tool, call.args))
+			if answer["position"] != "S@1:41" || answer["outcome"] != "pending" {
+				t.Errorf("answered %v at %v, want the dependency's pending "+
+					"outcome at its later position — the item's own is a "+
+					"floor below the edge", answer["outcome"], answer["position"])
+			}
+			if answer["version"] != float64(41) {
+				t.Errorf("version = %v, want the item's version after its "+
+					"authored edge, or the next If-Match is refused",
+					answer["version"])
+			}
+		})
+		t.Run(name+", the dependency unknown", func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.dependResult = &unknown
+			reg := workRegistry(t, builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, Dependencies: trk.depends,
+			})
+			answer := decodeAnswer(t, callWork(t, reg, call.tool, call.args))
+			if answer["outcome"] != "unknown" {
+				t.Errorf("outcome = %v over a dependency nobody can vouch "+
+					"for, want unknown — an unknown write is never reported "+
+					"applied", answer["outcome"])
+			}
+			if answer["position"] != call.first {
+				t.Errorf("position = %v, want %s: the dependency named no "+
+					"position, so the item's own record is the floor",
+					answer["position"], call.first)
+			}
+		})
+	}
+}
+
+func decodeAnswer(t *testing.T, got tools.Result) map[string]any {
+	t.Helper()
+	if got.Failed {
+		t.Fatalf("the call failed: %s", got.Output)
+	}
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("the answer is not json: %v\n%s", err, got.Output)
+	}
+	return answer
 }

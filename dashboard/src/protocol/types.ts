@@ -3196,6 +3196,10 @@ export interface Viewer {
   handle: string;
   name: string;
   kind: string;
+  /** The tools `POST /operator/act/{tool}` serves this caller: every write
+   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
+   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+  acts: string[];
 }
 
 export interface QueryMap {

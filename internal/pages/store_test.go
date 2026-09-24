@@ -105,7 +105,7 @@ func TestARenameMovesTheAddressAndFreesTheOldOne(t *testing.T) {
 	page := r.write(author("jane"), pages.NewPage{Title: "Old Name", Body: "prose"})
 
 	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"New Name", false); err != nil {
+		"New Name", false, ""); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	r.drain()
@@ -147,7 +147,7 @@ func TestARenameOntoATakenAddressIsRefused(t *testing.T) {
 	page := r.write(author("jane"), pages.NewPage{Title: "One", Body: "a"})
 	r.write(author("jane"), pages.NewPage{Title: "Two", Body: "b"})
 
-	_, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID, "Two", false)
+	_, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID, "Two", false, "")
 	if !errors.Is(err, pages.ErrTitleTaken) {
 		t.Fatalf("a rename took an address another page holds: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestOnlyTheAuthorEditsAComment(t *testing.T) {
 	r.drain()
 
 	_, _, err = r.store.EditComment(t.Context(), author("bob"), page.Page.ID,
-		comment.ID, "bob's words in jane's mouth")
+		comment.ID, "bob's words in jane's mouth", "")
 	if !errors.Is(err, pages.ErrInvalid) {
 		t.Fatalf("a second person edited somebody else's comment: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestAnUnchangedCommentEditStillAnswersWithARevision(t *testing.T) {
 	before := r.consumed
 
 	_, got, err := r.store.EditComment(t.Context(), author("jane"), page.Page.ID,
-		comment.ID, "is this still right?")
+		comment.ID, "is this still right?", "")
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestARenameToTheTitleItAlreadyDisplaysAnswersApplied(t *testing.T) {
 	before := r.consumed
 
 	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"  Runbook ", false)
+		"  Runbook ", false, "")
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
 	before := r.consumed
 
 	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"RUNBOOK", false)
+		"RUNBOOK", false, "")
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -794,7 +794,7 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 		t.Errorf("the head reads at %d and the reader answers %d", revision, got)
 	}
 	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
-		"New Name", false); err != nil {
+		"New Name", false, ""); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	r.drain()

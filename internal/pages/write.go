@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ type NewPage struct {
 
 	// Quiet suppresses the wake, for an import.
 	Quiet bool
+
+	// CallKey makes the create idempotent across a repetition its caller
+	// can produce — see [CallKey]. It derives the new page's id as well as
+	// the operation's, so a retry that the broker collapses into the first
+	// attempt answers with the page that attempt made.
+	CallKey CallKey
 }
 
 // Written is what a write reports back.
@@ -107,7 +114,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	at := s.now()
 	title := strings.Join(strings.Fields(in.Title), " ")
 	page := Page{
-		V: DocumentVersion, ID: s.newID(), Container: container,
+		V: DocumentVersion, ID: s.pageIDFor(in.CallKey, container, title), Container: container,
 		ParentID: strings.TrimSpace(in.ParentID),
 		Title:    title, Body: in.Body, Status: in.Status, Labels: labels,
 		Version: 1, Author: actor.Name(), CreatedAt: at, UpdatedAt: at,
@@ -119,7 +126,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	}
 
 	subject := TitleSubject(container, title)
-	opID := s.newSeqID()
+	opID := s.callOpID(in.CallKey, "create", container, NormalizeTitle(title))
 	scope := ScopeSet{Terms: []ScopeTerm{
 		{Kind: TermTitle, Container: container, ID: TitleToken(title)},
 		{Kind: TermObject, Container: container, ID: page.ID},
@@ -199,6 +206,10 @@ type Save struct {
 	Watch *bool
 
 	Quiet bool
+
+	// CallKey makes the save idempotent across a repetition its caller can
+	// produce — see [CallKey].
+	CallKey CallKey
 }
 
 // SavePage applies an edit to a page, arbitrated on the page's own subject.
@@ -234,7 +245,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(save.CallKey, "save", pageID, strconv.Itoa(save.BaseVersion), saveKey(save))
 	var out Page
 	var read uint64
 	subject := PageSubject(pageID)
@@ -306,8 +317,12 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 // smuggled past the rule — it is the rule: the title subject is the same
 // subject this page already holds, so there is nothing there to contend for,
 // and the only row the write touches is the page's own.
+//
+// KEYED LIKE EVERY WRITE A CALLER CAN REPEAT: both records derive their
+// operation from the key, the page and the title asked for
+// ([Store.callOpID]), so a retried rename is one record.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
-	title string, quiet bool) (Written, error) {
+	title string, quiet bool, key CallKey) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err
@@ -318,7 +333,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title = strings.Join(strings.Fields(title), " ")
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(key, "rename", pageID, title)
 	var out Page
 
 	head, err := s.head(ctx, pageID)

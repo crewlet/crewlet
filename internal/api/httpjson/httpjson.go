@@ -65,13 +65,20 @@ const (
 	// begun to drain. The request was fine and nothing was done with it; it
 	// belongs on another node, or on this one once it has restarted.
 	CodeDraining Code = "draining"
+
+	// CodeInvalidToken is a request the bearer guard refused: no credential
+	// where one is required, or one that matches no configured token. The
+	// guard and the socket handshake both answer it, and they spelled it by
+	// hand in two places until it was named here.
+	CodeInvalidToken Code = "invalid_token"
 )
 
 // Valid reports whether c is one this package defines.
 func (c Code) Valid() bool {
 	switch c {
 	case CodeEncodeFailed, CodeBodyTooLarge, CodeUnreadableBody,
-		CodeInvalidBody, CodeInvalidQuery, CodeInternalError, CodeDraining:
+		CodeInvalidBody, CodeInvalidQuery, CodeInternalError, CodeDraining,
+		CodeInvalidToken:
 		return true
 	default:
 		return false

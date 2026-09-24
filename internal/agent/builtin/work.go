@@ -2,6 +2,9 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -348,13 +351,14 @@ type Actor struct {
 	// outside a turn — the `request_id` a person's write carries through
 	// the operator surface, set by that surface and never by an argument.
 	//
-	// IT IS WHAT MAKES A RETRY ONE WRITE. A person whose write answered
-	// `unknown` (the broker took it, nobody heard back) retries it, and
-	// without a key of their own the retry minted a fresh operation id and
-	// wrote a second time — a second comment, a second created item. Keyed
-	// on the request, the operation ledger collapses the retry into the
-	// first attempt, exactly as it collapses a redelivered turn. Empty for
-	// every in-turn write, whose identities above already do this.
+	// IT IS WHAT MAKES A RETRY THE SAME WRITE. A person whose write
+	// answered `unknown` (the broker took it, nobody heard back) retries
+	// it, and without a key of their own the retry minted a fresh
+	// operation id and fresh object ids and wrote a second time under new
+	// identities — a second comment, a second created item. Keyed on the
+	// request, the retry derives the first attempt's operations and ids,
+	// exactly as a redelivered turn does. Empty for every in-turn write,
+	// whose identities above already do this.
 	RequestKey string
 
 	Chain []string
@@ -1478,11 +1482,42 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
+		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
+		// the dependency lands after it, so the create's position is a
+		// floor below the edge and a read at it shows the item without
+		// its blocker, and an `unknown` dependency beside an applied
+		// create is not a call anybody may treat as landed. The version
+		// moves too, since the authored edge is a commit on this item.
+		outcome, at, version := joinDepend(got.Outcome, got.Position,
+			got.Version, result)
+		answer["outcome"], answer["position"] = string(outcome), positionOf(at)
+		answer["version"] = version
 		if len(result.OneSided) > 0 {
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
 	return jsonResult(answer)
+}
+
+// joinDepend folds a dependency sequence that ran AFTER a call's first record
+// into that call's one answer: the less certain outcome, the later position,
+// and the item's later version.
+//
+// ONE RULE FOR EVERY TOOL THAT APPENDS MORE THAN ONE RECORD, which is the rule
+// save_page follows for a save and its rename ([statelog.LessCertain],
+// [statelog.Later]). A caller barriers on the position before its next read
+// and treats the outcome as "may I stop looking": answering the first
+// record's hands it a floor below the edge it just wrote and reports an
+// unknown dependency as applied. A sequence that appended nothing leaves the
+// answer as it was.
+func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
+	result tracker.DependencyResult) (statelog.Outcome, statelog.Position, int64) {
+
+	if !result.Wrote() {
+		return outcome, at, version
+	}
+	return statelog.LessCertain(outcome, result.Outcome),
+		statelog.Later(at, result.Position), max(version, result.Version)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -1627,6 +1662,105 @@ func opIDFor(actor Actor, verb, object string) string {
 		return verb + "-" + object + "-" + uuid.NewString()
 	}
 	return seed + "-" + verb + "-" + object
+}
+
+// contentKey is a short digest of what a caller sent, for the object half of
+// an [opIDFor] whose object is not an id of its own.
+//
+// A VERB THAT WRITES ONE SHARED OBJECT — a project's tags or policy, the
+// workspace catalogue, a label declaration — has nothing but the object's key
+// to derive from, and one seed legitimately writes it more than once: a turn
+// declares a tag and then archives another, a person's two gestures each
+// carry their own request id but a turn's two calls share its work key. Keyed
+// on the object alone the second call is the first's operation, and the
+// broker collapses it inside its duplicate window and answers `applied` for a
+// change that never landed. Keyed on WHAT WAS SENT, a repetition is one
+// operation (a retry sends the same thing) and a different change is another.
+//
+// OVER THE ARGUMENTS AS SENT, never over the edit derived from them: a
+// declaration without an id is minted one on every call, so a digest of the
+// derived value would differ between a request and its own retry. Sixteen hex
+// characters is a 64-bit digest, which only has to tell apart the handful of
+// calls one seed makes on one object.
+func contentKey(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		// Tool arguments are decoded JSON and always re-encode; a value
+		// that does not is formatted instead, which is as deterministic
+		// (fmt sorts map keys) and is never a reason to fail a write.
+		raw = []byte(fmt.Sprintf("%#v", v))
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
+}
+
+// argsKey is [contentKey] over the named arguments a call sent, absent ones
+// left out — so a facet the caller did not send cannot change the operation.
+func argsKey(args map[string]any, names ...string) string {
+	picked := make(map[string]any, len(names))
+	for _, name := range names {
+		if v, held := args[name]; held {
+			picked[name] = v
+		}
+	}
+	return contentKey(picked)
+}
+
+// callOutcome is one tool call's answer over EVERY record it appended: the
+// less certain outcome and the later position, which is the rule [joinDepend]
+// and save_page follow ([statelog.LessCertain], [statelog.Later]).
+//
+// FOR A TOOL WHOSE RECORDS ARE REPORTED FACET BY FACET — a project's tags and
+// its policy, the catalogue's types and its fields — and which therefore had
+// no top-level answer at all. Every transport reads the call's outcome and
+// position from the top of the answer (a caller barriers on the position
+// before its next read), so a tool that stated them only per facet handed the
+// act transport nothing, and it reported `applied` at no position over records
+// whose outcome may have been `unknown`.
+type callOutcome struct {
+	outcome statelog.Outcome
+	at      statelog.Position
+}
+
+// add folds one record's result in. A result that appended nothing is left
+// out ([statelog.Result.Wrote]): it claims no record a caller must wait for.
+func (c *callOutcome) add(r statelog.Result) {
+	if !r.Wrote() {
+		return
+	}
+	c.outcome = statelog.LessCertain(c.outcome, r.Outcome)
+	c.at = statelog.Later(c.at, r.Position)
+}
+
+// stamp writes the call's answer onto the top of a tool's result. A call that
+// appended nothing is `applied` at no position — nothing is outstanding.
+func (c callOutcome) stamp(answer map[string]any) {
+	outcome := c.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	answer["outcome"], answer["position"] = string(outcome), positionOf(c.at)
+}
+
+// partlyWritten is the refusal of a call whose LATER record was refused after
+// an earlier one landed: the later write's class, and a sentence that says
+// what did land and where.
+//
+// THE SAME SHAPE save_page gives a refused rename after a landed save, and for
+// the same reason. The unmarked refusal says "the change was NOT made", which
+// over a call that already replaced a tag set or a type list tells a caller to
+// redo — or to report as undone — a change that is on every node.
+func partlyWritten(failure tools.Result, landed, refusedPart string, call callOutcome) tools.Result {
+	outcome := call.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	where := "and appended nothing"
+	if !call.at.IsZero() {
+		where = "at " + call.at.String()
+	}
+	return refused(failure.Refusal, fmt.Sprintf("%s (%s, %s) and %s were not: %s",
+		landed, outcome, where, refusedPart, failure.Output))
 }
 
 // ---- update_work_item -------------------------------------------------- //
@@ -1882,6 +2016,11 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 
 	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
+	var (
+		patchOutcome statelog.Outcome
+		patchAt      statelog.Position
+		patchVersion int64
+	)
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
@@ -1903,6 +2042,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
 		answer["position"] = positionOf(got.Position)
+		patchOutcome, patchAt, patchVersion = got.Outcome, got.Position, got.Version
 		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
 		// coercion table can raise: a timestamp truncated to its date on
 		// a field that holds no time. A change the engine made to a
@@ -1923,7 +2063,14 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return writeFailure(UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
-		if _, held := answer["outcome"]; !held {
+		// THE CALL ANSWERS FOR BOTH RECORDS when the patch appended one
+		// too — see [joinDepend] — and for the sequence alone otherwise.
+		if _, held := answer["outcome"]; held {
+			outcome, at, version := joinDepend(patchOutcome, patchAt,
+				patchVersion, result)
+			answer["outcome"], answer["version"] = string(outcome), version
+			answer["position"] = positionOf(at)
+		} else {
 			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
 			answer["position"] = positionOf(result.Position)
 		}
@@ -1967,8 +2114,10 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 			"cannot declare labels at a write. Ask the project lead to "+
 			"declare it, or file without the label."))
 	}
+	// DERIVED LIKE EVERY OTHER OPERATION THIS CALL MAKES, so a retried
+	// create declares its labels once — see [opIDFor] and [contentKey].
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
-		"tags-"+uuid.NewString(), project, labels)
+		opIDFor(actor, "tags", project+"."+contentKey(labels)), project, labels)
 	if err != nil {
 		return nil, refusalOf(writeFailure(tracker.WriteProjectTool, err))
 	}
@@ -2385,7 +2534,8 @@ func commentID(actor Actor, taskID string) string {
 // idempotent: a redelivered turn filed its work a second time, and a person
 // whose "file this" answered `unknown` and who pressed retry got two items,
 // each waking its assignee. Derived from the caller's seed, the repetition is
-// the same id and therefore the same operation, which the ledger collapses.
+// the same id and therefore the same operation, and a second copy of the item
+// is refused `exists` by its own guarding row rather than filed.
 //
 // OVER THE TITLE AND THE PROJECT AS GIVEN, because one seed legitimately files
 // several items — a turn that breaks work down creates five — and those differ

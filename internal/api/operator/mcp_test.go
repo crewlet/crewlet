@@ -380,7 +380,7 @@ func (stubPageWriter) SavePage(context.Context, pages.Actor, string, pages.Save)
 	return pages.Written{}, nil
 }
 
-func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool) (pages.Written, error) {
+func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool, pages.CallKey) (pages.Written, error) {
 	return pages.Written{}, nil
 }
 
@@ -388,7 +388,8 @@ func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewCom
 	return pages.Comment{}, pages.Written{}, nil
 }
 
-func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string) (pages.Comment, pages.Written, error) {
+func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string,
+	pages.CallKey) (pages.Comment, pages.Written, error) {
 	return pages.Comment{}, pages.Written{}, nil
 }
 

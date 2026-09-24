@@ -3076,16 +3076,29 @@ for, and what the window badge on Spend names.
 
 ---
 
-## Changing what you are looking at
+## Acting, as yourself
 
-**The dashboard only reads.** Every change in a Crewlet company is attributed
-to whoever made it, and a browser form posting as "the dashboard" would be the
-one actor an audit trail cannot name — so there is no edit button anywhere in
-it, and that is a decision rather than a gap.
+**The dashboard acts as you.** Every change in a Crewlet company is attributed
+to whoever made it, and the one actor an audit trail cannot name is "the
+dashboard" — so there is no such actor. A write from a browser is made by the
+**person your token is bound to** (`contact.crewlet_operator_id` on your seat),
+through the same operator tools your own assistant calls, and it is recorded
+exactly as that assistant's would be: your token as the author, author kind
+`operator`, your seat as the person.
 
-What an object page offers instead is a closed disclosure, **Change this with
-your assistant**, holding the operator MCP calls that would make the change,
-with this object's ids already in them:
+The engine's half is [`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface):
+one catalogue tool per request, a `request_id` the screen mints per gesture
+and repeats on a retry, and an answer carrying the write's `outcome` and
+`position` — the floor the screen's next read waits for. The live socket stays
+read-only; writes and credentials travel over REST. A token no seat binds, and
+every caller while the guard is disabled, is refused `unbound`, and
+`viewer.acts` is empty for exactly those callers — which is what a screen
+reads to disable a control and say why, rather than offer a press the engine
+refuses.
+
+Where an object page offers a change as a closed disclosure, **Change this with
+your assistant**, it holds the operator MCP calls that would make it, with this
+object's ids already in them:
 
 ```
 update_work_item {"item":"ENG-8","status":"in_progress"}

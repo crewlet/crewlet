@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -219,17 +217,26 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
+	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each facet keeps its
+	// own detail beneath it — see [callOutcome].
+	var call callOutcome
 
 	// THE TAGS FIRST, because the policy half may archive the project and
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
+	//
+	// EACH UNDER AN OPERATION DERIVED FROM THE CALLER'S SEED and what it
+	// sent for that facet ([opIDFor], [argsKey]), so a retried request
+	// writes each record once.
 	if !tagEdit.Empty() {
-		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
-			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
+		result, err := writer.WriteTags(ctx,
+			opIDFor(actor, "tags", key+"."+argsKey(args, "tags_add", "tags_rename", "tags_archive")),
+			key, tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return writeFailure(tracker.WriteProjectTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		tags := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
@@ -239,16 +246,24 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
-			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
+		result, err := writer.WriteProject(ctx,
+			opIDFor(actor, "policy", key+"."+argsKey(args, "fields", "default_assignee", "archived")),
+			key, edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return writeFailure(tracker.WriteProjectTool, err), nil
+			failure := writeFailure(tracker.WriteProjectTool, err)
+			if !tagEdit.Empty() {
+				return partlyWritten(failure, "The tag change was written",
+					"the project settings", call), nil
+			}
+			return failure, nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["policy"] = map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 	}
+	call.stamp(out)
 	return jsonResult(out)
 }
 

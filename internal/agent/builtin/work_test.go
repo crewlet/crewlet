@@ -69,10 +69,12 @@ type fakeTracker struct {
 	threadQuery tracker.ThreadQuery
 	threadErr   error
 
-	// depended is every dependency change the tool composed, and
-	// dependErr what the sequence answers.
-	depended  []tracker.DependencyChange
-	dependErr error
+	// depended is every dependency change the tool composed, dependErr
+	// what the sequence answers, and dependResult — when set — the result
+	// it answers in place of the default applied commit.
+	depended     []tracker.DependencyChange
+	dependErr    error
+	dependResult *tracker.DependencyResult
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
@@ -1180,6 +1182,9 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
 		return tracker.DependencyResult{}, f.dependErr
+	}
+	if f.dependResult != nil {
+		return *f.dependResult, nil
 	}
 	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
 		Result: statelog.Result{

@@ -1525,6 +1525,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// ONE operator surface, handed to the routes that serve it and to the
+	// viewer that says what it serves.
+	operators := operatorSurface(e)
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1546,10 +1549,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
-		// The OPERATOR MCP surface. Built here rather than in the engine
+		// The OPERATOR surface, both transports. Built here rather than in the engine
 		// because it is an API concern, and because its writer identity
 		// comes off an HTTP request's own credential.
-		Operator:     operatorSurface(e),
+		Operator:     operators,
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
@@ -1588,8 +1591,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// answer "no backend" forever for a company whose backend
 			// came up after this line ran.
 			Knowledge: e.Knowledge,
-			Config:    configSurface,
-			Budget:    e.Backends().Fleet,
+			// WHAT A PERSON MAY DO, from the SAME surface the act route
+			// serves: a list computed anywhere else would be a second
+			// opinion about which buttons work.
+			OperatorActs: operators.Acts,
+			Config:       configSurface,
+			Budget:       e.Backends().Fleet,
 			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
 			// through this node's own chain. `public_base_url` may be a
 			// whole ${VAR}, and what a surface registered is the address

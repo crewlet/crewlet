@@ -96,4 +96,13 @@ func (a *App) mountOperator(mux *http.ServeMux, server *operator.Server) {
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
 			"an api.auth.tokens entry")
+	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only,
+	// one tool per request, admitting a token bound to a seat and nobody
+	// else (ADR-0024). Under the same always-guarded prefix, so the guard in
+	// front of it is the one in front of /operator/mcp.
+	mux.Handle(operator.ActPattern, server.ActHandler())
+	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
+		"tools", server.Acts(),
+		"detail", "the dashboard writes here as the person the presented "+
+			"token is bound to by contact.crewlet_operator_id")
 }

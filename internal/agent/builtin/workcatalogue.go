@@ -166,42 +166,67 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	}
 	writer := t.deps.CatalogueWriter(actor)
 	out := map[string]any{}
+	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each list keeps its
+	// own detail beneath it — see [callOutcome].
+	var call callOutcome
+
+	// BOTH LISTS ARE READ BEFORE EITHER IS WRITTEN. A malformed `fields`
+	// used to be found only after `types` had landed, and the call answered
+	// the parse refusal alone — a caller told its call failed, holding a
+	// catalogue whose types had already been replaced.
+	var types []tracker.TaskType
+	var fields []tracker.FieldDef
+	if hasTypes {
+		var refusal string
+		if types, refusal = catalogueTypes(args); refusal != "" {
+			return failed(refusal), nil
+		}
+	}
+	if hasFields {
+		var refusal string
+		if fields, refusal = catalogueFields(args); refusal != "" {
+			return failed(refusal), nil
+		}
+	}
 
 	// TWO WRITES, NEVER ONE, because they are two objects on two subjects
 	// — see internal/tracker/catalogue.go. A call sending both does them
-	// in order, and the second still runs if the first was refused only
-	// in the sense that it does NOT: an operator who sent both meant both,
-	// and reporting one applied and one refused is the honest shape.
+	// in order; a refused second write after a landed first is reported as
+	// exactly that ([partlyWritten]), because the first list IS replaced.
 	if hasTypes {
-		types, refusal := catalogueTypes(args)
-		if refusal != "" {
-			return failed(refusal), nil
-		}
-		result, err := writer.WriteTypes(ctx, "types-"+uuid.NewString(), types)
+		// DERIVED from the caller's seed and the list it sent, so a
+		// retried request replaces the list once ([opIDFor], [argsKey]).
+		result, err := writer.WriteTypes(ctx,
+			opIDFor(actor, "types", "workspace."+argsKey(args, "types")), types)
 		if err != nil {
 			return writeFailure(tracker.WriteWorkCatalogueTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["types"] = map[string]any{
 			"count": len(types), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}
 	if hasFields {
-		fields, refusal := catalogueFields(args)
-		if refusal != "" {
-			return failed(refusal), nil
-		}
-		result, err := writer.WriteFields(ctx, "fields-"+uuid.NewString(), fields)
+		result, err := writer.WriteFields(ctx,
+			opIDFor(actor, "fields", "workspace."+argsKey(args, "fields")), fields)
 		if err != nil {
-			return writeFailure(tracker.WriteWorkCatalogueTool, err), nil
+			failure := writeFailure(tracker.WriteWorkCatalogueTool, err)
+			if hasTypes {
+				return partlyWritten(failure, "The types were replaced", "the fields",
+					call), nil
+			}
+			return failure, nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["fields"] = map[string]any{
 			"count": len(fields), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}
+	call.stamp(out)
 	return jsonResult(out)
 }
 

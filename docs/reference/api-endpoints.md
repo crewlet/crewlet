@@ -37,7 +37,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
@@ -101,7 +101,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
-| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
+| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller: the catalogue's writes for a bound token, and an empty list for anybody else |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -119,6 +119,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
+| `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Absent where `/operator/mcp` is |
 
 > **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
 > `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
@@ -158,7 +159,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
+Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
 ### Security headers on every response
 
@@ -1646,9 +1647,14 @@ verbatim, which is what a reader opens the finished card for.
 Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 `{"kind": "...", "data": ..., "ts": "<iso8601>"}`.
 
-> **The socket is the dashboard's only data channel.** Everything it draws
+> **The socket is the dashboard's only read channel.** Everything it draws
 > arrives here — pushes plus a request/response query channel — and the
 > REST snapshot exists only for degraded mode, when the socket is down. The
+> socket carries no write: a change travels over REST, through
+> [`/operator/act`](#operatoract--the-dashboards-write-surface) as the person
+> the token is bound to, or through the credential-scoped `/config`,
+> `/secrets`, `/setup` and `/backup`, because a write has to be able to say
+> whether it happened and a frame into a dropped socket has no answer. The
 > dashboard survives losing it by polling `/stream/snapshot` every five
 > seconds, which is exactly the kind of failure that is easy to miss:
 > nothing looks broken, the page is simply always a few seconds stale.
@@ -1717,7 +1723,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_inbox` | `{handle, unread, primary_only, include_snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, which is the same ranking a seat gets from `search_work`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A score is comparable WITHIN one answer and nowhere else, because the statistics it is computed against are this corpus's |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
+| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind, acts}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) serves this caller, empty unless the token is bound to a seat. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
@@ -2141,11 +2147,11 @@ catalogue's own, and a verb this company is not served is not listed at all.
 An MCP call names no request of its own, so **every call here is a fresh
 write**: an assistant that files the same item twice gets two items, because
 that is what it asked for twice, and there is nothing to deduplicate against.
-A transport that does carry the caller's own request identity seeds every
-operation it writes from it, so a retry of that one request — sent again after
-an `unknown` — is the same operation and the ledger collapses it into the
-first; a create, a comment, an update and a person's own marks, pins and queue
-all follow the one rule.
+[`/operator/act`](#operatoract--the-dashboards-write-surface) carries the
+caller's own request identity, and derives every operation it writes from it, so a retry of that one request — sent again after
+an `unknown` — is the first attempt's operations rather than new ones; a
+create, a comment, an update, a page write, a project or catalogue change, a
+saved view and a person's own marks, pins and queue all follow the one rule.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
@@ -2195,6 +2201,137 @@ writable company surface under the same prefix would have put it behind no
 credential at all. `/operator` is its own always-guarded prefix, alongside
 `/config` and `/secrets`.
 
+## `/operator/act` — the dashboard's write surface
+
+The dashboard changes the company **as you**: every button that writes posts
+one tool of the [operator catalogue](#operatormcp--your-own-assistant) here,
+and the write is made by the person your token is bound to. It is the same
+catalogue, the same tools and the same attribution as `/operator/mcp` — the
+only rule this transport adds is who may use it.
+
+```http
+POST /operator/act/update_work_item
+Authorization: Bearer ${CREWLET_API_TOKEN}
+Content-Type: application/json
+
+{"request_id": "0f7c1a4e-9b2d-4e51-8c3a-6d7e8f9a0b1c",
+ "args": {"item": "ENG-8", "status": "in_progress"}}
+```
+
+**Only a person acts.** The token must be bound to a human seat by
+`contact.crewlet_operator_id`. A token no seat binds — a CI token, an ops bot —
+is refused `unbound` (`403`), and so is every caller while `api.auth.disabled`
+is set: a caller the guard never checked is nobody, and a change here is made
+by somebody. Both keep `/operator/mcp`, where a credential acting as itself is
+ordinary. `GET /viewer`'s `acts` names what this route would serve
+the caller, and is empty for exactly the callers it refuses, so a screen can
+disable a control with the reason rather than offer a press that fails.
+
+**Who the write is attributed to does not change.** The author is the token,
+the kind `operator`, and the bound seat rides beside it as the person whose own
+state it is — so a write from the dashboard and one from the same person's
+assistant read identically in the audit and in every thread.
+
+**The body is JSON and nothing else**: `{request_id, args}`, declared
+`Content-Type: application/json` (UTF-8). A form post, `text/plain` or no
+content type is `415` before anything is read — a cross-site form can send
+those without a preflight — and a key the envelope does not take is refused
+rather than ignored. `args` is the tool's own arguments, exactly as the tool's
+schema names them. The body is capped at 1 114 112 bytes: twice the largest
+legal page, because a page escapes to up to twice its length as a JSON string,
+plus 64 KiB for the rest.
+
+**`request_id` is what names a retry.** A UUID the client mints once per
+gesture and sends again, unchanged, if it never heard the answer. Every id the
+write derives is derived from it and from what the call sent — each record's
+operation, a created item's, page's or view's own id, a comment's — so a retry
+is the first attempt's operations rather than new ones, and two different
+calls under one id are still two. What that buys, precisely:
+
+- a retry whose append reaches the log while the first attempt's is still in
+  flight is collapsed into that record by the log's two-minute duplicate
+  window, and answered at its position. One that arrives after the first
+  attempt's record waits until this node has applied it (or answers
+  `unavailable` if it does not catch up), and is then decided as below;
+- a create retried after the first attempt landed files under the same id
+  and the same address, so it is refused `exists` rather than filed twice, and
+  a page save retried after it landed is refused `stale_version` — each the
+  sign the first attempt went through: re-read rather than retry again;
+- any other retry is decided again against what the first attempt produced. A
+  comment edit to the text it already holds, or a rename to the title the page
+  already has, is `applied` with no record; anything else is written again
+  under the same operation — a comment under the same comment id.
+
+It is compared in canonical form, scoped to the token that sent it — one id
+from two people is two requests, so nobody can make their write the first
+attempt of somebody else's — and the nil UUID is refused.
+
+### What it answers
+
+A write that went through answers `200`:
+
+```json
+{"tool": "update_work_item", "outcome": "applied",
+ "position": "CREWLET_TRACKER_LOG@1:4711",
+ "receipt": {"key": "ENG-8", "labels_created": null, "outcome": "applied",
+             "version": 4711, "position": "CREWLET_TRACKER_LOG@1:4711"}}
+```
+
+`outcome` is the write's three-valued answer and `position` where its record
+landed — the value a read hands back as `min_position` so the answer after the
+write includes it. `pending` is durable and not yet applied here; `unknown`
+means the broker never said, and the only safe retry is the same request under
+the same `request_id`. A write that appended nothing answers `applied` at a
+`null` position: the state asked for already holds. `receipt` is the tool's
+own answer, verbatim.
+
+A tool that appends more than one record — an item filed or edited together
+with a dependency, a page saved and renamed in one call, a project's tags and
+settings, the catalogue's types and fields — answers for all of them: the
+**least certain** outcome (`unknown` over `pending` over `applied`) at the
+**latest** position, and for a work item the version it is at after the
+last of them. So `min_position` never floors a read below a record the call
+made, and a write with one unconfirmed record is never reported `applied`.
+A later record refused after an earlier one landed answers the later
+record's refusal, and its `detail` says what did land — with that record's
+outcome and position — because the earlier change is on every node and "not
+made" would send a person to redo it.
+
+A refusal is `{error, tool, detail}`, and the transport's own `unbound` adds
+`hint`. There is no separate `field` key: a tool's refusal is its own
+sentence, which names the argument it refused, and no refusal in this build
+carries a `hint` except `unbound`. The transport's own:
+
+| `error` | Status | When |
+|---|---|---|
+| `invalid_token` | `401` | No valid bearer token (the guard's own refusal) |
+| `unbound` | `403` | The token is bound to no seat, or the guard is disabled. `hint` names the line of configuration that fixes it |
+| `unknown_tool` | `404` | The company's catalogue serves no such tool |
+| `read_only_tool` | `400` | The tool is a read; ask it over the socket or its REST route |
+| `unsupported_media_type` | `415` | The body is not declared `application/json` |
+| `invalid_request_id` | `400` | `request_id` is absent, not a UUID, or the nil UUID |
+| `invalid_body` / `body_too_large` / `unreadable_body` | `400` / `413` / `400` | The envelope is not one JSON object of `{request_id, args}`, is over the cap, or did not arrive |
+| `draining` | `503` | This node is [draining](#during-a-drain) |
+| `internal_error` | `500` | A tool failed without classifying its failure; the detail is in the node's log |
+
+And the tool's own refusal, carrying the tool's sentence as `detail`:
+
+| `error` | Status |
+|---|---|
+| `invalid` | `422` |
+| `not_found` | `404` |
+| `forbidden` | `403` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported` | `409` |
+| `unavailable`, `peer_upgrading` | `503` |
+
+A call interrupted before the tool answered is `503` `unavailable`, never a
+refusal: whether it landed is unknown, and the answer says to send it again
+with the same `request_id`. No transport code is also a refusal class, so a
+client branches on `error` alone.
+
+Every act is logged as `operator_act` at info with the tool, the operator id,
+the seat, the request id and the outcome or refusal — never the arguments.
+
 ## The native tracker and knowledge base
 
 `GET /work`, `GET /pages` and their neighbours read **this node's own
@@ -2226,14 +2363,15 @@ because a client told to come back would go round a loop that cannot
 terminate; those are ordinary failures and the log names them. See
 [Read Consistency](../guides/consistency.md).
 
-**The item surface is read-only.** There is no `POST /work`. An item is filed
-and moved by a seat's own tools, or by an operator through the
-[MCP surface](../guides/tools-and-mcp.md), and both are attributed to somebody
-— where a dashboard button would write as "the dashboard", which is not a
-person and not a seat and cannot be asked why. The three routes under
-`/work/retention/` below are the exception, and they are not about items: they
-are operator gestures against the log's own history, attributed to the token
-that made them.
+**These routes read; a write is a tool.** There is no `POST /work`. An item is
+filed and moved by a seat's own tools, by an operator's assistant through the
+[MCP surface](#operatormcp--your-own-assistant), or by a person at the dashboard
+through [`/operator/act`](#operatoract--the-dashboards-write-surface) — the same
+tools every time, each write attributed to somebody who can be asked why. There
+is no write as "the dashboard", which is not a person and not a seat. The three
+routes under `/work/retention/` below are the exception, and they are not about
+items: they are operator gestures against the log's own history, attributed to
+the token that made them.
 
 ### Paging and filters
 
@@ -3275,6 +3413,6 @@ The body is read **whole even when the request will be refused**, and bounded at
 crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
-The API is read-only against the database, and the one thing it publishes is inbound webhook deliveries, onto `crewlet.notifications.inbound`. It does not run agents — the engine process handles that.
+The API is served inside the engine's own process, over the engine's own store, broker and coordination plane. Its reads answer from that node's store and projection. Its writes are few and each is named above: the operator surface (`/operator/mcp`, `/operator/act`) writes the tracker and knowledge base through the tools a seat holds, `/config`, `/secrets` and `/setup` write the company's configuration and credentials, `/backup` and the `/work/retention` gestures act on the node and the log, and the webhook edge publishes inbound deliveries onto `crewlet.notifications.inbound`. It runs no agent itself — a seat's turn is the engine's.
 
 See [Deployment](../guides/deployment.md) for how the API and engine run together, and the integration docs ([Slack](../integrations/slack.md), [Jira](../integrations/jira.md)) for webhook setup.

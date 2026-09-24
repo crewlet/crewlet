@@ -43,13 +43,14 @@ type NewComment struct {
 	// CallKey makes a comment idempotent across the one repetition its
 	// caller can produce: a re-run turn (the turn's key) posts once, and so
 	// does a person's retried request (their request key). Empty for a call
-	// that named neither, which posts a fresh comment every time.
+	// that named neither, which posts a fresh comment every time. See
+	// [CallKey].
 	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own,
-	// which is the upgrade the log brings: the operation ledger collapses
-	// the whole record, so a retried turn does not even append — where the
+	// IT DERIVES THE OPERATION ID as well as the comment's own, so a retried
+	// turn's comment is the first attempt's operation — the identity the
+	// broker's duplicate window and the operation ledger key on — where the
 	// bucket could only make the second write land on the same key.
-	CallKey string
+	CallKey CallKey
 
 	Quiet bool
 }
@@ -122,8 +123,12 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 }
 
 // EditComment rewrites one remark's body.
+//
+// KEYED LIKE EVERY WRITE A CALLER CAN REPEAT: the operation is derived from
+// the key, the comment and the text ([Store.callOpID]), so a retried edit is
+// one record.
 func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
-	commentID, body string) (Comment, Written, error) {
+	commentID, body string, key CallKey) (Comment, Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
@@ -138,7 +143,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	}
 
 	at := s.now()
-	opID := s.newSeqID()
+	opID := s.callOpID(key, "comment-edit", pageID, commentID, textKey(body))
 	subject := PageSubject(pageID)
 	var out Comment
 	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
@@ -288,16 +293,16 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // commentOpID is the operation this comment belongs to.
 //
 // DERIVED FROM THE CALLER'S KEY when one is named, so a re-run turn or a
-// retried request is one operation the ledger collapses rather than a second
-// comment. The comment's own id is
+// retried request is the first attempt's operation and comment rather than a
+// second comment. The comment's own id is
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
 func (s *Store) commentOpID(pageID string, in NewComment) string {
-	if strings.TrimSpace(in.CallKey) == "" {
+	if in.CallKey.empty() {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + strings.TrimSpace(in.CallKey) + "\x00" +
+	name := pageID + "\x00" + in.CallKey.String() + "\x00" +
 		hex.EncodeToString(sum[:])
 	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
 }

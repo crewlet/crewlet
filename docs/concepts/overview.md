@@ -283,7 +283,8 @@ dashboard/                # The dashboard's SOURCE — React + TypeScript, built
                           #   Node. See reference/dashboard-design.md
 static/dashboard/         # That build output, embedded in the binary — a
                           #   store mirroring the server projection, one
-                          #   websocket as the only data channel, a hash
+                          #   websocket as the only read channel (writes
+                          #   are REST, as the signed-in person), a hash
                           #   router, one file per screen
 ```
 

@@ -1,14 +1,19 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The bridge route on the App. What the bridge itself does with a call is
@@ -80,4 +85,60 @@ func probe(a *api.App, method, path string) *http.Response {
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, req)
 	return rec.Result()
+}
+
+// THE ACT ROUTE IS MOUNTED BESIDE THE MCP ONE, behind the same guard.
+//
+// What the transport does with a request is internal/api/operator's; what is
+// asserted here is the wiring the app owns: the route exists wherever the
+// operator surface does, answers POST alone, and is ALWAYS guarded — a
+// request with no token is refused by the guard before it reaches the
+// handler, whatever the read posture, because every tool it serves writes.
+func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.Auth.AllowAnonymousRead = true
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Runtime:   &fakeRuntime{},
+		Operator: operator.New(operator.Options{
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
+		}),
+	})
+	post := func(token string) (int, string) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.ListWorkItemsTool,
+			strings.NewReader(`{"request_id":"0f7c1a4e-9b2d-4e51-8c3a-6d7e8f9a0b1c","args":{}}`))
+		r.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, r)
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		code, _ := body["error"].(string)
+		return rec.Code, code
+	}
+	if status, code := post(""); status != http.StatusUnauthorized ||
+		code != string(httpjson.CodeInvalidToken) {
+
+		t.Errorf("an act with no token answered %d %q, want the guard's 401 "+
+			"even with anonymous reads open", status, code)
+	}
+	// THE HANDLER IS REACHED with a token: the read it names is refused by
+	// the transport's own rule, which only the mounted handler can answer.
+	if status, code := post("secret"); status != http.StatusBadRequest ||
+		code != string(operator.CodeReadOnlyTool) {
+
+		t.Errorf("an authenticated act answered %d %q, want the transport's own "+
+			"read_only_tool — the route is not mounted", status, code)
+	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, operator.ActPathPrefix+tracker.ListWorkItemsTool, nil)
+	r.Header.Set("Authorization", "Bearer secret")
+	a.ServeHTTP(rec, r)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET on the act route answered %d, want 405: it serves POST alone", rec.Code)
+	}
 }

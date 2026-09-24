@@ -349,6 +349,11 @@ func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
 	return tracker.PersonState{}, nil
 }
 
+func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
+	statelog.Freshness) (tracker.ResolvedThread, error) {
+	return tracker.ResolvedThread{}, nil
+}
+
 // THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".
 //
 // Same hazard the burndown had, one route later: `/work/{id}` matches the

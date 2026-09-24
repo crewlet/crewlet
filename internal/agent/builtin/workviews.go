@@ -202,13 +202,13 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// spelling it remembers, and a view saved under one spelling of a team
 	// is a view the strip asked for under the other never shows.
 	container = tracker.CanonicalContainer(t.deps.Units, container)
-	// THE CALLER'S ID WHEN IT HAS ONE, a fresh one when it does not. A
+	// THE CALLER'S ID WHEN IT HAS ONE, a derived one when it does not. A
 	// verb that always minted would write a second view on every retry of
 	// an `unknown` outcome; one that always required an id could not
-	// create.
+	// create. See [viewIDFor].
 	id := strings.TrimSpace(argString(args, "id"))
 	if id == "" {
-		id = uuid.NewString()
+		id = viewIDFor(actor, container, args)
 	}
 	view := tracker.View{
 		ID:        id,
@@ -221,7 +221,14 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := t.deps.ViewWriter(actor).WriteView(ctx, "view-"+id, view)
+	// THE OPERATION IS THE CALL'S, not the view's. It was `view-<id>` —
+	// one fixed id for every save of one view, so inside the broker's
+	// duplicate window a second edit of the same view was collapsed into
+	// the first and answered `applied` without landing. Derived from the
+	// caller's seed and what it sent ([opIDFor], [argsKey]), a retry is one
+	// write and a second edit is a second one.
+	result, err := t.deps.ViewWriter(actor).WriteView(ctx,
+		opIDFor(actor, "view", id+"."+argsKey(args, viewArgs...)), view)
 	if err != nil {
 		return writeFailure(tracker.SaveWorkViewTool, err), nil
 	}
@@ -230,6 +237,35 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
 }
+
+// viewArgs is every argument save_work_view writes, which is what its
+// operation id is derived over. `id` is left out: it is the object half of the
+// operation already.
+var viewArgs = []string{"container", "name", "type", "params", "owner",
+	"protected", "default", "icon"}
+
+// viewIDFor is a NEW view's id, derived so a repeated create saves one view —
+// [taskIDFor]'s rule, for the same reason: the create's operation is derived
+// over this id, so an id minted fresh made every retry of an `unknown` create
+// a second view on the strip.
+//
+// OVER THE CONTAINER AND THE NAME, because one seed legitimately saves several
+// views and those differ in what they are called; two views of one name in one
+// container under one seed are a repetition. FRESH WITH NO SEED, because an
+// assistant's two identical calls are two views if that is what it asked for.
+func viewIDFor(actor Actor, container tracker.Container, args map[string]any) string {
+	seed := actor.OperationSeed()
+	if seed == "" {
+		return uuid.NewString()
+	}
+	name := seed + "\x00" + container.Kind + "\x00" + container.ID + "\x00" + strings.TrimSpace(argString(args, "name"))
+	return uuid.NewSHA1(viewNamespace, []byte(name)).String()
+}
+
+// viewNamespace is the uuid namespace derived view ids live under. Fixed for
+// the life of the format: a view's id is durable on every node, and a new
+// namespace would make every repeated create after the change a second view.
+var viewNamespace = uuid.MustParse("6f4a2c1e-8d3b-5e7f-9a0c-2b4d6e8f1a3c")
 
 // containerParameter is the one container argument both tools take.
 func containerParameter() map[string]any {
