@@ -203,6 +203,58 @@ func TestALinkAndAnUnlinkAreAnnounced(t *testing.T) {
 	}
 }
 
+// A LINK AND AN UNLINK MADE THROUGH A TOKEN SAY SO.
+//
+// A machine token acts as its owner, so the name on the announcement is the
+// owner's either way; the credential beside it is what tells an
+// administrator's own pin from one their token made — which matters most on
+// exactly these two, since a link decides whose provider account signs in as
+// somebody. The case above is the control: the node's own writer acts through
+// no credential and announces none. Mutation: announce the actor alone and the
+// token's two rows read as the owner's.
+func TestALinkAndAnUnlinkMadeThroughATokenSaySo(t *testing.T) {
+	t.Parallel()
+	rig := newLinkRig(t)
+	ada := rig.person("ada.linked")
+	subject := rig.subject("ada-sub")
+	rig.events.take()
+
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	owner := principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)
+	owner.Via = via
+	party := rig.writer.As(owner)
+
+	if err := rig.during(func() error {
+		_, err := party.Link(t.Context(), iamdomain.LinkChange{
+			PersonID: ada, Link: subject, OpID: "link-ada",
+			Reason: "pinned through a token",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	linked, _ := linkEvents(rig.events.take())
+	want := types.IAMIdentityLinked{Person: ada, Issuer: linkIssuer,
+		Via: types.LinkViaAdmin, By: "ana.admin", OperatorID: via}
+	if len(linked) != 1 || linked[0] != want {
+		t.Fatalf("linked = %+v, want exactly %+v", linked, want)
+	}
+
+	if err := rig.during(func() error {
+		_, err := party.Unlink(t.Context(), ada, subject, "unlink-ada",
+			"left the provider")
+		return err
+	}); err != nil {
+		t.Fatalf("unlink: %v", err)
+	}
+	_, unlinked := linkEvents(rig.events.take())
+	wantGone := types.IAMIdentityUnlinked{Person: ada, Issuer: linkIssuer,
+		By: "ana.admin", OperatorID: via, Reason: "left the provider"}
+	if len(unlinked) != 1 || unlinked[0] != wantGone {
+		t.Fatalf("unlinked = %+v, want exactly %+v", unlinked, wantGone)
+	}
+}
+
 // A PERSON HOLDS ONE LINK, AND A MOVE LEAVES THE OLD SUBJECT FREE.
 //
 // The directory row reports the link the person holds now (what an

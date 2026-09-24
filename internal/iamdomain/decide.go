@@ -315,6 +315,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 		w.announce(ctx, result, err, types.IAMIdentityLinked{
 			Person: in.PersonID, Issuer: pinned.Issuer, Via: via, By: w.Actor,
+			OperatorID: w.OperatorID,
 		})
 	}
 	return result, err

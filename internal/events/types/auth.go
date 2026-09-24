@@ -766,6 +766,12 @@ type IAMIdentityLinked struct {
 	Issuer string  `json:"issuer"`
 	Via    LinkVia `json:"via"`
 	By     string  `json:"by"`
+
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID]. Empty on a link an invitation's
+	// redemption pinned, which the node's own writer makes on nobody's
+	// credential.
+	OperatorID string `json:"operator_id,omitempty"`
 }
 
 // EventType is the "iam_identity_linked" wire type.
@@ -792,6 +798,11 @@ type IAMIdentityUnlinked struct {
 	Person string `json:"person"`
 	Issuer string `json:"issuer"`
 	By     string `json:"by"`
+
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+
 	Reason string `json:"reason"`
 }
 

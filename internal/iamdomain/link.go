@@ -116,7 +116,7 @@ func (w *Writer) Link(ctx context.Context, in LinkChange) (statelog.Result, erro
 	}
 	w.announce(ctx, result, err, types.IAMIdentityLinked{
 		Person: in.PersonID, Issuer: in.Link.Issuer, Via: types.LinkViaAdmin,
-		By: w.Actor,
+		By: w.Actor, OperatorID: w.OperatorID,
 	})
 	return result, err
 }
@@ -139,7 +139,8 @@ func (w *Writer) Unlink(ctx context.Context, personID string, link Link,
 	result, err := w.release(ctx, w.gesture(), KindLink, link.Blind, personID,
 		opID, reason, false)
 	w.announce(ctx, result, err, types.IAMIdentityUnlinked{
-		Person: personID, Issuer: link.Issuer, By: w.Actor, Reason: reason,
+		Person: personID, Issuer: link.Issuer, By: w.Actor,
+		OperatorID: w.OperatorID, Reason: reason,
 	})
 	return result, err
 }

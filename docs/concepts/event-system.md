@@ -303,8 +303,9 @@ iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
 iam_identity_linked        # a provider subject pinned to a person, via an
                            # invitation redeemed through the provider or an
-                           # administrator; never the subject itself
-iam_identity_unlinked      # and taken off them again
+                           # administrator, with by and operator_id; never
+                           # the subject itself
+iam_identity_unlinked      # and taken off them again, with by and operator_id
 iam_grants_changed         # one per person write, from the writer that
                            # decided it: added, removed, by, record version
 iam_token_first_use        # a Tier A token used, once per token per hour

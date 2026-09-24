@@ -1648,8 +1648,8 @@ Identity has **two trails**, and they answer different questions.
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
-| `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator | Once per link, and only once the person it names exists |
-| `iam_identity_unlinked` | The identity writer, when an administrator takes a person's provider subject off them | Once per unlink |
+| `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator, with the credential they acted through as `operator_id` | Once per link, and only once the person it names exists |
+| `iam_identity_unlinked` | The identity writer, when an administrator takes a person's provider subject off them, with the credential they acted through as `operator_id` | Once per unlink |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `iam_token_first_use` | The request guard, for a Tier A token | Once per token per hour per node — or every request, for a token whose entry sets `audit_every_use` |

@@ -835,8 +835,8 @@ The directory never shows a subject back: the estate holds it only as a keyed
 blind. A linked person renders `"oidc": {"issuer": "…"}`, and their link is an
 `oidc` row in `GET /iam/credentials` — whose id `DELETE /iam/credentials/{id}`
 also unlinks. Each link and unlink is announced as `iam_identity_linked` /
-`iam_identity_unlinked`, naming the person and the issuer and never the
-subject.
+`iam_identity_unlinked`, naming the person, the issuer, who made it (`by`) and
+the credential they acted through (`operator_id`) — and never the subject.
 
 #### Values that are shown once
 
