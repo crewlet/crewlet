@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -227,6 +228,140 @@ func (s *suite) runWire(t *testing.T) {
 		}
 		if second.Work != "original" {
 			t.Errorf("g2's payload reads %q — g1's mutation reached it", second.Work)
+		}
+	})
+
+	t.Run("publish_stamps_the_publishing_node", func(t *testing.T) {
+		t.Parallel()
+		// THE ORIGIN IS THE QUEUE'S TO NAME, on every copy of the event
+		// alike. The event store is written by a publish listener on the
+		// publishing node, a seat's mailbox by the broker, a dashboard by
+		// the broadcast — and a reader holding any one of them has only the
+		// envelope's `node` to find the node that holds the rest. So all
+		// three must carry it, and must carry the SAME value: a listener
+		// handed the publisher's unstamped struct while the wire copy was
+		// stamped would write every row with no origin at all.
+		const node = "node-a"
+		q := s.start(ctx, t, queue.WithNode(node))
+		const topic = "crewlet.events.agent_phase_started"
+		listened := make(chan string, 1)
+		q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+			if ev != nil && labelOf(ev) == "stamped" {
+				listened <- ev.Node
+			}
+		})
+		delivered := make(chan string, 1)
+		subscribe(ctx, t, q, topic, "grp", func(_ context.Context, ev *events.Event) queue.Result {
+			delivered <- ev.Node
+			return queue.Ack()
+		})
+		broadcast := make(chan string, 1)
+		if _, err := q.SubscribeStream(ctx, "crewlet.events.>",
+			func(_ context.Context, _ string, ev *events.Event) {
+				if labelOf(ev) == "stamped" {
+					broadcast <- ev.Node
+				}
+			}); err != nil {
+			t.Fatalf("SubscribeStream: %v", err)
+		}
+
+		sent := newEvent("stamped")
+		publish(ctx, t, q, topic, sent)
+		for name, seen := range map[string]chan string{
+			"publish listener": listened, "durable consumer": delivered, "broadcast": broadcast,
+		} {
+			select {
+			case got := <-seen:
+				if got != node {
+					t.Errorf("the %s saw the event from node %q, want %q", name, got, node)
+				}
+			case <-time.After(settleFor):
+				t.Errorf("the %s never saw the event", name)
+			}
+		}
+		// Publish READS its argument. One event published to two topics
+		// from two goroutines is legitimate, so a stamp written into the
+		// caller's struct is a data race in every such caller.
+		if sent.Node != "" {
+			t.Errorf("Publish wrote node %q into the caller's own event", sent.Node)
+		}
+
+		// AND A CLIENT THAT NAMES NO NODE INVENTS NONE: an origin nobody
+		// declared is worse than an absent one, because a reader follows it.
+		anonymous := s.start(ctx, t)
+		unnamed := make(chan string, 1)
+		subscribe(ctx, t, anonymous, topic, "grp", func(_ context.Context, ev *events.Event) queue.Result {
+			unnamed <- ev.Node
+			return queue.Ack()
+		})
+		publish(ctx, t, anonymous, topic, newEvent("unstamped"))
+		select {
+		case got := <-unnamed:
+			if got != "" {
+				t.Errorf("a client built with no node stamped %q", got)
+			}
+		case <-time.After(settleFor):
+			t.Fatal("no delivery from the client built with no node")
+		}
+	})
+
+	t.Run("a_republish_keeps_its_origin_node", func(t *testing.T) {
+		t.Parallel()
+		// ONLY AN EMPTY ORIGIN IS STAMPED. A node hands another node's
+		// event back to the broker as a matter of course — a delivery it
+		// parked, a dead letter — and that event's row, the work it
+		// describes and the rest of its turn are on the node that FIRST
+		// published it. Restamped on the way through, it would send every
+		// reader to a node whose store holds none of that.
+		//
+		// Two separate queues rather than two clients of one broker, which
+		// is all the case needs and so needs no capability: what b is
+		// handed is exactly what a consumer of a received — the decoded
+		// copy, origin and all.
+		a := s.start(ctx, t, queue.WithNode("node-a"))
+		b := s.start(ctx, t, queue.WithNode("node-b"))
+		const topic = "crewlet.agent.relay.inbox"
+
+		received := make(chan *events.Event, 1)
+		subscribe(ctx, t, a, topic, "agent-relay", func(_ context.Context, ev *events.Event) queue.Result {
+			received <- ev
+			return queue.Ack()
+		})
+		publish(ctx, t, a, topic, newEvent("relayed"))
+		var handed *events.Event
+		select {
+		case handed = <-received:
+		case <-time.After(settleFor):
+			t.Fatal("no delivery on the origin node")
+		}
+		if handed.Node != "node-a" {
+			t.Fatalf("the origin node's own delivery names node %q, want node-a", handed.Node)
+		}
+
+		listened := make(chan string, 1)
+		b.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+			if ev != nil && labelOf(ev) == "relayed" {
+				listened <- ev.Node
+			}
+		})
+		redelivered := make(chan string, 1)
+		subscribe(ctx, t, b, topic, "agent-relay", func(_ context.Context, ev *events.Event) queue.Result {
+			redelivered <- ev.Node
+			return queue.Ack()
+		})
+		publish(ctx, t, b, topic, handed)
+		for name, seen := range map[string]chan string{
+			"relaying node's listener": listened, "relaying node's consumer": redelivered,
+		} {
+			select {
+			case got := <-seen:
+				if got != "node-a" {
+					t.Errorf("after node-b handed it on, the %s saw origin %q, want node-a",
+						name, got)
+				}
+			case <-time.After(settleFor):
+				t.Errorf("the %s never saw the relayed event", name)
+			}
 		}
 	})
 

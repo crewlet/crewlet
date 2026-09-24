@@ -1,12 +1,16 @@
 package engine_test
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // brokerServerName asks the broker what it calls itself, over the connection
@@ -98,5 +102,51 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 
 	if got := brokerServerName(t, back); got != "node-a" {
 		t.Errorf("the clustered member calls itself %q, want %q", got, "node-a")
+	}
+}
+
+// TestWhatANodePublishesNamesThatNode pins the other half of a node's name:
+// every event it publishes leaves carrying it as the envelope's `node`, and the
+// row its own event store writes carries the same.
+//
+// The event store is written inline on the publishing node, so each node's
+// database holds only what that node published — and a reader holding one row
+// or one live frame has nothing but this field to find the node whose store
+// holds the rest of that turn. Asserted on the stored row rather than on a
+// listener of this test's own, because the row is what a reader later holds,
+// and through the environment-supplied id, because that is the shape an
+// orchestrator uses and the one the raw config field reads empty for.
+func TestWhatANodePublishesNamesThatNode(t *testing.T) {
+	// Not parallel: it sets the environment variable whose precedence is
+	// the subject.
+	t.Setenv(config.NodeIDEnvVar, "node-from-the-orchestrator")
+
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	b.Node.ID = ""
+
+	back, err := engine.OpenBackends(t.Context(), &b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+
+	sent := events.New(types.OrgStarted{OrgName: "Nimbus"}, events.TraceContext{})
+	if err := back.Queue.Publish(t.Context(), topics.Event(sent.Type), sent); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	row, err := back.Store.Events().ByID(t.Context(), sent.ID.String())
+	if err != nil {
+		t.Fatalf("the event store holds no row for what this node published: %v", err)
+	}
+	var stored events.Event
+	if err := json.Unmarshal(row.Payload, &stored); err != nil {
+		t.Fatalf("decode the stored row: %v", err)
+	}
+	if stored.Node != "node-from-the-orchestrator" {
+		t.Errorf("the row this node wrote names node %q, want the resolved node id %q: "+
+			"the queue was built without the node it publishes for",
+			stored.Node, "node-from-the-orchestrator")
 	}
 }

@@ -318,10 +318,25 @@ func WithMaxHistory(n int) Option {
 	}
 }
 
+// Contract hands this client the settings the queue CONTRACT defines for every
+// backend — [queue.WithNode] among them — in this backend's option shape.
+//
+// A converter rather than a parallel set of options, so there is one
+// vocabulary for what every backend promises alike and the conformance suite
+// can build either backend from the same [queue.Option]s.
+func Contract(opts ...queue.Option) Option {
+	resolved := queue.Resolve(opts...)
+	return func(q *Queue) { q.contract = resolved }
+}
+
 // Queue is one node's connection to a Broker.
 type Queue struct {
 	broker          *Broker
 	maxRedeliveries int
+
+	// contract is the contract-level settings this client was built with,
+	// fixed at construction and read without the lock for that reason.
+	contract queue.Options
 
 	// Everything below is guarded by broker.mu. Node state, not broker
 	// state: every gate here describes THIS process's consumer, and a
@@ -351,6 +366,11 @@ type Queue struct {
 func New(opts ...Option) *Queue { return NewBroker().Client(opts...) }
 
 // Client mints another node on the same broker as this one.
+//
+// It inherits this client's delivery budget, which is the BROKER's policy in
+// every real deployment, and NOT its node: a peer is a different node, and one
+// that published as this one would name the wrong origin on everything it
+// sent. A peer that should name itself takes its own [Contract].
 func (q *Queue) Client(opts ...Option) *Queue {
 	return q.broker.Client(append([]Option{WithMaxRedeliveries(q.maxRedeliveries)}, opts...)...)
 }
@@ -463,6 +483,10 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	if ev == nil {
 		return errors.New("memory: nil event")
 	}
+	// THE ORIGIN FIRST, before a byte is written: the wire copy every
+	// consumer decodes and the event every listener is handed must name
+	// the same node. See [queue.Options.Stamp].
+	ev = q.contract.Stamp(ev)
 	// Serialised before the lock, and once: the bytes are what every
 	// consumer decodes from, so a failure here fails the publish exactly as
 	// it would on a real backend rather than half-delivering.
@@ -511,7 +535,9 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// Listeners see the PUBLISHER'S event, not a decoded copy, because they
 	// are a local hook on the local publish path — the event store's writer
 	// is one — and they run before anything reaches a wire. Real backends
-	// call them the same way.
+	// call them the same way. "The publisher's" as stamped: when this
+	// client named the origin, what they are handed is the stamped copy,
+	// so the row the store writes carries the same node the wire does.
 	for _, l := range listeners {
 		notifyListener(ctx, l, topic, ev)
 	}

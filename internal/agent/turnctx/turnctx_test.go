@@ -1,9 +1,12 @@
 package turnctx_test
 
 import (
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -58,5 +61,117 @@ func TestAgentIDIsEmptyWithoutASeatOrAnOrg(t *testing.T) {
 		if got := tn.AgentID(); got != "" {
 			t.Errorf("%s: AgentID() = %q, want empty", name, got)
 		}
+	}
+}
+
+func item(id string) types.WorkItem {
+	return types.WorkItem{Backend: types.WorkNative, ID: id, Key: "ENG-" + id, Project: "ENG"}
+}
+
+// ONE ITEM IS ONE ITEM, however often and under whatever label it was written.
+//
+// The set answers "did this turn write to exactly one item", so the same task
+// written three times — once before a project rename changed its key and twice
+// after — has to count once. Counted by key, the rename alone would turn a
+// turn's sole write into two, and the turn would be charged to nothing.
+func TestTheWriteSetNamesTheSoleItemItWasWrittenTo(t *testing.T) {
+	t.Parallel()
+	var w turnctx.Written
+	if _, ok := w.Sole(); ok {
+		t.Fatal("an empty set names a sole item")
+	}
+	w.Add(item("7"))
+	renamed := item("7")
+	renamed.Key, renamed.Project = "CORE-7", "CORE"
+	w.Add(renamed)
+	w.Add(item("7"))
+	got, ok := w.Sole()
+	if !ok || got.Ref() != "native:7" {
+		t.Fatalf("Sole() = %+v, %v; want the one item written", got, ok)
+	}
+	// THE FIRST WRITE'S LABEL, since that is the item as the turn found it.
+	if got.Key != "ENG-7" {
+		t.Errorf("the sole item reads key %q, want the first write's ENG-7", got.Key)
+	}
+	// A write that names no item is not an item: it must not make one sole
+	// write into two.
+	w.Add(types.WorkItem{Backend: types.WorkNative})
+	if _, ok := w.Sole(); !ok {
+		t.Error("a write naming no item was counted as a second item")
+	}
+
+	w.Add(item("8"))
+	if _, ok := w.Sole(); ok {
+		t.Error("a turn that wrote to two items names a sole one")
+	}
+	items, many := w.Items()
+	if len(items) != 2 || many {
+		t.Errorf("Items() = %d items, many=%v; want the two, in full", len(items), many)
+	}
+}
+
+// PAST THE CAP THE SET SAYS "MANY" AND STOPS GROWING, and never says "one".
+//
+// The cap bounds what a runaway fan-out can make a turn hold; the flag is what
+// keeps that bound from changing an answer. A set that silently stopped at 64
+// would read as a turn that wrote to 64 items, which is a claim, and a turn
+// that wrote to a thousand is not charged to any one of them.
+func TestPastTheCapTheWriteSetSaysMany(t *testing.T) {
+	t.Parallel()
+	var full turnctx.Written
+	for i := range turnctx.MaxWritten {
+		full.Add(item(strconv.Itoa(i)))
+	}
+	if items, many := full.Items(); len(items) != turnctx.MaxWritten || many {
+		t.Fatalf("at the cap: %d items, many=%v; want %d listed in full",
+			len(items), many, turnctx.MaxWritten)
+	}
+	// Re-writing one the set already holds is not a new item.
+	full.Add(item("0"))
+	if _, many := full.Items(); many {
+		t.Fatal("re-writing a listed item marked the set as having more")
+	}
+	full.Add(item("overflow"))
+	items, many := full.Items()
+	if len(items) != turnctx.MaxWritten || !many {
+		t.Errorf("past the cap: %d items, many=%v; want %d listed and many",
+			len(items), many, turnctx.MaxWritten)
+	}
+	if _, ok := full.Sole(); ok {
+		t.Error("a set past its cap names a sole item")
+	}
+}
+
+// EVERY CONCURRENT WRITE IS RECORDED. Tool calls and delegate workers of one
+// turn run at once and share this set, so it is exercised the way they use it,
+// under the race detector.
+func TestTheWriteSetRecordsConcurrentWrites(t *testing.T) {
+	t.Parallel()
+	var w turnctx.Written
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			w.Add(item(strconv.Itoa(i)))
+			_, _ = w.Items()
+			_, _ = w.Sole()
+		})
+	}
+	wg.Wait()
+	if items, _ := w.Items(); len(items) != 8 {
+		t.Errorf("recorded %d of 8 concurrent writes", len(items))
+	}
+}
+
+// A TURN BUILT WITHOUT A SET RECORDS NOTHING rather than panicking — a tool
+// surface built for a validate command or a test has no turn to charge.
+func TestANilWriteSetRecordsNothing(t *testing.T) {
+	t.Parallel()
+	var w *turnctx.Written
+	w.Add(item("1"))
+	if items, many := w.Items(); items != nil || many {
+		t.Errorf("a nil set reports %v, many=%v", items, many)
+	}
+	if _, ok := w.Sole(); ok {
+		t.Error("a nil set names a sole item")
 	}
 }

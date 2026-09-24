@@ -1504,6 +1504,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
 	tel := e.describeTurn(ctx, company, req)
+	// THE TURN IS ON THE RECORD BEFORE ANYTHING SLOW, and the prefetch below
+	// is the first slow thing: it reads a chat thread and searches the
+	// knowledge base over the network, and until a phase opened nothing
+	// else said this run existed. Every path out of this frame that returns
+	// closes it — see [Engine.publishTurnStarted].
+	e.publishTurnStarted(ctx, tel, req.Depth, req.DelegationChain, false)
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.
@@ -1564,11 +1570,20 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 	})
 	if err != nil {
-		// No turn-completed event: nothing started, so nothing ended. A
-		// seat whose runner could not be built never published a started
-		// phase either, so there is no live row to close — and publishing a
-		// completion for a turn that never ran would put a failed turn in
-		// the record of a seat that did not take one.
+		// CLOSED, BECAUSE IT WAS OPENED. This path used to publish nothing
+		// on the reasoning that nothing had started — which stopped being
+		// true the moment the turn announced itself above: its start is on
+		// the record, its context was gathered, and a start with no end is
+		// what a reader takes for a turn that is still running, or one whose
+		// process died under it. So it ends as what it is, a run that failed
+		// before its first phase, with the build's own error as the reason.
+		//
+		// It costs the retry nothing: the dispatch hands the delivery back,
+		// the redelivery is a NEW run with a start and an end of its own
+		// (ADR-0017), and the learning dispatcher marks a unit of work
+		// spent only on a settled outcome, which the empty decision of a
+		// turn that never reached its loop is not.
+		e.publishTurnCompleted(ctx, tel, runner.Spend{}, turn.Result{}, err)
 		return turn.Result{}, err
 	}
 

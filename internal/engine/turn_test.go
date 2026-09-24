@@ -621,14 +621,32 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 // tear-down around the loop. Each case panics somewhere different, and each
 // must settle the delivery, record the trigger and put the seat AFK, because
 // no turn telemetry ran to do it.
+//
+// AND THE BREACH NAMES THE RUN THE PANIC ENDED, when there was one. A turn
+// announces itself under its run id before its prefetch, so a panic in its own
+// frames is a panic in a turn already on the record — and the breach is the one
+// row that says why it stopped. It used to carry the WORK KEY in `turn_id`, a
+// value no turn event is filed under since ADR-0017, so the start and the
+// breach of one dead turn were joined by nothing. A panic in a screening stage
+// happens before any run is minted, and names none.
 func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 	t.Parallel()
-	for name, arrange := range map[string]func(d *engine.Dispatcher, r *recorder){
-		"in the turn's own frames": func(_ *engine.Dispatcher, r *recorder) {
-			r.panicWith = "runner could not be built: nil registry"
+	for name, tc := range map[string]struct {
+		arrange func(d *engine.Dispatcher, r *recorder)
+		// ran reports whether the panic came from inside the turn, where
+		// a run had been minted for it to name.
+		ran bool
+	}{
+		"in the turn's own frames": {
+			arrange: func(_ *engine.Dispatcher, r *recorder) {
+				r.panicWith = "runner could not be built: nil registry"
+			},
+			ran: true,
 		},
-		"in a screening stage": func(d *engine.Dispatcher, _ *recorder) {
-			d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+		"in a screening stage": {
+			arrange: func(d *engine.Dispatcher, _ *recorder) {
+				d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -646,7 +664,7 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 				}
 				return "CEO", "a-1"
 			}
-			arrange(d, r)
+			tc.arrange(d, r)
 			ctx := context.Background()
 
 			got := d.Dispatch(ctx, "ceo", []*events.Event{a})
@@ -676,8 +694,19 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 				breach.Agent != "a-1" {
 				t.Errorf("breach = %+v, want unhandled_exception addressed to CEO/a-1", breach)
 			}
-			if breach.TurnID != key {
-				t.Errorf("breach turn id = %q, want the partition's work key %q", breach.TurnID, key)
+			wantRun := ""
+			if tc.ran {
+				if len(r.reqs) != 1 || r.reqs[0].RunID == "" {
+					t.Fatalf("the turn ran %d times, want once under a minted run", len(r.reqs))
+				}
+				wantRun = r.reqs[0].RunID
+			}
+			if breach.TurnID != wantRun {
+				t.Errorf("breach turn id = %q, want %q: the run the panic ended, "+
+					"which every other record of that turn is filed under", breach.TurnID, wantRun)
+			}
+			if breach.WorkKey != key {
+				t.Errorf("breach work key = %q, want the partition's %q", breach.WorkKey, key)
 			}
 			if skipped == nil || !strings.Contains(skipped.Reason, "panicked") {
 				t.Errorf("skipped = %+v, want the trigger on the record as panicked", skipped)
@@ -843,8 +872,15 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 					"to the queue", data.TriggerID)
 			}
 		case *types.TurnGuardBreach:
-			if data.TurnID != headKey {
-				t.Errorf("breach turn id = %q, want the head's own key %q", data.TurnID, headKey)
+			// THE HEAD'S OWN KEY beside the run it was running under —
+			// the tail was never this delivery's to answer for, so a key
+			// derived over both would name a unit nobody worked.
+			if data.WorkKey != headKey {
+				t.Errorf("breach work key = %q, want the head's own key %q", data.WorkKey, headKey)
+			}
+			if len(r.reqs) != 1 || data.TurnID != r.reqs[0].RunID {
+				t.Errorf("breach turn id = %q, want the run the head's turn was "+
+					"dispatched under", data.TurnID)
 			}
 		}
 	}

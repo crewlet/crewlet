@@ -49,7 +49,9 @@ package turnctx
 
 import (
 	"fmt"
+	"sync"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -57,7 +59,8 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion.
+// decision downstream a suggestion. The one thing it POINTS AT that changes is
+// [Turn.Written], which only ever grows and authorizes nothing.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -96,10 +99,32 @@ type Turn struct {
 	Org *org.Organization
 
 	// Depth is the delegation depth this turn inherited, and Chain is who
-	// it came through. Both travel so a sub-agent or an A2A ask can refuse
-	// past the cap rather than discovering the loop at runtime.
+	// it came through. Both travel on the work this turn starts — an A2A
+	// ask, a detached coding run — so the turn that work wakes inherits
+	// them and is refused at the cap before it runs, rather than the loop
+	// being discovered at runtime. A delegate worker is not a turn and
+	// inherits neither: it is a leaf, which is what bounds that construct
+	// (see internal/agent/subagent).
 	Depth int
 	Chain []string
+
+	// WorkItem is the one work item this turn is charged to, as the engine
+	// resolved it at dispatch — and nil for a turn nothing at dispatch
+	// named an item for, which is the ordinary case for a chat wake.
+	// WorkItemBasis is the rule that named it, empty with it.
+	//
+	// ONE ITEM, never several, and never changed by the turn. A turn that
+	// touches three tasks is charged to the one it was woken for; one woken
+	// for nothing may still be charged at completion, by what [Written]
+	// recorded, but that is a conclusion drawn after the turn and not
+	// something a tool reads mid-turn.
+	WorkItem      *types.WorkItem
+	WorkItemBasis types.WorkItemBasis
+
+	// Written records the work items this turn's own writes committed to,
+	// shared by every tool call and every delegate worker of the turn — see
+	// [Written] for why it is the one mutable thing a Turn points at.
+	Written *Written
 
 	// ConversationKey is the conversation this turn is serving — the Slack
 	// thread, the issue, the page — or empty for a trigger that has none.
@@ -201,31 +226,90 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 	return t.Seat, nil
 }
 
-// ForSubagent derives the context an ephemeral sub-agent runs under.
+// MaxWritten is how many distinct work items [Written] lists before it stops
+// listing them and records only that there were more.
 //
-// It KEEPS the org (a sub-agent must see the same company its parent does) and
-// EXTENDS the delegation chain, refusing past the cap. The seat becomes the
-// child's own: a sub-agent acting as its parent would make the delegation cap
-// unenforceable, because nothing downstream could tell the two apart.
-func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
-	if t == nil {
-		return nil, ErrNoSeat
+// PAST THE DEFAULT EXECUTOR CEILING (48 rounds, config.TurnEngine's
+// ExecuteMaxToolRoundsCeiling): a turn that wrote a different item on every
+// round of an executor run extended all the way to it is still listed in
+// full. A turn past 64 is a bulk operation — a relabel, a sweep — whose list
+// nobody reads item by item, and the bound is what keeps a runaway fan-out
+// from growing one turn's record without limit. The answer the set exists
+// for survives the cap untouched: "exactly one" is a question about the
+// first two.
+const MaxWritten = 64
+
+// Written is the set of work items a turn's writes committed to, in the order
+// each was first written.
+//
+// IT IS THE ONE MUTABLE THING A [Turn] POINTS AT, and the exception is exactly
+// as wide as it has to be. A Turn is immutable because a tool that could
+// rewrite what it runs as would make every authorization downstream a
+// suggestion; this set authorizes nothing and is only ever added to. It has to
+// be shared rather than copied because the writes it records happen in tool
+// calls and delegate workers that run concurrently under one turn, and what it
+// answers — "did this turn write to exactly one item" — is a question about all
+// of them at once. Hence the lock.
+//
+// THE REF IS THE IDENTITY ([types.WorkItem.Ref]): the same item written twice
+// under two keys, before and after a project rename, is one item.
+//
+// The zero value is an empty set, ready to use. A NIL *Written records nothing
+// and reports nothing, which is what a surface built outside a turn — a
+// validate command, a test driving a tool directly — legitimately has.
+type Written struct {
+	mu    sync.Mutex
+	refs  map[string]struct{}
+	items []types.WorkItem
+	many  bool
+}
+
+// Add records one committed write to item. An item with no id names nothing
+// and is not recorded; one already recorded is not recorded again; one past
+// [MaxWritten] marks the set as having more than it lists.
+func (w *Written) Add(item types.WorkItem) {
+	if w == nil || item.ID == "" {
+		return
 	}
-	depth := t.Depth + 1
-	if limit > 0 && depth > limit {
-		return nil, fmt.Errorf("turnctx: delegation depth %d exceeds the limit of %d "+
-			"(chain: %v)", depth, limit, t.Chain)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ref := item.Ref()
+	if _, seen := w.refs[ref]; seen {
+		return
 	}
-	// Copied, not appended in place: append can share a backing array, and
-	// two sub-agents derived from one parent would then write over each
-	// other's chain.
-	chain := make([]string, len(t.Chain), len(t.Chain)+1)
-	copy(chain, t.Chain)
-	if h := t.Handle(); h != "" {
-		chain = append(chain, h)
+	if len(w.items) >= MaxWritten {
+		w.many = true
+		return
 	}
-	return &Turn{
-		RunID: t.RunID, WorkKey: t.WorkKey,
-		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
-	}, nil
+	if w.refs == nil {
+		w.refs = map[string]struct{}{}
+	}
+	w.refs[ref] = struct{}{}
+	w.items = append(w.items, item)
+}
+
+// Items reports the items recorded, in first-write order, and whether the turn
+// wrote to more than [MaxWritten] of them — in which case the list is its first
+// MaxWritten and not the whole.
+func (w *Written) Items() (items []types.WorkItem, many bool) {
+	if w == nil {
+		return nil, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]types.WorkItem(nil), w.items...), w.many
+}
+
+// Sole reports the one item the turn wrote to, and false when it wrote to
+// none or to more than one. A set past its cap wrote to many by definition.
+func (w *Written) Sole() (types.WorkItem, bool) {
+	if w == nil {
+		return types.WorkItem{}, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.many || len(w.items) != 1 {
+		return types.WorkItem{}, false
+	}
+	return w.items[0], true
 }

@@ -75,6 +75,28 @@ func TestSummaries(t *testing.T) {
 		},
 		want: "CTO turn failed (rate_limit)",
 	}, {
+		// The item is what a line about a turn beginning is read for, and
+		// its KEY is the word a person knows it by.
+		name: "a turn's start names the item it is on",
+		payload: AgentTurnStarted{RoleName: "CTO",
+			WorkItem: &WorkItem{Backend: WorkNative, ID: "7c1e", Key: "ENG-412"}},
+		want: "CTO started a turn on ENG-412",
+	}, {
+		name: "a resumed segment says it resumed",
+		payload: AgentTurnStarted{RoleName: "CTO", Resumed: true,
+			WorkItem: &WorkItem{Backend: WorkNative, ID: "7c1e", Key: "ENG-412"}},
+		want: "CTO resumed a turn on ENG-412",
+	}, {
+		// An item a tracker gave no label is still named, by the one
+		// identity every backend has, rather than by nothing.
+		name:    "an item with no key is named by its ref",
+		payload: AgentTurnStarted{RoleName: "CTO", WorkItem: &WorkItem{Backend: WorkJira, ID: "10042"}},
+		want:    "CTO started a turn on jira:10042",
+	}, {
+		name:    "a turn on no item claims none",
+		payload: AgentTurnStarted{RoleName: "CTO"},
+		want:    "CTO started a turn",
+	}, {
 		name:    "an exhausted chain counts what it tried",
 		payload: LLMUnavailable{RoleName: "Engineer", ProviderChain: []string{"openai", "anthropic"}},
 		want:    "LLM unavailable for Engineer (2 providers tried)",

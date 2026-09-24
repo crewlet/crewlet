@@ -1534,8 +1534,10 @@ knows; `refused` names the tool's refusal class in `refusal`; `failed` is a
 failure the tool did not classify. The last two also carry `failed: true`, so
 the row is tagged failed and the log's failure filter finds it. `request_id`
 is the act transport's own (MCP sends none), so every retry of one gesture
-reads as the same request. A backup's record names the `node` whose disk it
-was written to, the `dir`, and the number of `streams` the manifest covers.
+reads as the same request. A backup's record names the `dir` and the number of
+`streams` the manifest covers; the node whose disk it was written to is the
+envelope's `node`, which the queue stamps on every event with the node that
+published it — and the backup route publishes from the node that took the copy.
 
 **The arguments are never recorded.** A page body or a comment is the
 company's content and already lives in the history of the object it changed;

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,8 +23,10 @@ import (
 
 // The turn-level events, published around turn.Run.
 //
-// The phases publish their own (internal/agent/runner/telemetry.go); these two
-// close the turn, and they are separate because they have different readers:
+// The phases publish their own (internal/agent/runner/telemetry.go). One opens
+// the turn — agent_turn_started, before its context is gathered (see
+// [Engine.publishTurnStarted]) — and two close it, separate because they have
+// different readers:
 //
 //   - agent_turn_completed is the DASHBOARD's single-phase summary. It is what
 //     ends a seat's live row, so a turn that failed to publish it leaves a
@@ -189,6 +192,58 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Reply: reply.String(),
 		},
 	}
+}
+
+// publishTurnStarted puts a turn — or one resumed segment of it — on the record
+// before it does anything slow: agent_turn_started.
+//
+// EVERY OTHER TURN EVENT IS PUBLISHED FROM INSIDE A PHASE OR AFTER THE LAST
+// ONE, so until this existed nothing said a turn was running while it gathered
+// its context: a seat whose prefetch was reading a long thread was
+// indistinguishable from an idle one, and a turn that died there left no row
+// naming its run at all. So the dispatch path publishes this BEFORE the
+// prefetch, and the resume path once the segment is certain to run (see
+// [Engine.resumeTurn] for why that is later).
+//
+// EVERY START IS CLOSED. Each frame that publishes one publishes
+// [Engine.publishTurnCompleted] on every path out of it that returns, so a
+// reader pairing the two on `turn_id` never holds an open turn that ended. A
+// start with no completion is a turn that died in its own frames: a panic
+// recovered outside the loop, which the unhandled-exception breach under the
+// same `turn_id` says (see [panicBreach]), or a process that died under it —
+// the fact the unpaired row is there to state.
+//
+// The depth and the chain travel on the ENVELOPE, whose keys they are — a
+// payload field under an envelope key is dropped on the way out — and they are
+// arguments, on the terms [turnTelemetry.runnerTurn] takes them: the dispatch
+// reads them off the trigger and the resume off the parked row.
+//
+// Nothing names a work item here yet: the resolution that fills `work_item`
+// and `work_item_basis` at dispatch is the turn engine's, and until it runs a
+// start carries neither key, which is the documented shape of an unattributed
+// turn rather than a null.
+func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
+	depth int, chain []string, resumed bool,
+) {
+	ev := events.New(types.AgentTurnStarted{
+		Agent:           t.agentID,
+		AgentHandle:     t.handle,
+		RoleName:        t.role,
+		TurnID:          t.runID,
+		WorkKey:         t.workKey,
+		Trigger:         t.trigger,
+		ConversationKey: t.convKey,
+		// THE SAME INSTANT turn_completed reports as the turn's start, so
+		// the two records of one run can never disagree about when it
+		// began — both read it off the telemetry assembled once.
+		StartedAt: t.startedAt,
+		Resumed:   resumed,
+	}, t.trace)
+	ev.DelegationDepth = depth
+	// A copy, never the caller's backing array: the request that holds it
+	// outlives this publish, and a listener handed the event keeps it.
+	ev.DelegationChain = slices.Clone(chain)
+	e.publishEvent(ctx, ev, t.role)
 }
 
 // publishTurnCompleted closes the turn for both readers.

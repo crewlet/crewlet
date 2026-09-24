@@ -116,6 +116,36 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 	})
 
+	t.Run("a_nil_event_is_refused_and_reaches_nobody", func(t *testing.T) {
+		t.Parallel()
+		// THE CONTRACT REFUSES IT, and the backends did not agree. The twin
+		// refused a nil event; the broker-backed backend encoded it — as
+		// `null` — stored it, and delivered an event with no id and no type
+		// to every consumer on the topic, where it reached the completion
+		// ledger and the dispatcher as a delivery of nothing. Neither half
+		// of that is observable from the caller's side, which is why the
+		// write that must not happen is asserted beside the answer.
+		q := s.start(ctx, t)
+		const topic, group = "crewlet.agent.void.inbox", "agent-void"
+		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+			t.Fatalf("EnsureSubscription: %v", err)
+		}
+		listened := newJournal()
+		q.AddPublishListener(func(_ context.Context, topic string, ev *events.Event) {
+			listened.record(topic + "/" + labelOf(ev))
+		})
+
+		if err := q.Publish(ctx, topic, nil); err == nil {
+			t.Fatal("a nil event published successfully")
+		}
+		listened.staysAt(t, 0, "a refused publish reached a publish listener")
+		if backlog := s.optionalBacklog(t); backlog != nil {
+			if got := backlog(q, topic, group); len(got) != 0 {
+				t.Errorf("a refused nil publish left %d events in the mailbox", len(got))
+			}
+		}
+	})
+
 	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail", func(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)

@@ -359,7 +359,12 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if b.Stream.EventRetentionHours > 0 {
 		cfg.EventRetention = b.Stream.EventRetention()
 	}
-	out, conn, err := openStream(ctx, b, cfg)
+	// THE SAME RESOLVED ID NAMES WHAT THIS NODE PUBLISHES. Every event
+	// leaves carrying it as its origin (queue.WithNode), because the event
+	// store is written inline on the publishing node and a reader holding
+	// any one row or frame has only that to find the node whose store holds
+	// the rest — see events.Event.Node.
+	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +383,9 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 // independently, so a node could hold live leases over a connection that
 // still works while the one carrying its inbox has dropped — alive to its
 // peers, deaf to its work.
-func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*Backends, *nats.Conn, error) {
+func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
+	opts ...queue.Option,
+) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here
 	// started an in-process member and connected to THAT: an operator who
@@ -389,7 +396,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 	// a seat claimed by everyone, a trigger worked twice, a token counter
 	// per node.
 	if b.Stream.URL != "" {
-		q, err := jetstream.Open(ctx, cfg)
+		q, err := jetstream.Open(ctx, cfg, opts...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: stream: %w", err)
 		}
@@ -404,7 +411,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
-	q, err := server.Client(ctx)
+	q, err := server.Client(ctx, opts...)
 	if err != nil {
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)

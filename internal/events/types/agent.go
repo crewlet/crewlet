@@ -16,6 +16,7 @@ import (
 // no matter what the seat had spent.
 
 func init() {
+	events.Register[AgentTurnStarted]()
 	events.Register[AgentTurnCompleted]()
 	events.Register[TurnCompleted]()
 	events.Register[AgentPhaseStarted]()
@@ -116,6 +117,76 @@ type ToolExecution = map[string]any
 // An open map for the same reason [ToolExecution] is one — a producer that
 // starts recording one more thing must not need every reader recompiled.
 type RoundNarration = map[string]any
+
+// AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
+// run is resumed — before its context is assembled and before its first phase.
+//
+// THE ONE EVENT THAT SAYS A TURN EXISTS WHILE IT IS STILL GATHERING CONTEXT.
+// Every other turn event is published from inside a phase or after the last
+// one, so until a phase opened nothing said a turn was running — a seat whose
+// prefetch was reading a long thread showed as idle for as long as that took —
+// and a turn's start was only ever inferred from the first event it happened
+// to publish. It carries the work item the turn is charged to, resolved at
+// dispatch, so a live screen can say "working on ENG-412" from the first
+// instant rather than from the first completed phase.
+//
+// Its delegation depth is the ENVELOPE's `delegation_depth`, not a field here:
+// the envelope owns that key, and a payload field under it would be dropped
+// on the way out.
+type AgentTurnStarted struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	// TurnID names this run — see ADR-0017.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey].
+	WorkKey string `json:"work_key,omitempty"`
+	// WorkItem is the one item this turn is charged to, when a rule at
+	// dispatch named one, and absent otherwise. ABSENT, never null: an
+	// unattributed turn is the ordinary case for a chat wake, and a reader
+	// tells it apart by the missing key. A sole write names an item only at
+	// completion, so a turn that ends up charged by one starts without it.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
+	// WorkItemBasis is the rule that named WorkItem, and empty with it.
+	WorkItemBasis WorkItemBasis `json:"work_item_basis"`
+	// Trigger is what woke the turn — see DescribeTrigger. A resumed
+	// segment carries the event that resumed it.
+	Trigger         Trigger `json:"trigger"`
+	ConversationKey string  `json:"conversation_key"`
+	// StartedAt is when this run — or this segment of it — began, on the
+	// publishing node's clock.
+	StartedAt time.Time `json:"started_at"`
+	// Resumed marks a segment that re-entered a parked run rather than a
+	// fresh dispatch. One turn id then has several starts, and only the
+	// first is the turn beginning.
+	Resumed bool `json:"resumed"`
+}
+
+// EventType is the "agent_turn_started" wire type.
+func (AgentTurnStarted) EventType() string { return "agent_turn_started" }
+
+// Role is the seat the turn runs as.
+func (e AgentTurnStarted) Role() string { return e.RoleName }
+
+// AgentID is the instance running the turn.
+func (e AgentTurnStarted) AgentID() string { return e.Agent }
+
+// SummaryFor names the item when the turn has one, because that is the
+// question a feed line about a turn beginning is read to answer.
+func (e AgentTurnStarted) SummaryFor(actor string) string {
+	verb := "started a turn"
+	if e.Resumed {
+		verb = "resumed a turn"
+	}
+	if e.WorkItem != nil {
+		if label := e.WorkItem.Key; label != "" {
+			return lead(actor, verb+" on "+label)
+		}
+		return lead(actor, verb+" on "+e.WorkItem.Ref())
+	}
+	return lead(actor, verb)
+}
 
 // AgentTurnCompleted is the single-phase summary a dashboard reads at turn end.
 type AgentTurnCompleted struct {

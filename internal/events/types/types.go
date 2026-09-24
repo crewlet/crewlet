@@ -51,9 +51,10 @@
 //     those methods are how anything reads the values.
 //   - No payload field may be named like an envelope field (id, type,
 //     timestamp, source, payload, trace_id, span_id, parent_span_id,
-//     delegation_depth, parent_turn_id, delegation_chain). The envelope owns
-//     those keys and silently drops a payload field that collides — see
-//     ConfigRevisionActivated, the one event that would redeclare one.
+//     delegation_depth, parent_turn_id, delegation_chain, node). The envelope
+//     owns those keys and silently drops a payload field that collides — see
+//     ConfigRevisionActivated, the one event that would redeclare one, and
+//     BackupRequested, whose host is the envelope's `node` for that reason.
 package types
 
 import (

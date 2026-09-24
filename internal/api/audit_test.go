@@ -201,7 +201,7 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		},
 		status: http.StatusOK,
 		want: &want{eventType: "backup_requested", outcome: types.AuditApplied, fields: map[string]any{
-			"node": "node-a", "dir": "/var/backups/one", "streams": float64(3),
+			"dir": "/var/backups/one", "streams": float64(3),
 		}},
 	}, {
 		name:  "a backup that fails",
@@ -212,7 +212,7 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		},
 		status: http.StatusInternalServerError,
 		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
-			fields: map[string]any{"node": "node-a", "dir": "/var/backups/two"}},
+			fields: map[string]any{"dir": "/var/backups/two"}},
 	}, {
 		name: "a backup that names no destination",
 		run: func(t *testing.T, a *api.App) int {
@@ -278,6 +278,14 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 				if body[key] != value {
 					t.Errorf("%s = %v, want %v", key, body[key], value)
 				}
+			}
+			// THE NODE IS THE QUEUE'S TO STAMP, on every record alike. The
+			// route publishes through its own node's queue, which names the
+			// origin on the way out; a record that arrived here already naming
+			// one is a publisher claiming the envelope's fact for itself.
+			if node, named := body["node"]; named {
+				t.Errorf("the record names node %v before any queue saw it — the "+
+					"origin is stamped by the queue it is published through", node)
 			}
 			if _, leaked := body["args"]; leaked {
 				t.Error("the record carries the call's arguments, which are the company's " +

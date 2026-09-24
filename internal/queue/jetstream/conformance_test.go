@@ -24,9 +24,9 @@ func TestConformance(t *testing.T) {
 // Own broker per queue, not per test binary: the suite asserts things like
 // "a subscription nobody created retains nothing", which a shared broker
 // carrying another subtest's streams could satisfy accidentally.
-func newConformanceQueue(t *testing.T) queue.EventQueue {
+func newConformanceQueue(t *testing.T, opts ...queue.Option) queue.EventQueue {
 	t.Helper()
-	return openForTest(t, Config{})
+	return openForTest(t, Config{}, opts...)
 }
 
 // openForTest starts a broker owned by the TEST, not by the queue, and
@@ -36,7 +36,7 @@ func newConformanceQueue(t *testing.T) queue.EventQueue {
 // the client that used it — "the mail survived a node leaving" is precisely
 // the property seat ownership rests on, and it is unobservable if stopping
 // the node also took the broker down.
-func openForTest(t *testing.T, cfg Config) *Queue {
+func openForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	// Production timings would make this suite take hours: a 30-minute ack
 	// window, a one-second poll, a one-second redelivery delay. The
@@ -62,7 +62,7 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	}
 	t.Cleanup(srv.Shutdown)
 
-	q, err := srv.Client(t.Context())
+	q, err := srv.Client(t.Context(), opts...)
 	if err != nil {
 		t.Fatalf("Client: %v", err)
 	}

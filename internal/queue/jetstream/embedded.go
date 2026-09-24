@@ -129,8 +129,12 @@ func StartServer(ctx context.Context, cfg Config) (*Server, error) {
 
 // Client connects a new queue to this server. The client does NOT own the
 // server: stopping it leaves the broker and every peer running.
-func (s *Server) Client(ctx context.Context) (*Queue, error) {
-	return newQueueOn(ctx, s.cfg, s.embedded, false)
+//
+// opts are the contract-level settings — [queue.WithNode] names the node the
+// client publishes for — and belong to the CLIENT rather than to the server,
+// because several nodes can be clients of one broker.
+func (s *Server) Client(ctx context.Context, opts ...queue.Option) (*Queue, error) {
+	return newQueueOn(ctx, s.cfg, s.embedded, false, queue.Resolve(opts...))
 }
 
 // Conn returns a NATS connection to this server, for subsystems that ride

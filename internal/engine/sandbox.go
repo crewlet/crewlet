@@ -398,7 +398,7 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 		}
 	}
 	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, trace, panicked); breach != nil {
+	if breach := panicBreach(role, agentID, run.TurnID, run.UnitOfWork(), trace, panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
@@ -607,6 +607,17 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
+	// THE SEGMENT IS ON THE RECORD ONCE IT IS CERTAIN TO RUN, and not a
+	// line earlier — which is where the dispatch path's start differs, and
+	// has to. Every return above is a RETRY OF THIS SAME RUN: the
+	// coordinator reverts its claim and the resume comes round again under
+	// the same turn id. Announced before them, a runner that could not be
+	// built would leave a start nothing closes, and closing it with a
+	// completion would record as ended a run that is still parked. From
+	// here every path publishes the completion below, so each start this
+	// frame makes is paired. A resume gathers no context of its own, so
+	// nothing slow is being skipped by waiting.
+	e.publishTurnStarted(ctx, tel, in.Run.DelegationDepth, in.Run.DelegationChain, true)
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.

@@ -51,7 +51,7 @@ import (
 // it carries its own copy, and every such copy has drifted at least once. The
 // check belongs on the engine side because the engine owns the value.
 //
-// # Two-sided, like the roster it is built on
+// # Two-sided, like the roster it is built on — plus a third
 //
 // One direction stops a band naming a type that can never fill. The other
 // stops the repair being forgotten: [keptOutOfTurnBands] records each decision
@@ -62,7 +62,8 @@ import (
 // the day their payloads were repaired. A reason per entry rather than a
 // set for the reason `events.excluded` gives about its own map: an exclusion
 // and an oversight look identical from the outside, and writing the reason
-// down is what lets the next reader tell them apart.
+// down is what lets the next reader tell them apart. The third direction —
+// every stored, turn-scoped type is placed — is on the test itself.
 
 // turnBands are the declarations in `contract/turnbands.ts` whose members are
 // matched against a turn's rows.
@@ -148,9 +149,25 @@ var keptOutOfTurnBands = map[string]string{
 
 // TestTurnBandsNameOnlyTurnScopedEvents holds the Turn screen's four bands
 // against the `turn_id` key, both ways.
+//
+// AND EVERY ROW THE TURN QUERY CAN RETURN HAS A PLACE, which is the third
+// direction and the one a new event type trips. The residual band is for a
+// type a NEWER build publishes — the registry is additive-only, so it must
+// still render — and not a default for this build's own: a turn-scoped type
+// that is stored and banded nowhere is drawn under "everything else" on every
+// turn, which is the flat list the bands were introduced to end. So a type
+// this build registers, stores and stamps with a turn id is placed in a band
+// or absorbed, and the decision lands in the same change as the type.
 func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	t.Parallel()
 	stamped, persisted, known := turnScopedTypes(t)
+	placed := map[string]bool{}
+	// unread is whether any declaration could not be read at all — a band
+	// or the absorbed map. The third direction below asks where every type
+	// is PLACED, and a declaration nobody read placed nothing, so asking it
+	// then would report every type that declaration holds as unplaced: a
+	// wall of wrong findings under the one real one.
+	unread := false
 
 	for _, band := range turnBands {
 		// `internal/events/types` is one level deeper than the package
@@ -159,6 +176,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 		body, err := clientsource.Literal("../"+clientsource.Tree, band)
 		if err != nil {
 			t.Errorf("%s: %v", band, err)
+			unread = true
 			continue
 		}
 		names := clientsource.Strings(body)
@@ -168,6 +186,7 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 			continue
 		}
 		for _, name := range names {
+			placed[name] = true
 			switch {
 			case !known[name]:
 				t.Errorf("the Turn screen's %s band names %q, which this build "+
@@ -214,12 +233,14 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("%s: %v", absorbedBand, err)
+		unread = true
 	} else {
 		if len(names) == 0 {
 			t.Errorf("the Turn screen's %s map names no event type, so this "+
 				"gate certifies nothing for it", absorbedBand)
 		}
 		for _, name := range names {
+			placed[name] = true
 			switch {
 			case !known[name]:
 				t.Errorf("the Turn screen's %s map names %q, which this build "+
@@ -268,6 +289,21 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 					"The excuse no longer applies: drop the entry and let the "+
 					"turn-id question decide, or say here what still keeps the "+
 					"row out. It was listed because: %s", name, reason)
+			}
+		}
+	}
+
+	// THE THIRD DIRECTION: every row the turn query can return has a place.
+	// Asked only when every declaration was read — see `unread`.
+	if !unread {
+		for _, name := range sortedKeys(known) {
+			if stamped[name] && persisted[name] && !placed[name] {
+				t.Errorf("%q is stored and carries a `turn_id`, so the Turn screen's "+
+					"query returns it — and no band in "+
+					"dashboard/src/contract/turnbands.ts places it, so it is drawn "+
+					"under \"everything else\" on every turn it appears in. Put it in "+
+					"the band whose question it answers, or in ABSORBED naming where "+
+					"the screen already draws it", name)
 			}
 		}
 	}

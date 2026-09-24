@@ -37,6 +37,12 @@
  * fill fails the build, and so does a kept-out type that GAINS a `turn_id` and
  * is therefore ready to come back. The second direction is what made this
  * repair land in one change instead of being noticed a release later.
+ *
+ * AND A THIRD: every type this build stores with a `turn_id` is placed here,
+ * in a band or in ABSORBED. The residual band is for a type a NEWER build
+ * publishes, which must still render; this build's own types get a decision in
+ * the change that adds them, or they are drawn under "everything else" on every
+ * turn — the flat list these sets were introduced to end.
  */
 
 /**
@@ -53,6 +59,10 @@ export const ABSORBED: Readonly<Record<string, string>> = {
   agent_phase_completed: "its own phase card",
   // Stream-only; never persisted, so it cannot be in a query answer anyway.
   agent_turn_progress: "the live phase card",
+  // The turn's opening record, published before its context is gathered.
+  // The header names the seat and what woke the turn off it until a phase
+  // lands, and off the phases after — the same seat and the same wake.
+  agent_turn_started: "the turn's header: its seat and what woke it",
   // The stat strip, the header and the turn record.
   agent_turn_completed: "the turn's header and record",
   turn_completed: "the turn's header and record",

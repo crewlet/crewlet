@@ -136,15 +136,17 @@ func NewOperatorActed(e OperatorActed) OperatorActed {
 // BackupRequested is one `POST /backup`: a copy of a node's whole durable
 // state, credentials included, written to a directory on that node's host.
 //
-// Node is named in the payload because the envelope's source is
-// [OperatorSource], and a backup is only findable on the host it was written
-// to.
+// WHICH HOST is the envelope's `node`, and deliberately not a field here. A
+// backup is only findable on the host it was written to, and the route that
+// takes it publishes this record from that same node — so the node the queue
+// stamps as the event's origin IS the node whose disk holds the copy. A
+// payload `node` beside it would have been the one fact stated twice, and the
+// envelope owns the key: a payload field under it is dropped on the way out.
 type BackupRequested struct {
 	OperatorID string `json:"operator_id"`
 	ActorSeat  string `json:"actor_seat,omitempty"`
 
-	Node string `json:"node"`
-	Dir  string `json:"dir"`
+	Dir string `json:"dir"`
 	// Outcome is `applied` for a backup whose manifest was written and
 	// `failed` for one that was not — never anything else, since the
 	// route is synchronous and finishes the copy even if the caller hangs
@@ -162,12 +164,13 @@ func (BackupRequested) EventType() string { return "backup_requested" }
 func (e BackupRequested) Actor() string { return e.OperatorID }
 
 // SummaryFor says where the copy went, which is the one thing somebody
-// reading the log after the fact needs.
+// reading the log after the fact needs. The host is the row's own node, which
+// every surface showing the row shows beside it.
 func (e BackupRequested) SummaryFor(actor string) string {
 	if e.Outcome.failed() {
-		return lead(asPerson(actor, e.ActorSeat), "backup of "+e.Node+" to "+e.Dir+" failed")
+		return lead(asPerson(actor, e.ActorSeat), "backup to "+e.Dir+" failed")
 	}
-	return lead(asPerson(actor, e.ActorSeat), "backed up "+e.Node+" to "+e.Dir+
+	return lead(asPerson(actor, e.ActorSeat), "backed up to "+e.Dir+
 		" ("+strconv.Itoa(e.Streams)+" streams)")
 }
 
