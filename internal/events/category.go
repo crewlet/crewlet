@@ -141,10 +141,10 @@ var excluded = map[string]string{
 		"kept out below",
 	"a2a_message": "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request",
-	"budget_reported": "a SNAPSHOT of the shared token counter, published by " +
+	"budget_meters": "a SNAPSHOT of the shared token counters, published by " +
 		"every node on a 15-second tick, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
-		"and GET /budgets answer for free. What the audit log holds instead is " +
+		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
 		"agent_phase_completed rows internal/tokens aggregates, so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
@@ -173,7 +173,7 @@ var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
 	"agent_spawned":       true,
 	"agent_terminated":    true,
-	"budget_reported":     true,
+	"budget_meters":       true,
 }
 
 // Category names an event type's dashboard category and reports whether the

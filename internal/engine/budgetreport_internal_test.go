@@ -70,9 +70,8 @@ func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
 	if !sent {
 		t.Fatal("the meter still publishes nothing after the last older node has gone")
 	}
-	if frame.OrgUsedTokens != 250 || frame.OrgMaxTokens != 1000 {
-		t.Fatalf("frame = %d of %d, want the company's 250 of its 1000 a day",
-			frame.OrgUsedTokens, frame.OrgMaxTokens)
+	if w := frame.Org.Windows; len(w) != 1 || w[0].Used != 250 || w[0].Limit == nil || *w[0].Limit != 1000 {
+		t.Fatalf("frame = %+v, want the company's day at 250 of its 1000", w)
 	}
 	// LATCHED: a floor that has reached the windowed protocol falls again
 	// only by a downgrade, which needs the whole fleet stopped, so the

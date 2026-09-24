@@ -195,10 +195,10 @@ type refusal struct {
 // ENDS LAST, across every capped window of both scopes, by [coord.Outlasts] —
 // the tie-break the counter's own refusal names its window by: the seat can run
 // nothing until that one turns over, and naming an earlier one would wake it
-// into a refusal. Every window rather than each scope's binding one, because
-// [coord.Usage.Binding] puts a stamped window before a full one that ends
-// later — a month a collected coding run post-charged past its ceiling carries
-// no stamp until a charge is refused against it.
+// into a refusal. Every window rather than only the stamped ones, because a
+// full window that ends later may carry no stamp yet — a month a collected
+// coding run post-charged past its ceiling carries none until a charge is
+// refused against it.
 //
 // THREE-VALUED. An unreachable counter is an error, never "not refusing" and
 // never "refusing": the caller decides what an unknown answer is worth, and
@@ -224,7 +224,7 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 		}
 		for p, ceiling := range scope.caps {
 			slot := usage.In(p)
-			if slot.RefusedAt.IsZero() && slot.Used < ceiling {
+			if !windowRefuses(slot, ceiling) {
 				continue
 			}
 			if !found || coord.Outlasts(slot.Window, out.Window) {

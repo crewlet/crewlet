@@ -37,7 +37,7 @@ func catalogue() []events.Payload {
 		A2ARequest{}, A2AMessage{},
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
 		// budget.go
-		BudgetExhausted{}, BudgetReported{},
+		BudgetExhausted{}, BudgetMeters{},
 		// provider.go
 		LLMUnavailable{}, ProviderFallback{},
 		// agent.go
@@ -78,7 +78,7 @@ var wireTypes = []string{
 	"agent_turn_completed",
 	"agent_turn_progress",
 	"budget_exhausted",
-	"budget_reported",
+	"budget_meters",
 	"compaction_completed",
 	"compaction_requested",
 	"config_revision_activated",
@@ -284,7 +284,7 @@ var wireTags = map[string][]string{
 	"a2a_message_sent":                {"channel_id", "content", "message_id", "recipient", "sender", "sender_role", "turn_id", "work_key"},
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
-	"budget_reported":                 {"agents", "meter_id", "org_max_tokens", "org_refused_at", "org_used_tokens", "seq"},
+	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
 	"agent_turn_completed":            {"a2a_context", "agent_id", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "subagent_count", "subagent_tokens", "tool_executions", "total_tokens", "trigger", "turn_id", "work_key"},

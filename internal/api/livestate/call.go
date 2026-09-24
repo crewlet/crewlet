@@ -3,6 +3,8 @@ package livestate
 // The in-flight call: seeded when a phase opens, folded on every progress
 // round, frozen on failure, cleared on a clean completion.
 
+import "slices"
+
 // clone returns a deep-enough copy for a reader to hold.
 //
 // The overlay a caller receives must not alias the projection's own state: a
@@ -43,12 +45,14 @@ func (e *ErrorInfo) clone() *ErrorInfo {
 	return &dup
 }
 
-func (m *Meter) clone() *Meter {
+// clone copies the window list, so an overlay handed to a caller cannot be
+// changed under it by the next report. A window's Limit pointer is shared: it
+// is decoded fresh for every report and never written after.
+func (m *BudgetMeter) clone() *BudgetMeter {
 	if m == nil {
 		return nil
 	}
-	dup := *m
-	return &dup
+	return &BudgetMeter{Windows: slices.Clone(m.Windows)}
 }
 
 // sameCall reports whether a call is the one these coordinates name.

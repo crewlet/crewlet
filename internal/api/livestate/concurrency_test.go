@@ -34,7 +34,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 					with(base, map[string]any{"total_tokens": 1}), id(fmt.Sprint("t", w, i))))
 				s.Apply(env("sandbox_run_started",
 					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role}))
-				s.Apply(env("budget_reported",
+				s.Apply(env("budget_meters",
 					meterReport("m-1", w*100+i, seatMeter(role, i, 100)), streamOnly))
 			}
 		})

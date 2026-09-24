@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -604,15 +606,61 @@ func chargeAt(t *testing.T, f *coordmemory.Fleet, seat string, tokens int, org, 
 	return got
 }
 
-func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
+// budgetsWire is the budgets answer as a client decodes it.
+type budgetsWire struct {
+	Timezone     string  `json:"timezone"`
+	Durable      bool    `json:"durable"`
+	NearFraction float64 `json:"near_fraction"`
+	Org          struct {
+		Windows []types.BudgetWindow `json:"windows"`
+	} `json:"org"`
+	Seats []struct {
+		AgentID string               `json:"agent_id"`
+		Role    string               `json:"role"`
+		Handle  string               `json:"handle"`
+		Windows []types.BudgetWindow `json:"windows"`
+	} `json:"seats"`
+}
+
+// askBudgets asks the budgets question and decodes it the way the wire does,
+// returning the raw bytes beside it for assertions on what is absent.
+func askBudgets(t *testing.T, r *queries.Registry) (budgetsWire, []byte) {
+	t.Helper()
+	raw, err := json.Marshal(ask(t, r, "budgets", nil))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out budgetsWire
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return out, raw
+}
+
+// window is one period of a scope's answer, failing the test when it is
+// missing.
+func window(t *testing.T, ws []types.BudgetWindow, p period.Period) types.BudgetWindow {
+	t.Helper()
+	for _, w := range ws {
+		if w.Period == string(p) {
+			return w
+		}
+	}
+	t.Fatalf("no %s window in %+v", p, ws)
+	return types.BudgetWindow{}
+}
+
+func TestBudgetsStateEveryWindowWithItsCeiling(t *testing.T) {
 	t.Parallel()
-	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
-	// ceiling with no usage says nothing about how close a company is, and
+	// THE CEILING AND THE COUNTER GO TOGETHER, and neither is useful alone:
+	// a ceiling with no usage says nothing about how close a company is, and
 	// usage with no ceiling says nothing about whether it will be refused.
-	// The pair is ONE WINDOW's — the capped window with the least room
-	// left — so a ceiling is never drawn beside another window's spend.
+	// EVERY WINDOW is stated, capped or not, so what a seat spent this week
+	// is on the answer even where nothing caps the week — and an uncapped
+	// window carries no `limit` at all, never a 0 that reads as full.
 	cfg := parsed(t, `
 name: Acme
+timezone: Europe/Berlin
 providers:
   llm:
     p: {type: anthropic, model: m, api_keys: ["${K}"]}
@@ -630,11 +678,19 @@ token_budget: {week: 10000, month: 40000}
 	if err != nil {
 		t.Fatalf("organization: %v", err)
 	}
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
 	ceo := organization.AgentSeatByHandle("ceo")
 	id, _ := organization.AgentIDFor(ceo)
 	budgets := coordmemory.NewFleet()
-	chargeAt(t, budgets, coord.AgentScope(id.String()), 120,
-		coord.Caps(organization.TokenBudget), coord.Caps(ceo.TokenBudget))
+	if _, err := budgets.Charge(t.Context(), coord.ChargeRequest{
+		Seat: coord.AgentScope(id.String()), Tokens: 120, Windows: coord.WindowsAt(budgetsAt, berlin),
+		OrgCaps: coord.Caps(organization.TokenBudget), SeatCaps: coord.Caps(ceo.TokenBudget),
+	}); err != nil {
+		t.Fatalf("charge: %v", err)
+	}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
@@ -642,31 +698,90 @@ token_budget: {week: 10000, month: 40000}
 		Budget:  budgets,
 		Now:     func() time.Time { return budgetsAt },
 	})
-	got := ask(t, r, "budgets", nil)
+	got, raw := askBudgets(t, r)
 
-	if got["durable"] != true {
+	if !got.Durable {
 		t.Error("durable = false with a readable counter, so every figure " +
 			"below it reads as unmeasured")
 	}
-	// The company's week has 9 880 left and its month 39 880: the week.
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["max_tokens"] != 10000 || orgRow["durable_used"] != 120 {
-		t.Errorf("org = %+v", orgRow)
+	if got.Timezone != "Europe/Berlin" || got.NearFraction != 0.9 {
+		t.Errorf("timezone = %q, near_fraction = %v; want Europe/Berlin and 0.9", got.Timezone, got.NearFraction)
 	}
-	if orgRow["durable_updated_at"] == "" {
-		t.Error("no charge timestamp, so an operator cannot tell a live " +
-			"counter from a stale one")
+	if len(got.Org.Windows) != 3 {
+		t.Fatalf("org windows = %+v, want the day, the week and the month", got.Org.Windows)
+	}
+	for i, p := range period.Periods {
+		if got.Org.Windows[i].Period != string(p) {
+			t.Errorf("org window %d = %q, want %q: the answer is in day, week, month order", i, got.Org.Windows[i].Period, p)
+		}
+	}
+	if w := window(t, got.Org.Windows, period.Day); w.Used != 120 || w.Limit != nil || w.State != types.BudgetOK ||
+		w.Window != "2026-03-14" || w.StartsAt != "2026-03-13T23:00:00Z" || w.ResetsAt != "2026-03-14T23:00:00Z" {
+		t.Errorf("org day = %+v, want Berlin's 14 March at 120 under no ceiling", w)
+	}
+	if w := window(t, got.Org.Windows, period.Week); w.Used != 120 || w.Limit == nil || *w.Limit != 10000 {
+		t.Errorf("org week = %+v, want 120 of 10000", w)
 	}
 
-	seats, _ := got["seats"].([]any)
-	if len(seats) != 1 {
+	if len(got.Seats) != 1 {
 		t.Fatalf("seats = %d, want the one AGENT seat — a human spends "+
-			"nothing and a permanent zero row is noise", len(seats))
+			"nothing and a permanent zero row is noise", len(got.Seats))
 	}
-	// The CEO's day has 380 left and its month 11 880: the day.
-	seat, _ := seats[0].(map[string]any)
-	if seat["role"] != "CEO" || seat["max_tokens"] != 500 || seat["durable_used"] != 120 {
+	seat := got.Seats[0]
+	if seat.Role != "CEO" || seat.Handle != "ceo" || seat.AgentID != id.String() {
 		t.Errorf("seat = %+v", seat)
+	}
+	if w := window(t, seat.Windows, period.Day); w.Used != 120 || w.Limit == nil || *w.Limit != 500 {
+		t.Errorf("CEO's day = %+v, want 120 of 500", w)
+	}
+	if w := window(t, seat.Windows, period.Week); w.Used != 120 || w.Limit != nil {
+		t.Errorf("CEO's week = %+v, want 120 spent under no ceiling", w)
+	}
+	// The retired figures are gone rather than null.
+	for _, retired := range []string{"max_tokens", "durable_used", "durable_updated_at", "live_used"} {
+		if bytes.Contains(raw, []byte(`"`+retired+`"`)) {
+			t.Errorf("the answer still carries %q: %s", retired, raw)
+		}
+	}
+}
+
+func TestBudgetsAreNearAtNineTenthsAndNotATokenBefore(t *testing.T) {
+	t.Parallel()
+	// ONE THRESHOLD, THE ENGINE'S: the answer's `state` is the engine's own,
+	// so a screen has no number of its own to disagree with.
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+token_budget: {day: 1000}
+`)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	for _, tc := range []struct {
+		spent int
+		want  types.BudgetState
+	}{
+		{899, types.BudgetOK},
+		{900, types.BudgetNear},
+	} {
+		budgets := coordmemory.NewFleet()
+		chargeAt(t, budgets, coord.AgentScope(id.String()), tc.spent, coord.Caps{period.Day: 1000}, nil)
+		r := registryOver(t, queries.Sources{
+			State: livestate.New(), Company: func() *config.Company { return cfg },
+			Budget: budgets, Now: func() time.Time { return budgetsAt },
+		})
+		got, _ := askBudgets(t, r)
+		if w := window(t, got.Org.Windows, period.Day); w.State != tc.want {
+			t.Errorf("%d of 1000: state = %q, want %q", tc.spent, w.State, tc.want)
+		}
 	}
 }
 
@@ -706,20 +821,20 @@ token_budget: {day: 1000}
 	}); err != nil {
 		t.Fatalf("charge: %v", err)
 	}
-	orgUsed := func(at time.Time) any {
+	orgDay := func(at time.Time) types.BudgetWindow {
 		t.Helper()
 		r := registryOver(t, queries.Sources{
 			State: livestate.New(), Company: func() *config.Company { return cfg },
 			Budget: budgets, Now: func() time.Time { return at },
 		})
-		row, _ := ask(t, r, "budgets", nil)["org"].(map[string]any)
-		return row["durable_used"]
+		got, _ := askBudgets(t, r)
+		return window(t, got.Org.Windows, period.Day)
 	}
-	if got := orgUsed(evening.Add(15 * time.Minute)); got != 300 {
-		t.Errorf("at 23:45 in Los Angeles the day holds %v, want the 300 charged at 23:30", got)
+	if got := orgDay(evening.Add(15 * time.Minute)); got.Used != 300 || got.Window != "2026-09-22" {
+		t.Errorf("at 23:45 in Los Angeles the day is %+v, want 22 September holding the 300 charged at 23:30", got)
 	}
-	if got := orgUsed(evening.Add(45 * time.Minute)); got != 0 {
-		t.Errorf("at 00:15 in Los Angeles the day holds %v, want a fresh day", got)
+	if got := orgDay(evening.Add(45 * time.Minute)); got.Used != 0 || got.Window != "2026-09-23" {
+		t.Errorf("at 00:15 in Los Angeles the day is %+v, want a fresh 23 September", got)
 	}
 }
 
@@ -727,7 +842,8 @@ func TestBudgetsWithNoCounterSayNobodyLooked(t *testing.T) {
 	t.Parallel()
 	// `durable: false` means UNREADABLE, never zero. A company drawn at 0%
 	// of its budget when the truth is that nobody looked is the lie this
-	// field exists to prevent.
+	// field exists to prevent — so no window is stated at all, rather than
+	// three windows of zeroes.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -742,25 +858,28 @@ token_budget: {month: 10000}
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Company: func() *config.Company { return cfg },
 	})
-	got := ask(t, r, "budgets", nil)
-	if got["durable"] != false {
+	got, raw := askBudgets(t, r)
+	if got.Durable {
 		t.Error("a registry with no counter claimed a durable reading")
 	}
-	// The CAPS are still stated: they are config, and they do not wait on
-	// the counter.
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["max_tokens"] != 10000 {
-		t.Errorf("the cap was dropped with the counter: %+v", orgRow)
+	if len(got.Org.Windows) != 0 || len(got.Seats) != 0 {
+		t.Errorf("an unreadable counter stated figures: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"windows":[]`)) {
+		t.Errorf("the org's windows are not an empty list: %s", raw)
+	}
+	if got.Timezone != "UTC" {
+		t.Errorf("timezone = %q, want UTC: the clock is config and does not wait on the counter", got.Timezone)
 	}
 }
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never durable_used >= max_tokens: a refused
-	// charge increments nothing, so a seat charged in rounds stalls short
-	// of its cap and never reads as full. The stamp is what says the gate
-	// is turning turns away, so the answer carries it for the scope that
-	// refused and leaves it empty for the one that did not.
+	// "Exhausted" is a refusal, never used >= limit alone: a refused charge
+	// increments nothing, so a seat charged in rounds stalls short of its
+	// cap and never reads as full. The stamp is what says the gate is
+	// turning turns away, so the answer carries it on the window that
+	// refused and on no other, and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -781,8 +900,8 @@ token_budget: {day: 10000}
 	scope := coord.AgentScope(id.String())
 	budgets := coordmemory.NewFleet()
 	orgCaps, seatCaps := coord.Caps{period.Day: 10000}, coord.Caps{period.Day: 100}
-	chargeAt(t, budgets, scope, 90, orgCaps, seatCaps)
-	if refusal := chargeAt(t, budgets, scope, 20, orgCaps, seatCaps); refusal.RefusedScope != "agent" {
+	chargeAt(t, budgets, scope, 70, orgCaps, seatCaps)
+	if refusal := chargeAt(t, budgets, scope, 40, orgCaps, seatCaps); refusal.RefusedScope != "agent" {
 		t.Fatalf("setup: refusal = %+v, want the seat to refuse", refusal)
 	}
 
@@ -792,29 +911,25 @@ token_budget: {day: 10000}
 		Budget:  budgets,
 		Now:     func() time.Time { return budgetsAt },
 	})
-	got := ask(t, r, "budgets", nil)
+	got, _ := askBudgets(t, r)
 
-	seats, _ := got["seats"].([]any)
-	if len(seats) != 1 {
-		t.Fatalf("seats = %d", len(seats))
+	if len(got.Seats) != 1 {
+		t.Fatalf("seats = %d", len(got.Seats))
 	}
-	seat, _ := seats[0].(map[string]any)
-	stamp, _ := seat["refused_at"].(string)
-	if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
-		t.Errorf("seat refused_at = %q, want the refusal's instant: %v", stamp, err)
+	day := window(t, got.Seats[0].Windows, period.Day)
+	if _, err := time.Parse(time.RFC3339Nano, day.RefusedAt); err != nil {
+		t.Errorf("seat's day refused_at = %q, want the refusal's instant: %v", day.RefusedAt, err)
 	}
-	if seat["durable_used"] != 90 {
-		t.Errorf("seat durable_used = %v, want the 90 that fit", seat["durable_used"])
+	// 70 of 100 is below the near mark, and still refusing: the stamp, not
+	// the arithmetic, is the gate's word.
+	if day.Used != 70 || day.State != types.BudgetRefusing {
+		t.Errorf("seat's day = %+v, want the 70 that fit and refusing", day)
 	}
-	orgRow, _ := got["org"].(map[string]any)
-	if orgRow["refused_at"] != "" {
-		t.Errorf("org refused_at = %v, want empty: the company refused nothing", orgRow["refused_at"])
+	if w := window(t, got.Seats[0].Windows, period.Week); w.RefusedAt != "" || w.State != types.BudgetOK {
+		t.Errorf("seat's week = %+v, want no refusal: nothing caps it", w)
 	}
-	// The retired per-process figure is gone rather than null.
-	for _, row := range []map[string]any{seat, orgRow} {
-		if _, present := row["live_used"]; present {
-			t.Errorf("row still carries live_used: %+v", row)
-		}
+	if w := window(t, got.Org.Windows, period.Day); w.RefusedAt != "" || w.State != types.BudgetOK {
+		t.Errorf("org's day = %+v, want no refusal: the company refused nothing", w)
 	}
 }
 

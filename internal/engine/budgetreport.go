@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -71,7 +72,7 @@ type budgetReporter struct {
 //
 // EVERY NODE PUBLISHES, deliberately — this is not a fleet duty. The counters
 // are shared, so two nodes report the same numbers and a consumer keyed on
-// [types.BudgetReported.MeterID] simply holds whichever arrived last; making
+// [types.BudgetMeters.MeterID] simply holds whichever arrived last; making
 // it a singleton would mean the meters stop the moment one node's lease flaps,
 // for a frame that costs one coordination read.
 func (e *Engine) startBudgetReports(ctx context.Context) {
@@ -119,7 +120,7 @@ func (r *budgetReporter) publish(ctx context.Context) {
 		return
 	}
 	e := r.engine
-	// THE INCARNATION, not the node id: see [types.BudgetReported.MeterID].
+	// THE INCARNATION, not the node id: see [types.BudgetMeters.MeterID].
 	report.MeterID = e.node.Owner()
 	report.Seq = int(r.seq.Add(1))
 	ev := events.New(report, tracing.TraceOf(ctx))
@@ -147,14 +148,14 @@ func (r *budgetReporter) publish(ctx context.Context) {
 // consumer REPLACES what it holds on every report, so a zeroed one would
 // render a company that is spending as a company that has spent nothing —
 // which is the one reading an operator acts on by doing nothing.
-func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.BudgetReported, bool) {
+func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.BudgetMeters, bool) {
 	e := r.engine
 	company := e.Company()
 	if company == nil || company.Org == nil {
-		return types.BudgetReported{}, false
+		return types.BudgetMeters{}, false
 	}
 	if !r.countersCurrent(ctx) {
-		return types.BudgetReported{}, false
+		return types.BudgetMeters{}, false
 	}
 	windows := coord.WindowsAt(now, company.Config.Location())
 	usage, err := e.backends.Fleet.Usage(ctx, windows)
@@ -164,7 +165,7 @@ func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.Budget
 				"detail", "the shared counter could not be read, so the live "+
 					"meters keep the last frame they had")
 		}
-		return types.BudgetReported{}, false
+		return types.BudgetMeters{}, false
 	}
 	return budgetSnapshot(company, windows, usage)
 }
@@ -179,8 +180,11 @@ func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.Budget
 // a newer node claims no seat beside them. Its frames would read the company
 // as having spent nothing, and every dashboard folds each node's frame over
 // the last — so the header would flicker between the two readings for as long
-// as the rollout took. It publishes nothing until then, and the older nodes'
-// frames are the meter.
+// as the rollout took. It publishes nothing until then. The older nodes'
+// frames are the older build's `budget_reported`, which this build's live
+// projection does not read — so a dashboard served by a newer node draws no
+// meter at all for the rollout, which is a reading nobody took rather than a
+// wrong one.
 //
 // A floor that cannot be read, or that sees no live lease at all, is not yet:
 // a frame skipped costs one interval of a meter that keeps its last reading.
@@ -202,6 +206,92 @@ func (r *budgetReporter) countersCurrent(ctx context.Context) bool {
 	return true
 }
 
+// BudgetNearFraction is the share of a window's ceiling at which the engine
+// calls it `near` ([types.BudgetNear]), and the ONE such threshold: every
+// answer that carries a state serves it beside the state, so a surface that
+// draws a threshold mark draws this one rather than a number of its own.
+//
+// NINE TENTHS, from what a steadily spending company looks like. Under a flat
+// rate a window's spend tracks the share of the window that has elapsed, so a
+// lower mark — the dashboard's 75%, which was one of the three this replaced —
+// fires in the last week of every healthy month and on every healthy evening,
+// and a mark that is always on is one nobody reads. At nine tenths a window is
+// ahead of its pace or at its last tenth either way, which is when raising a
+// ceiling is a decision somebody still has time to make.
+const BudgetNearFraction = 0.9
+
+// windowRefuses reports whether a capped window turns the next charge away:
+// the gate has stamped a refusal on it — only an admitted charge or the window
+// turning over clears one — or it has no room left for a single token, which
+// the gate refuses on the next charge whatever its size.
+//
+// ONE PREDICATE for the budget park ([meter.refusing]) and the state every
+// meter reports ([budgetState]), so a seat is never parked under a meter that
+// reads as merely near.
+func windowRefuses(slot coord.WindowUsage, ceiling int) bool {
+	return !slot.RefusedAt.IsZero() || slot.Used >= ceiling
+}
+
+// budgetState is the engine's judgement of one window, computed here once so
+// no surface has a threshold of its own.
+//
+// A window nothing caps is [types.BudgetOK]: with no ceiling it is neither near
+// one nor refused by one.
+func budgetState(slot coord.WindowUsage, ceiling int, capped bool) types.BudgetState {
+	switch {
+	case !capped:
+		return types.BudgetOK
+	case windowRefuses(slot, ceiling):
+		return types.BudgetRefusing
+	case float64(slot.Used) >= BudgetNearFraction*float64(ceiling):
+		return types.BudgetNear
+	}
+	return types.BudgetOK
+}
+
+// BudgetWindows is one scope's counter as the wire states it: every window, in
+// [period.Periods] order, with its span, its spend, its ceiling where caps sets
+// one, its refusal and its [types.BudgetState].
+//
+// Every window rather than the capped ones, because a reader asking what a
+// scope has spent this week is owed the week whether or not a ceiling is
+// written for it; the live frame, which draws bars, keeps the capped ones
+// ([cappedWindows]). The one implementation both the frame and the `budgets`
+// answer are built from, so the two can never state one counter differently.
+func BudgetWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
+	out := make([]types.BudgetWindow, 0, len(period.Periods))
+	for i, p := range period.Periods {
+		slot := u.Windows[i]
+		ceiling, capped := caps[p]
+		w := types.BudgetWindow{
+			Period:   string(p),
+			Window:   slot.Window.Label,
+			StartsAt: rfc3339(slot.Window.Start),
+			ResetsAt: rfc3339(slot.Window.End),
+			Used:     slot.Used,
+			State:    budgetState(slot, ceiling, capped),
+		}
+		if capped {
+			w.Limit = &ceiling
+			w.RefusedAt = refusedAt(slot)
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// cappedWindows is [BudgetWindows] less the windows caps does not cap, and an
+// empty list rather than nil where it caps none, which the wire states as `[]`.
+func cappedWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
+	out := []types.BudgetWindow{}
+	for _, w := range BudgetWindows(caps, u) {
+		if w.Limit != nil {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // budgetSnapshot is the frame one read of the shared counters makes, and false
 // when nothing in the company is capped.
 //
@@ -209,12 +299,11 @@ func (r *budgetReporter) countersCurrent(ctx context.Context) bool {
 // node and a fleet: the reading of the counter is the whole of what can be
 // wrong with it, and it was the half nothing exercised.
 //
-// ONE FIGURE PER SCOPE, because that is what the frame carries: each scope's
-// [coord.Usage.Binding] window — a refusing window first, else the capped one
-// with the least room left — with that window's ceiling and its refusal, so a
-// meter never pairs one window's spend with another's cap. A scope nothing
-// has charged reads [coord.Unspent].
-func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) (types.BudgetReported, bool) {
+// EVERY CAPPED WINDOW OF EVERY SCOPE, each with its own ceiling, refusal and
+// state, so a seat capped by the day and by the month shows two bars rather
+// than one that jumps between them. A scope nothing has charged reads
+// [coord.Unspent].
+func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) (types.BudgetMeters, bool) {
 	byScope := make(map[string]coord.Usage, len(usage))
 	for _, row := range usage {
 		byScope[row.Scope] = row
@@ -226,18 +315,18 @@ func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage
 		return coord.Unspent(scope, windows)
 	}
 
-	var report types.BudgetReported
 	orgCaps := coord.Caps(company.Org.TokenBudget)
-	orgSlot, orgLimit, _ := read(coord.OrgScope).Binding(orgCaps)
-	report.OrgUsedTokens, report.OrgMaxTokens = orgSlot.Used, orgLimit
-	report.OrgRefusedAt = refusedAt(orgSlot)
+	report := types.BudgetMeters{
+		Timezone: company.Config.Location().String(),
+		Org:      types.BudgetScopeMeter{Windows: cappedWindows(orgCaps, read(coord.OrgScope))},
+	}
 
 	// ONLY METERED SEATS, which is what the payload promises: absence
-	// means "no cap and no meter", and a seat listed at a cap of zero
+	// means "no cap and no meter", and a seat listed with no windows
 	// would be drawn as an empty bar rather than as no bar at all.
 	type seatMeter struct {
 		scope string
-		meter types.BudgetMeter
+		meter types.BudgetSeatMeter
 	}
 	var seats []seatMeter
 	for seat := range company.Org.AllRoles() {
@@ -253,22 +342,21 @@ func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage
 			continue
 		}
 		scope := coord.AgentScope(agentID.String())
-		slot, limit, _ := read(scope).Binding(caps)
-		seats = append(seats, seatMeter{scope: scope, meter: types.BudgetMeter{
-			AgentID: agentID.String(), Role: seat.Name,
-			UsedTokens: slot.Used, MaxTokens: limit, RefusedAt: refusedAt(slot),
+		seats = append(seats, seatMeter{scope: scope, meter: types.BudgetSeatMeter{
+			AgentID: agentID.String(), Role: seat.Name, Handle: seat.Handle(),
+			Windows: cappedWindows(caps, read(scope)),
 		}})
 	}
 	// SORTED BY SCOPE, so two frames of an unchanged company are
 	// byte-identical and a consumer diffing them sees nothing move.
 	slices.SortFunc(seats, func(a, b seatMeter) int { return strings.Compare(a.scope, b.scope) })
 	for _, seat := range seats {
-		report.Agents = append(report.Agents, seat.meter)
+		report.Seats = append(report.Seats, seat.meter)
 	}
-	if len(orgCaps) == 0 && len(report.Agents) == 0 {
+	if len(orgCaps) == 0 && len(report.Seats) == 0 {
 		// NOTHING IS CAPPED, so there is no meter to render and a frame
 		// would be a header bar over an unlimited budget.
-		return types.BudgetReported{}, false
+		return types.BudgetMeters{}, false
 	}
 	return report, true
 }

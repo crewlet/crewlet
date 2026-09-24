@@ -195,8 +195,11 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 	}
 
 	s.Ingest(livestate.Envelope{
-		ID: "e2", Type: "budget_reported", Timestamp: "2026-06-14T12:00:01Z",
-		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "org_used_tokens": 5},
+		ID: "e2", Type: "budget_meters", Timestamp: "2026-06-14T12:00:01Z",
+		Payload: map[string]any{"meter_id": "m-1", "seq": 1, "timezone": "UTC",
+			"org": map[string]any{"windows": []any{map[string]any{
+				"period": "day", "window": "2026-06-14", "used": 5, "limit": 10, "state": "ok",
+			}}}},
 	})
 	if kinds := kindsOf(c); !contains(kinds, stream.KindBudget) {
 		t.Errorf("kinds = %v, want a budget push", kinds)

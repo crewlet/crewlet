@@ -162,7 +162,7 @@ type agentLive struct {
 	afkReason string
 	lastError *ErrorInfo
 	liveCall  *LiveCall
-	budget    *Meter
+	budget    *BudgetMeter
 
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
@@ -476,7 +476,13 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	// The live token meters. Stream-only: a report is a snapshot of a counter
 	// that moves every round, so a copy replayed from history would show
 	// figures the counter left behind long ago as the current ones.
-	if env.Type == "budget_reported" {
+	//
+	// ONLY `budget_meters`. The older build's `budget_reported` carried one
+	// figure per scope from the lifetime counters and is ignored rather than
+	// translated: during the rollout that retired it those counters are not
+	// the ones this build's gate charges, so folding it would draw a reading
+	// of a counter that is being retired over the windows.
+	if env.Type == "budget_meters" {
 		return s.applyBudget(*env, payload)
 	}
 

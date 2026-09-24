@@ -640,13 +640,6 @@ var budgetCases = []fleetCase{{
 			if stamps := h.refusingAt(w, coord.OrgScope); !slices.Equal(stamps, capped) {
 				h.t.Fatalf("%s: the org is stamped in %v, want every full window %v", tc.what, stamps, capped)
 			}
-			// And a reader stating one figure for the scope states the window
-			// the refusal named, so the refusal event and every screen agree.
-			if slot, _, ok := h.usedAt(w, coord.OrgScope).Binding(tc.caps); !ok ||
-				slot.Window.Period != tc.want || slot.Window.Label != w[i].Label {
-				h.t.Fatalf("%s: the binding window is %s %q, the refusal named the %s %q",
-					tc.what, slot.Window.Period, slot.Window.Label, tc.want, w[i].Label)
-			}
 		}
 	},
 }, {

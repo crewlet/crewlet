@@ -1563,6 +1563,9 @@
 .cell-meter-fill.critical {
   background: var(--critical);
 }
+.cell-meter-fill.neutral {
+  background: var(--text-faint);
+}
 
 /* ---- Narrow ------------------------------------------------------------- */
 

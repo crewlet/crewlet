@@ -1130,8 +1130,8 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	if _, tracked := store.Category("agent_turn_progress"); tracked {
 		t.Fatal("agent_turn_progress must stay out of the store: it is a live-only signal")
 	}
-	if _, tracked := store.Category("budget_reported"); tracked {
-		t.Fatal("budget_reported must stay out of the store: it is a ROLLUP " +
+	if _, tracked := store.Category("budget_meters"); tracked {
+		t.Fatal("budget_meters must stay out of the store: it is a ROLLUP " +
 			"of live meters on a 15-second tick, so a durable row per tick " +
 			"is about two million a year to answer what the live projection " +
 			"answers for free — and the audit log already holds the per-turn " +

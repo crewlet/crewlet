@@ -5,6 +5,8 @@ package livestate
 // unchanged and is the compatibility reference, so a renamed field is a broken
 // dashboard, not a refactor.
 
+import "github.com/crewlet/crewlet/internal/events/types"
+
 // Envelope is one serialized event as the dashboard sees it.
 //
 // Payload stays untyped on purpose. This projection is fed engine events AND
@@ -147,16 +149,24 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 }
 
-// Meter is a seat's or the org's live token budget.
+// BudgetMeter is a seat's or the org's live token meters: one entry per CAPPED
+// calendar window, as the engine's `budget_meters` frame states it.
 //
-// The fleet's SHARED counter as the gate enforces it: every node's spend,
-// since the last deliberate reset, against the cap in the active revision. It
-// is never to be compared with a spend rollup beside it on the same screen,
-// which covers a window of time rather than the life of the counter.
-type Meter struct {
-	Used int `json:"used"`
-	Max  int `json:"max"`
+// The fleet's SHARED counters as the gate enforces them: every node's spend in
+// the window on the company's clock, against the ceiling in the active
+// revision, with the gate's own refusal stamp and the engine's judgement of the
+// window ([types.BudgetState]). It is never to be compared with a spend rollup
+// beside it on the same screen, which covers a window of time a reader chose
+// rather than the calendar window a ceiling is written for.
+type BudgetMeter struct {
+	Windows []WindowMeter `json:"windows"`
 }
+
+// WindowMeter is one capped window of a live meter, held exactly as the frame
+// carried it — an alias rather than a copy of the wire struct, because a
+// projection that re-declared the fields is how `refused_at` was dropped on its
+// way from the frame to the push.
+type WindowMeter = types.BudgetWindow
 
 // Overlay is the live half of an agent row, merged onto its static config row.
 type Overlay struct {
@@ -177,7 +187,7 @@ type Overlay struct {
 	// that look the same from here: the seat has no per-agent budget, or
 	// no report has arrived yet. Either way a bar drawn without one
 	// would be a claim nobody measured.
-	Budget *Meter `json:"budget"`
+	Budget *BudgetMeter `json:"budget"`
 
 	// AFKReason is ALWAYS present, even when empty. The overlay is merged
 	// into a client's row rather than replacing it, so an omitted key
@@ -204,11 +214,13 @@ type SandboxEntry struct {
 }
 
 // OrgBudget is the org-wide half of the live meter, plus the identity and
-// sequence of the node incarnation whose report is held.
+// sequence of the node incarnation whose report is held and the company clock
+// its windows were cut on.
 type OrgBudget struct {
-	MeterID string `json:"meter_id"`
-	Seq     int    `json:"seq"`
-	Org     Meter  `json:"org"`
+	MeterID  string      `json:"meter_id"`
+	Seq      int         `json:"seq"`
+	Timezone string      `json:"timezone"`
+	Org      BudgetMeter `json:"org"`
 }
 
 // Change is what one applied event moved.

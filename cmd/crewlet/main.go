@@ -203,8 +203,8 @@ Usage:
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
-  crewlet budgets show        Show the durable token counters, with the calendar
-                              window each scope is closest to its ceiling in
+  crewlet budgets show        Show the durable token counters: each scope's day,
+                              week and month, its ceiling and its state
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
