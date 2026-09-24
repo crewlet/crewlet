@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -227,13 +228,27 @@ type endings struct {
 	mu      sync.Mutex
 	persons []string
 	epochs  []uint64
+
+	// failing is how many of the next revocations answer that they did
+	// not land, which is how a case stands a revocation up that failed or
+	// came back unknown.
+	failing int
+	asked   int
 }
 
-func (e *endings) record(_ context.Context, person string, epoch uint64) {
+// record is the session arm's OnReuse: every call is ASKED, and one is
+// recorded as a revocation only when it lands.
+func (e *endings) record(_ context.Context, person string, epoch uint64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.asked++
+	if e.failing > 0 {
+		e.failing--
+		return errors.New("the revocation's outcome is unknown")
+	}
 	e.persons = append(e.persons, person)
 	e.epochs = append(e.epochs, epoch)
+	return nil
 }
 
 func (e *endings) all() []string {

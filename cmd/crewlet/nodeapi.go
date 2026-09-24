@@ -239,8 +239,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		Chart:    engine.SeatViewOf(e),
 		External: boot.API.ExternalBase(),
 		OnReuse:  sessionReuse(e),
-		// The same trail, whose once-per-lineage decision is what
-		// OnReuse hangs on: a replayed cookie ends its sessions once.
+		// The same trail, whose once-per-lineage claim is what OnReuse
+		// hangs on: a replayed cookie ends its sessions once it lands,
+		// and asks again on its next presentation while it has not.
 		Audit: e.AuthEvents(),
 	})
 	if err != nil {
@@ -271,11 +272,19 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 // THE WRITE IS THE NODE'S OWN, not the person's: they did not ask for it, and
 // an authentication trail that recorded them as the author of their own
 // lockout would be wrong about the one row an investigation reads.
-func sessionReuse(e *engine.Engine) func(context.Context, string, uint64) {
-	return func(ctx context.Context, person string, epoch uint64) {
+//
+// # An error is a revocation nobody can say landed
+//
+// A refusal, a failure and an `unknown` outcome all leave the person's other
+// sessions possibly live, so each answers an error — which is what makes the
+// guard hand its claim back and ask again on the cookie's next presentation.
+// The deterministic op id is what makes that retry the SAME operation: one
+// that landed after all is answered by the ledger rather than written twice.
+func sessionReuse(e *engine.Engine) func(context.Context, string, uint64) error {
+	return func(ctx context.Context, person string, epoch uint64) error {
 		writer := e.IAMWriter()
 		if writer == nil {
-			return
+			return errNoIdentityWriter
 		}
 		// WITHOUT CANCEL, because the request this was noticed on is
 		// about to be refused and its context cancelled — and a
@@ -285,19 +294,27 @@ func sessionReuse(e *engine.Engine) func(context.Context, string, uint64) {
 		opID := "session-reuse:" + person + ":" + strconv.FormatUint(epoch, 10)
 		revoked, err := writer.RevokePast(ctx, person, epoch, opID,
 			"a session cookie was replayed past the rotation overlap")
-		if err != nil || revoked.Outcome == statelog.OutcomeUnknown {
+		switch {
+		case err != nil:
+			return fmt.Errorf("revoke %s past epoch %d (op %s): %w", person,
+				epoch, opID, err)
+		case revoked.Outcome == statelog.OutcomeUnknown || !revoked.Outcome.Valid():
 			// AN UNKNOWN OUTCOME IS NOT A REVOCATION: nothing can say the
 			// epoch moved, so the person's other sessions may be live.
-			logging.Get("api.auth").ErrorContext(ctx,
-				"iam_session_reuse_not_revoked", "person", person,
-				"error", err, "op_id", revoked.OpID,
-				"outcome", string(revoked.Outcome),
-				"detail", "the replayed cookie was refused, but this "+
-					"person's other sessions may still be live; retry with "+
-					"crewlet iam revoke")
+			return fmt.Errorf("revoke %s past epoch %d: the outcome of op %s "+
+				"is %q: %w", person, epoch, revoked.OpID, revoked.Outcome,
+				statelog.ErrUnavailable)
 		}
+		return nil
 	}
 }
+
+// errNoIdentityWriter is the revocation a node with no identity writer cannot
+// make. The session arm is built only where the identity domain runs, so this
+// is a wiring fault rather than a posture — and reported as an error, the
+// replay's next presentation asks again rather than treating it as done.
+var errNoIdentityWriter = errors.New("this node holds no identity writer, so " +
+	"the revocation a replay asks for cannot be published here")
 
 // refreshCustody is the engine's refresh-token custody as the sign-in surface's
 // seam, or a genuine nil.

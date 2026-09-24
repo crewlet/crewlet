@@ -56,10 +56,12 @@
 // overreach, a replayed cookie, a session noticed past its deadline. It is the
 // notification digest's idiom (one row stands for the window) applied to a
 // single key, and it reports whether it published so a caller that has to act
-// exactly once alongside the row — the revocation a replayed cookie triggers —
-// can hang the action on the same decision. [Trail.Claim] is the same decision
-// for a caller that must READ before it knows what the fact is, and hands the
-// key back when the read cannot say.
+// exactly once alongside the row can hang the action on the same decision.
+// [Trail.Claim] is the same decision for a caller that must READ or WRITE
+// before it knows what the fact is, and hands the key back when it cannot say
+// — the revocation a replayed cookie triggers is taken on a claim of its own
+// ([OnceReuseRevocation]) rather than on the row's, because the row is said
+// once whatever happens and the revocation is asked for again until it lands.
 //
 // EACH CLASS OF FACT KEEPS ITS OWN BOUNDED SET ([OnceClass]), so a class
 // remembered for the life of the process can never evict one that expires —

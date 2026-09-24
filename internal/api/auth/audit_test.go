@@ -457,6 +457,43 @@ func TestAReplayedCookieRevokesOnceHoweverOftenItIsPresented(t *testing.T) {
 	}
 }
 
+// A REPLAY'S REVOCATION THAT DID NOT LAND IS ASKED FOR AGAIN, and the row
+// that records the replay is still said once.
+//
+// The revocation hung on the claim that records the replay, which is never
+// handed back: one that failed or came back unknown left the person's other
+// sessions live for the rest of the bearer's life, with nothing asking again.
+// Mutation: keep the revocation's claim when it did not land, and the second
+// presentation asks nothing.
+func TestAReplaysRevocationThatDidNotLandIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	tr := newAuditTrail(t)
+	rig.cookie = rig.aheadOfTheClock(t)
+	rig.ended.failing = 1
+	g := rig.withAudit(tr)
+	for range 3 {
+		if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusUnauthorized {
+			t.Fatalf("a replayed cookie answered %d", got.status)
+		}
+	}
+	rig.ended.mu.Lock()
+	asked := rig.ended.asked
+	rig.ended.mu.Unlock()
+	if asked != 2 {
+		t.Errorf("the revocation was asked for %d times over three "+
+			"presentations with the first failing, want 2: once that failed "+
+			"and once that landed, and none after it landed", asked)
+	}
+	if ended := rig.ended.all(); len(ended) != 1 {
+		t.Errorf("%d revocations landed, want 1", len(ended))
+	}
+	if reuse := tr.published("iam_session_reuse_detected"); len(reuse) != 1 {
+		t.Errorf("%d reuse rows, want 1: the row records the replay, and a "+
+			"retried revocation is not a second replay", len(reuse))
+	}
+}
+
 // THE SESSION ARM IS REFUSED WITHOUT A TRAIL, because the revocation above
 // hangs on the trail's decision.
 func TestTheSessionArmNeedsATrail(t *testing.T) {

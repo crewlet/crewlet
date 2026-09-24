@@ -201,27 +201,34 @@ type Sessions struct {
 	// onReuse is called when a bearer's rotation index proves a cookie was
 	// replayed past the overlap, with the person and the EPOCH the bearer
 	// was minted at. It ends every session the person opened at or below
-	// that epoch.
+	// that epoch, and answers an error when it cannot say the revocation
+	// LANDED — refused, failed, or an outcome nobody can establish.
 	//
-	// ONCE PER LINEAGE, on the same decision that records the replay: a
-	// replayed cookie is refused, and whoever holds it can present it
-	// again — before this, every presentation published another
-	// revocation, which is a write to the identity log paced by the holder
-	// of a cookie this node had already refused.
+	// ONCE PER LINEAGE WHILE IT LANDS: a replayed cookie is refused, and
+	// whoever holds it can present it again — before the dedupe, every
+	// presentation published another revocation, which is a write to the
+	// identity log paced by the holder of a cookie this node had already
+	// refused. So the revocation is taken on a once-per-lineage claim
+	// ([authevents.OnceReuseRevocation]) and KEPT once it lands, and HANDED
+	// BACK when it did not, so the next presentation asks again. It used to
+	// hang on the claim that records the replay, which is never handed
+	// back: one failed or unknown revocation left the person's other
+	// sessions live for the rest of the bearer's life, with nothing asking
+	// again.
 	//
-	// AND CONDITIONAL ON THE EPOCH, which is what the correctness rests on
-	// rather than the dedupe: the once-per-lineage decision is one NODE's
-	// and it is bounded, so another ingress node seeing the same replay —
-	// or this one after the lineage was forgotten — asks again, and a
-	// revocation that moves the epoch only while it is still at the
-	// bearer's is one that lands once however often it is asked for.
+	// AND CONDITIONAL ON THE EPOCH, which is what makes the retry safe
+	// rather than the dedupe: the claim is one NODE's and it is bounded, so
+	// another ingress node seeing the same replay — or this one retrying —
+	// asks again, and a revocation that moves the epoch only while it is
+	// still at the bearer's is one that lands once however often it is
+	// asked for.
 	//
 	// A SEAM RATHER THAN A WRITE FROM HERE, which is internal/iam/session's
 	// own rule arriving one layer out: validation runs on every ingress
 	// node on every request, and a validator that could append to the log
 	// is one an unauthenticated caller can make write. Nil logs and does
 	// not write, which is the honest posture for a node with no publisher.
-	onReuse func(ctx context.Context, person string, epoch uint64)
+	onReuse func(ctx context.Context, person string, epoch uint64) error
 
 	// now is the clock, injectable so a case can pin what a principal's
 	// freshness is measured against.
@@ -257,15 +264,15 @@ type SessionsDeps struct {
 	External string
 
 	// OnReuse ends every session of a person whose cookie was replayed,
-	// up to the epoch the replayed bearer carries. Optional; see
-	// [Sessions.onReuse].
-	OnReuse func(ctx context.Context, person string, epoch uint64)
+	// up to the epoch the replayed bearer carries, and answers an error
+	// when it cannot say that landed. Optional; see [Sessions.onReuse].
+	OnReuse func(ctx context.Context, person string, epoch uint64) error
 
 	// Audit records what this arm sees. REQUIRED, and not only for the
-	// rows: the revocation a replay triggers is taken on the same
-	// once-per-lineage decision that records it, so an arm with no trail
-	// would have nothing to stop a refused cookie writing a revocation
-	// every time it was presented.
+	// rows: the revocation a replay triggers is taken on a once-per-lineage
+	// claim of the trail's, so an arm with no trail would have nothing to
+	// stop a refused cookie writing a revocation every time it was
+	// presented.
 	Audit Audit
 
 	// Now is the clock. Nil takes UTC wall time.
@@ -792,16 +799,25 @@ func personID(value string) uuid.UUID {
 }
 
 // reuse records a replayed cookie and asks for the person's epoch to be
-// bumped — ONCE per lineage, for as long as the bearer could still be
-// presented.
+// bumped — the row ONCE per lineage, and the revocation until it lands, for as
+// long as the bearer could still be presented.
 //
-// THE ROW AND THE REVOCATION ARE ONE DECISION. The replayed bearer is refused
-// and nothing stops whoever holds it presenting it again, and the rotation
-// check that recognises a replay runs before any row is read, so every
-// presentation reaches here. Taken per presentation, the revocation was a
-// write to the identity log paced by the holder of a cookie this node had
-// already turned away; taken once, it has already ended every session the
-// person held, which is all a second one could do.
+// # Two decisions, released by different facts
+//
+// The replayed bearer is refused and nothing stops whoever holds it presenting
+// it again, and the rotation check that recognises a replay runs before any
+// row is read, so every presentation reaches here. The ROW is a fact about the
+// replay and is said once: a row per presentation would be a feed paced by the
+// holder of a cookie this node had already turned away. The REVOCATION is an
+// action, and it is taken once it LANDS: a claim of its own
+// ([authevents.OnceReuseRevocation]) keeps a second presentation from asking
+// while one is in flight or after one landed, and is handed back when the
+// revocation failed or came back unknown, so the next presentation asks again.
+// Both hung on the row's claim once, which is never handed back — a revocation
+// that did not land was never asked for again, and the person's other
+// sessions, the replayed copy's holder included, stayed live until an operator
+// read the log line. [iamdomain.Writer.RevokePast] is what makes the retry
+// safe: it moves the epoch only while it is still at the replayed bearer's.
 //
 // THE WINDOW IS THE BEARER'S OWN REMAINING LIFETIME: past its absolute
 // deadline the deadline check refuses it before the rotation is looked at,
@@ -810,25 +826,36 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 	ctx := r.Context()
 	lineage := v.Bearer.Lineage.String()
 	window := v.Bearer.AbsoluteExpiresAt.Sub(s.now())
-	first := s.audit.EmitOnce(ctx, authevents.OnceSessionReuse, lineage, window,
+	if s.audit.EmitOnce(ctx, authevents.OnceSessionReuse, lineage, window,
 		types.IAMSessionReuseDetected{
 			Person: v.Bearer.Person, Lineage: lineage,
 			Rotation: v.Bearer.Rotation, Remote: remote,
-		})
-	if !first {
-		log.DebugContext(ctx, "iam_session_reuse_repeated",
-			"lineage", lineage, "detail", "already recorded and acted on")
-		return
+		}) {
+		// AT WARN whether or not a writer is wired: the log line is the
+		// evidence an investigation looks for, and a node with no
+		// publisher must not make the event invisible as well as
+		// unactionable.
+		log.WarnContext(ctx, "iam_session_reuse_detected",
+			"person", v.Bearer.Person, "lineage", lineage, "detail", v.Detail)
 	}
-	// AT WARN whether or not a writer is wired: the log line is the
-	// evidence an investigation looks for, and a node with no publisher
-	// must not make the event invisible as well as unactionable.
-	log.WarnContext(ctx, "iam_session_reuse_detected",
-		"person", v.Bearer.Person, "lineage", lineage, "detail", v.Detail)
 	if s.onReuse == nil {
 		return
 	}
-	s.onReuse(ctx, v.Bearer.Person, v.Bearer.Epoch)
+	release, claimed := s.audit.Claim(ctx, authevents.OnceReuseRevocation,
+		lineage, window)
+	if !claimed {
+		log.DebugContext(ctx, "iam_session_reuse_repeated",
+			"lineage", lineage, "detail", "its revocation landed or is in flight")
+		return
+	}
+	if err := s.onReuse(ctx, v.Bearer.Person, v.Bearer.Epoch); err != nil {
+		release()
+		log.ErrorContext(ctx, "iam_session_reuse_not_revoked",
+			"person", v.Bearer.Person, "lineage", lineage, "error", err,
+			"detail", "the replayed cookie was refused and this person's "+
+				"other sessions may still be live; the next presentation of "+
+				"the cookie asks again, and `crewlet iam revoke` ends them now")
+	}
 }
 
 // ended records what a refusing row means for the audit trail — which, for

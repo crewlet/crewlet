@@ -21,11 +21,12 @@ import (
 // noticed past its deadline is remembered for ever, because a stale cookie can
 // be presented for ever; a long-running node filled the whole set with those
 // (about sixteen days of them for a 500-person company), and from then on
-// every new one evicted a REPLAY's key or a token's hour. The replay's key is
-// the decision its revocation hangs on, so the next presentation of a replayed
-// cookie published another reuse row and revoked again — per presentation,
-// which is the write-amplifier the once-per-lineage rule exists to close — and
-// a token's use published once per session ending rather than once an hour.
+// every new one evicted a REPLAY's key or a token's hour. The replay's key was
+// then the decision its revocation hung on, so the next presentation of a
+// replayed cookie published another reuse row and revoked again — per
+// presentation, which is the write-amplifier the once-per-lineage rule exists
+// to close — and a token's use published once per session ending rather than
+// once an hour.
 //
 // So each class of fact has its OWN set and its OWN bound ([OnceBound]), and a
 // class at its bound evicts only its own entries: every entry whose window has
@@ -50,6 +51,18 @@ const (
 	// keyed on the session's lineage, for the bearer's remaining lifetime.
 	OnceSessionReuse OnceClass = "session_reuse"
 
+	// OnceReuseRevocation is the revocation a replay asks for, keyed on the
+	// replayed session's lineage, for the bearer's remaining lifetime —
+	// held while one is in flight and kept once it LANDED.
+	//
+	// A CLASS OF ITS OWN BESIDE [OnceSessionReuse], because the two keys
+	// are released by different facts: the row is said once whatever
+	// happens next, and the revocation is handed back when it did not land,
+	// so the next presentation asks again. Held under the row's key, a
+	// revocation that failed or came back unknown was never retried, and
+	// the person's other sessions stayed live until somebody read the log.
+	OnceReuseRevocation OnceClass = "reuse_revocation"
+
 	// OnceSessionEnded is a session noticed past one of its own deadlines,
 	// keyed on its lineage, for the life of the process.
 	OnceSessionEnded OnceClass = "session_ended"
@@ -58,7 +71,8 @@ const (
 // OnceClasses is every class, for validation and for a walk that holds
 // [OnceBound] to them.
 var OnceClasses = []OnceClass{
-	OnceTokenUse, OnceTokenOverreach, OnceSessionReuse, OnceSessionEnded,
+	OnceTokenUse, OnceTokenOverreach, OnceSessionReuse, OnceReuseRevocation,
+	OnceSessionEnded,
 }
 
 // Valid reports whether c is a class this build keeps a set for.
@@ -86,10 +100,15 @@ var onceBounds = map[OnceClass]int{
 	// replay, remembered for the bearer's remaining lifetime; a lineage is
 	// signed, so nobody can invent one, and each entry is a stolen or
 	// cloned cookie — thousands at once is past any company. What the key
-	// gates is a revocation that is itself conditional on the bearer's
-	// epoch, so a key forgotten early costs a second row and no second
-	// write.
+	// gates is the ROW, so a key forgotten early costs a second row.
 	OnceSessionReuse: 8192,
+
+	// 8192 revocations, the same population as the rows above: one per
+	// replayed lineage, held for the bearer's remaining lifetime once it
+	// landed and handed back when it did not. A key forgotten early costs
+	// one more conditional revocation, which publishes nothing once the
+	// epoch has moved.
+	OnceReuseRevocation: 8192,
 
 	// 8192 deadline endings, remembered for the life of the process: a
 	// 500-person company ends about 500 sessions a day this way, so the
@@ -134,9 +153,10 @@ func newOnceSets() map[OnceClass]*onceSet {
 // window, and reports whether it published.
 //
 // THE REPORT IS PART OF THE CONTRACT: a caller whose action must happen once
-// alongside the row — ending every session of a person whose cookie was
-// replayed — takes the same decision rather than keeping a second dedupe that
-// could disagree with this one.
+// alongside the row takes the same decision rather than keeping a second
+// dedupe that could disagree with this one. An action that must happen once
+// it SUCCEEDS — and be asked for again when it did not — takes a [Trail.Claim]
+// of its own instead, since the row's key is never handed back.
 //
 // A window of zero or less remembers the key for the life of the process. A
 // class this build does not know publishes nothing and says so in the log:
