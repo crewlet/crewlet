@@ -82,10 +82,41 @@ func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
 	}
 }
 
+// EVERY WAY A PAGE CAN REACH A SEAT HAS A PRODUCER.
+//
+// The guard-kind gap once more, for `knowledge_read`: the type has several
+// producers, so the registry test above passes as long as ONE of them runs,
+// and a `via` nothing writes is a column value every "read by" screen offers
+// as a filter and no row can ever carry. A producer is a read built with the
+// value, `Via: types.ReadViaX` or a call handing `types.ReadViaX` to the
+// helper that builds one, in a non-test file.
+func TestEveryKnowledgeReadViaIsProducedSomewhere(t *testing.T) {
+	t.Parallel()
+	root := moduleRoot(t)
+	declared := constsOf(t, filepath.Join(root, "internal", "events", "types"), "KnowledgeReadVia")
+	written := sourceMatches(t, root, regexp.MustCompile(
+		`(?:\bVia:\s*|knowledgeRead\(turn,\s*)types\.(ReadVia[A-Za-z0-9_]+)\b`))
+	for _, name := range declared {
+		if !written[name] {
+			t.Errorf("types.%s is a declared way a page reaches a seat and no read "+
+				"is built with it: a filter on it can never match a row. Produce "+
+				"it, or retire the value", name)
+		}
+	}
+}
+
 // guardKinds is every constant the payload package declares as a GuardKind,
 // read from its source so a kind added there is covered without being listed
 // here.
 func guardKinds(t *testing.T, dir string) []string {
+	t.Helper()
+	return constsOf(t, dir, "GuardKind")
+}
+
+// constsOf is every constant the payload package declares with the named
+// type, read from its source so a value added there is covered without being
+// listed here.
+func constsOf(t *testing.T, dir, typeName string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
@@ -112,7 +143,7 @@ func guardKinds(t *testing.T, dir string) []string {
 				if !ok {
 					continue
 				}
-				if typ, ok := value.Type.(*ast.Ident); ok && typ.Name == "GuardKind" {
+				if typ, ok := value.Type.(*ast.Ident); ok && typ.Name == typeName {
 					for _, ident := range value.Names {
 						kinds = append(kinds, ident.Name)
 					}
@@ -121,7 +152,7 @@ func guardKinds(t *testing.T, dir string) []string {
 		}
 	}
 	if len(kinds) == 0 {
-		t.Fatal("no GuardKind constant found, so this test could not fail")
+		t.Fatalf("no %s constant found, so this test could not fail", typeName)
 	}
 	return kinds
 }

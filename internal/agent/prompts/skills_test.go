@@ -50,11 +50,18 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			excludes(t, p, "MENTIONS-BODY", "GITHUB-BODY", "MEMORY-BODY")
-			// Each header points the model at the explicit-load mechanism
-			// and must never promise automatic injection — a model that
-			// believes the body is coming skips the call and waits for
-			// guidance that never arrives.
-			if strings.Contains(p, "## Tool skills") {
+			// Each header that can load points the model at the
+			// explicit-load mechanism and must never promise automatic
+			// injection — a model that believes the body is coming skips
+			// the call and waits for guidance that never arrives. Review
+			// cannot load at all (its only tool is its submission), so its
+			// header names no loader rather than one it does not have.
+			if !strings.Contains(p, "## Tool skills") {
+				t.Fatal("no catalogue rendered, so this case proves nothing")
+			}
+			if name == "review" {
+				excludes(t, p, "load_tool_skill")
+			} else {
 				contains(t, p, "load_tool_skill")
 			}
 		})
@@ -176,6 +183,11 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	rv := BuildReview(s, ReviewInput{Skills: cat})
 	contains(t, rv, "- `mcp:github` — GITHUB-SUMMARY")
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
+	// Nor is the reviewer told to LOAD anything: its only tool is its
+	// submission, and its tool choice forces that call, so an instruction
+	// naming the loader is an instruction it can only fail.
+	contains(t, rv, "## Tool skills")
+	excludes(t, rv, "load_tool_skill")
 
 	// No enforcement note when nothing catalogued is required.
 	advisory := BuildExecutor(s, ExecutorInput{Skills: &fakeCatalogue{skills: []fakeSkill{

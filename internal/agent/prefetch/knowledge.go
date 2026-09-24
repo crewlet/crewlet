@@ -93,24 +93,35 @@ Examples:
 - Task: "investigate the latency spike on checkout after the Tuesday deploy" -> latency spike checkout deployment rollback incident response
 - Task: "review the change adding the rate limiter" -> code review checklist rate limiting conventions`
 
-// relevantKnowledge renders the block, and reports how many pages it put in
-// it.
+// knowledgeBlock is the rendered block, and the read it came from.
+type knowledgeBlock struct {
+	text string
+
+	// pages are the hits the block rendered, in rank order, and query the
+	// search that found them. Both empty whenever the block is a hint.
+	pages []knowledge.Hit
+	query string
+}
+
+// relevantKnowledge renders the block, and reports which pages it put in it
+// and what it searched for.
 //
-// The COUNT is not derivable from the block: an empty search renders
-// EmptyKnowledgeHint, which is non-empty prose. Without the count, telemetry
-// cannot tell a search that ran and found nothing from one that surfaced six
-// runbooks — the exact distinction an operator checking whether the knowledge
-// backend is wired up needs.
-func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int) {
+// The PAGES are not derivable from the block: an empty search renders
+// EmptyKnowledgeHint, which is non-empty prose, and a rendered bullet names a
+// title rather than a page. Without them, telemetry cannot tell a search that
+// ran and found nothing from one that surfaced six runbooks — the exact
+// distinction an operator checking whether the knowledge backend is wired up
+// needs — nor say which six.
+func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlock {
 	if f.src.Knowledge == nil || strings.TrimSpace(r.Task) == "" {
-		return "", 0
+		return knowledgeBlock{}
 	}
 	// THE CHEAP GATE FIRST. CanSearch does no I/O, and its whole job is to
 	// let the query call be skipped when the search is a guaranteed no-op
 	// — a gate that had to reach the network would cost more than the call
 	// it saves.
 	if !f.src.Knowledge.CanSearch(r.Seat, r.Org) {
-		return "", 0
+		return knowledgeBlock{}
 	}
 	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
 	// during that window every search answers empty. Said out loud rather
@@ -124,7 +135,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	if builder, ok := f.src.Knowledge.(interface {
 		Building(ctx context.Context) bool
 	}); ok && builder.Building(ctx) {
-		return BuildingKnowledgeHint, 0
+		return knowledgeBlock{text: BuildingKnowledgeHint}
 	}
 	if r.RequiresRecon {
 		// The trigger is a pointer, so there is nothing worth searching
@@ -132,11 +143,11 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		// wrong pages or none. The hint says to look again once the seat
 		// knows what the task needs, which is exactly what the executor's
 		// search_knowledge tool is for.
-		return EmptyKnowledgeHint, 0
+		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	query := f.knowledgeQuery(ctx, r)
 	if query == "" {
-		return "", 0
+		return knowledgeBlock{}
 	}
 	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
@@ -147,7 +158,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	if len(hits) == 0 {
-		return EmptyKnowledgeHint, 0
+		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	bullets := make([]string, 0, len(hits)+1)
 	for _, hit := range hits {
@@ -155,13 +166,16 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	}
 	rendered := joinBullets(bullets)
 	if rendered == "" {
-		return EmptyKnowledgeHint, 0
+		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
 	// two hundred characters of a runbook.
-	return rendered + "\nTo read any of these in full, look it up by title " +
-		"with your knowledge-base tools.", len(hits)
+	return knowledgeBlock{
+		text: rendered + "\nTo read any of these in full, look it up by title " +
+			"with your knowledge-base tools.",
+		pages: hits, query: query,
+	}
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.

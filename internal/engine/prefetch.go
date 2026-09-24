@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -119,7 +120,45 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	took := time.Since(began)
 	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks,
 		began.UTC(), took)
+	e.publishPrefetchRead(ctx, seat, agentID.String(), req.RunID, req.WorkKey, blocks)
 	return blocks
+}
+
+// publishPrefetchRead records the pages the turn-start knowledge block put in
+// front of the seat, as a `knowledge_read` with `via: prefetch`.
+//
+// A SECOND EVENT rather than a list on prefetch_summary, because the two answer
+// different questions for different readers: the summary is one row per turn
+// about the PIPELINE (did each block fire, how large was it), and this is one
+// row per read about the PAGES, which is what every other way a seat reads the
+// knowledge base records too — so "which pages does this company's staff read"
+// is one event type to count however the page arrived.
+//
+// NAMES NO PHASE: the prefetch runs before the first one opens. Nothing is
+// published when the block surfaced no page, a hint included — a read of
+// nothing is not a read. Best effort, like the summary beside it.
+func (e *Engine) publishPrefetchRead(ctx context.Context, seat *org.Role,
+	agentID, runID, workKey string, b prefetch.Blocks,
+) {
+	if e.backends == nil || e.backends.Queue == nil || len(b.RelevantKnowledgePages) == 0 {
+		return
+	}
+	read := knowledge.ReadPages(b.RelevantKnowledgePages)
+	if len(read) == 0 {
+		return
+	}
+	ev := events.NewFrom(types.KnowledgeRead{
+		Agent: agentID, AgentHandle: seat.Handle(), RoleName: seat.Name,
+		TurnID: runID, WorkKey: workKey,
+		Via:     types.ReadViaPrefetch,
+		Backend: b.RelevantKnowledgePages[0].Backend,
+		Query:   types.KnowledgeReadQuery(b.RelevantKnowledgeQuery),
+		Pages:   read,
+	}, tracing.TraceOf(ctx))
+	if ev == nil {
+		return
+	}
+	e.publishEvent(ctx, ev, seat.Name)
 }
 
 // publishPrefetchSummary reports what each block actually surfaced.
@@ -161,7 +200,7 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		// The count the block cannot carry: an empty search still
 		// renders the hint, so hit=true with count=0 is "it ran and
 		// found nothing" rather than "it surfaced pages".
-		RelevantKnowledgeSelectionCount: b.RelevantKnowledgeHits,
+		RelevantKnowledgeSelectionCount: len(b.RelevantKnowledgePages),
 		ThreadContextHit:                b.ThreadContext != "",
 		ThreadContextBytes:              len(b.ThreadContext),
 		ThreadContextPosts:              b.ThreadContextPosts,

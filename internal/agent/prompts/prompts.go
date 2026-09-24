@@ -190,6 +190,14 @@ const skillCatalogueHeader = "\n## Tool skills" +
 	"to fetch the rich body (workflow examples, mention markup, handoff " +
 	"conventions) when the summary is not enough."
 
+// skillCatalogueReviewHeader is the catalogue's header in Review, which has no
+// load_tool_skill: the loading instruction the other phases get would point
+// the reviewer at a tool it does not have, on a surface whose only tool is its
+// submission and whose tool choice forces that call.
+const skillCatalogueReviewHeader = "\n## Tool skills" +
+	"\nHow this company uses specific tools / MCP servers, one line per " +
+	"skill.  Weigh the work you are reviewing against these conventions."
+
 const skillCatalogueRequiredNote = "\nEntries marked `(required — load before use)` are enforced: the " +
 	"engine rejects calls to the tools they cover until you have loaded " +
 	"the skill with `load_tool_skill(key)` in the current session.  Load " +
@@ -210,7 +218,8 @@ const requiredMarker = " (required — load before use)"
 // message is the recovery path, not the discovery path. Review is the
 // exception: it has no domain tools and no load_tool_skill, so nothing is
 // enforced there and the marker would point at a tool the reviewer does not
-// have. Required skills render unmarked in Review.
+// have. Required skills render unmarked in Review, under a header that asks
+// the reviewer to weigh the work against them rather than to load them.
 func injectSkillCatalogue(parts []string, cat SkillCatalogue, phase Phase, surface Surface) []string {
 	if cat == nil {
 		return parts
@@ -229,7 +238,11 @@ func injectSkillCatalogue(parts []string, cat SkillCatalogue, phase Phase, surfa
 
 	// Enforcement needs a phase that HAS the tools and the loader.
 	enforceable := phase != PhaseReview
-	parts = append(parts, skillCatalogueHeader)
+	if enforceable {
+		parts = append(parts, skillCatalogueHeader)
+	} else {
+		parts = append(parts, skillCatalogueReviewHeader)
+	}
 	if enforceable && slices.ContainsFunc(skills, func(s Skill) bool { return s.Required }) {
 		parts = append(parts, skillCatalogueRequiredNote)
 	}

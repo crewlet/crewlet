@@ -113,7 +113,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 
-	system, user := r.executorPrompt(round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
 	// will: a native pass publishes it from inside runPhase, which agent
 	// mode does not enter, and the resume's own record deliberately carries

@@ -512,6 +512,28 @@ Full page bodies open via the backend's page-read MCP tool; further searches via
 
 See [Agent Learning § Relevant-knowledge prefetch](agent-learning.md#relevant-knowledge-prefetch) for the design rationale and failure modes.
 
+## What agents read
+
+Every time a seat reads from the knowledge base the engine records it, as one `knowledge_read` event per act. A page's history says who wrote it and a search's ranking says what it matched; neither says whether anybody opened it, and "which runbooks does this company's staff actually read" is the question a knowledge base is curated against — a page nobody has read in a quarter is one to retire, and a page every turn is given is one whose mistakes are expensive.
+
+A read names the pages it reached (`pages[{id, container, title, rank}]`), the backend their ids are addresses in, the seat, the turn and the phase, and **how** the pages arrived (`via`):
+
+| `via` | What happened | Phase |
+|---|---|---|
+| `get_page` | The seat read one page in full with `get_page` (native backend). | the phase that called it |
+| `search` | The seat ran `search_knowledge`; `pages` are the hits it was shown, ranked, and `query` is what it searched for. | the phase that called it |
+| `prefetch` | The turn-start `## Relevant knowledge` block put these pages in front of the seat; `query` is the auxiliary model's. | none — it runs before the first phase |
+| `skill_loaded` | The seat loaded a [tool skill](tool-skills.md)'s body with `load_tool_skill`; the page is the one the skill was read from. | the phase that loaded it |
+| `skill_injected` | A phase's prompt carried the tool-skill catalogue; `pages` are the pages behind each skill it listed. One read per rendered catalogue — the executor's, the reviewer's, and each delegate worker's. | the phase whose prompt it was |
+
+Three rules keep the record honest:
+
+- **One event per act, listing its pages.** A search that showed six pages is one read with six pages, because a page's rank is a fact about that search and six separate rows could not say what else was on the list.
+- **Nothing is recorded for nothing.** A search with no hits, a page that was not found and a catalogue that listed no skill publish no event — a read of nothing is not a read, and a row with an empty page list would count toward every "read today" total.
+- **Only a seat reads.** The operator surface serves `get_page` and `search_knowledge` to people too; their calls are audited by the operator surface's own `operator_acted` record and are never a `knowledge_read`.
+
+A search's `query` is clipped to 200 bytes on a character boundary (with a trailing `…` when it was cut): it is a label a reader recognises a search by, not an input anything re-runs. The event is stored under the `learning` category, beside `skill_used`; see [Event System](event-system.md) for the catalogue entry.
+
 ---
 
 ## Onboarding markers

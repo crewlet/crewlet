@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -16,10 +17,14 @@ const LoadToolSkillTool = "load_tool_skill"
 //
 // Consumer-defined and one method wide. The registry is a live,
 // webhook-updated store sourced from the team knowledge base; none of that
-// reaches this package, which knows only that a key resolves to prose.
+// reaches this package, which knows only that a key resolves to prose and the
+// page it was read from.
 type ToolSkills interface {
-	// Body returns the rendered skill, reporting whether the key exists.
-	Body(key string) (string, bool)
+	// Load returns the rendered skill and its page, reporting whether the
+	// key exists. One call, so the page a load is recorded against is the
+	// page whose body the model was handed — a live registry can be edited
+	// between two.
+	Load(key string) (skills.Loaded, bool)
 }
 
 // loadToolSkill fetches the body behind a catalogue entry.
@@ -80,7 +85,7 @@ func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed("load_tool_skill needs a `key` — one of the keys your " +
 			"tool-skills catalogue lists."), nil
 	}
-	body, ok := t.skills.Body(key)
+	loaded, ok := t.skills.Load(key)
 	if !ok {
 		// NAMES THE MISTAKE rather than reporting an empty skill: a model
 		// that mistyped a key and got back "" would read it as a skill
@@ -93,6 +98,15 @@ func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// values: a company-published tool skill being loaded and a seat
 	// reusing one it synthesized answer different questions, and a feed
 	// that could not tell them apart answers neither.
-	note(ctx, t.events, turn, skillUsed(turn, key, "", "", types.SkillSourceRegistry))
-	return tools.Result{Output: body}, nil
+	page := types.KnowledgeReadPage{
+		ID: loaded.PageID, Container: loaded.Container, Title: loaded.Title,
+	}
+	note(ctx, t.events, turn, skillUsed(turn, key, "", types.SkillSourceRegistry, page))
+	// AND A READ, because loading a skill's body is reading the page it was
+	// written on: a knowledge base's "who opens this" must count the pages
+	// an author maintains as skills, or the most-read pages in the company
+	// are the ones it reports as unread.
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSkillLoaded,
+		loaded.Backend, "", []types.KnowledgeReadPage{page}))
+	return tools.Result{Output: loaded.Body}, nil
 }

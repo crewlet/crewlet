@@ -156,8 +156,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// a database column. Distinct from the per-OFFER stamp
 	// internal/learning deliberately keeps silent — that one fires for
 	// every skill the prompt merely listed.
-	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID, "",
-		types.SkillSourceSynthesized))
+	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID,
+		types.SkillSourceSynthesized, types.KnowledgeReadPage{}))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", sk.Name)

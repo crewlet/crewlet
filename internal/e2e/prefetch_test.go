@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // waitForSeat blocks until this node owns the seat: publishing before the
@@ -270,6 +272,13 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	if len(searched) == 0 {
 		t.Fatal("no knowledge search ran at all")
 	}
+	// The executor's own search is recorded as a read, in the phase that
+	// asked, with the query it wrote.
+	read := knowledgeReadVia(t, n, types.ReadViaSearch)
+	if read.Phase != types.PhaseExecute || read.Query != "staging login redirect proxy" ||
+		len(read.Pages) != 1 || read.Pages[0].ID != "page-1" {
+		t.Errorf("search read = %+v; want page-1 found by the executor's own query", read)
+	}
 	for _, query := range searched {
 		if strings.Contains(query, "PR !42") {
 			t.Fatalf("the search ran on the pointer: %q", query)
@@ -295,4 +304,45 @@ func TestASubstantiveTriggerSearchesOnceAtTurnStart(t *testing.T) {
 	if got := len(wiki.searched()); got != 1 {
 		t.Fatalf("a substantive trigger ran %d searches, want exactly one", got)
 	}
+
+	// AND THE PAGE IT WAS GIVEN IS RECORDED AS READ, against the page and
+	// the backend its id is an address in — the half of "which pages does
+	// this company's staff read" that no tool call ever shows, because the
+	// engine searched on the seat's behalf.
+	read := knowledgeReadVia(t, n, types.ReadViaPrefetch)
+	if read.Backend != "confluence" || read.AgentHandle != "ceo" || read.Phase != "" ||
+		len(read.Pages) != 1 || read.Pages[0].ID != "page-1" || read.Pages[0].Rank != 1 ||
+		read.Query == "" {
+		t.Errorf("prefetch read = %+v; want page-1 at rank 1 on confluence, with its query and no phase", read)
+	}
+}
+
+// knowledgeReadVia waits for the stored knowledge_read that came in one way,
+// and decodes it.
+func knowledgeReadVia(t *testing.T, n *node, via types.KnowledgeReadVia) *types.KnowledgeRead {
+	t.Helper()
+	var found *types.KnowledgeRead
+	waitFor(t, "a knowledge_read via "+string(via)+" to be stored", func() bool {
+		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+			store.ListQuery{Type: "knowledge_read", Limit: 50})
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID)
+			if err != nil {
+				return false
+			}
+			var ev events.Event
+			if err := json.Unmarshal(full.Payload, &ev); err != nil {
+				t.Fatalf("decode stored knowledge_read: %v", err)
+			}
+			if read, ok := events.DataAs[*types.KnowledgeRead](&ev); ok && read.Via == via {
+				found = read
+				return true
+			}
+		}
+		return false
+	})
+	return found
 }

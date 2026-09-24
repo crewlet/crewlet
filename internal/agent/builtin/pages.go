@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -253,7 +254,14 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 
 // ---- get_page ---------------------------------------------------------- //
 
-type getPage struct{ deps PageDeps }
+type getPage struct {
+	deps PageDeps
+
+	// events receives the `knowledge_read` a seat's read records. Nil
+	// records nothing: a registry built outside an engine, and the
+	// operator's catalogue, whose reader is a person rather than a seat.
+	events Telemetry
+}
 
 var _ tools.SeatCallable = (*getPage)(nil)
 
@@ -305,6 +313,10 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	case err != nil:
 		return pageReadFailure(GetPageTool, err), nil
 	}
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaGetPage, pages.Backend, "",
+		[]types.KnowledgeReadPage{{
+			ID: detail.Page.ID, Container: detail.Page.Container, Title: detail.Page.Title,
+		}}))
 	return jsonResult(detail)
 }
 

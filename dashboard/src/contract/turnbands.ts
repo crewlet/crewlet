@@ -165,6 +165,13 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * `task_assigned` was named here too and is a different mistake: it is the
  * SCHEDULER's cron fire — the wake that starts a turn — rather than work a
  * turn did. The trigger is already on the Turn screen, as the brief.
+ *
+ * `knowledge_read` is here for every one of its ways in, the two the ENGINE
+ * chose (`prefetch`, `skill_injected`) as well as the three the model did. The
+ * GIVEN band draws only the prefetch blocks and the prompt weights, so a row
+ * filed there would go unrendered; here its summary names the pages and the
+ * query, which is what a reader scanning a turn for "what did it look at" is
+ * after.
  */
 export const DID: ReadonlySet<string> = new Set([
   "sandbox_run_started",
@@ -172,6 +179,7 @@ export const DID: ReadonlySet<string> = new Set([
   "sandbox_run_completed",
   "subagent_batched",
   "skill_used",
+  "knowledge_read",
   "a2a_channel_opened",
   "a2a_message_sent",
   "a2a_channel_closed",

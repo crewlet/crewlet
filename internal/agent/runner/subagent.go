@@ -85,6 +85,13 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 	if !ok {
 		return tools.Entry{}
 	}
+	// ONE OFFER FOR THE PHASE'S WORKERS, drained as each one finishes, so
+	// every worker prompt's catalogue is recorded once — see
+	// [emitter.skillsInjected]. Drained on the completion path because
+	// that is the one hook the subagent package calls on every path a
+	// child can take, after its prompt was built.
+	offer := r.cfg.Skills.Offer()
+	emit := r.emitter().nestedAt(round)
 	tool := subagent.NewTool(subagent.Config{
 		Seat: r.cfg.Seat, Models: r.cfg.Models,
 		// The parent's UNIVERSE and its LIVE active list. The second is a
@@ -100,7 +107,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 			return s.Active()
 		},
 		Discovery: DiscoveryTools,
-		Skills:    r.catalogue(),
+		Skills:    offer.Catalogue(),
 		Budget:    r.cfg.Budget,
 		// The parent's OWN fence, not a second one: a worker has no grant
 		// of its own, and building a fresh check here would close on a
@@ -127,7 +134,10 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 		Guard: func(child *tools.Surface) tools.Guard {
 			return r.guardFor(phase.Subagent, child, nil).tools()
 		},
-		Telemetry: r.emitter().nestedAt(round).subagentCompleted,
+		Telemetry: func(ctx context.Context, res subagent.Result) {
+			emit.subagentCompleted(ctx, res)
+			emit.skillsInjected(ctx, phase.Subagent, offer.Drain())
+		},
 	})
 	return tools.Entry{
 		Tool: tool, Origin: tools.OriginBuiltin,

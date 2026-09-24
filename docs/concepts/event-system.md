@@ -258,9 +258,25 @@ turn_trigger_skipped       # a redelivery the completion ledger had already
 #           dashboard can include or exclude all of it with one toggle
 turn_completed, episode_written, persist_decider_completed
 counterparty_profile_updated, reflection_completed
-skill_synthesized, skill_refined, skill_promoted, skill_used
+skill_synthesized, skill_refined, skill_promoted
+skill_used                 # a seat loaded a skill; a company-published tool
+                           # skill names the page it was read from
+                           # (`source_page_id`, `source_container`), absent on
+                           # a skill the seat synthesized for itself
 skill_staled, skill_archived, skill_revived
 prefetch_summary
+knowledge_read             # a seat read from the knowledge base: ONE row per
+                           # act, listing the pages it reached
+                           # (`pages[{id, container, title, rank}]`, rank on
+                           # a ranked answer only), the `backend` their ids
+                           # are addresses in, the `phase` it happened in and
+                           # `via` — get_page, search, prefetch (the
+                           # turn-start block, no phase), skill_loaded, or
+                           # skill_injected (the pages behind a phase's
+                           # tool-skill catalogue). A search's `query` is
+                           # clipped to 200 bytes. A read that reached no
+                           # page, and a read with no seat (the operator
+                           # surface), publish nothing
 compaction_requested, compaction_completed
 
 # system: the engine talking about itself

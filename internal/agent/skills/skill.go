@@ -296,6 +296,15 @@ type Skill struct {
 	// Both are backend-neutral: a backend with no version concept stamps zero.
 	SourcePageID      string
 	SourcePageVersion int
+
+	// SourceBackend, SourceContainer and SourceTitle say where that page
+	// is and what it was called when it was read: the knowledge backend
+	// ("native", "confluence"), the container the skill sync walked, and
+	// the page's own title. Provenance for a record of the skill being
+	// used, never identity — a rename changes the title and nothing else.
+	SourceBackend   string
+	SourceContainer string
+	SourceTitle     string
 }
 
 // Validate refuses a skill that cannot be offered.

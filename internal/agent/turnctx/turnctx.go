@@ -167,6 +167,33 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+
+	// Phase is the phase session this value was bound for, and empty on
+	// the Turn the engine built for the whole turn. Set only through
+	// [Turn.InPhase], by the frame that builds a phase's tool surface, so
+	// a tool reporting what it did can say WHICH phase did it — a read in
+	// the executor and one in a delegate worker are different acts — without
+	// the phase travelling ambiently, which is exactly what this package
+	// refuses (an ambient phase attributes a call to whichever phase last
+	// wrote the context).
+	Phase types.Phase
+}
+
+// InPhase derives the Turn a phase session's tools see: this one, naming the
+// phase.
+//
+// A COPY rather than a write, because a Turn is immutable and the executor, the
+// reviewer and every delegate worker of one turn hold it at once. Everything
+// the copy points at is shared with the original — [Turn.Written] above all,
+// which is one set for the whole turn however many phases write into it. Nil
+// in, nil out, for a surface built outside a turn.
+func (t *Turn) InPhase(phase types.Phase) *Turn {
+	if t == nil {
+		return nil
+	}
+	bound := *t
+	bound.Phase = phase
+	return &bound
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.
