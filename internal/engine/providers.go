@@ -9,6 +9,11 @@
 // each of those is a package of its own (internal/agent/inbox, and the config
 // plane), and what remains here is the WIRING: which concrete thing satisfies
 // which seam.
+//
+// It is also where a turn is charged to the work it was on: which item a turn
+// is on is decided in worksubject.go and what each of its segments charges that
+// item in turnspend.go, because only this package holds the trigger, the
+// runner's tally and the tracker's writer together. ADR-0022 is the decision.
 package engine
 
 import (

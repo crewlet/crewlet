@@ -154,6 +154,12 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		return 0, nil
 	}
 
+	// THE REOPEN COUNTER, off the delta this row has just stored — see
+	// [countReopen] for why the row rather than the documents.
+	reopens, err := countReopen(ctx, tx, subject, fields)
+	if err != nil {
+		return 0, err
+	}
 	successors, err := a.raiseSuccessors(ctx, tx, subject.ID, c)
 	if err != nil {
 		return 0, err
@@ -166,7 +172,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	return rows + successors + stamped + inbox, nil
+	return rows + reopens + successors + stamped + inbox, nil
 }
 
 // stampProjectChange records that this commit changed the project's work, and

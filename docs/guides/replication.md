@@ -473,11 +473,13 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, one version past the base carries something a later
-build added. Version 2 is a task change carrying a cross-project move's mark:
-only the root of the subtree being moved carries it, and only until the move's
-walk is done. An old node holds those records back, with the task they are
-about, and applies every other write as it arrives.
+In the tracker today, two versions past the base carry something a later
+build added. Version 2 is a turn's charge to its task when it counts delegated
+workers or reviews that sent the work back. Version 3 is a task change carrying
+a cross-project move's mark: only the root of the subtree being moved carries
+it, and only until the move's walk is done. An old node holds those records
+back, with the task they are about, and applies every other write as it
+arrives.
 
 In the knowledge base, one kind of record does: a container's settings, at
 version 2, because they carry the activation that wrote them — a later
@@ -499,7 +501,9 @@ from the rows it holds, in the same transaction that records which rules the
 rows now follow, before it applies anything new. It happens once per change,
 on every node, including a node that just adopted a snapshot from a peer on a
 different build; the `statelog_rederived` log line names the domain, the rule
-versions it moved between and how many rows it wrote.
+versions it moved between and how many rows it wrote. The tracker's first such
+column is a task's `reopens`, recomputed from its history rows the first time a
+build that counts it boots.
 
 ### The other direction: a kind that was removed
 

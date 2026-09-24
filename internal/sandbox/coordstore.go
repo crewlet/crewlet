@@ -127,6 +127,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
+		// AND ITS COST: a parked job's tokens are paid by the resume its
+		// answer drives, which has happened by the time a new job opens.
+		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
 		// log is the whole record an agent-mode resume rebuilds its phase
 		// from, and a second executor round under the same turn id — what
@@ -206,6 +209,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Audience = q.Audience
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
+		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		return true
 	})
 	return err

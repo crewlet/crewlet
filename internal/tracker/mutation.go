@@ -37,9 +37,10 @@ import (
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// Version 2 is the cross-project move's marker on a task patch:
-// [TaskPatch.Moving].
-const RecordVersion = 2
+// Version 2 is the turn record's spend split: [TurnSpend.Workers] and
+// [TurnSpend.SentBack]. Version 3 is the cross-project move's marker on a task
+// patch: [TaskPatch.Moving].
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -75,7 +76,17 @@ const baseRecordVersion = 1
 // upgrade disagree about, so "nothing has been released" does not exempt a new
 // field from its row.
 var versionedFields = statelog.RecordFields{
-	// THE CROSS-PROJECT MOVE'S MARK, at version 2. A build reading 1
+	// THE TURN'S SPEND SPLIT, both at version 2. A build reading 1 adds a
+	// turn's tokens to its task and has no column for how many workers it
+	// delegated to or how often a reviewer sent it back — applied there,
+	// the task's `spend_workers` and `spend_sent_back` would stay behind
+	// its peers' for good. Scoped to the turn op because `workers` is the
+	// kind of key another payload could come to carry.
+	{Name: "TurnSpend.Workers", Since: 2, Op: string(OpTurn),
+		Path: []string{"mutation", "spend", "workers"}},
+	{Name: "TurnSpend.SentBack", Since: 2, Op: string(OpTurn),
+		Path: []string{"mutation", "spend", "sent_back"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 3. A build reading 2
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -86,7 +97,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 2, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 3, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 
@@ -1385,6 +1396,14 @@ func (n *Notify) checkSnapshot() error {
 // that insert affected a row, in the same transaction. A redelivery therefore
 // cannot double-count, and an update affecting zero rows is a malformed record
 // that stops the loop rather than a rounding error nobody sees.
+//
+// WHAT A TURN'S TOKENS ARE is the engine's to decide (see ADR-0022): its own
+// phases, the workers it delegated to and the extension judge, plus a
+// collected coding run's tokens on the segment that resumed from it. Workers
+// and SentBack are COUNTS beside those tokens, not more tokens — how many
+// delegated tasks ran and how many reviews sent the work back — and both are
+// version-2 fields (see [versionedFields]), OMITTED AT ZERO so a turn that
+// delegated nothing and passed its first review stays readable by every build.
 type TurnSpend struct {
 	Turns      int `json:"turns,omitempty"`
 	Rounds     int `json:"rounds,omitempty"`
@@ -1393,6 +1412,8 @@ type TurnSpend struct {
 	CacheRead  int `json:"cache_read,omitempty"`
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // Tokens is the derived eighth counter, so nothing else adds the two halves.

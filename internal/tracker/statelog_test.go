@@ -64,7 +64,12 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 // as the path being wrong, which is a fixture fault dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	at := time.Unix(1_700_000_000, 0).UTC()
+	spend := tracker.TurnSpend{Turns: 1, Input: 100, Output: 50}
 	switch field.Name {
+	case "TurnSpend.Workers":
+		spend.Workers = 2
+	case "TurnSpend.SentBack":
+		spend.SentBack = 1
 	case "TaskPatch.Moving":
 		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
 		// the mark its walk is still running under.
@@ -86,6 +91,21 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)
 	}
+	body, err := json.Marshal(tracker.TurnRecord{
+		Task: "suite-task", Seat: "dev", TurnID: "run-1", Outcome: "done",
+		Phases: []string{"execute"}, Spend: spend,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			OpID: "suite-carrying", Subject: tracker.TurnSubject("suite-task"),
+			Op: tracker.OpTurn, CreatedAt: at, Writer: "suite-node",
+			Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+		},
+		Mutation: body, Actor: "dev", ActorKind: tracker.AuthorAgent,
+	}.Encode()
 }
 
 // encodeSuiteGate is the eviction record a peer's writer publishes onto this

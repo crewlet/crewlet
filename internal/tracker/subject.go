@@ -465,6 +465,19 @@ func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn
 }
 
+// GatedByPurge reports a kind whose subject id is a TASK id, so a purge of
+// that task's marker gates every record of it: the task's own, and the turns
+// charged to it.
+//
+// ONE PREDICATE for both statements of the deletion gate — the applier's
+// ([Applier.Gated]) and the publisher's outcome resolution
+// ([Gates.GatedAt]) — because the two answer one question and a kind added to
+// one of them would drop a record on every node while its writer was told it
+// had applied.
+func (k ObjectKind) GatedByPurge() bool {
+	return k == KindTask || k == KindTurn
+}
+
 // ProjectKey normalises what somebody typed into what the column stores.
 //
 // ONE SPELLING of a rule three parsers already carried separately: a project

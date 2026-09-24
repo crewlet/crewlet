@@ -1186,6 +1186,7 @@ var sortColumns = map[string]sortColumn{
 	"estimate":       {Column: "t.estimate_min"},
 	"points":         {Column: "t.points"},
 	"spend":          {Column: "t.spend_tokens"},
+	"reopens":        {Column: "t.reopens"},
 	"status_entered": {Column: "t.status_entered_at"},
 
 	// NULLABLE, and the two that made this rule necessary: a task with no

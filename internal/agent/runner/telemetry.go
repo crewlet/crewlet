@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -225,9 +226,11 @@ type Spend struct {
 	WorkerInput  int
 	WorkerOutput int
 
-	// Judged and JudgeTokens count the round-cap extension judge: how many
-	// times a phase ran out of rounds and asked for more, and what those
-	// calls cost between them.
+	// Judged, JudgeInput and JudgeOutput count the round-cap extension
+	// judge: how many times a phase ran out of rounds and asked for more,
+	// and what those calls cost between them — split the way every other
+	// token figure is, because a task's charge adds them to its own input
+	// and output (ADR-0022).
 	//
 	// Kept out of the turn's own totals for the same reason a worker's are —
 	// the judge's spend goes through the shared meter, so folding it in
@@ -236,7 +239,21 @@ type Spend struct {
 	// cannot: whether a seat's cost is its work or its arguing about
 	// whether to keep working.
 	Judged      int
-	JudgeTokens int
+	JudgeInput  int
+	JudgeOutput int
+
+	// Rounds is the provider rounds the turn's completed phases ran, as
+	// each phase record states them — so a resumed phase counts the rounds
+	// before its suspend as well as after, exactly as its tokens do.
+	Rounds int
+
+	// SentBack is how many reviews returned the work for another pass: the
+	// review phases that decided self_iterate. The same count the usage
+	// domain's per-seat `sent_back` is, taken from the same records.
+	SentBack int
+
+	// Phases are the phases that completed, in the order each first ran.
+	Phases []string
 }
 
 // Total is the turn's own token count — what its PHASES spent, and what the
@@ -247,6 +264,9 @@ func (s Spend) Total() int { return s.InputTokens + s.OutputTokens }
 
 // WorkerTokens is what the turn's delegated workers cost between them.
 func (s Spend) WorkerTokens() int { return s.WorkerInput + s.WorkerOutput }
+
+// JudgeTokens is what the turn's extension judgements cost between them.
+func (s Spend) JudgeTokens() int { return s.JudgeInput + s.JudgeOutput }
 
 // recordWorker folds one finished delegated task into the tally.
 //
@@ -263,9 +283,10 @@ func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 //
 // No lock, like record and unlike recordWorker: the judge is called from the
 // phase's own goroutine, between tool-loop invocations.
-func (s *Spend) recordJudge(tokens int) {
+func (s *Spend) recordJudge(d extension.Decision) {
 	s.Judged++
-	s.JudgeTokens += tokens
+	s.JudgeInput += d.InputTokens
+	s.JudgeOutput += d.OutputTokens
 }
 
 // Spend reports what this turn has cost so far.
@@ -291,6 +312,13 @@ func (s *Spend) record(rec phaseRecord) {
 	s.OutputTokens += rec.Result.OutputTokens
 	s.CacheRead += rec.Result.CacheRead
 	s.CacheWrite += rec.Result.CacheWrite
+	s.Rounds += rec.Result.RoundsUsed
+	if name := rec.Phase.String(); !slices.Contains(s.Phases, name) {
+		s.Phases = append(s.Phases, name)
+	}
+	if rec.Phase == phase.Review && rec.Decision == string(phase.SelfIterate) {
+		s.SentBack++
+	}
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}
@@ -882,7 +910,7 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 ) {
 	// Tallied first, as everywhere here: the tally is the turn's own
 	// accounting and must not depend on whether anyone is listening.
-	e.tally.recordJudge(d.Tokens())
+	e.tally.recordJudge(d)
 	if !e.on() {
 		return
 	}

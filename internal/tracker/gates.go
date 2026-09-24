@@ -213,8 +213,10 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		// marker holds the task for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`
 		// is the answer that stays true. The applier's opposite order
-		// decides only which gate a drop is COUNTED under.
-		if ObjectKind(subj.Kind) == KindTask {
+		// decides only which gate a drop is COUNTED under. Every kind the
+		// marker gates ([ObjectKind.GatedByPurge]) — a turn charged to a
+		// purged task as well as the task — is keyed on the task's id.
+		if ObjectKind(subj.Kind).GatedByPurge() {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,

@@ -204,6 +204,8 @@ type Spend struct {
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
 	Tokens     int `json:"tokens,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // Tombstone is an operator's removal.
