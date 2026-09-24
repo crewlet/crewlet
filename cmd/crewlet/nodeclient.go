@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Talking to a running node.
@@ -168,22 +170,72 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 		return noAnswer{fmt.Errorf("reading the node's answer to %s: %w", path, err)}
 	}
 	if len(body) > maxNodeResponseBytes {
-		return fmt.Errorf(
-			"the node's answer to %s exceeded %d bytes, so it was not read: this "+
-				"build caps one answer to bound a proxy's error page. Check that "+
-				"-url names the engine rather than something in front of it",
-			path, maxNodeResponseBytes)
+		// NOT THE NODE'S ANSWER EITHER: no answer this API writes comes
+		// near the cap, so what did is something in front of it — and
+		// what the node did with the request is as unknown as if nothing
+		// had come back at all.
+		return noAnswer{fmt.Errorf(
+			"the answer to %s exceeded %d bytes, so it was not read: this build "+
+				"caps one answer to bound a proxy's error page, and what the node "+
+				"did with the request is unknown. Check that -url names the engine "+
+				"rather than something in front of it",
+			path, maxNodeResponseBytes)}
 	}
 	if resp.StatusCode != http.StatusOK {
+		if engineCode(body) == "" {
+			return notTheNode(path, resp.StatusCode, body)
+		}
 		return nodeError(resp.StatusCode, body, c.token != "")
 	}
 	if into == nil {
 		return nil
 	}
 	if err := json.Unmarshal(body, into); err != nil {
-		return fmt.Errorf("the node's answer was not the expected JSON: %w", err)
+		// A 200 WHOSE BODY DOES NOT DECODE is an answer cut short — a
+		// proxy that closed a buffered response, a connection that ended
+		// on a clean boundary — and says nothing about what the node did.
+		// Reported as a plain error it read as a failure, and a gesture
+		// that very likely ran printed nothing that finishes it.
+		return noAnswer{fmt.Errorf("the answer to %s was cut short or is not the "+
+			"JSON the node writes (%w), so what the node did is unknown", path, err)}
 	}
 	return nil
+}
+
+// engineCode is the refusal code a non-200 body carries, or "" where it carries
+// none — which no refusal the engine writes does: every one is JSON with an
+// `error` code, the guard's 401 included.
+func engineCode(body []byte) string {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	return payload.Error
+}
+
+// notTheNode is a non-200 that is not the node's own answer: no engine error
+// code, so something between this command and the node wrote it — most often
+// a reverse proxy's read timeout, a 504 with an HTML page, while the node went
+// on to finish the request.
+//
+// # Why it is a noAnswer and not a refusal
+//
+// Because a refusal the node wrote means nothing was done, and this does not:
+// the gate route takes up to a minute past its judgement, a proxy's default
+// read timeout is a minute, and the node finishes a gesture whatever happens to
+// the connection. Read as a refusal, the eviction printed no -op-id, so the
+// only way on was a second gesture over every log the first one reached.
+func notTheNode(path string, status int, body []byte) error {
+	said := textcut.Ellipsis(strings.TrimSpace(string(body)), maxRefusalTextBytes)
+	if said == "" {
+		said = "(an empty body)"
+	}
+	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+
+		"the engine writes, so it is not the node's own: something in front of it "+
+		"answered — a proxy or gateway, most often its read timeout — and the node "+
+		"may still have done what was asked. It said: %s", path, status, said)}
 }
 
 // noAnswer is a request the node never answered: it could not be reached, the
@@ -215,7 +267,9 @@ type nodeRefusal struct {
 
 func (e *nodeRefusal) Error() string { return e.msg }
 
-// nodeError turns a non-200 into something an operator can act on.
+// nodeError turns a non-200 the NODE wrote into something an operator can act
+// on. Only an answer carrying an engine error code reaches it: one that
+// carries none is [notTheNode]'s.
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
 		Error   string   `json:"error"`
@@ -234,21 +288,16 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		return errors.New("the node refused the token: check it against the " +
 			"api.auth.tokens entry you meant to use")
 	case http.StatusServiceUnavailable:
-		// TWO DIFFERENT FACTS on this surface, and the guess below is
-		// only one of them: a node built without the backend a route
-		// needs, and a node DRAINING for a shutdown. The body says
-		// which, so the guess is a fallback rather than the answer, and
-		// the detail and hint beside it are what say where to go
-		// instead — "draining" on its own names what happened and not
-		// what to do about it.
+		// TWO DIFFERENT FACTS on this surface: a node built without the
+		// backend a route needs, and a node DRAINING for a shutdown. The
+		// code says which, and the detail and hint beside it are what say
+		// where to go instead — "draining" on its own names what happened
+		// and not what to do about it.
 		refusal.msg = "this node cannot serve that: " + withRefusalDetail(
-			firstNonEmpty(payload.Error,
-				"it is running without the backend the route needs"),
-			payload.Detail, payload.Hint)
+			payload.Error, payload.Detail, payload.Hint)
 	default:
 		refusal.msg = fmt.Sprintf("the node answered %d: %s", status,
-			withRefusalDetail(firstNonEmpty(payload.Error, string(body)),
-				payload.Detail, payload.Hint))
+			withRefusalDetail(payload.Error, payload.Detail, payload.Hint))
 	}
 	return refusal
 }

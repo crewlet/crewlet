@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -49,6 +51,10 @@ type fakeRetentionNode struct {
 	// hangUp makes a gate request go unanswered: the connection is closed
 	// with no response.
 	hangUp bool
+
+	// gateReply, when set, writes the gate's whole response instead of the
+	// route's renderer — what something in front of the node sends.
+	gateReply func(w http.ResponseWriter)
 
 	// mu guards the gate fields for a reader that no response synchronises
 	// with — a request [fakeRetentionNode.hangUp] never answered.
@@ -93,6 +99,10 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 				n.gateKind = verb
 				n.gateQuery = r.URL.Query()
 				n.mu.Unlock()
+				if n.gateReply != nil {
+					n.gateReply(w)
+					return
+				}
 				if n.hangUp {
 					// NO ANSWER AT ALL: the connection goes the way a
 					// client timeout or a dropped link takes it.
@@ -724,6 +734,86 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	if gateRequestTimeout <= engine.GateBudget {
 		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
 			gateRequestTimeout, engine.GateBudget)
+	}
+}
+
+// AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
+// timeout — a 504 with an HTML page, at a minute, which is also the budget the
+// node gives a gesture past its judgement — and a 200 cut off part way through
+// both leave what the node did unknown, and the node finishes a gesture
+// whatever happens to the connection. Read as a refusal, the eviction printed
+// no -op-id, and the only way on was a second gesture over every log the first
+// one reached.
+func TestAGateAnswerTheNodeDidNotWriteNamesItsOperation(t *testing.T) {
+	for name, reply := range map[string]func(w http.ResponseWriter){
+		"a gateway timeout's page": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_, _ = w.Write([]byte("<html><body><h1>504 Gateway Time-out</h1></body></html>"))
+		},
+		"a bad gateway with a JSON body of its own": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"message":"upstream closed the connection"}`))
+		},
+		"a 200 cut off part way through": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"node":"node-4","op_id":"01a0`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			node := newFakeRetentionNode(t)
+			base := bootstrapForURL(t, node.server.URL)
+			node.gateReply = reply
+
+			_, stderr, err := cli(t, "retention", "evict", "node-4", base,
+				"-confirm", "node-4")
+			if err == nil {
+				t.Fatal("a gesture whose answer never came from the node exited zero")
+			}
+			sent := node.lastGate().Get("op_id")
+			if want := "-op-id " + sent; sent == "" || !strings.Contains(stderr, want) {
+				t.Errorf("the gesture never says %q, so the only way on is a "+
+					"second gesture:\n%s\n%v", want, stderr, err)
+			}
+		})
+	}
+}
+
+// ONLY AN ANSWER CARRYING AN ENGINE ERROR CODE IS THE NODE'S REFUSAL. Every
+// refusal the engine writes is JSON with an `error` code, so one without is
+// something in front of it — and a refusal read as "no answer" would tell an
+// operator a 409 that wrote nothing might have done what it refused.
+func TestOnlyAnAnswerWithAnEngineCodeIsTheNodesRefusal(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		node   bool
+	}{
+		"an engine refusal":           {http.StatusConflict, `{"error":"eviction_refused","detail":"live"}`, true},
+		"a drain":                     {http.StatusServiceUnavailable, `{"error":"draining"}`, true},
+		"a gateway page":              {http.StatusGatewayTimeout, "<html>504</html>", false},
+		"a 503 carrying no code":      {http.StatusServiceUnavailable, `{}`, false},
+		"an empty 502":                {http.StatusBadGateway, "", false},
+		"a 200 whose JSON is cut off": {http.StatusOK, `{"node":`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(server.Close)
+			client := &nodeClient{base: server.URL, token: "t", http: httpx.Client(nodeRequestTimeout)}
+			var into map[string]any
+			err := client.post(t.Context(), "/work/retention/evict/node-4", &into)
+			var lost noAnswer
+			if got := !errors.As(err, &lost); err == nil || got != tc.node {
+				t.Errorf("%d %q = %v; the node's own answer %v, want %v", tc.status,
+					tc.body, err, got, tc.node)
+			}
+		})
 	}
 }
 

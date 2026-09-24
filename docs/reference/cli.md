@@ -839,7 +839,10 @@ command's rendering of the node's `actions` (see
 The command mints the operation id **before** it asks, and waits
 seventy-five seconds for the answer — past the minute the node allows a
 gesture, which it finishes even if the connection drops. So a gesture that got
-no answer at all still prints the `-op-id` that finishes it. Pass it back
+no answer at all still prints the `-op-id` that finishes it — and so does one
+whose answer the node did not write: a reverse proxy's 504 page, any status
+carrying no engine error code, or a 200 cut off part way through, each of
+which says nothing about what the node did. Pass it back
 exactly as printed: the node refuses (`op_id_invalid`) an id that is not in
 the engine's grammar — a UUIDv7 carrying its mint instant — and one over 128
 bytes or holding anything but visible ASCII, since the broker would carry that

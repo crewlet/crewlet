@@ -523,7 +523,9 @@ after the first run the retry comes. A fresh id would be a second gesture
 rather than this one finished. The command mints the id **before** it asks —
 in the engine's own grammar, carrying its instant, since the node refuses an id
 that carries none — so a gesture the node never answered — the connection
-dropped, the wait ran out — still prints the `-op-id` that finishes it.
+dropped, the wait ran out, or what came back was not the node's own answer (a
+proxy's 504 page, any status with no engine error code, a 200 cut off part way
+through) — still prints the `-op-id` that finishes it.
 
 Where running it again **cannot** finish a log straight away, it says what
 has to happen first — and in every case but two, the gesture survives that
