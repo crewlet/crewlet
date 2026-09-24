@@ -60,20 +60,36 @@ lists the project sees what it just filed.
 Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
 [three values every write has](replication.md#a-write-has-three-outcomes) — and
 the `position` it is durable at. A write whose outcome is **unknown** is never
-answered with the id and revision of something that may not exist: the tool
-answers that it may have landed and may not, and what to do. That includes
-`create_work_item`, whose unknown answer names the key this attempt minted, if
-it minted one, as the key the item has *if* it was filed — never as a receipt.
+answered with the id, key, version or revision of something that may not
+exist, on any write tool on either surface: the call fails, saying that the
+write may have landed and may not, under which operation, and what to do. That
+includes `create_work_item`, whose unknown answer names the key this attempt
+minted, if it minted one, as the key the item has *if* it was filed — never as
+a receipt — and a comment, whose id, mentions and ask are not reported beside
+a remark nobody can say was posted. An `update_work_item` whose change is
+unknown writes none of the dependency changes it was also asked for: it stops
+there, and the same call made again answers the change first and writes them
+after. And the `version` an update answers with is always the item's own and
+its newest — the one to send back as `if_match` — never another item's that
+the same call wrote, and never one its own dependency change has already moved
+the item past, when a call changes both; its `position` is likewise the call's
+last write, so waiting for it waits for all of them.
+
 Where this node's operation ledger cannot vouch for the operation — it was
 minted before the ledger may have lost rows, a seat woken by a backlog trigger
 just after its node adopted a snapshot — the answer says this node cannot
-tell, because the same call here answers the same way until the write reaches
-this node, and tells the caller to look before writing it again; a gesture
-that stopped part of the way through at such a step is not told to repeat
-itself either. A seat's own comment or create under a plain lost
-acknowledgement is told to repeat the call with exactly the same arguments,
-before any different call to the same tool — that is the same operation, and
-it lands once. Reworded, it is a new one.
+tell, because the same operation asked here answers the same way until the
+write reaches this node, and tells the caller to look before writing it again;
+a gesture that stopped part of the way through at such a step is not told to
+repeat itself either. A seat's own write under a plain lost acknowledgement is
+told to repeat the call with exactly the same arguments, before any different
+call to the same tool — that is the same operation, and it lands once.
+Reworded, it is a new one. Where the ledger cannot vouch for it, that same
+repeat is still safe — it publishes nothing this node cannot vouch for — but it
+answers the same way until the write reaches this node, so looking says sooner.
+The two writes that state a whole value rather than change one —
+`write_project` and `write_work_catalogue` — say instead that repeating them is
+harmless: each call is a new operation stating the same thing.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),

@@ -714,21 +714,58 @@ func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
 		}
 	}
 
-	// A SEAT'S COMMENT UNDER A LOST ACKNOWLEDGEMENT IS FINISHED BY THE SAME
-	// CALL, and an unvouched one is not — the same call meets the same
-	// scrubbed ledger here every time.
-	for unvouched, want := range map[bool]string{
-		false: "Call comment_on_page again with exactly the same arguments",
-		true:  "Do not post it again without checking the page",
+	// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is derived
+	// from its turn, so its repeat is the same comment: under a lost
+	// acknowledgement it posts once, and unvouched it publishes nothing and
+	// answers the same way — so it is SAFE, never "a second comment", which
+	// is what a seat was told. An operator's comment has no turn to derive
+	// from, so its repeat is a new one.
+	operator := func(context.Context, *turnctx.Turn) (pages.Actor, error) {
+		return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+			OperatorID: "founder"}, nil
+	}
+	for _, tc := range []struct {
+		name      string
+		operator  bool
+		unvouched bool
+		want      []string
+		refuse    []string
+	}{
+		{name: "a seat under a lost acknowledgement",
+			want: []string{"Call comment_on_page again with exactly the same arguments",
+				"lands once"}},
+		{name: "a seat the ledger cannot vouch for", unvouched: true,
+			want: []string{"get_page before doing anything else",
+				"call comment_on_page again with exactly the same arguments",
+				"that is safe"},
+			refuse: []string{"a second call is a new operation"}},
+		{name: "an operator", operator: true,
+			want:   []string{"get_page before making it again", "a second comment"},
+			refuse: []string{"exactly the same arguments", "that is safe"}},
+		{name: "an operator the ledger cannot vouch for", operator: true, unvouched: true,
+			want:   []string{"get_page before making it again", "a second comment"},
+			refuse: []string{"exactly the same arguments", "that is safe"}},
 	} {
 		kb := newFakeKB()
 		kb.outcome = &statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op",
-			Unvouched: unvouched}
-		out := callWork(t, kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb}),
-			builtin.CommentOnPageTool, calls["comment"])
-		if !strings.Contains(out.Output, want) {
-			t.Errorf("an unknown comment (unvouched %v) never says %q: %s",
-				unvouched, want, out.Output)
+			Unvouched: tc.unvouched}
+		deps := builtin.PageDeps{Reader: kb, Writer: kb}
+		call := callWork
+		if tc.operator {
+			deps.Actor, call = operator, callNoTurn
+		}
+		out := call(t, kbRegistry(t, deps), builtin.CommentOnPageTool, calls["comment"])
+		for _, want := range tc.want {
+			if !strings.Contains(out.Output, want) {
+				t.Errorf("%s: the unknown comment never says %q: %s", tc.name,
+					want, out.Output)
+			}
+		}
+		for _, bad := range tc.refuse {
+			if strings.Contains(out.Output, bad) {
+				t.Errorf("%s: the unknown comment says %q, which is not what "+
+					"its repeat is: %s", tc.name, bad, out.Output)
+			}
 		}
 	}
 }

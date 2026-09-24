@@ -77,8 +77,9 @@ type fakeTracker struct {
 
 	// depended is every dependency change the tool composed, and
 	// dependErr what the sequence answers.
-	depended  []tracker.DependencyChange
-	dependErr error
+	depended     []tracker.DependencyChange
+	dependErr    error
+	dependAnswer *tracker.DependencyResult
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
@@ -830,7 +831,7 @@ func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
 		{
 			name: "a seat the ledger cannot vouch for looks before it refiles", answer: unvouched,
 			want: []string{"this node cannot tell", "list_work_items",
-				"Never file it again under different wording"},
+				"Never make it again under different arguments"},
 			refuse: []string{"If this attempt filed it", "acknowledgement was lost"},
 		},
 		{
@@ -1325,6 +1326,9 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
 		return tracker.DependencyResult{}, f.dependErr
+	}
+	if f.dependAnswer != nil {
+		return *f.dependAnswer, nil
 	}
 	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
 		Result: statelog.Result{

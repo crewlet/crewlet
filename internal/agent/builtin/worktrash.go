@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -117,8 +118,8 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Removed = &tracker.Tombstone{
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
-	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx,
-		opIDFor(actor, t.Name(), "remove", before.Task.ID, args), before.Task.ID,
+	opID := opIDFor(actor, t.Name(), "remove", before.Task.ID, args)
+	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx, opID, before.Task.ID,
 		before.Task.Project, argBool(args, "subtree"),
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
@@ -130,6 +131,15 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			before.Task.Key, "removed", got, stopped)
 	case err != nil:
 		return failed(writeFailure(actor, tracker.RemoveWorkItemTool, err)), nil
+	case got.Outcome == statelog.OutcomeUnknown:
+		// See [mergeWorkItem]: the seam's contract, held here.
+		return failed(unknownWrite(actor, tracker.RemoveWorkItemTool,
+			fmt.Sprintf("%s went to the trash", before.Task.Key), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, tracker.RemoveWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+					"is in the trash", before.Task.Key),
+				"it changes nothing, since the item is already there"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{
@@ -208,8 +218,8 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	after := before.Task
 	after.Removed = nil
-	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx,
-		opIDFor(actor, t.Name(), "restore", before.Task.ID, args), before.Task.ID,
+	opID := opIDFor(actor, t.Name(), "restore", before.Task.ID, args)
+	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx, opID, before.Task.ID,
 		before.Task.Project,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
@@ -225,6 +235,14 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			before.Task.Key, "restored", got, stopped)
 	case err != nil:
 		return failed(writeFailure(actor, tracker.RestoreWorkItemTool, err)), nil
+	case got.Outcome == statelog.OutcomeUnknown:
+		return failed(unknownWrite(actor, tracker.RestoreWorkItemTool,
+			fmt.Sprintf("%s came out of the trash", before.Task.Key), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, tracker.RestoreWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
+					"is still in the trash", before.Task.Key),
+				"it is refused, since there is nothing left to restore"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{

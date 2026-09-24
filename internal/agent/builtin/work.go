@@ -1576,58 +1576,114 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // NOT made": the seat then reworded the call and filed a duplicate of the item
 // its first run had filed.
 //
-// # What it tells the caller to do depends on whether a repeat is the same operation
-//
-// Where a repeat can be the same operation ([sameCall]) — a seat repeating its
-// arguments, an operator bringing back its `op_id` — it answers with the item
-// if it landed and files it once if it did not; reworded, it is a new item. An
-// unvouched one publishes nothing whatever it is asked, so that repeat is safe
-// and answers the same way until this node holds the item — the list is what
-// can say sooner. A caller with no repeat that is the same operation is told
-// to look before filing again, because its repeat is a second item.
-//
-// THE OPERATION IT NAMES is the one to bring back where there is one to bring
-// back: the create's own step id handed back as an `op_id` would be a new
-// call's operation, deriving a new task.
+// What it tells the caller to do next is [unknownNext]'s, which every
+// tracker write that can answer `unknown` shares.
 func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
+	filed := ""
+	if got.Key != "" {
+		filed = fmt.Sprintf(" If this attempt filed it, it is %s.", got.Key)
+	}
+	return unknownWrite(actor, CreateWorkItemTool, "the work item was filed",
+		opID, got.Unvouched, filed+" "+unknownNext(got.Unvouched,
+			sameCall(actor, CreateWorkItemTool),
+			"Look for it with list_work_items", "it files a second item"))
+}
+
+// unknownWrite explains a tracker write whose outcome is unknown, as the
+// failed result every write tool answers one with: whether `what` happened is
+// unknown, why, under which operation, and next.
+//
+// # Why a failed result and never a receipt carrying `outcome: unknown`
+//
+// Because the rest of a receipt is a claim. A `comment_id` or a `version`
+// beside the word "unknown" is read as the comment's id or the item's new
+// version, and the seat reports the change made — when nothing may have been
+// published at all: an operation this node's ledger cannot vouch for is
+// answered `unknown` WITHOUT publishing, which is exactly the answer a seat
+// woken by a backlog trigger just after its node adopted a snapshot gets.
+//
+// # Which operation it names
+//
+// A caller holding an `op_id` brings THAT back ([sameCall]), so that is the
+// one named: every write the call makes is a step derived from it, and a
+// step's id handed back as an `op_id` would be a new call's operation. Any
+// other caller is shown `opID`, the operation the tool handed the writer —
+// never a step inside a sequence, which is a detail of how the tracker walks
+// it.
+//
+// AN UNVOUCHED ONE SAYS SO, because it sends the caller somewhere else: the
+// same call here answers the same way every time, since the ledger row the
+// answer needs is the one the loss took.
+func unknownWrite(actor Actor, tool, what, opID string, unvouched bool,
+	next string) string {
+
 	why := "the write's acknowledgement was lost"
-	if got.Unvouched {
+	if unvouched {
 		why = "this node's operation ledger may have lost the record of this " +
 			"operation, so this node cannot tell"
 	}
 	if actor.Operation != "" {
 		opID = actor.Operation
 	}
-	filed := ""
-	if got.Key != "" {
-		filed = fmt.Sprintf(" If this attempt filed it, it is %s.", got.Key)
-	}
-	again := sameCall(actor, CreateWorkItemTool)
-	var next string
+	return fmt.Sprintf("%s: whether %s is unknown (%s; operation %s). It may "+
+		"have landed and it may not — do not report it as done, and do not "+
+		"report it as failed. %s", tool, what, why, opID,
+		strings.TrimSpace(next))
+}
+
+// unknownNext says what a caller told `unknown` does next, from the two facts
+// that decide it: whether this node's ledger can vouch for the operation, and
+// whether this caller has a repeat that IS the same operation ([sameCall] —
+// `again`, or "" where it has none).
+//
+// # Why four answers
+//
+// A LOST ACKNOWLEDGEMENT with a same-operation repeat is finished by that
+// repeat: the ledger answers what landed, and it lands once if it did not.
+// Reworded it is a new operation, which is the duplicate.
+//
+// AN UNVOUCHED ONE with such a repeat publishes nothing whatever it is asked,
+// so the repeat is SAFE — but it answers the same way until the write reaches
+// this node, so looking is what can say sooner, and a reworded call is still
+// the duplicate.
+//
+// A CALLER WITH NO SUCH REPEAT has only a new operation to make, so it looks
+// first either way: `twice` is what that new operation does if the first one
+// landed.
+//
+// `look` is a clause naming the read that shows whether it landed, in the
+// imperative ("Read ENG-4 with get_work_item").
+func unknownNext(unvouched bool, again, look, twice string) string {
 	switch {
-	case got.Unvouched && again != "":
-		next = "Look for it with list_work_items before doing anything else " +
-			"about it. To repeat it, " + again + ": that is safe — it files " +
-			"nothing this node cannot vouch for — but answers the same way " +
-			"until the item reaches this node. Never file it again under " +
-			"different wording: if the first call filed it, that is a second item."
+	case unvouched && again != "":
+		return look + " before doing anything else about it. To repeat it, " +
+			again + ": that is safe — it writes nothing this node cannot vouch " +
+			"for — but answers the same way until the write reaches this node. " +
+			"Never make it again under different arguments: if the first call " +
+			"landed, " + twice + "."
 	case again != "":
-		next = capitalize(again) + ": the retry is the same operation, " +
-			"answers with the item if it was filed, and files it once if it " +
-			"was not. Do not reword it — a call with different arguments is a " +
-			"new item."
-	case got.Unvouched:
-		next = "Look for it with list_work_items before filing it again: if " +
-			"the first attempt filed it, a second call files a second item."
-	default:
-		next = "Look for it with list_work_items before filing it again: a " +
-			"second call is a new operation, and files a second item if the " +
-			"first one landed."
+		return capitalize(again) + ": the retry is the same operation, answers " +
+			"with what landed, and lands once if it did not. Do not reword it: " +
+			"a call with different arguments is a new operation, and if the " +
+			"first one landed, " + twice + "."
+	case unvouched:
+		return look + " before making it again: this node cannot tell, and if " +
+			"the first call landed, " + twice + "."
 	}
-	return fmt.Sprintf("%s: whether the work item was filed is unknown (%s; "+
-		"operation %s). It may exist and it may not — do not report it as "+
-		"filed, and do not report it as failed.%s %s",
-		CreateWorkItemTool, why, opID, filed, next)
+	return look + " before making it again: a second call is a new operation, " +
+		"and if the first one landed, " + twice + "."
+}
+
+// restateNext is [unknownNext] for a write that STATES a value rather than
+// changing one — a catalogue list, a project's tags and policy — and mints a
+// fresh operation on every call: a repeat is a new operation, and harmless,
+// because it states the same thing again and changes nothing if the first one
+// landed. So it is offered rather than warned against, and never offered as
+// "the same operation", which it is not.
+func restateNext(look string) string {
+	return look + " to see whether it did. Making the same call again is " +
+		"harmless: it is a new operation stating the same thing, so it changes " +
+		"nothing if the first one landed."
 }
 
 // dependencyFailure explains a create whose ITEM was filed and whose
@@ -2131,14 +2187,17 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	answer := withOperation(map[string]any{
 		"key": before.Task.Key, "labels_created": declared,
 	}, actor)
+	// patchedAt is where the patch landed, when it ran: the dependency step
+	// below replaces the answer's position only with a LATER one.
+	var patchedAt statelog.Position
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
 	// this item would put a `fields` commit in the feed that changed no
 	// fields.
 	if !patch.Empty() {
-		got, err := writer.UpdateTask(ctx,
-			opIDFor(actor, t.Name(), "update", before.Task.ID, args), before.Task.ID,
+		opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
+		got, err := writer.UpdateTask(ctx, opID, before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
 				Kind:   kind,
@@ -2149,7 +2208,17 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		if err != nil {
 			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
 		}
+		if got.Outcome == statelog.OutcomeUnknown {
+			// A CHANGE NOBODY CAN SAY LANDED IS NOT ONE TO REPORT, and
+			// its `version` least of all: handed back as `if_match` it
+			// names a version the item may never have had. And the
+			// dependencies wait for it — the same call made again answers
+			// this write first and writes them after, once.
+			return failed(updateUnknown(actor, opID, got, before.Task,
+				!change.Empty())), nil
+		}
 		t.deps.settle(ctx, got.Position)
+		patchedAt = got.Position
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
 		answer["position"] = positionOf(got.Position)
 		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
@@ -2172,9 +2241,33 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
 		}
 		t.deps.settle(ctx, result.Position)
-		if _, held := answer["outcome"]; !held {
-			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
+		_, patchRan := answer["outcome"]
+		// THE LATER OF THE TWO POSITIONS, with the outcome that goes with
+		// it. The dependency step runs after the patch and the tracker's
+		// log is strictly ordered, so where its last commit is later it is
+		// the one this call is durable — and applied here, or not — at:
+		// an answer carrying the patch's position had a caller settle
+		// short of its own call's writes.
+		if later, err := patchedAt.Before(result.Position); !patchRan ||
+			(err == nil && later) {
+			answer["outcome"] = string(result.Outcome)
 			answer["position"] = positionOf(result.Position)
+		}
+		// THIS ITEM'S OWN VERSION, never the last commit's. A dependency
+		// change writes other items too — each blocker's mirror, each
+		// dependent's edge — and the last of those is somebody else's
+		// version: handed back as `if_match` on this item it was refused
+		// as stale. Zero where the call landed nothing on this item's own
+		// subject, which as `if_match` is no condition at all — and so,
+		// where the patch ran, the patch's version stands.
+		//
+		// WHERE BOTH WROTE THIS ITEM, THE DEPENDENCY'S IS THE NEWER: its
+		// `waiting_on` commit lands on the same subject after the patch.
+		// Answering the patch's version handed the caller an `if_match`
+		// its own call's second write had already moved past, and the
+		// next update was refused as stale by nobody but itself.
+		if !patchRan || result.TaskVersion != 0 {
+			answer["version"] = result.TaskVersion
 		}
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
@@ -2186,6 +2279,29 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	return jsonResult(answer)
+}
+
+// updateUnknown explains an update whose outcome is unknown — see
+// [unknownWrite] for why it is a failed result rather than a receipt.
+//
+// THE VERSION IT READ IS WHAT IT POINTS AT: the item's version moves on every
+// change that lands, so a read showing it past the one this call started from
+// is the one thing that can say the change is there — or that somebody else's
+// is, which the thread and history on the same read tell apart.
+func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
+	before tracker.Task, dependencies bool) string {
+
+	look := fmt.Sprintf("Read %s with get_work_item (a version past %d means "+
+		"something landed, and its history says whether it was this)", before.Key,
+		before.Version)
+	next := unknownNext(got.Unvouched, sameCall(actor, UpdateWorkItemTool), look,
+		"it is applied a second time, and refused as stale if it names `if_match`")
+	if dependencies {
+		next += " The dependency changes this call asked for were NOT written: " +
+			"it stopped here, before them."
+	}
+	return unknownWrite(actor, UpdateWorkItemTool,
+		fmt.Sprintf("the change to %s landed", before.Key), opID, got.Unvouched, next)
 }
 
 // declareLabels declares the labels a write is about to use that its project
@@ -2557,8 +2673,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Handle: actor.Record(), Watch: true, Auto: true,
 		},
 	}
-	got, err := writer.UpdateTask(ctx,
-		opIDFor(actor, t.Name(), "comment", comment.ID, args), before.Task.ID, before.Task.Project,
+	opID := opIDFor(actor, t.Name(), "comment", comment.ID, args)
+	got, err := writer.UpdateTask(ctx, opID, before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
@@ -2579,6 +2695,19 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}.Notify(t.deps.Leads))
 	if err != nil {
 		return failed(writeFailure(actor, CommentOnWorkTool, err)), nil
+	}
+	if got.Outcome == statelog.OutcomeUnknown {
+		// A COMMENT NOBODY CAN SAY WAS POSTED IS NOT ONE TO REPORT. Its
+		// id, its mentions and its ask beside the word "unknown" read as
+		// a remark on the thread, and the seat tells whoever asked that
+		// it answered — when an operation this node's ledger cannot
+		// vouch for is answered without publishing anything at all.
+		return failed(unknownWrite(actor, CommentOnWorkTool,
+			fmt.Sprintf("the comment on %s was posted", before.Task.Key), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, CommentOnWorkTool),
+				fmt.Sprintf("Read %s's thread with get_work_item", before.Task.Key),
+				"that is a second comment"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := withOperation(map[string]any{

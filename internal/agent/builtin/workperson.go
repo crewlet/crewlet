@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -220,10 +221,18 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		resolved = append(resolved, id)
 	}
-	result, err := writer.WritePriorities(ctx,
-		opIDFor(actor, t.Name(), "prio", handle, args), handle, resolved, authority)
+	opID := opIDFor(actor, t.Name(), "prio", handle, args)
+	result, err := writer.WritePriorities(ctx, opID, handle, resolved, authority)
 	if err != nil {
 		return failed(writeFailure(actor, tracker.SetPrioritiesTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.SetPrioritiesTool,
+			fmt.Sprintf("%s's priorities were set", handle), opID,
+			result.Unvouched, unknownNext(result.Unvouched,
+				sameCall(actor, tracker.SetPrioritiesTool),
+				"Read the list with get_person",
+				"it sets the same list again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{
@@ -287,11 +296,18 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// — see the file head. A pin is an arrangement somebody made, so it
 	// belongs to them and not to whichever credential they were holding.
 	whose := actor.Record()
-	result, err := writer.WritePins(ctx,
-		opIDFor(actor, t.Name(), "pins", whose, args), whose,
+	opID := opIDFor(actor, t.Name(), "pins", whose, args)
+	result, err := writer.WritePins(ctx, opID, whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
 		return failed(writeFailure(actor, tracker.SetPinsTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.SetPinsTool,
+			"your pins were set", opID, result.Unvouched,
+			unknownNext(result.Unvouched, sameCall(actor, tracker.SetPinsTool),
+				"Read them with get_person",
+				"it sets the same lists again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{
@@ -400,14 +416,21 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// written on somebody else's behalf, and a founder's inbox is the
 	// founder's whichever credential their assistant holds.
 	whose := actor.Record()
-	result, err := writer.WriteInbox(ctx,
-		opIDFor(actor, t.Name(), "inbox", whose, args), whose,
+	opID := opIDFor(actor, t.Name(), "inbox", whose, args)
+	result, err := writer.WriteInbox(ctx, opID, whose,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
 	if err != nil {
 		return failed(writeFailure(actor, tracker.MarkInboxTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return failed(unknownWrite(actor, tracker.MarkInboxTool,
+			"the inbox was marked", opID, result.Unvouched,
+			unknownNext(result.Unvouched, sameCall(actor, tracker.MarkInboxTool),
+				"Read it with work_inbox",
+				"it marks the same notices again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{

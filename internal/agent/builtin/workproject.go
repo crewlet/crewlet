@@ -224,10 +224,23 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
-		result, err := writer.WriteTags(ctx, statelog.NewOpID(time.Now(), "tags-"+key), key,
+		opID := statelog.NewOpID(time.Now(), "tags-"+key)
+		result, err := writer.WriteTags(ctx, opID, key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(actor, tracker.WriteProjectTool, err)), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			// See [writeWorkCatalogue]: the second half waits for the
+			// first, and the whole call is harmless to repeat.
+			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			if !edit.Empty() {
+				next = "The policy change was NOT written: the call stopped " +
+					"here, before it. " + next
+			}
+			return failed(unknownWrite(actor, tracker.WriteProjectTool,
+				fmt.Sprintf("%s's tag change landed", key), opID,
+				result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		tags := map[string]any{
@@ -239,10 +252,20 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		result, err := writer.WriteProject(ctx, statelog.NewOpID(time.Now(), "policy-"+key), key,
+		opID := statelog.NewOpID(time.Now(), "policy-"+key)
+		result, err := writer.WriteProject(ctx, opID, key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(actor, tracker.WriteProjectTool, err)), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			if !tagEdit.Empty() {
+				next = "The tag change WAS written. " + next
+			}
+			return failed(unknownWrite(actor, tracker.WriteProjectTool,
+				fmt.Sprintf("%s's policy change landed", key), opID,
+				result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["policy"] = map[string]any{

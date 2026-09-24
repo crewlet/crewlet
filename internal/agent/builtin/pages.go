@@ -663,19 +663,23 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 	}
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
-		// THE ONE UNKNOWN A REPEAT MAY OR MAY NOT COLLAPSE. A seat's
-		// comment is derived from its turn, so the same call again is the
-		// same comment and posts once — wherever this node's ledger can
-		// vouch for it. An operator's has no turn to derive from, so a
-		// repeat is a second comment if the first landed.
-		next := "Do not post it again without checking the page: a repeat " +
-			"is a second comment if the first one landed."
-		if in.TurnKey != "" && !written.Outcome.Unvouched {
-			next = "Call comment_on_page again with exactly the same arguments, " +
-				"before calling it with any other: the retry is the same comment " +
-				"and posts once."
+		// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is
+		// derived from its turn, so the same call again is the same
+		// comment: under a lost acknowledgement it posts once, and where
+		// this node's ledger cannot vouch for it the repeat publishes
+		// nothing and answers the same way — safe, and no answer sooner
+		// than looking. An operator's has no turn to derive from, so its
+		// repeat is a new comment, and a second one if the first landed.
+		// [unknownNext] is the rule every tracker write already answers by.
+		again := ""
+		if in.TurnKey != "" {
+			again = "call comment_on_page again with exactly the same " +
+				"arguments, before calling it with any others"
 		}
-		return failed(pageUnknown(CommentOnPageTool, written.Outcome, next)), nil
+		return failed(pageUnknown(CommentOnPageTool, written.Outcome,
+			unknownNext(written.Outcome.Unvouched, again,
+				"Read the page's comments with get_page",
+				"that is a second comment"))), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -692,13 +696,15 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 //
 // AN UNVOUCHED ONE SAYS SO, because it sends the caller somewhere else: this
 // node's operation ledger may have lost the record of the operation, so the
-// same call here answers the same way every time, and another node — or a
-// person looking at the page — is what can tell.
+// same OPERATION asked here answers the same way every time, and another node
+// — or a person looking at the page — is what can tell. Whether a caller's
+// repeat is that same operation is `next`'s to say: a seat's comment is, and
+// an operator's is not.
 func pageUnknown(name string, result statelog.Result, next string) string {
 	why := "the write's acknowledgement was lost"
 	if result.Unvouched {
 		why = "this node's operation ledger may have lost the record of it, so " +
-			"this node cannot tell and asking it again answers the same way"
+			"this node cannot tell"
 	}
 	return fmt.Sprintf("%s: whether this landed is unknown (%s; operation %s). "+
 		"It may be on the page and it may not — do not report it as done, and "+

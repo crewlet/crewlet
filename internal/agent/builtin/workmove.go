@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -122,13 +123,26 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the recipient reads the key off the item.
 	after := before.Task
 	after.Project = target
-	got, err := t.deps.Moves(actor).MoveTaskToProject(ctx,
-		opIDFor(actor, t.Name(), "move", before.Task.ID, args), before.Task.ID,
+	opID := opIDFor(actor, t.Name(), "move", before.Task.ID, args)
+	got, err := t.deps.Moves(actor).MoveTaskToProject(ctx, opID, before.Task.ID,
 		target, tracker.Wake{
 			Kind: tracker.ChangeMoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
 		return failed(writeFailure(actor, tracker.MoveWorkItemTool, err)), nil
+	}
+	if got.Outcome == statelog.OutcomeUnknown {
+		// NEVER A NEW KEY FOR A MOVE NOBODY CAN SAY LANDED: the one this
+		// attempt minted is a gap if the root never moved. See
+		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
+		// is held here.
+		return failed(unknownWrite(actor, tracker.MoveWorkItemTool,
+			fmt.Sprintf("%s moved to %s", before.Task.Key, target), opID,
+			got.Unvouched, unknownNext(got.Unvouched,
+				sameCall(actor, tracker.MoveWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — its key and project "+
+					"say where it is now", before.Task.Key),
+				"it is refused, because the item is already there"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{

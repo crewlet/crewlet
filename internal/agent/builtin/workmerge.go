@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -135,8 +136,8 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	cancelled := before.Task
 	cancelled.Status = tracker.StatusCancelled
 	cancelled.StatusGroup = tracker.StatusCancelled.Group()
-	got, err := t.deps.Merges(actor).MergeDuplicates(ctx,
-		opIDFor(actor, t.Name(), "merge", before.Task.ID, args), before.Task.ID, survivor,
+	opID := opIDFor(actor, t.Name(), "merge", before.Task.ID, args)
+	got, err := t.deps.Merges(actor).MergeDuplicates(ctx, opID, before.Task.ID, survivor,
 		moveSubtasks(args), tracker.Wake{
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
@@ -151,6 +152,18 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if err != nil {
 		return failed(writeFailure(actor, tracker.MergeWorkItemTool, err)), nil
+	}
+	if got.Outcome == statelog.OutcomeUnknown {
+		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see
+		// [unknownWrite]. The sequence stops at an unknown step with an
+		// error of its own, so this is the seam's contract held here
+		// rather than an implementation's habit trusted.
+		return failed(unknownWrite(actor, tracker.MergeWorkItemTool,
+			fmt.Sprintf("%s was merged", before.Task.Key), opID, got.Unvouched,
+			unknownNext(got.Unvouched, sameCall(actor, tracker.MergeWorkItemTool),
+				fmt.Sprintf("Read %s with get_work_item — a merged item is "+
+					"cancelled and links the one it was folded into", before.Task.Key),
+				"it merges it a second time"))), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{

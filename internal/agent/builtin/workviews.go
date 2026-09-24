@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -229,9 +230,24 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opIDFor(actor, t.Name(), "view", id, args), view)
+	opID := opIDFor(actor, t.Name(), "view", id, args)
+	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opID, view)
 	if err != nil {
 		return failed(writeFailure(actor, tracker.SaveWorkViewTool, err)), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to
+		// save it again, it names a view that may not exist.
+		where := container.Kind
+		if container.ID != "" {
+			where += ":" + container.ID
+		}
+		return failed(unknownWrite(actor, tracker.SaveWorkViewTool,
+			fmt.Sprintf("the view %q was saved", view.Name), opID,
+			result.Unvouched, unknownNext(result.Unvouched,
+				sameCall(actor, tracker.SaveWorkViewTool),
+				fmt.Sprintf("List the views in %s with list_work_views", where),
+				"it saves a second view"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{
