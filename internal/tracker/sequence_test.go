@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -719,5 +723,199 @@ func TestABulkClaimIsNotFreeHereUntilItsLeaseIsGivenBack(t *testing.T) {
 	if !errors.Is(second, tracker.ErrBulkInFlight) {
 		t.Fatalf("a bulk asking while the admission's lease was being given "+
 			"back answered %v, want it refused as in flight", second)
+	}
+}
+
+// A CREATE RETRIED AFTER ITS KEY MINT LANDED KEYS THE TASK FROM THE NUMBER THAT
+// MINT TOOK.
+//
+// The retry's mint is answered from this node's operation ledger, so nothing
+// decides it again — and the number it minted is read back from the counter
+// record that landed. A number taken from the retry's own decision would be
+// the counter AFTER the first mint: the task would carry a key nobody minted,
+// and the next create would mint the same one.
+//
+// Mutation: take the number from the mint's decide closure and the retry, which
+// ran no decide, derives key ENG-0; take it from a decide the retry runs again
+// — the publisher without its ledger answer — and the task is keyed ENG-2, a
+// number nobody minted.
+func TestARetriedCreateKeysFromTheNumberItsFirstMintTook(t *testing.T) {
+	t.Parallel()
+	task := newTask("t-1")
+	task.Key = ""
+	broker := &refusingAppender{subject: tracker.TaskSubject(task.ID).Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+
+	// THE FIRST ATTEMPT: the mint lands and is applied here, and the task's
+	// own append is refused, so the caller tries the create again under the
+	// same operation id.
+	broker.refusing(true)
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err == nil {
+		t.Fatal("the first attempt filed the task the broker refused, so this " +
+			"case is not the shape it names")
+	}
+	r.drain()
+	if got := counterOf(t, r, "ENG"); got != 1 {
+		t.Fatalf("ENG's counter is %d after the first attempt's mint, want 1", got)
+	}
+	broker.refusing(false)
+
+	retried, err := r.writer.CreateTask(t.Context(), "op-create", task, nil)
+	if err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if retried.Key != "ENG-1" {
+		t.Fatalf("the retried create keyed its task %q, want ENG-1 — the number "+
+			"its first mint took", retried.Key)
+	}
+	r.drain()
+	if got := counterOf(t, r, "ENG"); got != 1 {
+		t.Errorf("ENG's counter is %d after the retry, want 1 — a retry of a "+
+			"mint that landed mints nothing", got)
+	}
+	if got := oneTask(t, r, task.ID).Key; got != "ENG-1" {
+		t.Errorf("the task reads back keyed %q, want ENG-1", got)
+	}
+
+	// AND THE NEXT CREATE TAKES THE NEXT NUMBER, rather than the one the
+	// retry would have claimed.
+	next := newTask("t-2")
+	next.Key = ""
+	created, err := r.writer.CreateTask(t.Context(), "op-next", next, nil)
+	if err != nil {
+		t.Fatalf("the next create: %v", err)
+	}
+	if created.Key != "ENG-2" {
+		t.Errorf("the next create keyed its task %q, want ENG-2", created.Key)
+	}
+}
+
+// refusingAppender is a broker that refuses every append on one subject with a
+// decision of its own — nothing stored, and a reason the write path answers
+// at once rather than retries.
+type refusingAppender struct {
+	statelog.Appender
+	subject string
+
+	mu      sync.Mutex
+	refuses bool
+}
+
+func (a *refusingAppender) refusing(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refuses = on
+}
+
+func (a *refusingAppender) Append(ctx context.Context, subject, msgID string,
+	expect *uint64, body []byte) (uint64, bool, error) {
+
+	a.mu.Lock()
+	refuses := a.refuses && subject == a.subject
+	a.mu.Unlock()
+	if refuses {
+		return 0, false, &jetstream.APIError{Code: 400, ErrorCode: 10999,
+			Description: "refused for this case"}
+	}
+	return a.Appender.Append(ctx, subject, msgID, expect, body)
+}
+
+// A MOVE RETRIED AFTER ITS SUBTREE GREW MINTS A RANGE FOR THE SUBTREE IT HAS.
+//
+// The key mint recovers its range from the counter record it landed, which
+// says where the counter ended and not how many numbers the mint took — so a
+// range recovered for a count other than the one that minted it starts at a
+// number an earlier mint already handed out. The move's count is therefore
+// part of its mint's operation id: a retry that needs more numbers than its
+// first attempt took mints them afresh, and the first attempt's range is a
+// gap.
+//
+// Mutation: drop the count from the move's mint step and the retry keys the
+// root with a number the target project's own tasks already hold.
+func TestAMoveRetriedAfterItsSubtreeGrewMintsAFreshRange(t *testing.T) {
+	t.Parallel()
+	root := tracker.TaskSubject("m-root").Wire()
+	broker := &refusingAppender{subject: root}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	r.applyWhileWriting()
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
+		tracker.ProjectSubject("OPS"), "", tracker.Project{
+			V: 1, Key: "OPS", Name: "Operations",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed the target project: %v", err)
+	}
+	r.drain()
+	// FIVE TASKS ALREADY IN THE TARGET, so a range recovered too low lands
+	// on keys that are taken.
+	for i := 1; i <= 5; i++ {
+		seeded := newTask(fmt.Sprintf("ops-%d", i))
+		seeded.Key, seeded.Project = "", "OPS"
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-ops-%d", i),
+			seeded, nil); err != nil {
+			t.Fatalf("seed OPS-%d: %v", i, err)
+		}
+		r.drain()
+	}
+	subtask := func(id string) {
+		t.Helper()
+		kid := newTask(id)
+		kid.Key = ""
+		parent := "m-root"
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	moving := newTask("m-root")
+	moving.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-root", moving, nil); err != nil {
+		t.Fatalf("CreateTask m-root: %v", err)
+	}
+	r.drain()
+	subtask("m-kid-1")
+
+	// THE FIRST ATTEMPT mints two numbers — the root and its one subtask —
+	// and is refused at the root's own append.
+	broker.refusing(true)
+	if _, err := r.writer.MoveTaskToProject(t.Context(), "op-move", "m-root",
+		"OPS", nil); err == nil {
+		t.Fatal("the first attempt moved the root the broker refused, so this " +
+			"case is not the shape it names")
+	}
+	r.drain()
+	if got := counterOf(t, r, "OPS"); got != 7 {
+		t.Fatalf("OPS's counter is %d after the first attempt, want 7 — five "+
+			"seeded and the two the move minted", got)
+	}
+
+	// THE SUBTREE GROWS, and the retry needs three numbers.
+	broker.refusing(false)
+	subtask("m-kid-2")
+	if _, err := r.writer.MoveTaskToProject(t.Context(), "op-move", "m-root",
+		"OPS", nil); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	r.drain()
+
+	if got := oneTask(t, r, "m-root").Key; got != "OPS-8" {
+		t.Fatalf("the moved root is keyed %q, want OPS-8 — the first number of a "+
+			"fresh three-number range after the seven OPS had handed out", got)
+	}
+	keys := r.strings(`SELECT key FROM tracker_tasks WHERE project_key = 'OPS' ORDER BY key`)
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if seen[key] {
+			t.Errorf("two tasks in OPS are keyed %s", key)
+		}
+		seen[key] = true
 	}
 }

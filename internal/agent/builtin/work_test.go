@@ -57,10 +57,11 @@ type fakeTracker struct {
 	created []tracker.Task
 	merged  []mergeCall
 
-	// searched is every text the ranked search was asked for, and ranked
-	// what it answers with.
+	// searched is every text the ranked search was asked for, ranked what
+	// it answers with, and partial what that ranking says it is missing.
 	searched  []string
 	ranked    []tracker.Ranked
+	partial   *tracker.SearchPartial
 	searchErr error
 	patched   []tracker.TaskPatch
 	ifMatch   []uint64
@@ -294,16 +295,16 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 // Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
 // the one read here that is a RANKING rather than a filter.
 func (f *fakeTracker) Search(_ context.Context, text string,
-	limit int) ([]tracker.Ranked, error) {
+	limit int) (tracker.Ranking, error) {
 
 	f.searched = append(f.searched, text)
 	if f.searchErr != nil {
-		return nil, f.searchErr
+		return tracker.Ranking{}, f.searchErr
 	}
 	if limit <= 0 || limit > len(f.ranked) {
-		return f.ranked, nil
+		return tracker.Ranking{Items: f.ranked, Partial: f.partial}, nil
 	}
-	return f.ranked[:limit], nil
+	return tracker.Ranking{Items: f.ranked[:limit], Partial: f.partial}, nil
 }
 
 // merges is its fourth, for the second sequence.

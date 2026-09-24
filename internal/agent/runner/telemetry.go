@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -517,9 +518,9 @@ type phaseRecord struct {
 	// resumed Execute phases are.
 	Run RunRecord
 
-	// Failed and Err describe a phase that died instead of finishing. The
-	// rest of the record is then PARTIAL rather than absent: a phase that
-	// raises used to publish nothing at all, leaving a dashboard showing an
+	// Failed and Err describe a phase that died — failed, or panicked —
+	// instead of finishing. The rest of the record is then PARTIAL rather
+	// than absent: without it the phase leaves only its started event, an
 	// in-flight call with no response and no reason.
 	Failed bool
 	Err    error
@@ -656,10 +657,14 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// delegated worker rendered as bare tool rows with nothing that
 		// asked for them.
 		RoundNarration: roundNarration(res.Narration),
-		InputTokens:    res.InputTokens,
-		OutputTokens:   res.OutputTokens,
-		TotalTokens:    res.Tokens(),
-		RoundsUsed:     res.Rounds,
+		// What the worker wrote that no round kept, beside the narration it
+		// committed — the same split, and the same field, as the turn's own
+		// phases publish.
+		AbandonedAttempts: roundNarration(res.Abandoned),
+		InputTokens:       res.InputTokens,
+		OutputTokens:      res.OutputTokens,
+		TotalTokens:       res.Tokens(),
+		RoundsUsed:        res.Rounds,
 		// THE WORKER'S OWN WALL CLOCK, off the result. A fan-out of eight
 		// runs its tasks in parallel under one wall-clock cap, so "which
 		// worker was slow" is the question a delegate call raises and the
@@ -784,15 +789,21 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 // prints beside a failed phase.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
-// raise a cap, wait out a provider. Everything else is "error", deliberately.
-// The tempting alternative is to name the failure's own type, and in Go that
-// is a lie: a wrapped error's type is *fmt.wrapError whatever went wrong
-// underneath, so the field would carry the same meaningless token for every
-// unclassified failure while looking specific. One honest generic beats a
-// specific-looking constant.
+// raise a cap, wait out a provider — or report a defect, which is what a
+// phase that panicked is, under the kind the turn's own breach names it by.
+// Everything else is "error", deliberately. The tempting alternative is to
+// name the failure's own type, and in Go that is a lie: a wrapped error's type
+// is *fmt.wrapError whatever went wrong underneath, so the field would carry
+// the same meaningless token for every unclassified failure while looking
+// specific. One honest generic beats a specific-looking constant.
 func classifyError(err error) string {
-	var provider *llm.Error
+	var (
+		provider *llm.Error
+		panicked *turn.PanicError
+	)
 	switch {
+	case errors.As(err, &panicked):
+		return string(types.GuardUnhandledException)
 	case errors.As(err, &provider):
 		return provider.Kind.String()
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
@@ -1003,15 +1014,14 @@ func tailedNarration(narr []toolloop.Narration) []types.RoundNarration {
 // and the whole of each of these texts is on the phase's completed record.
 // The round in flight is there as its narration once it commits; an attempt
 // at it that does not — one given up on for another, or the last one when the
-// phase fails during it — is among the record's abandoned attempts, with
-// every attempt a frame carries as abandoned; the rest are the record's own
-// response, narration and calls. On a record too large for one event the
-// whole is in its parts, which GET /phases/{id} reassembles, unless a part
-// could not be published, which the record's notes then say. The one text
-// the record does not hold is an attempt the executor abandoned before it
-// suspended: the pending-run row that carries the earlier rounds into the
-// resumed phase's record has no field for one, so it is logged whole when
-// the executor suspends ([Runner.recordSuspension]).
+// phase fails or panics during it — is among the record's abandoned attempts,
+// with every attempt a frame carries as abandoned; the rest are the record's
+// own response, narration and calls. An executor that suspends publishes no
+// record, and the pending-run row carries all of these into the record its
+// resumed phase publishes ([Runner.recordSuspension]). On a record too large
+// for one event the whole is in its parts, which GET /phases/{id}
+// reassembles, unless a part could not be published, which the record's notes
+// then say.
 //
 // At four thousand bytes, each field this cuts adds at most that much (plus
 // the three-byte marker) to a frame, however long the text runs. Bytes rather

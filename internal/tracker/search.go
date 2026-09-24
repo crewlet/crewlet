@@ -68,14 +68,50 @@ type RankedDoc struct {
 	Snippet string
 }
 
+// Ranking is a ranked search's answer, and what the ranking behind it is
+// missing.
+type Ranking struct {
+	// Items are the ranked work items, best first — never nil, so an answer
+	// that found nothing renders as an empty list.
+	Items []Ranked
+
+	// Partial is what the ranking is missing, or nil for a whole answer.
+	Partial *SearchPartial
+}
+
+// SearchPartial is what a ranked item search is missing.
+//
+// The items beside it are real, and ranked; what a reader must not conclude
+// from them is that an item they do not name does not exist — which a reader
+// of a short list with nothing beside it does, and acts on by filing the
+// duplicate.
+type SearchPartial struct {
+	// BucketsAnswered and BucketsMissing partition the corpus's search
+	// buckets: the answer ranked the items in the first and none of those
+	// in the second.
+	BucketsAnswered int `json:"buckets_answered"`
+	BucketsMissing  int `json:"buckets_missing"`
+
+	// AbsentNodes names the fleet nodes whose share went unscanned — one
+	// that did not answer in time, or answered that its own index is still
+	// building — so an operator has somewhere to look.
+	AbsentNodes []string `json:"absent_nodes"`
+
+	// SemanticSkipped says the half of a hybrid search that matches by
+	// meaning did not run over some or all of what was searched, so an item
+	// that says the same thing in other words can be missing.
+	SemanticSkipped bool `json:"semantic_skipped"`
+}
+
 // Ranker is the index seam, declared here because this is the caller.
 //
 // THE INDEX IS THIS NODE'S OWN and the rows are the fleet's, which is why the
 // two halves of this search are two reads rather than a join — the same estate
 // boundary every other reader here crosses the same way.
 type Ranker interface {
-	// RankItems returns work-item ids in rank order, best first.
-	RankItems(ctx context.Context, text string, limit int) ([]RankedDoc, error)
+	// RankItems returns work-item ids in rank order, best first, and what
+	// the ranking is missing — nil for a whole one.
+	RankItems(ctx context.Context, text string, limit int) ([]RankedDoc, *SearchPartial, error)
 
 	// Building reports an index that has not finished its first build over
 	// the work items, so a caller can tell "nothing matched" from "not
@@ -129,39 +165,42 @@ var ErrSearchLimit = fmt.Errorf("tracker: a search answers at most %d items",
 
 // Search ranks the company's work items against plain text.
 //
-// # A building index is refused, whatever it found
+// # A partial ranking is carried, and a building index is refused
 //
-// While this node's index is on its first build, a ranking it returns is one
-// it cannot vouch for: alone it scans nothing, and where the fleet divides a
-// search it counts its own share of the buckets missing and drops any item a
-// peer ranked that it has no row for yet. The answer is a list of rows with
-// nothing beside it, so a partial one reads as the whole — and a seat that
-// took a short list for every match acts on it by filing a duplicate. So the
-// gate is asked on EVERY search, which costs nothing: it reads the index's own
-// first-lap flag.
-func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked, error) {
+// A ranking that did not reach part of the corpus — a peer that did not
+// answer in time, or a query the semantic half could not run — comes back
+// with its items AND [Ranking.Partial], because the items are real and the
+// count says what is missing from them.
+//
+// A ranking from a node whose OWN index is on its first build cannot be
+// carried that way: where the fleet divides a search it counts its own share
+// of the buckets missing, and then drops any item a peer ranked that its own
+// index has no row for yet, which no count reports. So it is refused, and
+// the gate is asked on EVERY search, which costs nothing: it reads the
+// index's own first-lap flag.
+func (s *Searcher) Search(ctx context.Context, text string, limit int) (Ranking, error) {
 	switch {
 	case s == nil || s.rank == nil || s.db == nil:
-		return nil, fmt.Errorf("tracker: this node has no search index")
+		return Ranking{}, fmt.Errorf("tracker: this node has no search index")
 	case limit > MaxSearchLimit:
-		return nil, fmt.Errorf("%w: `limit` asked for %d — ask for %d or fewer",
+		return Ranking{}, fmt.Errorf("%w: `limit` asked for %d — ask for %d or fewer",
 			ErrSearchLimit, limit, MaxSearchLimit)
 	case limit <= 0:
 		limit = SearchLimit
 	}
 	if s.rank.Building(ctx) {
-		return nil, ErrIndexBuilding
+		return Ranking{}, ErrIndexBuilding
 	}
-	docs, err := s.rank.RankItems(ctx, text, limit)
+	docs, partial, err := s.rank.RankItems(ctx, text, limit)
 	if err != nil {
-		return nil, err
+		return Ranking{}, err
 	}
 	if len(docs) == 0 {
-		return nil, nil
+		return Ranking{Items: []Ranked{}, Partial: partial}, nil
 	}
 	rows, err := s.itemsByID(ctx, docs)
 	if err != nil {
-		return nil, err
+		return Ranking{}, err
 	}
 	// IN THE INDEX'S ORDER, not the database's. The rank is the whole
 	// answer here, and a SQL read returns rows in whatever order suits it.
@@ -181,7 +220,7 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
-	return out, nil
+	return Ranking{Items: out, Partial: partial}, nil
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of ids.

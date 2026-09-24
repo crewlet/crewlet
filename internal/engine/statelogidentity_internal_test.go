@@ -72,11 +72,11 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	if !running.createdAt.Equal(stats.CreatedAt.UTC()) {
+	if !running.identity().Equal(stats.CreatedAt.UTC()) {
 		t.Fatalf("the running domain carries %s and the broker reports %s — the "+
 			"detector compares the checkpoint against this, and a value read "+
 			"back out of the checkpoint detects nothing",
-			running.createdAt, stats.CreatedAt)
+			running.identity(), stats.CreatedAt)
 	}
 	// Commit a checkpoint under that identity, the way the applier does
 	// with every batch, so the second boot has something to compare.

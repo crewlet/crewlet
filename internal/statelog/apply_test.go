@@ -1824,6 +1824,80 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 	}
 }
 
+// A RUNNER THAT FOLLOWS THE STREAM ITS NEW CHECKPOINT NAMES RUNS ON IT.
+//
+// An adoption installs a checkpoint committed against the stream its donor was
+// on, between one run of a runner and the next. When that stream is not the
+// one the runner booted against — the log was rebuilt under a running node,
+// and the node adopted a peer's copy of the new one — the runner's next run
+// would compare the new checkpoint against the instant it booted with and stop
+// as though its log had been recreated, until a restart. Following the new
+// stream is what the adopter does instead, and a commit after it records the
+// stream it now runs on.
+//
+// Mutation: make Follow keep the boot instant and the run after it stops as
+// recreated; record the boot instant in the checkpoint and the last assertion
+// fails.
+func TestARunnerFollowsTheStreamItsAdoptedCheckpointNames(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	booted := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	h.rebuild(probeDomain{}, booted)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run on the stream it booted against: %v", err)
+	}
+
+	// THE ADOPTION: the estate now holds a checkpoint committed against a
+	// stream created an hour later.
+	rebuilt := booted.Add(time.Hour)
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE statelog_cursor SET stream_created_at = ? WHERE stream = ?`,
+			store.EncodeTime(rebuilt), probeStream)
+		return err
+	}); err != nil {
+		t.Fatalf("install the adopted checkpoint: %v", err)
+	}
+
+	// THE CONTROL: the same runner, still holding the instant it booted with.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := h.runner.Run(ctx); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("a runner holding its boot instant ran over a checkpoint naming "+
+			"another stream and returned %v, so this case proves nothing", err)
+	}
+
+	// NOT [applyHarness.run], which reads the runner's recorded stop before
+	// the new run has cleared the control's: the run's own return is the
+	// answer here.
+	h.runner.Follow(rebuilt)
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	followed, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+	ran := make(chan error, 1)
+	go func() { ran <- h.runner.Run(followed) }()
+	for h.runner.Committed().Seq < 2 {
+		select {
+		case err := <-ran:
+			t.Fatalf("a runner following the stream its checkpoint names "+
+				"returned %v before it applied the next record", err)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	stop()
+	<-ran
+	_, recorded, found, err := statelog.CursorFor(t.Context(), h.db.Replicated(), probeStream)
+	if err != nil || !found {
+		t.Fatalf("read the checkpoint: found=%v %v", found, err)
+	}
+	if !recorded.Equal(rebuilt) {
+		t.Errorf("the checkpoint after the followed run records a stream created "+
+			"at %s, want %s — the next boot compares against what is recorded",
+			recorded, rebuilt)
+	}
+}
+
 // A RUNNER RUNS AGAIN FROM THE CHECKPOINT IT NOW HOLDS.
 //
 // An adoption on a running node ends every apply loop, replaces the file, and

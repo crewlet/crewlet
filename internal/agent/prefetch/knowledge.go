@@ -2,6 +2,7 @@ package prefetch
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -86,6 +87,52 @@ const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
 	"found by a search right now, so ask a colleague who would know rather " +
 	"than concluding nothing has been written down)"
 
+// FailedKnowledgeHint is what the block says when its search failed — and what
+// the `search_knowledge` tool answers when one of its searches does. ONE
+// SENTENCE FOR BOTH, for [BuildingKnowledgeHint]'s reason.
+//
+// A DIFFERENT SENTENCE from [EmptyKnowledgeHint]: a search that failed found
+// nothing because it did not run, so "try other keywords" is advice for the
+// wrong problem and "nothing is written down" is a conclusion it cannot
+// support.
+const FailedKnowledgeHint = "(the knowledge search failed, so it says " +
+	"nothing about whether a page exists — search again shortly, or ask a " +
+	"colleague who would know)"
+
+// PartialKnowledgeNote is what the block, and the `search_knowledge` tool, say
+// about an answer that is missing part of what it searched — or "" for a
+// whole one.
+//
+// ONE SENTENCE FOR BOTH, for [BuildingKnowledgeHint]'s reason. It says what is
+// missing rather than only that something is, because the two causes send a
+// seat to different places: a slice of the knowledge base that did not answer
+// is found by asking again shortly, and a search that matched on words alone
+// is helped by the words a page on the subject would use.
+func PartialKnowledgeNote(p *knowledge.Partial) string {
+	if p == nil {
+		return ""
+	}
+	var missing []string
+	if p.BucketsMissing > 0 {
+		missing = append(missing, fmt.Sprintf("%d of the knowledge base's %d "+
+			"slices were not searched, because the node searching them did not "+
+			"answer in time or is still indexing — searching again shortly may "+
+			"find pages this answer does not name",
+			p.BucketsMissing, p.BucketsAnswered+p.BucketsMissing))
+	}
+	if p.SemanticSkipped {
+		missing = append(missing, "the half of the search that matches by "+
+			"meaning did not run, so a page that says the same thing in other "+
+			"words may be missing — try the words such a page would use")
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "(this answer is partial: " + strings.Join(missing, "; and ") +
+		". Before concluding a page does not exist, search again or ask a " +
+		"colleague who would know)"
+}
+
 // KnowledgeReadHint closes every rendering of hits, the block's and the
 // `search_knowledge` tool's alike: these are pointers, and here is how to
 // follow one.
@@ -150,7 +197,19 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	if query == "" {
 		return "", 0
 	}
-	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
+	if len(query) > knowledge.MaxQueryBytes {
+		// REFUSED, NOT CUT, on the seam's rule — see
+		// [knowledge.MaxQueryBytes]. The model was asked for one line of
+		// keywords and wrote prose, and a search on its first four hundred
+		// bytes would put pages about half of it in front of the seat as
+		// what the company knows. The block says to search again instead,
+		// which the seat does with words of its own.
+		log.WarnContext(ctx, "prefetch_knowledge_query_refused",
+			"seat", r.Seat.Handle(), "bytes", len(query),
+			"limit", knowledge.MaxQueryBytes)
+		return EmptyKnowledgeHint, 0
+	}
+	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: KnowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
 		// synthesis pass wrote; an executor cannot tell one from a
@@ -158,13 +217,22 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	bullets := make([]string, 0, len(hits))
-	for _, hit := range hits {
+	if answer.Failed {
+		return FailedKnowledgeHint, 0
+	}
+	bullets := make([]string, 0, len(answer.Hits))
+	for _, hit := range answer.Hits {
 		if bullet := KnowledgeBullet(hit); bullet != "" {
 			bullets = append(bullets, bullet)
 		}
 	}
+	// A PARTIAL ANSWER SAYS SO, found or not: "nothing surfaced" over half
+	// the knowledge base is not "nothing surfaced".
+	partial := PartialKnowledgeNote(answer.Partial)
 	if len(bullets) == 0 {
+		if partial != "" {
+			return EmptyKnowledgeHint + "\n" + partial, 0
+		}
 		return EmptyKnowledgeHint, 0
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
@@ -174,7 +242,11 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	// THE COUNT IS OF WHAT RENDERED, not of what came back: a hit with
 	// nothing to show and nothing to open is dropped above, and counting it
 	// would report a page the block never surfaced.
-	return joinBullets(bullets) + "\n" + KnowledgeReadHint, len(bullets)
+	block := joinBullets(bullets) + "\n"
+	if partial != "" {
+		block += partial + "\n"
+	}
+	return block + KnowledgeReadHint, len(bullets)
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.

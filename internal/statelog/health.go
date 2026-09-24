@@ -6,13 +6,15 @@ import (
 )
 
 // FloorState is what this node knows about the published trim floor, and
-// there are THREE answers rather than two.
+// there are FOUR answers rather than two.
 //
-// A boolean here hid the one that matters. "This node is at or above the
-// floor", "this node is below it" and "the floor could not be read" lead to
-// different code, and collapsing the third into the first keeps a node serving
-// reads over a hole it cannot see. The rule is the same one the trim itself
-// uses: a term that cannot be read blocks.
+// "This node is at or above the floor", "this node is below it", "the floor
+// could not be read" and "the floor is published in a number space this node
+// has left" lead to different code. Collapsing the third into the first keeps
+// a node serving reads over a hole it cannot see — the rule the trim itself
+// uses, that a term which cannot be read blocks. The third and the fourth both
+// refuse and differ in what clears them: an unread floor clears when the read
+// answers, and a left generation only when this node adopts the new one.
 type FloorState int
 
 const (
@@ -30,6 +32,14 @@ const (
 	// read is not a floor that is satisfied, and the cost of guessing
 	// wrong is a node serving answers with a hole in them.
 	FloorUnknown
+
+	// FloorLeft is a floor that WAS read and is published at a generation
+	// above the one this node's rows are on: the fleet re-anchored the
+	// domain and this node did not follow. Nothing this node holds can be
+	// compared against a floor in another number space, so it refuses as
+	// the third value does — and unlike the third value, waiting does not
+	// clear it.
+	FloorLeft
 )
 
 // String names a floor state for an operator surface.
@@ -41,6 +51,8 @@ func (f FloorState) String() string {
 		return "below"
 	case FloorUnknown:
 		return "unknown"
+	case FloorLeft:
+		return "left"
 	}
 	return fmt.Sprintf("FloorState(%d)", int(f))
 }
@@ -268,6 +280,8 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseBrokerUnreachable
 	case h.Floor.Effective(now) == FloorUnknown:
 		return RefuseFloorUnknown
+	case h.Floor.Effective(now) == FloorLeft:
+		return RefuseGenerationLeft
 	case h.Floor.Effective(now) == FloorBelow:
 		return RefuseBelowFloor
 	case h.AheadOfLog() || h.StreamRecreated:
@@ -296,8 +310,9 @@ func (h Health) AheadOfLog() bool {
 //
 // It is the holding gate, and it fires only where a seat's work would be
 // wrong: an applier that has stopped or stalled, an eviction, rows below the
-// trim floor or a floor that cannot be seen, a checkpoint on a stream that is
-// not this one. A copy that is BEHIND is admission's question —
+// trim floor, a floor that cannot be seen or one published at a generation
+// this node has left, a checkpoint on a stream that is not this one. A copy
+// that is BEHIND is admission's question —
 // [Health.Established] with strict set — because it catches up, so withholding
 // claims is the whole remedy. CaughtUp is therefore not read here. Records past
 // the checkpoint are what every node has for a moment after every write, so a

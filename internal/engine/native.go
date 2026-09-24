@@ -255,15 +255,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
-	// backend rather than under the wiki's.
-	//
-	// It used to sit inside the block below, which was correct while the
-	// index was the knowledge base's alone and silently wrong the moment
-	// it stopped being: a company with `tracker.backend: native` and
-	// Confluence for its knowledge indexed none of its own work items,
-	// served no `search_work_items`, and went on paying the embedding
-	// duty for a vector on every one of them — because that duty is armed
-	// on `e.native != nil`, which is either backend.
+	// backend rather than under the wiki's. Built under the wiki's alone, a
+	// company with `tracker.backend: native` and Confluence for its
+	// knowledge would index none of its own work items and serve no
+	// `search_work_items`, while the embedding duty — armed on
+	// `e.native != nil`, which is either backend — paid for a vector on
+	// every one of them.
 	//
 	// BEFORE the block, because the searcher built there takes it.
 	n.indexer = search.NewIndexerOver(e.backends.Store,
@@ -281,6 +278,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Corpus: n.indexer.Corpus,
 			Report: e.reportSearch,
 			Enter:  e.enterSearch,
+			// THE EPOCH'S SPACE, asked per search: the one the duty
+			// embeds the work items in, and none at all where the
+			// company's search has no semantic half.
+			Space: e.querySpace,
 		},
 	})
 	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
@@ -336,6 +337,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Roster:          e.searchRoster,
 			Report:          e.reportSearch,
 			Enter:           e.enterSearch,
+			// And the space the pages are embedded in, on the same terms
+			// as the work search's above.
+			Space: e.querySpace,
 		}); err != nil {
 			return fmt.Errorf("engine: pages searcher: %w", err)
 		}
@@ -1191,40 +1195,34 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to
-		// attribute. Nil where this node has no index, and the tool is
-		// then not advertised at all.
+		// attribute. Nil where this node does not run the engine's own
+		// tracker, and the tool is then not advertised at all.
 		Search:   WorkSearcher(e),
 		Mentions: seatMentions{org: c.Org},
-		// THE ROSTER, read PER CALL for the reason the default project
-		// and the unit seam are: a seat's tools are cloned into its
-		// lease, an apply does not rebuild the clone, and a captured
-		// chart would refuse a colleague who joined this morning and
+		// THE ROSTER, read PER CALL against the epoch current when the
+		// tool runs rather than the one that equipped it: a turn keeps
+		// the registry it started with until it ends, so a chart
+		// captured here would refuse a colleague who joined since and
 		// admit one who left.
 		Seats: func() []colleague.Seat {
 			return builtin.Corpus(e.Company().Org)
 		},
-		// AND THE UNIT SEAM, read per call for the reason the default
-		// project is: a seat's tools are cloned into its lease, an apply
-		// does not rebuild the clone, and a captured chart would render
-		// a project's unit against an org that has since moved.
+		// AND THE UNIT SEAM, per call for the roster's reason: a
+		// captured chart would render a project's unit against an org
+		// that has since moved.
 		Units: liveUnits{engine: e},
-		// PER CALL against the epoch current when the tool runs, not
-		// against the one that equipped it: a seat's tools are cloned
-		// into its lease and an apply does not rebuild the clone, so a
-		// captured project would outlive the org chart that named it.
+		// PER CALL for the roster's reason: a captured project would
+		// outlive the org chart that named it.
 		DefaultProject: func(handle string) string {
 			return ProjectOfSeat(e.Company().Org, handle)
 		},
 		// AND THE SEAT'S OWN TEAM, which a create stamps on both unit
-		// fields. Per call for the reason the default project is.
+		// fields. Per call for the roster's reason.
 		UnitOfSeat: func(handle string) string {
 			return UnitOfSeat(e.Company().Org, handle)
 		},
-		// THE LEAD MAP IS READ PER CALL against the epoch current when the
-		// tool runs, for the reason the default project is: a seat's
-		// tools are cloned into its lease, an apply does not rebuild the
-		// clone, and a captured map would route a change by the org chart
-		// that has since moved.
+		// THE LEAD MAP, per call for the roster's reason: a captured map
+		// would route a change by the org chart that has since moved.
 		Leads: liveLeads{engine: e},
 		Now:   func() time.Time { return time.Now().UTC() },
 		Zone:  c.Config.Tracker.Native.Location(),

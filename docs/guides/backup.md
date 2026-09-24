@@ -103,6 +103,11 @@ Worth knowing about it:
   one alone, and it must not carry the donor's audit log or the bootstrap half
   of its secret store. Restoring one without the other gives a company whose
   halves are from different moments.
+- **Only the engine's own user can read it.** The directory is made `0700` —
+  tightened to that if you created it first — and every file in it `0600`.
+  Each store copy is written in a stage directory beside its final name that
+  only that user can enter, and renamed into place once it verifies, so it is
+  never readable by anyone else, even while it is being written.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -233,11 +238,12 @@ the copy's own cost against your hardware — the window the trim hold covers an
 the I/O the copy spends competing with the applier's own commits; start from the
 table and move it once you have that number.
 
-**How stale is too stale is a separate setting.** `retention.backup_max_age`
-is what the trim reads, and it is deliberately not derived from the schedule:
-a company that never backs up never trims, loudly and by design, so the engine
-has to know what "recent enough" means to *you* rather than inferring it from
-how often a cron happened to fire. The age itself is read from the newest
+**How stale is too stale is a separate setting.**
+`stream.tracker_retention.backup_max_age` is what the trim reads, and it is
+deliberately not derived from the schedule: a company that never backs up
+never trims, loudly and by design, so the engine has to know what "recent
+enough" means to *you* rather than inferring it from how often a cron happened
+to fire. The age itself is read from the newest
 complete **manifest** on disk rather than from a counter the engine keeps —
 a counter records that a process believed it took a backup, and the disk
 records that one exists. They differ in exactly the cases the alarm is for — a
@@ -252,12 +258,13 @@ is the freshest backup imaginable.
 the log holds every record on R replicas and every node holds the applied
 rows, so losing a node loses nothing. Below it the log holds nothing, and the
 trim only ever gets there past a backup: it deletes a record only once the
-newest backup the fleet has recorded covers it, and `retention.backup_max_age`
-stops it once that backup is stale. So that history is in each node's
-replicated estate and in that backup — a `crewlet backup`'s
-`store-replicated.db`, or the copy an operator acknowledged with
-`crewlet retention ack`, the only kind `backup_floor: operator` counts — and a
-restore from a `crewlet backup` replays the log from the copy's own position.
+newest backup the fleet has recorded covers it, and
+`stream.tracker_retention.backup_max_age` stops it once that backup is stale.
+So that history is in each node's replicated estate and in that backup — a
+`crewlet backup`'s `store-replicated.db`, or the copy an operator acknowledged
+with `crewlet retention ack`, the only kind
+`stream.tracker_retention.backup_floor: operator` counts — and a restore from a
+`crewlet backup` replays the log from the copy's own position.
 Losing it takes every node's replicated estate and the backups that cover it.
 The schedule decides how far the trim may go, and so how large the log grows.
 See [Retention](retention.md).

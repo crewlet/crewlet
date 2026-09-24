@@ -177,6 +177,10 @@ type Runner struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	opts    ApplyOptions
+
+	// created is the broker's creation instant for the stream this loop
+	// runs on — [RunnerDeps.StreamCreatedAt] until [Runner.Follow] moves
+	// it — read and written under mu.
 	created time.Time
 
 	waiters waiters
@@ -376,6 +380,31 @@ func (r *Runner) Committed() Position {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cursor
+}
+
+// Follow re-identifies this runner with the stream its next run resumes on:
+// created is the broker's own creation instant for that stream, which the run
+// compares the checkpoint against and which every commit after it records.
+//
+// IT IS FOR THE GAP BETWEEN TWO RUNS, the one moment a node's identity for a
+// stream can honestly move under it. An adoption replaces the estate between
+// ending the loops and starting them again, checkpoint included, and the
+// checkpoint it installs was committed against the stream its donor was on. A
+// runner still holding the instant it booted with compares that checkpoint
+// against a stream it no longer runs on, and stops as though its log had been
+// recreated — so whoever installs a checkpoint says which stream it names.
+func (r *Runner) Follow(created time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.created = created
+}
+
+// identity is the stream creation instant this runner compares against and
+// records, as [Runner.Follow] last set it.
+func (r *Runner) identity() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.created
 }
 
 // Stopped is the error that halted this applier, or nil.
@@ -1236,7 +1265,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// because a run made ENTIRELY of redeliveries below the
 		// checkpoint has to be acknowledged without moving it at all.
 		committedAt = highest(consumed, r.Committed())
-		return r.tables.setCursor(ctx, tx, committedAt, r.created, r.now())
+		return r.tables.setCursor(ctx, tx, committedAt, r.identity(), r.now())
 	})
 	// THE COMMIT'S OWN INSTANT, taken before anything that follows it: the
 	// hold ends here, and a record is applied here rather than when its

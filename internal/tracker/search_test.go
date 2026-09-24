@@ -12,17 +12,21 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// rankerStub is a scripted index: what it ranks, whether it is still on its
-// first build, and how many rankings it was asked for.
+// rankerStub is a scripted index: what it ranks, what that ranking is
+// missing, whether it is still on its first build, and how many rankings it
+// was asked for.
 type rankerStub struct {
 	docs     []tracker.RankedDoc
+	partial  *tracker.SearchPartial
 	building bool
 	asked    []int
 }
 
-func (r *rankerStub) RankItems(_ context.Context, _ string, limit int) ([]tracker.RankedDoc, error) {
+func (r *rankerStub) RankItems(_ context.Context, _ string, limit int) (
+	[]tracker.RankedDoc, *tracker.SearchPartial, error) {
+
 	r.asked = append(r.asked, limit)
-	return r.docs, nil
+	return r.docs, r.partial, nil
 }
 
 func (r *rankerStub) Building(context.Context) bool { return r.building }
@@ -75,8 +79,56 @@ func TestABuildingIndexIsRefusedWhateverItFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a search on a built index: %v", err)
 	}
-	if len(got) != 1 || got[0].Key != "ENG-1" || got[0].Rank != 1 {
-		t.Errorf("a built index answered %+v, want ENG-1 in first place", got)
+	if len(got.Items) != 1 || got.Items[0].Key != "ENG-1" || got.Items[0].Rank != 1 {
+		t.Errorf("a built index answered %+v, want ENG-1 in first place", got.Items)
+	}
+}
+
+// A PARTIAL RANKING COMES BACK WITH ITS ITEMS AND WHAT IT IS MISSING.
+//
+// The items are real — a peer that did not answer costs its share of the
+// corpus, not the answer — and a list of them with nothing beside it reads as
+// every match there is, which a seat acts on by filing the duplicate. So the
+// ranking's own count travels with the rows, whether or not any of them
+// survived the read.
+func TestAPartialRankingIsCarriedWithItsItems(t *testing.T) {
+	t.Parallel()
+	db := searchStore(t)
+	partial := &tracker.SearchPartial{
+		BucketsAnswered: 42, BucketsMissing: 22, AbsentNodes: []string{"node-b"},
+	}
+	ranker := &rankerStub{partial: partial,
+		docs: []tracker.RankedDoc{{ID: "t.1", Snippet: "the signing key"}}}
+	items := tracker.NewSearcher(db, ranker)
+
+	got, err := items.Search(t.Context(), "signing key", 0)
+	if err != nil {
+		t.Fatalf("a partial ranking was refused: %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].Key != "ENG-1" {
+		t.Errorf("the partial ranking's items are %+v, want ENG-1", got.Items)
+	}
+	if got.Partial != partial {
+		t.Errorf("the answer carries partial %+v, want the ranking's own %+v",
+			got.Partial, partial)
+	}
+
+	// AND WHEN NOTHING SURVIVED, the count still travels: an empty list
+	// over part of the corpus is not "no such work".
+	ranker.docs = []tracker.RankedDoc{{ID: "t.gone"}}
+	got, err = items.Search(t.Context(), "signing key", 0)
+	if err != nil {
+		t.Fatalf("a partial ranking of a removed item was refused: %v", err)
+	}
+	if got.Items == nil || len(got.Items) != 0 || got.Partial != partial {
+		t.Errorf("an empty partial answer is %+v — want an empty list carrying "+
+			"the ranking's count", got)
+	}
+	ranker.docs = nil
+	if got, _ = items.Search(t.Context(), "signing key", 0); got.Items == nil ||
+		got.Partial != partial {
+		t.Errorf("a ranking with no items is %+v — want an empty list carrying "+
+			"the ranking's count", got)
 	}
 }
 

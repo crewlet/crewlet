@@ -3,6 +3,7 @@ package statelog
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -10,8 +11,8 @@ import (
 )
 
 // Appender is the broker, as narrowly as the framework needs it: one
-// conditional append, and the one query the rejection path discriminates
-// with.
+// conditional append, the one query the rejection path discriminates with,
+// and the one read that gives a caller back the record its write resolved to.
 //
 // DECLARED HERE because the framework is the caller. It is deliberately not
 // the queue's own Publish: that path discards the PubAck, and the sequence
@@ -46,6 +47,16 @@ type Appender interface {
 	// distinction, and the first one to forget would take the trimmed
 	// anchor's branch on a broker that was merely unreachable.
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
+
+	// At reads one record back by sequence, reporting false with a NIL
+	// error when the log no longer holds it.
+	//
+	// It is what [Publisher.Landed] reads, and a trimmed record is an
+	// ordinary answer there rather than a failure for the reason LastSeq's
+	// "no message" is: a caller has to tell "gone" from "the broker did not
+	// answer", because only the second is worth asking again.
+	At(ctx context.Context, seq uint64) (subject string, payload []byte,
+		storedAt time.Time, ok bool, err error)
 }
 
 // fault is what a publish attempt actually was: a record stored, a record

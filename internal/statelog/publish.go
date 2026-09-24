@@ -41,6 +41,11 @@ const (
 	// where the records commute — a sum, an append-only log of turns —
 	// because a commutative fold needs no arbitration and paying for one
 	// would serialize the hottest subject in the domain for nothing.
+	//
+	// AND ONLY WHERE THE APPLY FOLDS A SECOND RECORD UNDER ONE OPERATION
+	// ID TO NOTHING. With no expectation, nothing arbitrates a retry whose
+	// first record is on the log and not yet applied here: past the
+	// broker's duplicate window it lands again — see [Publisher.Publish].
 	PatternAdditive
 )
 
@@ -302,6 +307,35 @@ func NewPublisher(d Deps) (*Publisher, error) {
 }
 
 // Publish runs the write authority for one request.
+//
+// # A retry of an operation this node already applied publishes nothing
+//
+// Every round's snapshot reads this node's operation ledger first, and when it
+// already records the request's op id the write is answered `applied` at the
+// ledger's position without deciding or publishing. A retry cannot otherwise
+// tell its own first record from somebody else's once the broker has forgotten
+// the message id: past the stream's duplicate window it would decide again
+// from rows its first record already moved, publish a second record, and hand
+// its caller the second decision's values while every node also holds the
+// first's.
+//
+// # What that leaves uncovered, and why
+//
+// A retry of a first record that is ON THE LOG AND NOT YET APPLIED HERE has no
+// ledger row to find. An arbitrated or first-writer-wins retry is still safe:
+// its expectation is formed below the first record, so the broker refuses it,
+// the write waits for this node to apply the winner, and the next round's
+// snapshot finds the ledger row. A [PatternAdditive] retry carries no
+// expectation, so past the duplicate window nothing refuses it and a second
+// record lands — which is why that pattern is correct only where the apply
+// folds a second record under one op id to nothing. Closing it would take an
+// expectation on the additive subject or a wait for the log's end before
+// every additive write, and either is the serialization the pattern exists to
+// avoid.
+//
+// So is a retry whose ledger row this node no longer holds: one older than
+// [OpsRetention], or one applied before this node adopted a snapshot, whose
+// ledger is scrubbed from every artefact ([Gates.AdoptedAt]).
 func (p *Publisher) Publish(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	res, err := p.publish(ctx, req)
@@ -346,9 +380,26 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	gen := p.generation()
 	var pace pacing
 	for round := 1; round <= casRounds; round++ {
-		snap, err := p.rows.Snapshot(ctx, req.Subject, req.Scope, req.Decide)
+		snap, err := p.rows.Snapshot(ctx, req.Subject, req.Scope, req.OpID, req.Decide)
 		if err != nil {
 			return Result{Rounds: round}, err
+		}
+		if snap.AlreadyApplied {
+			// THIS OPERATION HAS LANDED AND THIS NODE APPLIED IT — by an
+			// earlier call under the same op id, or by an earlier round
+			// of this one whose answer never arrived. The ledger's
+			// position is the answer, and a publish here would be a
+			// second record of one operation. See the doc above.
+			p.logger.Debug("statelog_publish_replayed",
+				"domain", p.domain.Name(), "subject", req.Subject.String(),
+				"op_id", req.OpID, "position", snap.Applied.String())
+			return Result{
+				Outcome:  OutcomeApplied,
+				Position: snap.Applied,
+				OpID:     req.OpID,
+				Version:  snap.Applied.Packed(),
+				Rounds:   round,
+			}, nil
 		}
 		if refusal := p.refuseFromSnapshot(req, snap); refusal != nil {
 			return Result{Rounds: round}, refusal
@@ -978,6 +1029,57 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 
 	// Somebody else won. Re-decide.
 	return Result{}, nil
+}
+
+// Landed reads back the record a write's result names: the bytes the log holds
+// at res.Position, checked to be res.OpID's own.
+//
+// # Why a caller reads the record rather than its own decision
+//
+// A decision can compute a value its caller goes on to use — a key mint's
+// number is one. The closure that computed it is the wrong place to take that
+// value from: a decide runs once per round, and a write answered from this
+// node's ledger, or by the broker's duplicate acknowledgement, ran no decide
+// that landed — its last run, if it had one, decided from rows the landed
+// record had already moved. The record at the result's position is the one
+// every node applies, so a value read out of it cannot disagree with theirs.
+//
+// It refuses rather than guesses: a result with no position, a position on
+// another stream or at a generation this log has left — whose sequence names
+// a record in a stream that no longer exists — a record the log no longer
+// holds, and a record that is not this operation's.
+func (p *Publisher) Landed(ctx context.Context, res Result) ([]byte, error) {
+	at := res.Position
+	switch {
+	case at.IsZero():
+		return nil, fmt.Errorf("%w: the write under operation %q names no "+
+			"position, so there is no record to read back", ErrUnavailable, res.OpID)
+	case at.Stream != p.stream:
+		return nil, fmt.Errorf("%w: %s names a record on %s, and %s's log is %s",
+			ErrWrongStream, at, at.Stream, p.domain.Name(), p.stream)
+	case at.Generation != p.generation():
+		return nil, fmt.Errorf("%w: the record at %s is at generation %d and %s's "+
+			"log is at %d, so its sequence names a stream that no longer exists",
+			ErrUnavailable, at, at.Generation, p.domain.Name(), p.generation())
+	}
+	_, payload, _, held, err := p.log.At(ctx, at.Seq)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("statelog: read back the record at %s: %w", at, err)
+	case !held:
+		return nil, fmt.Errorf("%w: the log no longer holds the record at %s, so "+
+			"what it decided cannot be read back", ErrUnavailable, at)
+	}
+	env, err := p.domain.Envelope(payload)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read the envelope of the record at %s: %w",
+			at, err)
+	}
+	if env.OpID != res.OpID {
+		return nil, fmt.Errorf("statelog: the record at %s belongs to operation %q, "+
+			"not to %q", at, env.OpID, res.OpID)
+	}
+	return payload, nil
 }
 
 // checkEvicted is fence 0.

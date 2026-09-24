@@ -521,8 +521,11 @@ knowledge:
   # below, which is for routing + writes, not reads.
   #
   # ``skills_container`` (default ``TS``) and ``root_space`` (default
-  # ``HOME``) are both left unset.  Both are reserved: excluded from search
-  # and routing, and refused as a unit's own ``space``.
+  # ``HOME``) are both left unset.  Both are reserved: refused as a unit's
+  # or a seat's own ``space``, and closed to a seat's own page writes —
+  # your own assistant over /operator/mcp is what publishes into them.  The
+  # skills container is also excluded from search and routing, because its
+  # pages are machinery; the root is searched and routed like any other.
   # See docs/concepts/knowledge-system.md.
 
 # All tool MCP servers live here.  Mattermost and GitLab are

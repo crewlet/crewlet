@@ -225,7 +225,9 @@ type Limits struct {
 	MaxParallel int
 
 	// BudgetFraction is the share of the parent's REMAINING tokens one
-	// call may consume — the total across every task, not each.
+	// call's rounds are admitted against — the total across every task, not
+	// each. A round is billed before it is charged, so the round a task is
+	// refused is spent past the share, and counted (see [sliceMeter]).
 	BudgetFraction float64
 
 	// MinTokensPerTask floors each task's share. A call whose total
@@ -637,6 +639,12 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 	// a defer rather than a line beside the return.
 	defer func() { res.Elapsed = time.Since(began) }()
 
+	// The loop's failure view and the surface it runs on, declared ahead of
+	// the recovery below because a panic reports both: what the loop had done
+	// and what the worker could call.
+	progress := &toolloop.Progress{}
+	var surface *tools.Surface
+
 	// A PANIC IS CONTAINED HERE.
 	//
 	// Workers run concurrently, so a panicking goroutine takes the whole
@@ -647,13 +655,21 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 	// told exactly what happened either way.
 	//
 	// The stack is logged, not swallowed: a contained panic nobody can see
-	// is a bug that never gets fixed.
+	// is a bug that never gets fixed. And the worker's record keeps what the
+	// loop did before it, as it does on a failure: the loop brings progress
+	// up to date before a panic leaves it, so the transcript, the calls and
+	// the tokens already billed reach the record, with an answer its round
+	// never committed among the abandoned attempts.
 	defer func() {
 		r := recover()
 		if r == nil {
 			return
 		}
 		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+		res.keep(progress.Snapshot())
+		if surface != nil {
+			res.ToolsAvailable = surface.Active()
+		}
 		res.Status = StatusFailed
 		res.Error = fmt.Sprintf("worker panicked: %v", r)
 	}()
@@ -684,7 +700,6 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 		active = append(active, SubmitTool)
 	}
 
-	var surface *tools.Surface
 	if cfg.Discovery != nil {
 		for _, meta := range cfg.Discovery(func() *tools.Surface { return surface }) {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -736,7 +751,6 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 	})
 	res.UserPrompt = withDependencies(task.Prompt, deps)
 
-	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
 		Provider:  provider,
 		Surface:   surface,
@@ -760,13 +774,7 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 	res.ToolsAvailable = surface.Active()
 
 	if err == nil {
-		res.Text = loop.Text
-		res.Rounds = loop.RoundsUsed
-		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
-		res.Model = loop.Model
-		res.Executions = loop.Executions
-		res.Narration = loop.Narration
-		res.Truncated = loop.Truncated
+		res.keep(*loop)
 		res.Status, res.Output = submitted(submit)
 		if res.Status == StatusNoResult {
 			log.WarnContext(ctx, "subagent_never_submitted", "task", task.ID,
@@ -779,14 +787,7 @@ func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
 	// nine rounds and then hit its cap did nine rounds of work the parent
 	// paid for; reporting zeros throws away both the transcript and the
 	// only evidence of what it cost.
-	partial := progress.Snapshot()
-	res.Text = partial.Text
-	res.Rounds = partial.RoundsUsed
-	res.InputTokens, res.OutputTokens = partial.InputTokens, partial.OutputTokens
-	res.Model = partial.Model
-	res.Executions = partial.Executions
-	res.Narration = partial.Narration
-	res.Truncated = partial.Truncated
+	res.keep(progress.Snapshot())
 
 	kind, reason := stopReason(ctx)
 	res.Status, res.Error = classify(kind, reason, err)
@@ -882,8 +883,8 @@ func slice(remaining int, fraction float64) int {
 	return max(1, int(float64(remaining)*fraction))
 }
 
-// sliceMeter caps what a spawn — or a whole batch of them — may charge,
-// on top of whatever the parent's counter already enforces.
+// sliceMeter caps what a spawn — or a whole batch of them — may go on to
+// spend, on top of whatever the parent's counter already enforces.
 type sliceMeter struct {
 	inner toolloop.BudgetMeter
 	cap   int
@@ -896,50 +897,40 @@ func newSliceMeter(inner toolloop.BudgetMeter, cap int) *sliceMeter {
 	return &sliceMeter{inner: inner, cap: cap}
 }
 
-// Spend reserves against the slice, then charges the real counter.
+// Spend counts a worker round's billed tokens against the slice and the
+// parent's counter, and refuses the round when either had no room for them.
 //
-// The reservation is taken BEFORE the inner charge and under the lock,
-// because that charge can block: two children of one batch would otherwise
-// both test against the same `used` snapshot, both pass, and both spend —
-// overshooting the slice by a whole child. Reserving first makes the check
-// and the increment one operation, which is the same rule the shared counter
-// itself follows.
+// COUNTED EITHER WAY, as [toolloop.BudgetMeter] requires of every meter: the
+// provider billed the round before it was charged, so the slice keeps the
+// tokens and the parent's counter is handed them whatever the answer — and a
+// sibling that runs later is judged against what the call has really spent.
+//
+// The slice's own answer is decided from `used` as the increment found it,
+// under the lock and BEFORE the inner charge, because that charge can block:
+// two children of one batch deciding from one snapshot would both be told
+// there was room. The parent's refusal, when there is one, is the answer
+// reported — the company or the seat out of room is the fact an operator acts
+// on, and a slice refusal beside it would send them to a cap that was never
+// the one binding.
 func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	m.mu.Lock()
-	if m.used+tokens > m.cap {
-		used := m.used
-		m.mu.Unlock()
-		return toolloop.SpendOutcome{
-			OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap,
-		}, nil
-	}
+	before := m.used
 	m.used += tokens
 	m.mu.Unlock()
 
 	outcome, err := m.inner.Spend(ctx, tokens)
-	if err != nil {
-		// The reservation STAYS. An unreachable counter does not say whether
-		// the charge landed, so releasing it would let a sibling spend
-		// tokens that may already be billed. The round is aborted either
-		// way — this only decides what the siblings still running see.
+	if err != nil || !outcome.OK {
+		// Unreachable, or refused by the parent's own counter. An
+		// unreachable counter does not say whether the charge landed, and
+		// the slice keeps the tokens either way: they were billed.
 		return outcome, err
 	}
-	if !outcome.OK {
-		// A refusal is definite: nothing was charged, so the reservation
-		// goes back. Keeping it would shrink the slice for every sibling
-		// over a charge that never happened.
-		m.mu.Lock()
-		m.used -= tokens
-		m.mu.Unlock()
+	if before+tokens > m.cap {
+		return toolloop.SpendOutcome{
+			OK: false, Scope: ScopeSubagent, Used: before, Limit: m.cap,
+		}, nil
 	}
 	return outcome, nil
-}
-
-// Used is what the slice has spent, for a caller reporting on a batch.
-func (m *sliceMeter) Used() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.used
 }
 
 // workerModel is the provider one task runs on, and the key that names it.

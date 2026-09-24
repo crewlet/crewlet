@@ -7,7 +7,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -139,21 +141,23 @@ func TestAFailedPhaseKeepsTheAttemptItFailedDuring(t *testing.T) {
 	}
 }
 
-// AN ATTEMPT ABANDONED BEFORE A SUSPENSION IS LOGGED WHOLE, ONCE.
+// AN ATTEMPT ABANDONED BEFORE A SUSPENSION IS ON THE RESUMED RECORD.
 //
-// A suspending executor publishes no record, and the pending-run row that
-// carries its rounds into the resumed record has no field for an abandoned
-// attempt — so the one place its whole survives is the WARN line the
-// suspension writes, naming the run, the round and the texts with their
-// lengths.
-func TestAnAttemptAbandonedBeforeASuspensionIsLoggedWhole(t *testing.T) {
+// A suspending executor publishes no record, and the live frames that showed
+// an attempt a provider gave up on carried only its tail — so the pending-run
+// row carries each such attempt into the record the resumed phase publishes,
+// whole, numbered with the round it was an attempt at. Driven through the
+// row itself: the suspension's state is encoded and decoded as the pending
+// run stores it, and re-entered by a second runner, as a resume on another
+// node would be.
+func TestAnAttemptAbandonedBeforeASuspensionIsOnTheResumedRecord(t *testing.T) {
 	t.Parallel()
-	const marker = "[suspension-case attempt]"
-	wrote := marker + strings.Repeat(" unlocking the sandbox first", 300)
+	wrote := strings.Repeat("unlocking the sandbox first, ", 300) + "[end of the attempt]"
 	prov := &streamingScript{rounds: []streamedRound{
 		{
-			fragments: []llm.Delta{{Content: wrote}, {Restart: true, Model: "backup"}},
-			answer:    activate("run_sandbox"),
+			fragments: []llm.Delta{{Reasoning: "a coding run, then"}, {Content: wrote},
+				{Restart: true, Model: "backup"}},
+			answer: activate("run_sandbox"),
 		},
 		{answer: submitCall(t, "run_sandbox", `{"task":"fix the failing test"}`)},
 	}}
@@ -161,34 +165,47 @@ func TestAnAttemptAbandonedBeforeASuspensionIsLoggedWhole(t *testing.T) {
 	if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !w.Suspended {
-		t.Fatal("the phase did not suspend, so nothing was left for the row to carry")
+		t.Fatal("the phase did not suspend, so there is no row to carry the attempt")
+	}
+	parked, ok := r.Suspended()
+	if !ok {
+		t.Fatal("the suspension recorded no state")
+	}
+	row, err := execstate.Encode(parked.State)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	state, ok, err := execstate.Decode(row)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
 	}
 
-	var lines []map[string]any
-	for _, line := range logs.records(t, "abandoned_attempt_suspended") {
-		if content, _ := line["content"].(string); strings.HasPrefix(content, marker) {
-			lines = append(lines, line)
-		}
+	pub := newCapture()
+	resumed, resumedReg := buildWith(t,
+		[]phase.Entry{{Key: "default", Provider: &scriptedProvider{execute: []llm.Completion{submitWork(t)}}}},
+		buildOpts{pub: pub, resume: &runner.Resume{State: state, Answer: "the run failed its tests"}})
+	if err := resumedReg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
-	if len(lines) != 1 {
-		t.Fatalf("%d abandoned_attempt_suspended lines for the attempt; want exactly one", len(lines))
+	if _, _, err := resumed.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
-	line := lines[0]
-	if line["content"] != wrote || line["content_bytes"] != float64(len(wrote)) {
-		t.Errorf("the line carries %d bytes of content and names %v; want the whole %d",
-			len(line["content"].(string)), line["content_bytes"], len(wrote))
+
+	done := completedPhase(t, pub, "execute")
+	if len(done.AbandonedAttempts) != 1 {
+		t.Fatalf("the resumed record carries %d abandoned attempts, want the one before the suspension",
+			len(done.AbandonedAttempts))
 	}
-	if line["level"] != "WARN" || line["turn_id"] != "t-1" || line["phase"] != "execute" ||
-		line["iteration"] != float64(1) || line["round"] != float64(1) {
-		t.Errorf("the line is %v for run %v, phase %v, iteration %v, round %v; want WARN for run "+
-			"t-1, execute, iteration 1, round 1", line["level"], line["turn_id"], line["phase"],
-			line["iteration"], line["round"])
+	round, reasoning, content := attemptOf(t, done.AbandonedAttempts[0])
+	if round != 1 || reasoning != "a coding run, then" || content != wrote {
+		t.Errorf("the resumed record's attempt is round %d, reasoning %q and %d bytes of content; "+
+			"want round 1, the attempt's reasoning and its whole %d", round, reasoning,
+			len(content), len(wrote))
 	}
 }
 

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -840,26 +841,35 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		out.Elapsed = time.Since(began)
 		return ctx, out, nil
 	}
-	// Returns the phase context too, so `return fail(err)` stays a single
-	// line now that runPhase hands its context back.
-	fail := func(err error) (context.Context, phaseResult, error) {
+	// live is true from the moment a tool-loop invocation starts until its
+	// Result is folded into `out`: the one window in which `progress` holds
+	// rounds `out` does not. Outside it the invocation is already in `out`,
+	// and folding `progress` again would put its rounds on the record twice.
+	live := false
+	// failed publishes the record of a phase that died with err: the path a
+	// failure returns through below, and the one a panic leaves by.
+	failed := func(err error) {
 		// The span carries the failure too. The event below is the record
 		// of WHAT broke; the span is what makes the broken phase findable
 		// in a trace beside the calls that led to it.
 		tracing.Fail(span, err)
+		// FOLDED onto what the phase already had, exactly as the success
+		// path folds it. `progress` is one object reused across every
+		// invocation of the loop and `record` REPLACES rather than appends,
+		// so it holds only the invocation in flight: a phase that ran twenty
+		// rounds, was extended and then failed on extension round 2 would
+		// otherwise publish a record of two rounds, numbered 1 and 2, with
+		// the tokens of those two — on precisely the card an operator opens
+		// to see what led up to the failure. `out` is read here, not
+		// captured: the closure sees whatever the loop has accumulated by
+		// the time it fails.
+		result := out.Result
+		if live {
+			result = foldOnto(out, progress.Snapshot())
+		}
 		emit.completed(ctx, phaseRecord{
 			Phase: ph, Iteration: iteration, System: system, User: user,
-			// FOLDED onto what the phase already had, exactly as the success
-			// path folds it. `progress` is one object reused across every
-			// invocation of the loop and `record` REPLACES rather than
-			// appends, so it holds only the invocation that died: a phase
-			// that ran twenty rounds, was extended and then failed on
-			// extension round 2 published a record claiming two rounds,
-			// numbered 1 and 2, with the tokens of those two — on precisely
-			// the card an operator opens to see what led up to the failure.
-			// `out` is read here, not captured: the closure sees whatever
-			// the loop has accumulated by the time it fails.
-			Result: foldOnto(out, progress.Snapshot()), Available: surface.Active(),
+			Result: result, Available: surface.Active(),
 			// A PHASE THAT DIED STILL TOOK TIME, and on a timeout it is
 			// the number that says so: a phase whose provider hung for
 			// four minutes and one refused in fifty milliseconds are the
@@ -867,8 +877,31 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			Elapsed: time.Since(began),
 			Failed:  true, Err: err,
 		})
+	}
+	// Returns the phase context too, so `return fail(err)` stays a single
+	// line now that runPhase hands its context back.
+	fail := func(err error) (context.Context, phaseResult, error) {
+		failed(err)
 		return ctx, phaseResult{}, err
 	}
+	// A PANIC PUBLISHES THE FAILURE RECORD TOO, and then goes on as the same
+	// panic. The turn loop's guard recovers it and ends the turn with an
+	// unhandled_exception breach, but holds nothing the phase did; this
+	// record is where the conversation, the calls, the tokens already billed
+	// and the round in flight are kept — the live frames showed them only as
+	// tails. The tool loop leaves that account in `progress` before a panic
+	// leaves it, so `failed` folds it as it folds a failure's. Re-panicking with
+	// the recovered value leaves the guard's breach naming the same panic,
+	// and the stack it logs still holding the frames that panicked: they stay
+	// on the stack until a deferred call returns.
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		recordPanic(ctx, ph, iteration, recovered, failed)
+		panic(recovered)
+	}()
 
 	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
 	if err != nil {
@@ -926,6 +959,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// everything above the insertion point, which is the one property
 		// the round ledger exists to guarantee.
 		prior := out
+		live = true
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
@@ -959,6 +993,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// and the frames it published while running describe one phase.
 		out.Result = foldOnto(prior, *res)
 		out.Rounds = prior.Rounds + res.RoundsUsed
+		live = false
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {
@@ -987,6 +1022,29 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		})
 		budget = granted
 	}
+}
+
+// recordPanic publishes the failure record of a phase that panicked, through
+// runPhase's own failure path.
+//
+// A SECOND PANIC DOES NOT REPLACE THE FIRST. Were building or publishing the
+// record to panic in its turn, that panic would reach the turn's guard in
+// place of the phase's own, and the breach would name the record's defect
+// rather than the one that ended the turn. It is logged with its stack
+// instead, and the caller goes on with the phase's panic.
+func recordPanic(ctx context.Context, ph phase.Phase, iteration int, recovered any,
+	failed func(error),
+) {
+	defer func() {
+		if second := recover(); second != nil {
+			log.ErrorContext(ctx, "phase_record_panicked", "phase", ph, "iteration", iteration,
+				"panic", fmt.Sprint(second), "stack", string(debug.Stack()),
+				"detail", "publishing the record of a phase that panicked panicked in turn, so "+
+					"the phase's record may not have been published; the phase's own panic goes "+
+					"on to the turn's guard")
+		}
+	}()
+	failed(fmt.Errorf("runner: %s: %w", ph, turn.Recovered(recovered)))
 }
 
 // offsetRounds renumbers one loop invocation's rounds onto the phase's own
@@ -1099,10 +1157,13 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 
 // charge meters a model call the tool loop did not make.
 //
-// An unreachable counter is NOT a refusal — the same three-valued rule the
-// loop's own charge follows — but here both answers end the same way, because
-// neither is worth failing a turn over: the caller declines to extend and
-// says why.
+// The call has answered, so its tokens are billed: a refusal counts them all
+// the same and only declines what would follow — here the extension — which is
+// the rule [toolloop.BudgetMeter] states, so the judge's record and the
+// counter agree on what it cost. An unreachable counter is NOT a refusal — the
+// same three-valued rule the loop's own charge follows — but here both answers
+// end the same way, because neither is worth failing a turn over: the caller
+// declines to extend and says why.
 func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil

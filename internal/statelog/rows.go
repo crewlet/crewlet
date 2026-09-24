@@ -37,12 +37,19 @@ type Rows interface {
 	// rows inside it, and returns the framework's own inputs read in the
 	// SAME transaction.
 	//
+	// THE OPERATION LEDGER IS READ FIRST, and when it already records
+	// opID the domain does not decide at all: the snapshot reports where
+	// the operation applied ([Snap.Applied]) and nothing else. A decision
+	// about an operation that has landed is a second decision, formed
+	// from rows the first one already moved — see [Publisher.Publish] for
+	// what publishing it would do.
+	//
 	// The transaction is CLOSED before Snapshot returns, and nothing that
 	// can block runs inside it — no broker call, no coordination read, no
 	// model. A read transaction held across a round trip is a reader
 	// holding a snapshot open while the world moves, which is what the
 	// store's own short-transaction rule exists to stop.
-	Snapshot(ctx context.Context, subj Subject, s ScopeSet,
+	Snapshot(ctx context.Context, subj Subject, s ScopeSet, opID string,
 		decide func(*sql.Tx) (Decision, error)) (Snap, error)
 
 	// Op answers where an operation was applied on this node.
@@ -117,6 +124,19 @@ func (d Deferral) Describe(reads int) string {
 // same transaction as [Snap.Decision], which is the property the publisher
 // rests on and the reason this is one struct rather than five calls.
 type Snap struct {
+	// Applied is where this node's operation ledger records the request's
+	// own operation, and AlreadyApplied says whether it does. When it does,
+	// every other field is zero: the domain did not decide, and the
+	// publisher answers from this position without publishing.
+	//
+	// Only a POSITIVE answer means anything. The ledger is this node's
+	// applier's own record, so an absent row says "not applied HERE yet",
+	// never "not applied anywhere" — which is why absence sends the write
+	// on to decide and let the broker arbitrate, as every first attempt
+	// does. A domain with no ledger never reports one.
+	Applied        Position
+	AlreadyApplied bool
+
 	// Decision is what the domain decided, from rows inside the
 	// transaction.
 	Decision Decision

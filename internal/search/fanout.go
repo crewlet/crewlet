@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
 // THE SEARCH FAN-OUT: how a company's corpus scan is divided across the nodes
@@ -116,19 +118,16 @@ type Slice struct {
 	// the lexical index over it is each node's OWN — built by that node's
 	// own walk, in its own database, on its own schedule — so a node that
 	// joined a minute ago holds the corpus and can find nothing in it.
-	// Handed a bucket range, such a node answers almost nothing and the
-	// coordinator, having no way to tell that from a range with nothing
-	// in it, reported COMPLETE coverage over a corpus it had silently
-	// dropped a slice of. That is the one thing this file's whole coverage
-	// arithmetic exists to prevent — "an answer that is quietly short is
-	// indistinguishable from a corpus that is quietly short" — and the
-	// hole was that the sentence was only ever true for a participant that
-	// did not reply.
+	// Handed a bucket range, such a node answers almost nothing, which the
+	// coordinator cannot tell from a range with nothing in it: counted as
+	// an answer, it would report complete coverage over a corpus it had
+	// dropped a slice of — the one thing this file's coverage arithmetic
+	// exists to prevent.
 	//
-	// The zero value is "ready", which is what a peer on a build that
-	// predates this field sends, and it is the old behaviour: evolution
-	// here is additive and an unknown field is ignored, so a rolling
-	// upgrade degrades a ranking rather than a search.
+	// The zero value is "ready", which is how a reply without the field is
+	// read: evolution here is additive and an unknown field is ignored, so
+	// a peer on a build that does not send it degrades a ranking rather
+	// than a search.
 	Building bool
 }
 
@@ -138,9 +137,12 @@ type FanQuery struct {
 	Containers []string
 	Sources    []string
 
-	// Vector is the query embedding, packed as [SemanticQuery.Vector].
-	// Empty runs the lexical half alone, which is what a company with no
-	// embeddings provider gets.
+	// Vector is the query embedding, packed as [SemanticQuery.Vector], and
+	// Model and Dim are the space it was embedded in. The coordinator fills
+	// all three through [FanOut.Space] when its caller did not, and a peer
+	// takes them off the wire. Empty runs the lexical half alone: a company
+	// whose search has no semantic half, or a query that could not be
+	// embedded, which the answer marks ([Answer.SemanticSkipped]).
 	Vector []byte
 	Model  string
 	Dim    int
@@ -163,6 +165,19 @@ type FanQuery struct {
 
 // ErrLimit reports a [FanQuery.Limit] above [FuseN].
 var ErrLimit = errors.New("search: a fan-out answers at most FuseN hits")
+
+// QuerySpace is the embedding space a search embeds its query in: the provider
+// and the model id the corpus's vectors carry.
+//
+// BOTH HALVES, because a vector is comparable only with vectors of its own
+// model and width. The scan filters its candidate pool on that pair
+// ([SemanticQuery]), so the query has to be embedded by the provider and under
+// the model id the embedding duty writes every row with, at the provider's own
+// width — a query embedded any other way is compared with nothing.
+type QuerySpace struct {
+	Embedder embeddings.Embedder
+	Model    string
+}
 
 // Scanner answers one bucket range out of the corpus this process holds.
 //
@@ -234,6 +249,18 @@ type FanOut struct {
 	// [FanOutFloor] decision. Nil never fans out.
 	Corpus func(ctx context.Context) (int, error)
 
+	// Space answers the embedding space the corpus is embedded in, asked
+	// once per search. The query is embedded in it ONCE, here, and the
+	// vector travels to every participant with the rest of the query. The
+	// call is bounded by the caller's context and the provider's own
+	// per-call timeout, never by [SemanticScanBudget], which bounds a scan.
+	//
+	// Nil, or false, is a company whose search has no semantic half, and
+	// the query runs lexical alone — not a degradation. True with a query
+	// the provider could not embed IS one: the search still answers,
+	// lexically, and the answer says so ([Answer.SemanticSkipped]).
+	Space func() (QuerySpace, bool)
+
 	// Budget bounds the wait for the peers' assignments. Zero takes
 	// [SemanticScanBudget], which is the ceiling one search already has.
 	Budget time.Duration
@@ -283,13 +310,20 @@ type Answer struct {
 	// (see [Slice.Building]).
 	Absent []string
 
-	// SemanticSkipped says at least one answering participant ran without
-	// its semantic half.
+	// SemanticSkipped says the semantic half was meant to run and did not,
+	// over some or all of what was searched: the query could not be
+	// embedded, or an answering participant's vector scan failed. What the
+	// answer can be missing is then a document that matches the question's
+	// meaning and shares none of its words.
 	SemanticSkipped bool
 }
 
 // Partial reports whether part of the corpus went unscanned.
 func (a Answer) Partial() bool { return a.BucketsMissing > 0 }
+
+// Whole reports an answer with nothing missing: every bucket scanned, and the
+// semantic half run wherever it was asked for.
+func (a Answer) Whole() bool { return !a.Partial() && !a.SemanticSkipped }
 
 // Search runs one query across the fleet and fuses what comes back.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
@@ -300,6 +334,13 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 			"that would come back short with nothing saying so — ask for %d "+
 			"or fewer", ErrLimit, q.Limit, FuseN, FuseN)
 	}
+	// THE QUERY IS EMBEDDED FIRST, and outside the clock [FanOut.Report]
+	// is told: that clock is what `search_slow` fires on, and its remedy is
+	// about the scan — adding a node divides the buckets — which a slow
+	// embeddings provider would be counted against. A provider that cannot
+	// answer at all is `search_degraded`'s instead, through the flag the
+	// answer carries below.
+	q, notEmbedded := f.embed(ctx, q)
 	started := time.Now()
 	if f.Enter != nil {
 		// BEFORE THE PLAN, because the plan is a coordination read and
@@ -363,10 +404,47 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		}
 	}
 	answer := fuseSlices(answers, table, q.Limit)
+	// ONLY THE COORDINATOR KNOWS THIS ONE. Its participants were asked a
+	// lexical query, which none of them may report as degraded, so the
+	// answer would otherwise read as whole.
+	answer.SemanticSkipped = answer.SemanticSkipped || notEmbedded
 	if f.Report != nil {
 		f.Report(answer, time.Since(started))
 	}
 	return answer, nil
+}
+
+// embed fills a query's vector in the corpus's embedding space, and reports
+// whether the semantic half was meant to run and cannot.
+//
+// A QUERY THAT ALREADY CARRIES A VECTOR IS LEFT ALONE: its caller embedded it,
+// and a second call would pay the provider again for the same text.
+func (f *FanOut) embed(ctx context.Context, q FanQuery) (FanQuery, bool) {
+	if f.Space == nil || len(q.Vector) > 0 {
+		return q, false
+	}
+	space, ok := f.Space()
+	if !ok {
+		return q, false
+	}
+	width := space.Embedder.Width()
+	vector, err := space.Embedder.Embed(ctx, q.Text)
+	if err == nil {
+		// THE DUTY'S OWN CHECK, for the duty's reason: a vector of the
+		// wrong width is compared with nothing, and a non-finite one
+		// scores as a perfect match against everything.
+		var packed []byte
+		if packed, err = pack(vector, width); err == nil {
+			q.Vector, q.Model, q.Dim = packed, space.Model, width
+			return q, false
+		}
+	}
+	log.WarnContext(ctx, "search_query_not_embedded",
+		"model", space.Model, "error", err.Error(),
+		"detail", "this search answers on words alone and says so; a document "+
+			"that matches the question's meaning and shares none of its words "+
+			"is missing from it")
+	return q, true
 }
 
 // plan decides who participates and which buckets each one takes.

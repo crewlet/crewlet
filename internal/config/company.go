@@ -659,15 +659,23 @@ type Knowledge struct {
 	// at the top of the chain exactly where a new seat starts reading.
 	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
 
-	// Vectors adds semantic recall to the knowledge search.
+	// Vectors adds semantic recall to the engine's own searches: the
+	// knowledge search over its own pages, and the ranked work-item search.
+	// On, the embedding duty embeds every page and item with
+	// `providers.embeddings`, each search embeds its query once with the
+	// same provider and model, and the two ranked lists are fused. A query
+	// the provider will not embed is answered on its words alone, and the
+	// answer says so. A Confluence knowledge base is searched by Confluence
+	// and embeds nothing.
 	//
 	// A POINTER because the zero value is a real setting and the absent
 	// value is a different one: unset DERIVES from whether the company
 	// configured an embeddings provider (it already has one for the diary,
 	// so a company that pays for embeddings gets the better search), and an
-	// explicit false keeps the search purely lexical on a company that has
-	// one for its diary and does not want its pages embedded.
-	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge search. Unset derives from providers.embeddings."`
+	// explicit false keeps both searches purely lexical — no page, item or
+	// query is embedded — on a company that has a provider for its diary
+	// and does not want its pages embedded.
+	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into the engine's own knowledge and work-item search, embedding pages, items and queries with providers.embeddings. Unset derives from providers.embeddings; false embeds nothing."`
 }
 
 // KnowledgeBackend is which knowledge base a company runs.
@@ -924,7 +932,9 @@ func (c *Company) RunsStateLog() bool {
 	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
 }
 
-// VectorsEnabled reports whether knowledge search fuses semantic recall.
+// VectorsEnabled reports whether the engine's own searches fuse semantic
+// recall — and so whether anything is embedded for them, the corpus or a
+// query.
 func (c *Company) VectorsEnabled() bool {
 	if c.Knowledge.Vectors != nil {
 		return *c.Knowledge.Vectors

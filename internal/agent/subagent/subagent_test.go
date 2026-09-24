@@ -126,11 +126,14 @@ func (m *meter) spend(tokens int) (toolloop.SpendOutcome, error) {
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuse {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: m.total, Limit: m.total}, nil
-	}
+	// COUNTED WHETHER OR NOT IT IS REFUSED, as toolloop.BudgetMeter requires:
+	// the provider billed the round before it was charged.
+	before := m.total
 	m.charges = append(m.charges, tokens)
 	m.total += tokens
+	if m.refuse {
+		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: before, Limit: before}, nil
+	}
 	return toolloop.SpendOutcome{OK: true, Scope: "org", Used: m.total}, nil
 }
 
@@ -859,6 +862,85 @@ func TestAPanickingChildDoesNotTakeItsSiblingsDown(t *testing.T) {
 	}
 }
 
+// A PANICKED WORKER'S RECORD KEEPS WHAT IT DID BEFORE THE PANIC.
+//
+// A worker that panicked in its second round had already read a file, said
+// why and billed the round. Its Result is the only record of that: the
+// parent's report and the worker's phase event are both built from it, so a
+// panic that dropped the loop's account left a failed task that had called
+// nothing and cost nothing.
+func TestAPanickedWorkerKeepsWhatItDidBeforeThePanic(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			read := callTool("read_file", map[string]any{"path": "/incident.md"}, 30, 10)
+			read.Content = "Reading the incident notes first."
+			return read, nil
+		}
+		panic("provider SDK dereferenced nil")
+	}}
+	cfg := baseConfig(t, w, p)
+
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusFailed {
+		t.Fatalf("status = %s, want the panic contained as a failure", res.Status)
+	}
+	if len(res.Executions) != 1 || res.Executions[0].Name != "read_file" {
+		t.Errorf("executions = %+v, want the read the worker made before the panic", res.Executions)
+	}
+	if len(res.Narration) != 1 || res.Narration[0].Content != "Reading the incident notes first." {
+		t.Errorf("narration = %+v, want the round the worker committed", res.Narration)
+	}
+	if res.Tokens() != 40 || res.Rounds != 1 || res.Model != "scripted" {
+		t.Errorf("the record reports %d tokens over %d rounds on %q; want the committed round's "+
+			"40 over 1 on scripted", res.Tokens(), res.Rounds, res.Model)
+	}
+	if !slices.Contains(res.ToolsAvailable, "read_file") {
+		t.Errorf("tools available = %v, want what the worker could call", res.ToolsAvailable)
+	}
+}
+
+// A WORKER'S ROUND THAT NO ROUND KEPT IS ON ITS RECORD.
+//
+// The provider answered and billed the round, and then its charge failed, so
+// the round never committed and its narration never existed. What the worker
+// wrote in it reaches the record as an abandoned attempt, whole, numbered with
+// the round it was an attempt at — the same account the turn's own phases
+// give — and its tokens are counted.
+func TestAWorkersUncommittedAnswerIsOnItsRecord(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	wrote := strings.Repeat("the incident began at the deploy; ", 200) + "[end of the answer]"
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		read := callTool("read_file", map[string]any{"path": "/incident.md"}, 50, 20)
+		read.Content = wrote
+		return read, nil
+	}}
+	cfg := baseConfig(t, w, p)
+	counter := &meter{refuse: true}
+	cfg.Budget = countingMeter{counter}
+	cfg.ParentRemaining = 0
+
+	res := one(t, cfg, request("read_file"))
+	if !res.Failed() {
+		t.Fatalf("a refused charge did not stop the worker: %+v", res)
+	}
+	want := toolloop.Narration{Round: 1, Content: wrote}
+	if len(res.Abandoned) != 1 || res.Abandoned[0] != want {
+		t.Errorf("abandoned = %d attempts; want the refused round's whole %d-byte answer",
+			len(res.Abandoned), len(wrote))
+	}
+	if len(res.Narration) != 0 || len(res.Executions) != 0 {
+		t.Errorf("the refused round was committed: narration %+v, executions %+v",
+			res.Narration, res.Executions)
+	}
+	if res.Tokens() != 70 || counter.sum() != res.Tokens() {
+		t.Errorf("the record reports %d tokens and the counter holds %d; want both at the 70 the "+
+			"provider billed for the refused round", res.Tokens(), counter.sum())
+	}
+}
+
 func TestACancelledParentIsNotReportedAsATimeout(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -905,8 +987,12 @@ func TestTheSliceIsAFractionOfTheParentsRemaining(t *testing.T) {
 	if !res.Failed() || res.Status != subagent.StatusBudget {
 		t.Fatalf("the slice did not stop the child: %+v", res)
 	}
-	if m.sum() != 150 {
-		t.Errorf("the parent counter was charged %d, want only the round that fit (150)", m.sum())
+	// The round the slice refused was billed before it was charged, so the
+	// parent's counter holds it beside the round that fit — and holds what
+	// the worker's own record reports it cost.
+	if m.sum() != 250 || res.Tokens() != m.sum() {
+		t.Errorf("the parent counter holds %d and the worker's record %d; want both at the 250 "+
+			"the provider billed, the refused round included", m.sum(), res.Tokens())
 	}
 
 	// The counterfactual: a parent with no per-seat cap imposes none on its
@@ -945,20 +1031,24 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// A per-child wrapper would have let all three spend 150 — 450 against
-	// a configured slice of 200, which is the fan-out cost being invisible
-	// until the org budget is gone.
-	if m.sum() > 200 {
-		t.Fatalf("the batch charged %d against a 200-token slice", m.sum())
-	}
-	var ok int
+	// What one slice for the call decides is how many rounds are ADMITTED. A
+	// slice per child would have admitted all three, each going on to spend
+	// a fifth of its own, which is the fan-out cost being invisible until the
+	// org budget is gone. Each child's first round is billed before it is
+	// charged, so the parent's counter holds all three — as their records do.
+	var ok, billed int
 	for _, r := range results {
+		billed += r.Tokens()
 		if !r.Failed() {
 			ok++
 		}
 	}
 	if ok != 1 {
 		t.Errorf("%d children finished on a slice that fits one: %+v", ok, results)
+	}
+	if m.sum() != 450 || billed != m.sum() {
+		t.Errorf("the parent counter holds %d and the workers' records %d; want both at the 450 "+
+			"the provider billed", m.sum(), billed)
 	}
 	for _, r := range results {
 		if r.Failed() && r.Status != subagent.StatusBudget {
@@ -1043,11 +1133,11 @@ func TestAnUncappedParentSkipsTheFloorEntirely(t *testing.T) {
 	}
 }
 
-func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
+func TestConcurrentChildrenCannotAllBeAdmittedIntoTheSlice(t *testing.T) {
 	t.Parallel()
-	// The check and the reservation must be ONE operation. Two children
-	// testing against the same `used` snapshot both pass and both spend,
-	// overshooting by a whole child — and the inner charge is exactly where
+	// The slice's answer and its count must be ONE operation. Two children
+	// deciding from the same `used` snapshot would both be told there was
+	// room and both go on to spend — and the inner charge is exactly where
 	// that window opens, because it can block.
 	w := newWorld(t)
 	m := &meter{}
@@ -1082,9 +1172,6 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	close(release)
 	results := <-done
 
-	if m.sum() > 100 {
-		t.Fatalf("charged %d against a 100-token slice", m.sum())
-	}
 	var ok int
 	for _, r := range results {
 		if !r.Failed() {
@@ -1092,7 +1179,12 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 		}
 	}
 	if ok != 1 {
-		t.Errorf("%d of 8 children fitted a one-child slice", ok)
+		t.Errorf("%d of 8 children were admitted into a one-child slice", ok)
+	}
+	// Every child's round was billed before it was charged, so the parent's
+	// counter holds all eight, admitted or not.
+	if m.sum() != 8*60 {
+		t.Errorf("the parent counter holds %d, want the 480 the eight rounds billed", m.sum())
 	}
 }
 
@@ -1119,15 +1211,12 @@ func TestAnOrgRefusalIsNotBlamedOnTheChildsSlice(t *testing.T) {
 	}
 }
 
-func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
+func TestARefusedChargeStaysCountedAgainstTheSlice(t *testing.T) {
 	t.Parallel()
-	// A refusal is DEFINITE: nothing was charged. Keeping the reservation
-	// would shrink the slice for every sibling over a charge that never
-	// happened — which is the opposite polarity from an unreachable
-	// counter, where the charge may well have landed.
-	//
-	// Observable only through a sibling: the second child fits the slice
-	// exactly when the first child's refused reservation came back.
+	// A REFUSAL IS NOT A REFUND. The first child's round was billed, and then
+	// refused by the parent's counter, which counted it all the same. The
+	// slice counts it too, so the sibling after it is judged against what the
+	// call has really spent — and is refused by the slice it no longer fits.
 	w := newWorld(t)
 	m := &meter{}
 	var once sync.Once
@@ -1148,22 +1237,23 @@ func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var ok, failed int
+	var byParent, bySlice, billed int
 	for _, r := range results {
-		if r.Failed() {
-			failed++
-			if r.Status == subagent.StatusBudget {
-				t.Errorf("the survivor was refused by the slice, not the org: %+v", r)
-			}
-			continue
+		billed += r.Tokens()
+		switch r.Status {
+		case subagent.StatusFailed:
+			byParent++
+		case subagent.StatusBudget:
+			bySlice++
 		}
-		ok++
 	}
-	if ok != 1 || failed != 1 {
-		t.Fatalf("ok=%d failed=%d, want 1 and 1: %+v", ok, failed, results)
+	if byParent != 1 || bySlice != 1 {
+		t.Fatalf("%d refused by the parent's counter and %d by the slice, want 1 and 1: %+v",
+			byParent, bySlice, results)
 	}
-	if m.sum() != 10 {
-		t.Errorf("the parent counter was charged %d, want 10", m.sum())
+	if m.sum() != 20 || billed != m.sum() {
+		t.Errorf("the parent counter holds %d and the workers' records %d; want both at the 20 "+
+			"the two refused rounds billed", m.sum(), billed)
 	}
 }
 
@@ -1307,12 +1397,12 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 	}
 }
 
-func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
+func TestAnUnreachableCounterStillCountsAgainstTheSlice(t *testing.T) {
 	t.Parallel()
-	// An unreachable counter does not say whether the charge LANDED, so the
-	// slice keeps the reservation. Releasing it would let a sibling spend
-	// tokens that may already be billed — and the budget's polarity in this
-	// engine is fail-closed.
+	// An unreachable counter does not say whether the charge LANDED, and the
+	// provider billed the round either way, so the slice counts it. Dropping
+	// it would let a sibling spend tokens already billed — and the budget's
+	// polarity in this engine is fail-closed.
 	w := newWorld(t)
 	m := &meter{}
 	var once sync.Once
@@ -1334,7 +1424,7 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	// Whichever child hit the broken counter, the OTHER must find the slice
-	// already spoken for: a released reservation would let it through.
+	// already spoken for: a slice that dropped the round would let it through.
 	var budget, unreachable int
 	for _, r := range results {
 		switch {
@@ -1347,8 +1437,11 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 	if unreachable != 1 || budget != 1 {
 		t.Fatalf("unreachable=%d budget=%d, want 1 and 1: %+v", unreachable, budget, results)
 	}
-	if m.sum() != 0 {
-		t.Errorf("the parent counter was charged %d by a batch that never got through", m.sum())
+	// The round the slice refused reached the parent's counter, which
+	// answered; the round that met the broken counter is the one it cannot
+	// say it holds.
+	if m.sum() != 60 {
+		t.Errorf("the parent counter holds %d, want the 60 of the round the slice refused", m.sum())
 	}
 }
 
@@ -2381,8 +2474,9 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 	return e.inner.Spend(ctx, tokens)
 }
 
-// refuseOnceMeter refuses the FIRST charge and serves the rest, so a test can
-// watch what a definite refusal does to a shared reservation.
+// refuseOnceMeter refuses the FIRST charge — counting it at the inner meter,
+// as every refusal counts what it refuses — and serves the rest, so a test can
+// watch what a definite refusal does to the slice its siblings share.
 type refuseOnceMeter struct {
 	inner toolloop.BudgetMeter
 	once  *sync.Once
@@ -2391,10 +2485,11 @@ type refuseOnceMeter struct {
 func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	var refused bool
 	r.once.Do(func() { refused = true })
-	if refused {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: 0, Limit: 0}, nil
+	outcome, err := r.inner.Spend(ctx, tokens)
+	if err != nil || !refused {
+		return outcome, err
 	}
-	return r.inner.Spend(ctx, tokens)
+	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: 0, Limit: 0}, nil
 }
 
 // skillFor is a one-skill catalogue that fires only when its tool is in

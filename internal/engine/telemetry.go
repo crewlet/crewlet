@@ -483,7 +483,19 @@ func planSummary(res turn.Result) string {
 }
 
 // publishEvent sends one turn-level event, or logs why it could not.
+//
+// WITHOUT ctx's CANCELLATION, as the runner publishes a phase record
+// (runner.emitter.publishPhase): each event here reports work that already
+// happened — a turn that ran, what it spent, why it stopped — and the turns
+// most in need of one are those whose context ended under them. Releasing a
+// seat detaches its mailbox, which cancels the context its running turn was
+// handed, and a broker client refuses a publish under a context that is
+// already done. A turn's phase records already go out this way; closing
+// events that did not would leave a released seat's live row working, with
+// nothing saying the turn ended. The values ctx carries, the trace among
+// them, are kept.
 func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string) {
+	ctx = context.WithoutCancel(ctx)
 	// The envelope's source is the seat, for the same reason the phase
 	// events set it: a consumer with no other attribution renders an
 	// unsourced event as "system".

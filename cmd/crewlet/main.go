@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -1575,16 +1576,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// draw a different set depending on which node answered.
 			Channels: e.Backends().Fleet,
 			// The company's ONE knowledge backend, behind the same seam a
-			// seat's own turn searches through. Nil when none is
-			// configured, which leaves the question unregistered rather
-			// than answering an empty search as though it had run.
+			// seat's own turn searches through — and, when nothing
+			// answers, which of the two reasons it is, so the screen
+			// tells a company with no knowledge base from one this node
+			// is not serving.
 			//
 			// RESOLVED PER CALL. An apply rebuilds the searcher, so a
 			// value read once here would search with a rotated
 			// credential's predecessor, against a retired wiki, or
 			// answer "no backend" forever for a company whose backend
 			// came up after this line ran.
-			Knowledge: e.Knowledge,
+			Knowledge: e.KnowledgeServed,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
 			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
@@ -1630,30 +1632,28 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-			// THIS NODE'S PROJECTION of the company's own tracker and
+			// THIS NODE'S COPY of the company's own tracker and
 			// knowledge base — the same copy a seat's tools read, so an
 			// operator and an agent looking at one item see one item.
 			//
-			// Nil on a company running Jira or Confluence, which leaves
+			// Nil on a node that did not boot on them, which leaves
 			// their questions unregistered: there is no native record
 			// for this node to have a copy of, and an empty board would
 			// claim otherwise.
 			//
-			// A METHOD VALUE is safe here where [Sources.Knowledge]
-			// needs a function: the readers belong to the NODE and are
-			// not rebuilt by an apply — see engine/native.go for why a
-			// projector's lifetime is the process rather than the
-			// epoch. Nil-typed-nil is not a risk either, because these
+			// VALUES, where [queries.Sources.Knowledge] is a function:
+			// the readers belong to the NODE and outlive a revision,
+			// and the read surface gates each of their questions per
+			// call on the backend the CURRENT revision names — so a
+			// company that moves to Jira or Confluence by a live apply
+			// stops being answered from this copy on the next call.
+			// Nil-typed-nil is not a risk either, because these
 			// accessors return an untyped nil for a node with no
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
-			// RANKED SEARCH, gated on its own index rather than on
-			// the tracker: the rows are the fleet's and the lexical
-			// index is this node's own, so a node still building one
-			// answers every board question and cannot rank a word.
-			// The accessor already returns an untyped nil in that
-			// case, which is what the registration check needs.
+			// RANKED SEARCH over the same tracker, gated per call on
+			// the same revision.
 			WorkSearch: nativeWorkSearch(e),
 			// The seat's own thread ledger, and its counterparty
 			// profiles. Both are per-node stores, both have been
@@ -2386,14 +2386,14 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 	return out
 }
 
-// nativeWork and nativePages are this node's projections, as the read surface
-// wants them: an interface that is genuinely nil when the company runs the
-// vendor backends.
+// nativeWork and nativePages are this node's copies of the engine's own
+// tracker and knowledge base, as the read surface wants them: an interface
+// that is genuinely nil on a node that did not boot on them.
 //
 // THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
 // would satisfy its `!= nil` registration check and then panic on the first
-// question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
-// place where the check is a registration rather than a call.
+// question — the shape [engine.Engine.KnowledgeServed] guards against too, in
+// a place where the check is a registration rather than a call.
 func nativeWork(e *engine.Engine) queries.WorkReader {
 	if r := e.Tracker(); r != nil {
 		return r
@@ -2444,7 +2444,7 @@ func nativePages(e *engine.Engine) queries.PageReader {
 	return nil
 }
 
-// operatorMCP builds the operator's own MCP surface, or nil.
+// operatorMCP builds the operator's own MCP surface.
 //
 // THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
 // is what makes this one implementation of ten tools rather than two — see
@@ -2454,149 +2454,217 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // when it names none, because a seat HAS a unit; an operator does not, so the
 // argument is required and the tool refuses naming it rather than guessing a
 // project on a person's behalf.
+//
+// WHAT IT SERVES IS DECIDED PER CALL, by [operatorSurface]. The deps belong to
+// the node and are built once here; which of them the company runs is its
+// current revision's to say, and a live apply moves it.
 func operatorMCP(e *engine.Engine) *opsmcp.Server {
-	var opts opsmcp.Options
+	var company string
 	if c := e.Company(); c != nil && c.Config != nil {
-		opts.Company = c.Config.Name
+		company = c.Config.Name
 	}
-	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
-		opts.Work = builtin.WorkDeps{
-			Reader: reader,
-			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
-			// from the request's context rather than from the call: a
-			// tracker whose author field is chosen by the writer is not
-			// an audit trail, and there is deliberately no way to name a
-			// seat to act as.
-			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE TWO SEQUENCES, which this surface went
-			// without — so an operator's assistant was refused
-			// `waiting_on` and `blocking` by name on a tool whose
-			// own description offers them, and would not have been
-			// served the fold at all. Both need the replicated
-			// estate, which this writer has; nothing else about
-			// them differs from a seat's.
-			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE RANKED SEARCH. It reads, so it takes no actor —
-			// the corpus is the same for everybody and there is nothing
-			// to attribute — and without it the operator catalogue
-			// listed a verb this surface could never register.
-			Search: engine.WorkSearcher(e),
-			// THE SAVED-VIEW WRITER, which only this surface has: a
-			// view is furniture a person arranges, and no seat is
-			// given the tools that reach it.
-			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE GOAL WRITER, for the same reason: a goal is an
-			// outcome a person commits the company to, so no seat is
-			// given the tool that sets one.
-			GoalWriter: func(actor builtin.Actor) builtin.GoalWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE CATALOGUE WRITER: the company's own vocabulary is
-			// a person's to set, never a seat's to widen so its own
-			// create succeeds.
-			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE PERSON WRITER. Who may write what is the
-			// tracker's own rule; what this surface supplies is the
-			// identity it is judged against.
-			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE INBOX READ. It takes no actor for the reason
-			// Search takes none — it reads, and whose inbox is an
-			// argument rather than an identity — and it is this
-			// surface's alone beside the person writer, because a
-			// seat has a mailbox rather than an inbox.
-			Inbox: reader,
-			// AND THE TRASH. A removal takes an item off every board in
-			// the company and a restore puts it back at any age; neither
-			// destroys anything, which is what separates both from the
-			// purge the CLI guards with a typed confirmation. No seat
-			// holds either — see internal/agent/builtin/worktrash.go.
-			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
-			// this one is on every surface — declaring a tag is open
-			// to every seat — and what an operator adds here is the
-			// credential the archive facet asks for.
-			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// THE ROSTER, so an operator's assistant is refused a
-			// handle nobody has rather than silently filing work for
-			// one — the same check every seat's tools make.
-			Seats: func() []colleague.Seat {
-				c := e.Company()
-				if c == nil {
-					return nil
-				}
-				return builtin.Corpus(c.Org)
-			},
-			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
-			// ONE WENT WITHOUT. Their absence was invisible and not
-			// harmless: with no Leads, an operator filing an unassigned
-			// task woke nobody at all — the lead fallback is what
-			// catches exactly that task — and with no Units every
-			// project this surface listed read as belonging to no team.
-			Leads:          engine.LiveLeads(e),
-			Units:          engine.LiveUnits(e),
-			DefaultProject: func(string) string { return "" },
-			Actor:          opsmcp.WorkActor,
-			// THE MENTION RESOLVER, which this surface went without: a
-			// comment's @-mention is turned into a wake by the tracker's
-			// recipients only when the writer resolved it, so an
-			// operator writing "@alice can you take this" reached her
-			// watchers and never her — while the tool's own description,
-			// which their assistant reads, promised it would.
-			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
-		}
+	work, pages := operatorWork(e), operatorPages(e)
+	// THE LEAD RELATION, which the tracker deliberately does not derive:
+	// it holds no org chart, and one it derived would be a second opinion
+	// about the hierarchy. AND THE PROJECT'S OWN LEAD, which is a different
+	// question: one is about a person's line, the other about who plans a
+	// container's work.
+	leads, leadsProject := leadsOf(e), engine.LeadsProjectOf(e)
+	return opsmcp.New(opsmcp.Options{
+		Company: company,
+		Surface: func() opsmcp.Surface {
+			return operatorSurface(e, work, pages, leads, leadsProject)
+		},
+	})
+}
+
+// operatorSurface is what the operator surface serves NOW: each half the
+// current revision runs and this node holds, and for every other half the
+// setting that closed it.
+func operatorSurface(e *engine.Engine, work builtin.WorkDeps, pages builtin.PageDeps,
+	leads builtin.Leads, leadsProject builtin.LeadsProject) opsmcp.Surface {
+
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		const none = "no company configuration is active on this node"
+		return opsmcp.Surface{Closed: map[opsmcp.Half]string{
+			opsmcp.Work: none, opsmcp.Pages: none, opsmcp.Knowledge: none,
+		}}
 	}
-	opts.Pages = operatorPages(e)
-	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
-		opts.Knowledge = engine.LiveKnowledge(e)
+	out := opsmcp.Surface{Closed: map[opsmcp.Half]string{}}
+	if why := nativeClosed("tracker", "tracker.backend",
+		string(c.Config.TrackerBackendFor()), string(config.TrackerNative),
+		work.Reader != nil); why != "" {
+
+		out.Closed[opsmcp.Work] = why
+	} else {
+		out.Deps.Work = work
+		out.Deps.Leads, out.Deps.LeadsProject = leads, leadsProject
+	}
+	if why := nativeClosed("knowledge base", "knowledge.backend",
+		string(c.Config.KnowledgeBackendFor()), string(config.KnowledgeNative),
+		pages.Reader != nil); why != "" {
+
+		out.Closed[opsmcp.Pages] = why
+	} else {
+		out.Deps.Pages = pages
+	}
+	// SEARCH ON THE SEAT SURFACE'S OWN RULE: served whenever the company
+	// runs a knowledge base, on either backend, and the tool's own gate
+	// names the state a search that cannot run is in — a knowledge base
+	// this node is not serving, or one with nothing an org-wide search may
+	// read.
+	if search := engine.KnowledgeSearch(e, c); search != nil {
+		out.Deps.Knowledge = search
 		// AND THE CHART BESIDE IT. An operator has no turn, so the org
 		// the search is scoped against comes from here; resolved per
 		// call, because a config apply replaces it.
-		opts.Org = func() *org.Organization {
+		out.Deps.Org = func() *org.Organization {
+			current := e.Company()
+			if current == nil {
+				return nil
+			}
+			return current.Org
+		}
+	} else {
+		out.Closed[opsmcp.Knowledge] = knowledge.Refusal{State: knowledge.NoBackend}.Reason()
+	}
+	return out
+}
+
+// nativeClosed says why the engine's own tracker or knowledge base is not
+// served on the operator surface now, or "" when it is: the revision names
+// another backend, or it names this one and this node started without it —
+// the native backends start with the node, so only a restart starts them.
+func nativeClosed(what, field, backend, native string, held bool) string {
+	switch {
+	case backend != native:
+		return fmt.Sprintf("the company's %s is %q (`%s`), not the engine's own",
+			what, backend, field)
+	case !held:
+		return fmt.Sprintf("the company's %s is the engine's own (`%s: %s`), "+
+			"and this node started without it; a restart starts it",
+			what, field, native)
+	}
+	return ""
+}
+
+// operatorWork is the tracker's half of the operator surface, or the zero deps
+// on a node that does not run the engine's own tracker.
+func operatorWork(e *engine.Engine) builtin.WorkDeps {
+	reader, writer := e.Tracker(), e.TrackerWriter()
+	if reader == nil || writer == nil {
+		return builtin.WorkDeps{}
+	}
+	return builtin.WorkDeps{
+		Reader: reader,
+		// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
+		// from the request's context rather than from the call: a
+		// tracker whose author field is chosen by the writer is not
+		// an audit trail, and there is deliberately no way to name a
+		// seat to act as.
+		Writer: func(actor builtin.Actor) builtin.WorkWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE TWO SEQUENCES: without them an operator's
+		// assistant is refused `waiting_on` and `blocking` by
+		// name on a tool whose own description offers them, and
+		// is not served the fold at all. Both need the
+		// replicated estate, which this writer has; nothing else
+		// about them differs from a seat's.
+		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		Merges: func(actor builtin.Actor) builtin.WorkMerger {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE RANKED SEARCH. It reads, so it takes no actor:
+		// the corpus is the same for everybody and there is nothing
+		// to attribute.
+		Search: engine.WorkSearcher(e),
+		// THE SAVED-VIEW WRITER, which only this surface has: a
+		// view is furniture a person arranges, and no seat is
+		// given the tools that reach it.
+		ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE GOAL WRITER, for the same reason: a goal is an
+		// outcome a person commits the company to, so no seat is
+		// given the tool that sets one.
+		GoalWriter: func(actor builtin.Actor) builtin.GoalWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE CATALOGUE WRITER: the company's own vocabulary is
+		// a person's to set, never a seat's to widen so its own
+		// create succeeds.
+		CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE PERSON WRITER. Who may write what is the
+		// tracker's own rule; what this surface supplies is the
+		// identity it is judged against.
+		PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND THE INBOX READ. It takes no actor for the reason
+		// Search takes none — it reads, and whose inbox is an
+		// argument rather than an identity — and it is this
+		// surface's alone beside the person writer, because a
+		// seat has a mailbox rather than an inbox.
+		Inbox: reader,
+		// AND THE TRASH. A removal takes an item off every board in
+		// the company and a restore puts it back at any age; neither
+		// destroys anything, which is what separates both from the
+		// purge the CLI guards with a typed confirmation. No seat
+		// holds either — see internal/agent/builtin/worktrash.go.
+		TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
+		// this one is on every surface — declaring a tag is open
+		// to every seat — and what an operator adds here is the
+		// credential the archive facet asks for.
+		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
+		},
+		// THE ROSTER, so an operator's assistant is refused a
+		// handle nobody has rather than silently filing work for
+		// one — the same check every seat's tools make.
+		Seats: func() []colleague.Seat {
 			c := e.Company()
 			if c == nil {
 				return nil
 			}
-			return c.Org
-		}
+			return builtin.Corpus(c.Org)
+		},
+		// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS, whose
+		// absence would be invisible and not harmless: with no
+		// Leads, an operator filing an unassigned task wakes nobody
+		// at all — the lead fallback is what catches exactly that
+		// task — and with no Units every project this surface lists
+		// reads as belonging to no team.
+		Leads:          engine.LiveLeads(e),
+		Units:          engine.LiveUnits(e),
+		DefaultProject: func(string) string { return "" },
+		Actor:          opsmcp.WorkActor,
+		// THE MENTION RESOLVER: a comment's @-mention is turned into
+		// a wake by the tracker's recipients only when the writer
+		// resolved it, so without it an operator writing "@alice can
+		// you take this" reaches her watchers and never her — while
+		// the tool's own description, which their assistant reads,
+		// promises it would.
+		Mentions: engine.LiveMentions(e),
+		Await:    e.WaitCommitted,
 	}
-	// THE LEAD RELATION, which the tracker deliberately does not derive:
-	// it holds no org chart, and one it derived would be a second opinion
-	// about the hierarchy.
-	opts.Leads = leadsOf(e)
-	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
-	// about a person's line, the other about who plans a container's work.
-	opts.LeadsProject = engine.LeadsProjectOf(e)
-	return opsmcp.New(opts)
 }
 
 // operatorPages is the knowledge base's half of the operator surface, or the
@@ -2674,12 +2742,8 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 }
 
 // nativeWorkSearch is this node's ranked item search, as the read surface
-// wants it — converted for [nativeWork]'s reason.
-//
-// SEPARATE FROM [nativeWork], because the two are absent independently: a node
-// can hold the whole board and no lexical index at all, while it is building
-// one. Folding them into one seam would leave the board unregistered on a node
-// that can answer every question on it.
+// wants it — converted for [nativeWork]'s reason. A node still building its
+// index holds one, and it answers that it is building.
 func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
 	if s := e.WorkSearch(); s != nil {
 		return s

@@ -37,12 +37,17 @@
 //     what its own account never could ([Permitted]). The native backend has
 //     no per-seat credential and no second account to read through, so an
 //     empty scope there is the whole company.
-//   - BEST EFFORT. Search never fails the caller: every failure path is an
-//     empty result. A turn must not die because a wiki was slow.
+//   - BEST EFFORT, AND A FAILURE SAYS SO. Search never fails the caller:
+//     every failure path is an empty answer marked [Answer.Failed]. A turn
+//     must not die because a wiki was slow, and a seat must not read a
+//     search that failed as one that matched nothing.
 //   - A BUILDING INDEX SAYS SO. A backend that answers from an index of its
 //     own reports whether that index has finished its first build
 //     ([Searcher.Building]), because "nothing matched" and "not indexed yet"
 //     send a seat to opposite places. A backend with no index answers false.
+//   - A PARTIAL ANSWER SAYS SO. An answer ranked over part of what it was
+//     asked about carries [Answer.Partial], and every reader renders it:
+//     a short list with nothing beside it reads as everything that matched.
 package knowledge
 
 import (
@@ -101,6 +106,21 @@ const DefaultLimit = 8
 // multiplying by the hit count and the round cap.
 const SnippetLimit = 200
 
+// MaxQueryBytes bounds [Query.Text], and EVERY CALLER REFUSES a longer one,
+// naming the limit — none cuts it.
+//
+// A cut query is not a shorter query, it is a DIFFERENT one: the hits that
+// come back are real pages, ranked, about the half of the text that survived,
+// and whoever asked has no way to tell them from hits for what they wrote.
+// Refused, it costs a model one round, and a refusal naming the field is the
+// one failure a model reliably fixes.
+//
+// FOUR HUNDRED BYTES: a long sentence, or a dozen keywords — several times
+// what a model is asked for (the tool's `query` and the turn-start query both
+// ask for 2-8 keywords), so a model doing what it was asked never meets it,
+// and one that sent a task or a thread instead is told to send keywords.
+const MaxQueryBytes = 400
+
 // Hit is one ranked page from a knowledge-base search.
 type Hit struct {
 	Title string
@@ -136,6 +156,51 @@ type Hit struct {
 	// zero value is "not known", so a backend that sets nothing gets the
 	// fail-closed reading rather than the permissive one.
 	AncestorsKnown bool
+}
+
+// Answer is one search's hits, and what they were ranked from.
+type Answer struct {
+	Hits []Hit
+
+	// Partial is what the ranking behind these hits is missing, or nil for
+	// a whole answer. A backend that answers from one place in one call —
+	// a live vendor search — is whole whenever it answers at all.
+	Partial *Partial
+
+	// Failed is a search that did not complete. Its hits are empty and say
+	// nothing about what the knowledge base holds; the backend's own log
+	// line says why.
+	//
+	// A MARK RATHER THAN AN ERROR, for the seam's best-effort rule: a
+	// caller still gets an answer it can render, and what it must not
+	// render is "nothing matches" — which sends a seat to try other words
+	// against a search that is not running, or to write a page that
+	// already exists.
+	Failed bool
+}
+
+// Partial is what a ranked answer is missing.
+//
+// THE FOUR FACTS A DIVIDED SEARCH COUNTS, so every reader can say how much was
+// searched rather than only that something was not. The hits in a partial
+// answer are real; what a reader must not conclude from them is that a page
+// they do not name does not exist.
+type Partial struct {
+	// BucketsAnswered and BucketsMissing partition the corpus's search
+	// buckets: the answer ranked the documents in the first and none of
+	// those in the second.
+	BucketsAnswered int `json:"buckets_answered"`
+	BucketsMissing  int `json:"buckets_missing"`
+
+	// AbsentNodes names the fleet nodes whose share went unscanned — one
+	// that did not answer in time, or answered that its own index is still
+	// building — so an operator has somewhere to look.
+	AbsentNodes []string `json:"absent_nodes"`
+
+	// SemanticSkipped says the half of a hybrid search that matches by
+	// meaning did not run over some or all of what was searched, so a page
+	// that says the same thing in other words can be missing.
+	SemanticSkipped bool `json:"semantic_skipped"`
 }
 
 // Query is one search, in the only terms a caller may use.
@@ -209,11 +274,78 @@ type Searcher interface {
 	// reason: the prefetch asks it before it spends the query call.
 	Building(ctx context.Context) bool
 
-	// Search returns up to Limit ranked hits.
+	// Search returns up to Limit ranked hits, and what the ranking behind
+	// them is missing.
 	//
 	// BEST EFFORT: it never reports an error. Every failure path is an
-	// empty result, so a turn never fails because a wiki was slow.
-	Search(ctx context.Context, q Query) []Hit
+	// empty answer marked [Answer.Failed], so a turn never fails because a
+	// wiki was slow.
+	Search(ctx context.Context, q Query) Answer
+}
+
+// Unsearchable is why a knowledge search cannot run, as a closed set a caller
+// branches on rather than string-matching a sentence.
+type Unsearchable string
+
+// The states. The zero value is none of them: a search that can run.
+const (
+	// NoBackend is a company that runs no knowledge base
+	// (`knowledge.backend: none`).
+	NoBackend Unsearchable = "no_backend"
+
+	// NotServed is a company that runs a knowledge base this node is not
+	// serving: a Confluence connection that did not build or whose org
+	// credential did not resolve, or the engine's own knowledge base on a
+	// node that did not start with it.
+	NotServed Unsearchable = "not_served"
+
+	// NoScope is a backend this node serves that has nothing this search
+	// may read: no `knowledge.scope` is declared, and the search has no
+	// credential of its own to search unscoped with ([Permitted]).
+	NoScope Unsearchable = "no_scope"
+)
+
+// Valid reports whether u is a state this build names.
+func (u Unsearchable) Valid() bool {
+	switch u {
+	case NoBackend, NotServed, NoScope:
+		return true
+	}
+	return false
+}
+
+// Refusal says a knowledge search cannot run: which of the [Unsearchable]
+// states it is in, and a sentence for a person naming what to change. The
+// zero value refuses nothing.
+//
+// THE STATE AND THE SENTENCE TRAVEL TOGETHER, because the three states send a
+// reader to three different places — a backend to choose, a connection to
+// repair, a scope to declare — and a reply that named the wrong one sends
+// them to check a setting that is already right.
+type Refusal struct {
+	State  Unsearchable
+	Detail string
+}
+
+// Refused reports a search that cannot run.
+func (r Refusal) Refused() bool { return r.State != "" }
+
+// Reason is the refusal's sentence for a person: its own detail where the
+// refuser wrote one, else what its state means.
+func (r Refusal) Reason() string {
+	if detail := strings.TrimSpace(r.Detail); detail != "" {
+		return detail
+	}
+	switch r.State {
+	case NoBackend:
+		return "the company runs no knowledge base (`knowledge.backend: none`)"
+	case NotServed:
+		return "the company runs a knowledge base this node is not serving"
+	case NoScope:
+		return "no read scope (`knowledge.scope`) is declared, and this search " +
+			"has no credential of its own to search unscoped with"
+	}
+	return ""
 }
 
 // Scope normalises an org-wide read scope: trimmed, uppercased, deduped,

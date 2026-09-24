@@ -116,6 +116,78 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	}
 }
 
+// A LIVE MOVE OFF A NATIVE BACKEND TAKES ITS QUESTIONS WITH IT, on the very
+// next call. The readers belong to the node and outlive the apply, over rows
+// nothing writes any more, so a registry that trusted its own registration
+// would go on drawing the board or the wiki the company left.
+//
+// Every question the native readers add is found by DIFFERENCE against a
+// registry without them, so a question added later is held to the gate without
+// anybody listing it here.
+func TestTheNativeQuestionsFollowTheCurrentRevision(t *testing.T) {
+	t.Parallel()
+	current := &config.Company{Name: "Acme"}
+	company := func() *config.Company { return current }
+	base := registryOver(t, queries.Sources{Company: company}).Names()
+	added := func(s queries.Sources) []string {
+		s.Company = company
+		var out []string
+		for _, name := range registryOver(t, s).Names() {
+			if !slices.Contains(base, name) {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	work := added(queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}})
+	wiki := added(queries.Sources{Pages: &stubPages{}})
+	if !slices.Contains(work, "work_search") || !slices.Contains(wiki, "pages") {
+		t.Fatalf("the native readers added %v and %v, want the board, the search "+
+			"and the wiki", work, wiki)
+	}
+
+	// ONE REGISTRY for the whole case: the move is an apply, and nothing
+	// re-registers on an apply.
+	r := registryOver(t, queries.Sources{Company: company,
+		Work: &stubWork{}, WorkSearch: &stubWork{}, Pages: &stubPages{}})
+	ask := func(name string) error {
+		_, err := r.Answer(t.Context(), name, nil, "ops-1")
+		return err
+	}
+	answered := func(stage string, names []string) {
+		t.Helper()
+		for _, name := range names {
+			if err := ask(name); errors.Is(err, queries.ErrUnknown) {
+				t.Errorf("%s: %s answered %v", stage, name, err)
+			}
+		}
+	}
+	gone := func(stage string, names []string, field string) {
+		t.Helper()
+		for _, name := range names {
+			if err := ask(name); !errors.Is(err, queries.ErrUnknown) ||
+				!strings.Contains(err.Error(), field) {
+
+				t.Errorf("%s: %s answered %v, want unknown naming %s", stage, name,
+					err, field)
+			}
+		}
+	}
+
+	answered("on both native backends", work)
+	answered("on both native backends", wiki)
+
+	current = &config.Company{Name: "Acme",
+		Tracker: config.Tracker{Backend: config.TrackerJira}}
+	gone("after a live move to Jira", work, "tracker.backend")
+	answered("with the knowledge base still native", wiki)
+
+	current = &config.Company{Name: "Acme",
+		Knowledge: config.Knowledge{Backend: config.KnowledgeConfluence}}
+	answered("back on the native tracker", work)
+	gone("after a live move to Confluence", wiki, "knowledge.backend")
+}
+
 func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()

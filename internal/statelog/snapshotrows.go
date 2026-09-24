@@ -63,11 +63,28 @@ func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
 // decision with a new expectation is how two writers mint the same key — the
 // broker matches the expectation, accepts the append, and both callers are
 // told they won.
+//
+// THE LEDGER IS THE TRANSACTION'S FIRST READ, for the same reason. The rows a
+// retried operation would decide from are the rows its own first record
+// wrote, in this same file — so a ledger read in a second transaction could
+// miss a record the decision below had already seen, and decide again from
+// its consequences.
 func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSet,
-	decide func(*sql.Tx) (Decision, error)) (Snap, error) {
+	opID string, decide func(*sql.Tx) (Decision, error)) (Snap, error) {
 
 	var snap Snap
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		// RESET ON EVERY ATTEMPT: the store may run a read's body again,
+		// and a first attempt's fields must not survive into a second.
+		snap = Snap{}
+		applied, done, err := r.tables.op(ctx, tx, opID)
+		if err != nil {
+			return err
+		}
+		if done {
+			snap.Applied, snap.AlreadyApplied = applied, true
+			return nil
+		}
 		decision, err := decide(tx)
 		if err != nil {
 			return err
@@ -141,20 +158,16 @@ func (r *SnapshotRows) Op(ctx context.Context, opID string) (Position, bool, err
 		return Position{}, false, nil
 	}
 	var at Position
+	var found bool
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		got, _, err := r.tables.op(ctx, tx, opID)
-		at = got
+		var err error
+		at, found, err = r.tables.op(ctx, tx, opID)
 		return err
 	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return Position{}, false, nil
-	case err != nil:
+	if err != nil {
 		return Position{}, false, err
-	case at.Seq == 0 && at.Generation == 0:
-		return Position{}, false, nil
 	}
-	return at, true, nil
+	return at, found, nil
 }
 
 // CheckTables reports whether a domain's declared tables accept the

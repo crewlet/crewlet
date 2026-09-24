@@ -200,18 +200,15 @@ type WorkDeps struct {
 	// typed. Nil admits every handle, which is the honest state for a
 	// surface with no chart loaded.
 	//
-	// A FUNCTION, resolved per call, for the reason [WorkDeps.Units] and
-	// [WorkDeps.DefaultProject] are: a seat's tools are cloned into its
-	// lease, an apply does not rebuild the clone, and a captured roster
-	// would validate against an org that has since moved — refusing a
-	// colleague who joined this morning and admitting one who left.
+	// A FUNCTION, resolved per call: a roster captured when the tools were
+	// built would validate against an org that has since moved — refusing
+	// a colleague who joined since and admitting one who left.
 	Seats func() []colleague.Seat
 
 	// UnitOfSeat is the team a seat belongs to, read PER CALL against the
-	// epoch current when the tool runs — for the reason the default
-	// project is: a seat's tools are cloned into its lease, an apply does
-	// not rebuild the clone, and a captured unit would file today's work
-	// under the team somebody left last week.
+	// epoch current when the tool runs, for [WorkDeps.Seats]' reason: a
+	// captured unit would file today's work under the team somebody left
+	// last week.
 	//
 	// Nil stamps no unit, which is what a build with no chart has: the
 	// task is filed unrouted and its project lead is the only fallback.

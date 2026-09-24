@@ -258,10 +258,10 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 //
 // A suspending Execute returns before `emit.completed` runs, so it publishes
 // no durable record at all, and its progress frames are stream-only. The
-// resumed half is therefore the only account this phase will ever have — and
-// it used to start at round 1, so the pre-suspend rounds, the `run_sandbox`
-// call that caused the suspension included, were gone from the store for good,
-// under token counters that covered both halves.
+// resumed half is therefore the only account this phase will ever have, and it
+// carries the pre-suspend rounds on the phase's own count — the `run_sandbox`
+// call that caused the suspension included, which the row holds only as its
+// conversation's unanswered call, answered here with what the run reported.
 func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
@@ -277,8 +277,18 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
 	})
 
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+	w, _, err := r.Resume(context.Background(), nil)
+	if err != nil {
 		t.Fatalf("Resume: %v", err)
+	}
+	// The calls the turn is judged on hold the suspending call too, answered
+	// with what the run reported: it started a billed box.
+	var held bool
+	for _, c := range w.Calls {
+		held = held || (c.Name == "run_sandbox" && c.Result == "the run succeeded")
+	}
+	if !held {
+		t.Errorf("the resumed turn's calls %+v lack the run_sandbox call it suspended on", w.Calls)
 	}
 
 	done := completedPhase(t, pub, "execute")
@@ -287,15 +297,18 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 			done.RoundsUsed)
 	}
 	names := map[string]int{}
+	results := map[string]string{}
 	for _, ex := range done.ToolExecutions {
 		name, _ := ex["name"].(string)
 		round, _ := ex["round"].(int)
 		names[name] = round
+		results[name], _ = ex["result"].(string)
 	}
 	// The call that CAUSED the suspension. If this is missing, the only
 	// durable evidence that the phase started a coding run is gone.
-	if names["run_sandbox"] != 2 {
-		t.Errorf("run_sandbox is recorded in round %d, want 2: %v", names["run_sandbox"], names)
+	if names["run_sandbox"] != 2 || results["run_sandbox"] != "the run succeeded" {
+		t.Errorf("run_sandbox is recorded in round %d answered %q; want round 2, answered with what "+
+			"the run reported: %v", names["run_sandbox"], results["run_sandbox"], names)
 	}
 	if names["search_knowledge"] != 1 {
 		t.Errorf("the pre-suspend read is in round %d, want 1: %v",
@@ -346,8 +359,9 @@ func suspendedAfterTwoRounds() execstate.State {
 		InputTokens:  400,
 		OutputTokens: 100,
 		ToolExecutions: []types.ToolExecution{
+			// Every call the loop ANSWERED: the call it suspended on is the
+			// conversation's unanswered one, above, and is not among them.
 			{"name": "search_knowledge", "arguments": "{}", "result": "2 pages", "success": true, "round": 1},
-			{"name": "run_sandbox", "arguments": "{}", "result": "started", "success": true, "round": 2},
 		},
 		RoundNarration: []types.RoundNarration{
 			{"round": 1, "reasoning": "what do we already know", "content": ""},

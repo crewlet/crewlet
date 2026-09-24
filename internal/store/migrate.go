@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -239,20 +241,37 @@ func SchemaVersions(estate Estate) []string {
 // it makes "what would this apply" unanswerable through it: by the time you
 // could ask, the answer is none.
 //
-// So this opens the pool and reads, and creates nothing at all. A database
-// with no schema_migrations table has applied nothing, which is what a fresh
-// deployment looks like rather than an error: reporting a missing table
-// would send an operator to investigate the state every new install starts
-// in.
+// # It makes nothing it did not find
+//
+// A database that does not exist has applied nothing, and is reported so
+// without being made: no database file, no -wal and no lock sidecar are left
+// on a path the check was only pointed at. The deploy gate this answers for
+// runs before the node does, possibly as another user, and every file it made
+// would be one the node then meets as somebody else's — or a database at a
+// path nobody meant.
+//
+// A database that exists but has no schema_migrations table has applied
+// nothing too, which is what a fresh deployment looks like rather than an
+// error. One whose table is there and cannot be read is an error like any
+// other read — never an answer of "nothing applied", which would report a
+// database that has applied everything as one that has applied nothing.
+//
+// Reading a database that exists leaves beside it what any open of it does:
+// its lock's sidecar if it had none, which the lock's release leaves in place
+// (see [fileLock.release]), and its -wal, made owner-only before the driver
+// opens it (see filemode.go).
 //
 // # It takes the lock, and gives it back
 //
 // Reading is still a second process on a file this engine owns exclusively,
 // and the answer to that is [ErrLocked] naming the holder — not an opaque
-// driver error, and not a silent read of a file somebody is writing. It held
-// no lock at all until this was fixed, so `crewlet migrate` reported the
-// schema of a live engine's database and only refused at the point it tried
-// to change it: the check that runs first was the one with no guard.
+// driver error, and not a silent read of a file somebody is writing. Without
+// it `crewlet migrate -check` would report the schema of a live engine's
+// database and refuse only where it tried to change it, and the check that
+// runs first would be the one with no guard. It is asked even where there is
+// no database to read, of a sidecar already standing: a process that holds it
+// is an engine on this path, which can make the database the moment this
+// reports it absent.
 //
 // The lock is released before returning, and NOT because [Open] would
 // otherwise be refused — it would not. The claim is refcounted per process
@@ -318,12 +337,31 @@ func PendingEstate(ctx context.Context, estate Estate, path string, opts Options
 
 func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
 	out := Schema{Estate: estate, Path: path}
-
-	lock, err := lockStore(path)
+	files, err := schemaVersions(estate)
 	if err != nil {
 		return Schema{}, err
 	}
-	defer lock.release()
+
+	lock, err := lockExisting(path)
+	if err != nil {
+		return Schema{}, err
+	}
+	defer func() { lock.release() }()
+
+	switch _, statErr := os.Stat(path); {
+	case errors.Is(statErr, os.ErrNotExist):
+		out.Pending = files
+		return out, nil
+	case statErr != nil:
+		return Schema{}, fmt.Errorf("store: read the %s estate at %s: %w", estate, path, statErr)
+	}
+	if lock == nil {
+		// The database is there and its sidecar is not: the lock is taken
+		// the way every opener takes it, which makes the sidecar.
+		if lock, err = lockStore(path); err != nil {
+			return Schema{}, err
+		}
+	}
 
 	pool, err := openPrepared(ctx, path, opts.forEstate(estate))
 	if err != nil {
@@ -333,19 +371,12 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 
 	db := &DB{sql: pool, path: path, estate: estate,
 		busy: opts.busyTimeout(), writes: lock.queue()}
-	if out.Applied, err = db.appliedVersions(ctx); err != nil {
-		// A database that has never been migrated has no
-		// schema_migrations table, and that is the ordinary state of a
-		// fresh deployment rather than a fault.
-		out.Applied = nil
+	if out.Applied, err = db.recordedVersions(ctx); err != nil {
+		return Schema{}, err
 	}
 	have := make(map[string]bool, len(out.Applied))
 	for _, v := range out.Applied {
 		have[v] = true
-	}
-	files, err := schemaVersions(estate)
-	if err != nil {
-		return Schema{}, err
 	}
 	for _, file := range files {
 		if !have[file] {
@@ -353,4 +384,23 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 		}
 	}
 	return out, nil
+}
+
+// recordedVersions is [DB.appliedVersions] for a database that may never have
+// been migrated: one with no schema_migrations table has applied nothing and
+// answers so, while a table that is there and cannot be read is an error like
+// any other read.
+//
+// ASKED OF THE SCHEMA, not inferred from the read failing: a failed read is
+// every fault a database can have, and "no such table" is only one of them.
+func (d *DB) recordedVersions(ctx context.Context) ([]string, error) {
+	var tables int
+	if err := d.sql.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
+		return nil, fmt.Errorf("store: look for schema_migrations in %s: %w", d.path, err)
+	}
+	if tables == 0 {
+		return nil, nil
+	}
+	return d.appliedVersions(ctx)
 }

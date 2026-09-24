@@ -5,12 +5,13 @@
 // A node's durable state is split across two estates that an outside tool
 // cannot reach, for two different reasons.
 //
-// The STORE is one file this process owns exclusively for the life of the
-// handle, and the driver does not support a second process on a database file
-// — so every SQLite-ecosystem backup tool, all of which work by being a
-// second opener, is unavailable. Copying the file underneath a running engine
-// is worse than unavailable: committed data lives in the file and its -wal,
-// and a copy of either alone is torn.
+// The STORE is two files — the node estate and the replicated estate beside
+// it — each owned exclusively by this process for the life of the handle, and
+// the driver does not support a second process on a database file — so every
+// SQLite-ecosystem backup tool, all of which work by being a second opener, is
+// unavailable. Copying either file underneath a running engine is worse than
+// unavailable: committed data lives in a database file and its -wal both, and
+// a copy of the one without the other is torn.
 //
 // The STREAM ESTATE — the agent mailboxes and every coordination bucket, which
 // is where the fleet's leases, ledgers, counters and sealed credentials live —
@@ -23,8 +24,8 @@
 //
 // # What a backup is
 //
-// A directory holding the store copy, one snapshot per stream, and a
-// manifest. The manifest is written LAST and its presence is the claim: a
+// A directory holding a copy of each store file, one snapshot per stream, and
+// a manifest. The manifest is written LAST and its presence is the claim: a
 // directory with one is a complete backup, a directory without one is the
 // debris of an attempt that did not finish. Nothing else in the directory
 // says so, and an operator restoring from a half-written backup is the
@@ -32,7 +33,7 @@
 //
 // # What it is a copy OF
 //
-// A moment, not an instant. The engine is not stopped, the store copy and
+// A moment, not an instant. The engine is not stopped, the store copies and
 // each stream snapshot are taken one after another, and work continues
 // throughout — so the pieces are separated by however long the copy took.
 //
@@ -422,10 +423,9 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			manifest.Domains[stream] = cursor.Position
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
-		// copy is folded back into one file — a -wal left inside the
-		// artefact is debris carrying the reader's own umask rather
-		// than this directory's deliberate 0700, and a restore script
-		// looking for a set of named files finds one it does not know.
+		// copy is folded back into one file — a -wal or a lock left
+		// inside the artefact is a file a restore script looking for a
+		// set of named files does not know.
 		//nolint:govet // shadow: scoped to this block, which returns; see .golangci.yml
 		if err := store.QuiesceCopy(ctx, path); err != nil {
 			return Manifest{}, err
@@ -511,9 +511,9 @@ func estates(db *store.DB) []*store.DB {
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
 // makes sure it is the caller's alone to read.
 func emptyDir(dir string) error {
-	// 0700 because of what lands in here: the store copy carries every
-	// sealed credential the secret store bootstrapped and every seat's
-	// memory, and the coordination snapshot carries the company's
+	// 0700 because of what lands in here: the node estate's copy carries
+	// every sealed credential the secret store bootstrapped and every
+	// seat's memory, and the coordination snapshot carries the company's
 	// credentials outright.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("backup: create %s: %w", dir, err)

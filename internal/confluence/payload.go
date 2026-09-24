@@ -87,10 +87,11 @@ func EscapeCQL(value string) string {
 // THE QUERY IS NOT SHORTENED. A query the server refuses is an error the
 // searcher logs, and the caller sees no hits; a silently shortened query is a
 // DIFFERENT SEARCH, returning plausible pages for terms the seat never asked
-// about, with nothing anywhere saying so. Each caller bounds its own text
-// before it reaches here instead: the `search_knowledge` tool refuses one past
-// its limit, naming it, and the prefetch's query is one line of the auxiliary
-// model's output.
+// about, with nothing anywhere saying so. Every caller of the knowledge seam
+// refuses a text past knowledge.MaxQueryBytes before it reaches here instead,
+// naming the limit: the `search_knowledge` tool, the dashboard's knowledge
+// question, and the turn-start prefetch, which searches nothing when the
+// auxiliary model's line runs past it.
 //
 // Shape: `space IN ("ENG","HANDBOOK") AND type = page AND text ~ "…"`.
 //

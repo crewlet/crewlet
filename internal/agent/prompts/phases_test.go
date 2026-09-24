@@ -7,14 +7,23 @@ import (
 
 // -- Onboarding ----------------------------------------------------------
 
-// The one-time pass points at the team's knowledge-base MCP server by
-// capability, not by product: the same header has to read correctly whatever
-// knowledge base a company runs.
-func TestOnboardingHeaderIsBackendNeutral(t *testing.T) {
+// THE ONE-TIME PASS IS TOLD WHERE ITS READER IS ON BOTH KNOWLEDGE BASES, by
+// what each one is and never by product.
+//
+// On the engine's own knowledge base the reader is the first-party
+// `search_knowledge` and `get_page`, and a header that sent the pass to
+// `list_mcp_server_tools` would send it looking for a server it does not have.
+// On a vendor wiki the reader is that wiki's MCP server's tools, which only
+// discovery names. Either way the pass starts with neither active, so the
+// header says how to activate them. The tool names themselves are held against
+// the tools' own constants in onboarding_names_test.go.
+func TestOnboardingHeaderNamesTheReaderOnBothBackends(t *testing.T) {
 	t.Parallel()
 	contains(t, OnboardingHeader,
-		"knowledge-base search / read tools",
-		"a page-search / get-page tool on your team's knowledge-base server")
+		"`search_knowledge` and `get_page`",
+		"`activate_tool(name=...)`",
+		"that wiki's MCP server's page-search and get-page tools",
+		"`list_mcp_server_tools(server=...)`")
 	lowered := strings.ToLower(OnboardingHeader)
 	excludes(t, lowered, "confluence", "atlassian", "jira")
 }

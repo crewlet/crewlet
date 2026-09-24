@@ -62,7 +62,14 @@ func TestPendingWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if os.Getenv(pendingChildEnv) == "" {
 		t.Skip("not a child process; see TestPendingReportsABrokenLibraryCacheInsteadOfPanicking")
 	}
-	_, err := Pending(t.Context(), filepath.Join(t.TempDir(), "state.db"), Options{})
+	// A database that is THERE, so Pending has something to open: one that
+	// is not is reported without the driver being asked anything. Empty is
+	// what the driver reads as a new database.
+	path := filepath.Join(t.TempDir(), "state.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Pending(t.Context(), path, Options{})
 	if err == nil {
 		t.Fatal("Pending succeeded against a library cache that cannot exist")
 	}
@@ -113,30 +120,91 @@ func TestPendingRefusesADatabaseAnotherProcessHolds(t *testing.T) {
 // process, after this one has already exited and hidden the evidence. So what
 // is checked is that the claim on this path is gone: no entry, not merely a
 // second caller getting past it.
+//
+// BOTH WAYS IT TAKES ONE: a database it reads under the lock, and a sidecar
+// it asks of where there is no database to read.
 func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "seq.db")
+	for _, tc := range []struct {
+		name string
+		// stage leaves path the way Pending finds it.
+		stage func(t *testing.T, path string)
+	}{
+		{"a database it reads", func(t *testing.T, path string) {
+			db, err := Open(t.Context(), path, Options{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			_ = db.Close()
+		}},
+		{"a sidecar with no database beside it", func(t *testing.T, path string) {
+			lock, err := lockStore(path)
+			if err != nil {
+				t.Fatalf("lockStore: %v", err)
+			}
+			lock.release()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "seq.db")
+			tc.stage(t, path)
+			if _, err := os.Stat(path + lockSuffix); err != nil {
+				t.Fatalf("no sidecar beside %s, so Pending has no lock to take: the premise", path)
+			}
 
-	if schemas, err := Pending(t.Context(), path, Options{}); err != nil {
-		t.Fatalf("Pending: %v", err)
-	} else if len(estateOf(t, schemas, EstateNode).Pending) == 0 {
-		t.Fatal("a fresh database reported nothing pending")
+			if _, err := Pending(t.Context(), path, Options{}); err != nil {
+				t.Fatalf("Pending: %v", err)
+			}
+
+			locksHeld.mu.Lock()
+			held := locksHeld.by[path]
+			locksHeld.mu.Unlock()
+			if held != nil {
+				t.Fatalf("Pending kept its claim on %s (%d holder(s)) — the process "+
+					"never gives the file back, and the next one to want it is refused "+
+					"by a lock nothing is using", path, held.holds)
+			}
+
+			db, err := Open(t.Context(), path, Options{})
+			if err != nil {
+				t.Fatalf("Open after Pending: %v", err)
+			}
+			_ = db.Close()
+		})
 	}
+}
 
-	locksHeld.mu.Lock()
-	held := locksHeld.by[path]
-	locksHeld.mu.Unlock()
-	if held != nil {
-		t.Fatalf("Pending kept its claim on %s (%d holder(s)) — the process "+
-			"never gives the file back, and the next one to want it is refused "+
-			"by a lock nothing is using", path, held.holds)
-	}
-
-	db, err := Open(t.Context(), path, Options{})
+// PENDING MAKES NOTHING FOR A DATABASE THAT IS NOT THERE. The deploy gate runs
+// before the node does, possibly as another user; a check that left a database,
+// its -wal and its lock behind would leave the node files it then meets as
+// somebody else's, and a database at a path the check was merely pointed at.
+// What it reports instead is the truth about the path: nothing applied,
+// everything pending.
+func TestPendingMakesNothingForADatabaseThatIsNotThere(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	schemas, err := Pending(t.Context(), filepath.Join(dir, "absent.db"), Options{})
 	if err != nil {
-		t.Fatalf("Open after Pending: %v", err)
+		t.Fatalf("Pending: %v", err)
 	}
-	_ = db.Close()
+	for _, sch := range schemas {
+		if len(sch.Applied) != 0 || len(sch.Pending) != len(SchemaVersions(sch.Estate)) {
+			t.Errorf("the absent %s estate reports %d applied and %d pending, want none and all %d",
+				sch.Estate, len(sch.Applied), len(sch.Pending), len(SchemaVersions(sch.Estate)))
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Errorf("Pending left %v on a path that held no database", names)
+	}
 }
 
 // PENDING AND OPEN AGREE. Pending's whole contract is that it predicts what

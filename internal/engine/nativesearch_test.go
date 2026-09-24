@@ -64,7 +64,7 @@ func TestTheEnginesKnowledgeSearchReadsEachHitsParentChain(t *testing.T) {
 	waitFor(t, "both pages to become searchable", func() bool {
 		all = searcher.Search(t.Context(), knowledge.Query{
 			Text: words, Org: org, ExcludeAncestors: []string{},
-		})
+		}).Hits
 		return len(all) == 2
 	})
 	for _, hit := range all {
@@ -76,7 +76,7 @@ func TestTheEnginesKnowledgeSearchReadsEachHitsParentChain(t *testing.T) {
 		}
 	}
 
-	got := searcher.Search(t.Context(), knowledge.Query{Text: words, Org: org})
+	got := searcher.Search(t.Context(), knowledge.Query{Text: words, Org: org}).Hits
 	var ids, titles []string
 	for _, hit := range got {
 		ids, titles = append(ids, hit.PageID), append(titles, hit.Title)

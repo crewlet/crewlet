@@ -36,6 +36,9 @@ func suspended() execstate.State {
 			{"round": 1, "reasoning": "read it first", "content": ""},
 			{"round": 2, "reasoning": "", "content": "Starting a coding run."},
 		},
+		AbandonedAttempts: []types.RoundNarration{
+			{"round": 2, "reasoning": "the primary gave up", "content": "Starting a cod"},
+		},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
 	}
@@ -79,8 +82,35 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	if got.RoundNarration[0]["reasoning"] != "read it first" {
 		t.Fatalf("round 1's thinking did not survive: %+v", got.RoundNarration)
 	}
+	// And what those rounds wrote that no round kept, which the live frames
+	// carried only as tails: the resumed record is where it is kept.
+	if len(got.AbandonedAttempts) != 1 || got.AbandonedAttempts[0]["content"] != "Starting a cod" ||
+		got.AbandonedAttempts[0]["round"] != float64(2) {
+		t.Fatalf("the pre-suspend abandoned attempt did not survive: %+v", got.AbandonedAttempts)
+	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)
+	}
+}
+
+// A KEY THIS BUILD DOES NOT KNOW IS IGNORED WITHIN ITS VERSION.
+//
+// Evolution within a version is additive, and the two builds of a rolling
+// upgrade share one pending-run row: a field a newer build adds must reach an
+// older reader as nothing at all, never as a refusal that strands the run.
+func TestAKeyThisBuildDoesNotKnowIsIgnoredWithinItsVersion(t *testing.T) {
+	blob, err := execstate.Encode(suspended())
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	blob["a_field_a_newer_build_writes"] = []any{map[string]any{"round": float64(1)}}
+
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v; want the row read with the unknown key ignored", ok, err)
+	}
+	if got.PendingCallID != "call-1" || got.RoundsUsed != 2 {
+		t.Fatalf("the row decoded wrong around the unknown key: %+v", got)
 	}
 }
 

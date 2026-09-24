@@ -159,11 +159,12 @@ type Writer struct {
 	metrics *metrics.Recorder
 
 	// Drain is the applier's measured drain on this node in RECORDS a
-	// second, which a bulk edit's projection divides its record count by
-	// — and through that projection, the lease the bulk holds and the
-	// retry hint a bulk refused behind it reads. Nil means unmeasured,
-	// which the projection reads at [statelog.DrainFloor] rather than as
-	// infinity.
+	// second, which a bulk edit's projection divides its record count by.
+	// The projection is the wait a bulk refused behind this one is told to
+	// take, riding the lease as [bulkUntilMeta], and the applier occupancy an
+	// admitted bulk counts ([Writer.occupy]); the lease itself is heartbeated
+	// and never sized to it. Nil means unmeasured, which the projection
+	// reads at [statelog.DrainFloor] rather than as infinity.
 	Drain func() float64
 
 	// Leads resolves a project's or a unit's lead, and it is the ONE

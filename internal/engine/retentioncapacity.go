@@ -12,16 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// WHAT THIS NODE'S OWN HARDWARE IS DOING, and why three alarms needed it.
+// WHAT THIS NODE'S OWN HARDWARE IS DOING, which three alarms read.
 //
 // `volume_low`, `wal_large` and `pool_starved` are the three conditions in the
-// table that are about the MACHINE rather than about the log — and all three
-// read fields of [statelog.Reading] that nothing filled, so all three were
-// permanently silent. Each fails in the same quiet way: a volume fills and the
-// next backup, vacuum or peer join dies partway through; a write-ahead log a
-// checkpoint cannot pass grows until it takes the volume with it; a reader
-// pool too small for the node's domains makes every query slower with nothing
-// naming the queue in front of it.
+// table that are about the MACHINE rather than about the log, and each reads a
+// field of [statelog.Reading] measured from this node's own storage: the sizes
+// by [retention.space], the pool wait from the histogram [retention.poolWait]
+// feeds. Each fails in the same quiet way: a volume fills and the next backup,
+// vacuum or peer join dies partway through; a write-ahead log a checkpoint
+// cannot pass grows until it takes the volume with it; a reader pool too small
+// for the node's domains makes every query slower with nothing naming the
+// queue in front of it.
 //
 // # Why the sizes are measured per read and the pool wait per tick
 //
@@ -98,7 +99,7 @@ func (r *retention) backupGauges(ctx context.Context) {
 		}
 		at, ok, err := backup.Newest(point.Dir)
 		if err != nil {
-			log.WarnContext(ctx, "backup_age_unreadable", "dir", point.Dir,
+			r.logs().WarnContext(ctx, "backup_age_unreadable", "dir", point.Dir,
 				"err", err)
 			continue
 		}
@@ -204,29 +205,44 @@ func (r *retention) space(out *statelog.Reading) {
 }
 
 // semanticCoverage is the fraction of this node's sources carrying a current
-// vector, cached for one tick.
+// vector, measured at most once per [RetentionInterval] — see
+// [retention.coverAt].
 //
 // A POINTER, because zero coverage is the alarm and "no embeddings configured"
 // is a company that asked for none — see [statelog.Reading.SemanticCoverage].
-// A measurement that fails answers nil for the same reason: an unreadable
-// corpus is not an uncovered one.
+// A measurement that fails answers nil for the same reason, until the
+// interval allows another: an unreadable corpus is not an uncovered one.
+//
+// THE ATTEMPT IS CLAIMED BEFORE IT IS MADE. The tick and every API request
+// assemble a report on goroutines of their own, and two that found the cache
+// due at once would otherwise both scan the corpus; the one that did not claim
+// it answers from the measurement before, which is what it would have read a
+// moment earlier.
 func (r *retention) semanticCoverage(ctx context.Context, now time.Time) *float64 {
 	if r.coverage == nil {
 		return nil
 	}
 	r.mu.Lock()
-	fresh := !r.coverAt.IsZero() && now.Sub(r.coverAt) < RetentionInterval
+	due := r.coverAt.IsZero() || now.Sub(r.coverAt) >= RetentionInterval
+	if due {
+		r.coverAt = now
+	}
 	fraction, known := r.coverFraction, r.coverKnown
 	r.mu.Unlock()
-	if !fresh {
+	if due {
 		measured, ok, err := r.coverage(ctx)
 		if err != nil {
-			log.WarnContext(ctx, "vector_coverage_unreadable", "err", err)
-			return nil
+			// A FAILURE IS CACHED AS NOTHING KNOWN, so the scan and
+			// this line come once per interval while it lasts.
+			measured, ok = 0, false
+			r.logs().WarnContext(ctx, "vector_coverage_unreadable", "err", err,
+				"detail", "the recall_below_floor alarm has nothing to judge "+
+					"until a scan succeeds; the next is tried one trim "+
+					"interval from now")
 		}
 		fraction, known = measured, ok
 		r.mu.Lock()
-		r.coverAt, r.coverFraction, r.coverKnown = now, fraction, known
+		r.coverFraction, r.coverKnown = fraction, known
 		r.mu.Unlock()
 		if r.metrics != nil && known {
 			r.metrics.Set(metrics.TrackerVectorCoverage, fraction, nil)

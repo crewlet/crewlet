@@ -473,6 +473,22 @@ func (t tables) retainedMeeting(s ScopeSet) (string, []any, bool) {
 	return q, args, true
 }
 
+// meeting is the earliest retained record whose declared scope meets s and how
+// many retained records meet it, false when none does — both read in the
+// caller's one transaction, so a record retained between the two cannot make
+// an answer name one record and count another.
+func (t tables) meeting(ctx context.Context, tx *sql.Tx, s ScopeSet) (Deferral, uint64, bool, error) {
+	earliest, hit, err := t.deferredIn(ctx, tx, s)
+	if err != nil || !hit {
+		return Deferral{}, 0, false, err
+	}
+	n, err := t.retainedCount(ctx, tx, s)
+	if err != nil {
+		return Deferral{}, 0, false, err
+	}
+	return earliest, n, true, nil
+}
+
 // retainedCount is how many retained records have a declared scope that meets
 // s. A record several of whose scope terms meet s is one record.
 func (t tables) retainedCount(ctx context.Context, tx *sql.Tx, s ScopeSet) (uint64, error) {

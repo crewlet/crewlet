@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -93,6 +94,10 @@ func (d duplicating) Append(ctx context.Context, subject, msgID string, expect *
 
 func (d duplicating) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	return d.inner.LastSeq(ctx, subject)
+}
+
+func (d duplicating) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return d.inner.At(ctx, seq)
 }
 
 // A READER MAY ONLY USE A BARRIER THAT STARTED AT OR AFTER IT ARRIVED.
@@ -228,6 +233,10 @@ func (g *gatedBarrier) Append(ctx context.Context, subject, msgID string, expect
 
 func (g *gatedBarrier) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	return g.inner.LastSeq(ctx, subject)
+}
+
+func (g *gatedBarrier) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return g.inner.At(ctx, seq)
 }
 
 // A BARRIER'S RECORD VERSION IS ONE, FOR EVER.

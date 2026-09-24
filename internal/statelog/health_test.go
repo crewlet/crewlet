@@ -9,13 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE FLOOR IS THREE-VALUED, and the third value takes the SAME branch as the
-// bad one rather than the optimistic one.
+// A NODE SERVES ONLY AT OR ABOVE A FLOOR IT READ AT ITS OWN GENERATION, and
+// an unread floor takes the SAME branch as the bad ones rather than the
+// optimistic one.
 //
-// A boolean here hid the answer that matters. A floor that could not be read
-// is not a floor that is satisfied, and guessing keeps a node serving over a
-// hole it cannot see — which is the one failure a replicated log has no way to
-// notice later.
+// A floor that could not be read is not a floor that is satisfied, and
+// guessing keeps a node serving over a hole it cannot see — which is the one
+// failure a replicated log has no way to notice later.
 func TestAnUnreadableFloorDoesNotServe(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -23,6 +23,7 @@ func TestAnUnreadableFloorDoesNotServe(t *testing.T) {
 		statelog.FloorOK:      true,
 		statelog.FloorBelow:   false,
 		statelog.FloorUnknown: false,
+		statelog.FloorLeft:    false,
 	} {
 		floor := statelog.Floor{State: state, ReadAt: now}
 		if got := floor.Serves(now); got != serves {
@@ -303,6 +304,8 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			statelog.RefuseBelowFloor},
 		{"Floor(unread)", func(h *statelog.Health) { h.Floor = statelog.Floor{} },
 			statelog.RefuseFloorUnknown},
+		{"Floor(left)", func(h *statelog.Health) { h.Floor.State = statelog.FloorLeft },
+			statelog.RefuseGenerationLeft},
 		// THE END, which the lag cannot stand in for: it is clamped at
 		// zero, so a checkpoint past the end reads as caught up.
 		{"LastSeq(behind the checkpoint)", func(h *statelog.Health) {

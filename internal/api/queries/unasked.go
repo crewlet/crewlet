@@ -1,12 +1,8 @@
-// Four readers that were written, tested, and asked by nothing.
-//
-// Each of these has existed for as long as the subsystem behind it: the item
-// search a seat calls with `search_work`, the conversation ledger that stops a
-// seat replying twice in one thread, the counterparty profiles the learning
-// loop writes, and the per-recipient routing the tracker's applier records.
-// Every one of them is read by the engine itself and reaches no screen, which
-// is the quietest way for a feature to be absent — it is not missing, it is
-// merely unaddressable.
+// Four readers of records the engine keeps for its own use, answered for a
+// screen: the item search a seat calls with `search_work_items`, the
+// conversation ledger that stops a seat replying twice in one thread, the
+// counterparty profiles the learning loop writes, and the per-recipient
+// routing the tracker's applier records.
 
 package queries
 
@@ -19,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -29,7 +26,7 @@ import (
 // index is this node's own and the rows are the fleet's, which the searcher
 // already reconciles.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, text string, limit int) (tracker.Ranking, error)
 }
 
 // Conversations is the seat's own thread ledger, as this surface needs it.
@@ -63,14 +60,18 @@ const DefaultSearchLimit = 25
 // `building` rather than an error, because nothing is wrong — this node joined
 // recently and the company's work is simply not all searchable from here yet.
 // Reported as an empty result with a reason, exactly as `knowledge` reports
-// its own four unavailable states, so a screen says "try again in a moment"
+// its own unavailable states, so a screen says "try again in a moment"
 // instead of "nothing matches" — which a reader acts on by filing a duplicate.
+//
+// ONE SHAPE FOR EVERY ANSWER: `hits`, `available`, `reason`, `note` and
+// `partial`, the last null unless the ranking is missing part of what it
+// searched — see [tracker.SearchPartial].
 func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
 		return nil, badParams("q", "", nil)
 	}
-	hits, err := s.WorkSearch.Search(ctx, text, p.Int("limit", DefaultSearchLimit))
+	ranking, err := s.WorkSearch.Search(ctx, text, p.Int("limit", DefaultSearchLimit))
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
 		return map[string]any{
@@ -79,16 +80,44 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 			"reason":    "building",
 			"note": "this node joined recently and is still indexing the company's work — " +
 				"items that exist are simply not findable from here yet",
+			"partial": nil,
 		}, nil
+	case errors.Is(err, tracker.ErrSearchLimit):
+		// A REFUSAL OF THE REQUEST, in the tracker's own words, which
+		// name `limit` and the most it takes. Left to the default it
+		// reaches a client as a 500 — a fault of this node, for a number
+		// the caller has to change.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, err
 	}
+	hits := ranking.Items
 	if hits == nil {
 		// An EMPTY SLICE, never null: a client that renders `hits.length`
 		// on the answer should not have to guard the field as well.
 		hits = []tracker.Ranked{}
 	}
-	return map[string]any{"hits": hits, "available": true}, nil
+	out := map[string]any{
+		"hits": hits, "available": true, "reason": "", "note": "",
+		"partial": nil,
+	}
+	if ranking.Partial != nil {
+		// WHAT THE RANKING IS MISSING, beside what it found: a short list
+		// with nothing beside it reads as every match there is.
+		out["partial"] = ranking.Partial
+		out["note"] = partialNote(knowledgePartial(ranking.Partial), "items")
+	}
+	return out, nil
+}
+
+// knowledgePartial is a ranked item search's partial on the knowledge seam's
+// terms, so both search answers here say one state in one sentence.
+//
+// A CONVERSION, which the compiler refuses the day the two stop carrying the
+// same four facts: both come from the same fan-out's count.
+func knowledgePartial(p *tracker.SearchPartial) *knowledge.Partial {
+	converted := knowledge.Partial(*p)
+	return &converted
 }
 
 // The THREAD-LIST page, and its ceiling.

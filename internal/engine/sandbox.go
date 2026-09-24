@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -662,7 +663,13 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the turn suspended but recorded no conversation", nil)
 		return
 	}
-	blob, err := execstate.Encode(suspension.State)
+	e.keepSuspension(ctx, turnID, suspension.State)
+}
+
+// keepSuspension is [Engine.persistSuspension]'s second half: the conversation
+// the runner held, serialized onto its run's record, or the run failed.
+func (e *Engine) keepSuspension(ctx context.Context, turnID string, state execstate.State) {
+	blob, err := execstate.Encode(state)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
 			"the suspended conversation could not be serialized", err)
@@ -670,8 +677,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	}
 	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
 	if err != nil {
-		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
-			"the suspended conversation could not be written", err)
+		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable", suspensionUnwritable(err), err)
 		return
 	}
 	if !suspended {
@@ -682,6 +688,29 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
 			"the run was no longer launching when its conversation was written", nil)
 	}
+}
+
+// suspensionUnwritable is the `sandbox_run_failed` detail of a run failed
+// because its record would not take the suspended conversation. That event is
+// the run's only lasting account, so the detail names what to do; the refusal
+// itself goes on the `sandbox_suspension_unwritable` line beside it.
+//
+// A REFUSAL AS TOO LARGE IS A SERVER'S SETTING TO RAISE. The run's record and
+// the parts a conversation it cannot hold is kept in are both sized against
+// [queue.MaxPayloadBytes], and a part a server refuses is split down to 64 KiB
+// before the store gives up (see [sandbox.PendingStore.MarkSuspended]), so what
+// refused it is a NATS server whose max_payload is below that ceiling. Any
+// other failure is the coordination store's, and the line carries its reason.
+func suspensionUnwritable(err error) string {
+	if errors.Is(err, coord.ErrTooLarge) {
+		return fmt.Sprintf("the suspended conversation could not be kept, because a NATS server this "+
+			"node is connected to refused it as too large: that server's max_payload is below the "+
+			"%d bytes the engine sizes a record against. Set max_payload to at least %d on every "+
+			"server of the cluster; this turn cannot be continued", queue.MaxPayloadBytes, queue.MaxPayloadBytes)
+	}
+	return "the suspended conversation could not be written to the fleet's coordination store, so " +
+		"this turn cannot be continued; the store's reason is on the node's " +
+		"sandbox_suspension_unwritable log line"
 }
 
 // failSuspension settles a run whose suspension has nowhere to go, and says

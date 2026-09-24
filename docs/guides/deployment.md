@@ -356,15 +356,25 @@ coordination:
 > once for the call — `sandbox_bridge_call_least_form_filed` that the least
 > form landed, naming the whole's length and its parts, and
 > `sandbox_bridge_call_whole_not_kept` that a part of 64 KiB or less was
-> refused too. The two `…_refused_within_ceiling` lines name `max_payload`,
-> and so does a `…_whole_not_kept` line whose part was refused for its size; a
-> bridged call's refusal, in the `error` either line carries, also names the
-> `max_payload` the server this node is connected to announces, beside the
-> 8 MiB the engine sizes against. A write to the engine's own tracker,
-> knowledge base or vector index that the server refuses for its size is
-> refused at once as `too_large`, naming the `max_payload` that server
-> announces and, where it is below 8 MiB, the setting to raise, and that write
-> is not retried: the same record would be refused the same way.
+> refused too. A coding run's suspended conversation — what the run resumes
+> when its job reports back — goes to parts split the same way when the run's
+> record cannot hold it or that server refuses the record holding it, and the
+> resume reads it back whole; `sandbox_suspension_refused_within_ceiling` says
+> the server refused the record. If a part of 64 KiB or less is refused too,
+> the conversation cannot be kept: the run is failed as
+> `suspension_unrecorded`, its box reclaimed, with its `sandbox_run_failed`
+> detail naming `max_payload` and the value to raise it to, and the refusal
+> itself on the node's `sandbox_suspension_unwritable` line. The three
+> `…_refused_within_ceiling` lines name `max_payload`, and so does a
+> `…_whole_not_kept` line whose part was refused for its size; a bridged
+> call's or a suspended conversation's refusal, in the `error` the line
+> carries, also names the `max_payload` the server this node is connected to
+> announces, beside the 8 MiB the engine sizes against. A write to the
+> engine's own tracker, knowledge base or vector index that the server refuses
+> for its size is refused at once as `too_large`, naming the `max_payload`
+> that server announces and, where it is below 8 MiB, the setting to raise,
+> and that write is not retried: the same record would be refused the same
+> way.
 > A payload limit on the NATS account or user the engine connects as caps the
 > same messages, so where one is set (`max_payload` in an account's `limits`,
 > or `payload` in an account or user JWT's limits) it must be at least 8 MiB
@@ -778,6 +788,33 @@ genuinely needs to be shared between nodes lives here: seat leases, the
 activation pointer and per-node apply status, the completion ledger, webhook
 dedupe, the rate valve and credential cooldowns are all in the [coordination
 slot](../concepts/coordination.md) instead.
+
+**Only the engine's own user can read the store.** Each database and its
+`-wal` are made owner-only (`0600`) before the driver opens them, whatever the
+process umask, and so is the `.lock` beside each. Left to the driver they
+would be `0644` under the usual umask, and in a data directory every local
+user can list, that is the audit log, the agents' memory, the config
+revisions and the sealed bootstrap secrets — and the company's tracker and
+knowledge base — readable by all of them.
+
+A database or `-wal` the store finds with a wider mode is **tightened** when
+it opens it: every permission beyond the owner's is taken away, and the node
+logs `store_file_mode_tightened` naming the file and the mode it had. It is
+tightened rather than warned about because nothing but the engine opens these
+files — the lock refuses any other crewlet process, and a copy is `crewlet
+backup`'s, taken from inside — so a wider mode serves nothing the engine does.
+A grant you made for something else fails loudly once it is gone (that reader
+is refused, naming the path), where a mode left open would fail silently for
+as long as nobody read the warning. A file the engine cannot tighten, because
+another user owns it, is logged as `store_file_mode_not_tightened` and opened
+as it is.
+
+**Run every command that opens the store file itself as the user the engine
+runs as** — `crewlet migrate`, and the `crewlet config` and `crewlet secrets`
+commands that work on the file while the engine is stopped. A `-wal` or
+`.lock` such a command makes as another user (`root`, say) is owner-only and
+that user's, so the engine cannot open it afterwards. `crewlet migrate
+-check` against a path with no database makes nothing there.
 
 The load-bearing tables of the node estate:
 

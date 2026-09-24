@@ -1042,9 +1042,9 @@ func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// largeSuspension is a suspended conversation past what a run's row keeps one
-// within, which is half the transport's ceiling: one message the size of that
-// whole ceiling's worth of tool output a long turn can accumulate.
+// largeSuspension is a suspended conversation of one 6 MiB message: past the
+// 4 MiB — half the transport's ceiling — a run's row keeps a conversation
+// within, so a store keeps it in parts.
 func largeSuspension() map[string]any {
 	state := suspension()
 	state["messages"] = []any{map[string]any{

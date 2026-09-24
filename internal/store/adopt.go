@@ -124,13 +124,12 @@ func adoptSteps(live, prepared string) []adoptStep {
 //
 // # Why a reader needs this at all
 //
-// Opening a SQLite database creates a -wal and a -shm beside it, even for a
-// read, and this package's own advisory lock adds a third. That is invisible
-// while a process owns a live database and a problem the moment somebody READS
-// A COPY: a backup artefact is a set of files whose meaning depends on being
-// that set, so a sidecar left behind is debris carrying the reader's own umask
-// rather than the directory's deliberate 0700, and a restore script looking
-// for named files finds one it does not know.
+// Opening a database creates a -wal beside it, even for a read, and a reader
+// that opens it through [OpenEstate] adds this package's own lock sidecar. That
+// is invisible while a process owns a live database and a problem the moment
+// somebody READS A COPY: a backup artefact is a set of files whose meaning
+// depends on being that set, and a restore script looking for named files
+// finds one it does not know.
 //
 // # Why the name says COPY
 //

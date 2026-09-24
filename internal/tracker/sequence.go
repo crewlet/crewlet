@@ -369,6 +369,25 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 // It mints a RANGE of k, because a cross-project move re-keys a whole subtree
 // and doing it one at a time would be one append per descendant on the busiest
 // subject in the project.
+//
+// # The number comes back from the record that landed
+//
+// Not from the decision, and not from the counter's row. The framework runs a
+// decide once per round, and a mint answered from this node's operation ledger
+// — a retry of a mint that already landed — runs none that landed: a closure
+// that captured the number would hand back whatever its last run read, which
+// on a retry is the counter AFTER the first mint, so the caller would key its
+// items from numbers nobody minted and the next mint would collide with them.
+// The row moves on with every later mint. The record at the result's position
+// is the one every node applied, and it says where the counter ended; the
+// first number is that less k, plus one.
+//
+// WHICH MAKES k PART OF THE MINT'S IDENTITY. The record states where the
+// counter ended and not where it began, so a retry recovers the right range
+// only while it asks for the same count its first attempt took. A caller whose
+// count can differ between two attempts names the count in the op id, so a
+// different count is a different mint — a fresh range, and the first one a
+// numbering gap, which is this sequence's documented residue.
 func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
@@ -380,12 +399,6 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 
-	// THE VALUE THE LAST DECISION FORMED, captured rather than returned:
-	// the framework re-decides on a rejected append, so the number that
-	// landed is the one the final decision took, and only the closure sees
-	// it. Reading the row afterwards would read whatever the fleet has
-	// since minted.
-	var base uint64
 	result, err := w.publish(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
@@ -402,7 +415,6 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			base = uint64(counter.Last) + 1
 			next := Counter{
 				V: DocumentVersion, Project: project, Last: counter.Last + k,
 			}
@@ -430,7 +442,49 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			"unresolved, so the number it took cannot be built on: %w",
 			project, statelog.ErrUnavailable)
 	}
+	base, err := w.minted(ctx, result, project, k)
+	if err != nil {
+		return 0, result, err
+	}
 	return base, result, nil
+}
+
+// minted is the first number of the range a key mint took, read from the
+// counter record its result names — see [Writer.mintKey] for why the record
+// and nothing else.
+//
+// A record that is not this project's counter, or that ends below the count
+// it was asked for, is refused rather than read: either is a result naming a
+// record this mint did not publish, and a number derived from one is a key
+// somebody else may hold.
+func (w *Writer) minted(ctx context.Context, result statelog.Result, project string,
+	k int) (uint64, error) {
+
+	payload, err := w.publisher.Landed(ctx, result)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: read back the key mint for %s at %s: %w",
+			project, result.Position, err)
+	}
+	record, err := Decode(payload)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: decode the key mint for %s at %s: %w",
+			project, result.Position, err)
+	}
+	if record.Subject != CounterSubject(project) {
+		return 0, fmt.Errorf("tracker: the record at %s is on %s, not on %s's "+
+			"counter", result.Position, record.Subject, project)
+	}
+	var counter Counter
+	if err := decodePayload(record.Mutation, &counter); err != nil {
+		return 0, fmt.Errorf("tracker: decode %s's counter at %s: %w",
+			project, result.Position, err)
+	}
+	if counter.Last < k {
+		return 0, fmt.Errorf("tracker: %s's counter at %s ends at %d, below the "+
+			"%d numbers this mint asked for", project, result.Position,
+			counter.Last, k)
+	}
+	return uint64(counter.Last-k) + 1, nil
 }
 
 // refuseCreate is what sequence 1 reads the project and its catalogues for.
@@ -1031,7 +1085,14 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 
-	base, _, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
+	// THE COUNT IS IN THE STEP'S ID, because it is the one mint whose count
+	// can change between two attempts of one gesture: a subtask filed under
+	// the subtree in between makes the retry need one more number than the
+	// first attempt took, and [Writer.mintKey] recovers a range only for the
+	// count that minted it.
+	span := 1 + len(subtree)
+	base, _, err := w.mintKey(ctx, stepID(opID, fmt.Sprintf("counter%d", span)),
+		target, span, nil)
 	if err != nil {
 		return WriteResult{}, err
 	}
@@ -1043,7 +1104,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base, Base: base, Length: 1 + len(subtree)})
+		&KeyMint{N: base, Base: base, Length: span})
 	if err != nil {
 		return result, err
 	}
@@ -1683,9 +1744,10 @@ func projectedEnd(meta map[string]any) (time.Time, bool) {
 //
 // NO FLOOR HERE. The projection divides through [statelog.BacklogTime], which
 // owns the one floor every backlog-to-time conversion takes and applies it to
-// the unmeasured zero alone: a lease held too long delays a caller where one
-// held too briefly admits the concurrency it exists to stop, so a measured
-// rate below the floor is used as measured rather than raised to it.
+// the unmeasured zero alone: a projection stated short sends a caller refused
+// behind this bulk back into a second refusal and reads the occupancy it
+// counts as lighter than it is, so a measured rate below the floor is used as
+// measured rather than raised to it.
 func (w *Writer) drain() float64 {
 	if w.Drain == nil {
 		return 0

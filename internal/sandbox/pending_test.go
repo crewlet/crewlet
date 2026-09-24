@@ -1509,15 +1509,66 @@ func TestASuspensionReferenceWithNoLaunchIsUnreadable(t *testing.T) {
 	}
 }
 
+// predatingRun is a run's row as a build that predates suspension parts
+// decodes and encodes it: the wire fields its PendingRun carries, frozen here
+// so this build's own type cannot stand in for it. A field this build adds is
+// one that build drops on its first write, and that loss is what a round trip
+// through this build's type can never show.
+type predatingRun struct {
+	TurnID            string          `json:"turn_id"`
+	WorkKey           string          `json:"work_key,omitempty"`
+	AgentHandle       string          `json:"agent_handle"`
+	AgentID           string          `json:"agent_id"`
+	Role              string          `json:"role"`
+	SandboxID         string          `json:"sandbox_id"`
+	CodingAgent       string          `json:"coding_agent"`
+	Placement         string          `json:"placement,omitempty"`
+	CommandID         string          `json:"command_id"`
+	Status            string          `json:"status"`
+	LaunchID          string          `json:"launch_id,omitempty"`
+	Owner             string          `json:"owner"`
+	OwnerEpoch        int64           `json:"owner_epoch"`
+	TaskDescription   string          `json:"task_description"`
+	Reply             string          `json:"reply,omitempty"`
+	PartitionKey      string          `json:"conversation_key"`
+	ConversationKey   string          `json:"conversation_identity,omitempty"`
+	Branch            string          `json:"branch"`
+	SessionID         string          `json:"session_id"`
+	Question          string          `json:"question"`
+	Audience          string          `json:"audience"`
+	TraceID           string          `json:"trace_id"`
+	SpanID            string          `json:"span_id"`
+	DelegationDepth   int             `json:"delegation_depth"`
+	DelegationChain   []string        `json:"delegation_chain"`
+	ExecuteState      map[string]any  `json:"execute_state"`
+	BridgeCalls       []predatingCall `json:"bridge_calls,omitempty"`
+	BridgeCallsElided int             `json:"bridge_calls_elided,omitempty"`
+	Charged           bool            `json:"charged,omitempty"`
+	PauseTTLSeconds   float64         `json:"pause_ttl_seconds"`
+	PausedAt          time.Time       `json:"paused_at"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+}
+
+// predatingCall is a bridged call as that build's row carries it.
+type predatingCall struct {
+	Name   string    `json:"name"`
+	Args   string    `json:"args,omitempty"`
+	Output string    `json:"output,omitempty"`
+	Failed bool      `json:"failed,omitempty"`
+	At     time.Time `json:"at"`
+}
+
 // A WRITE BY A BUILD THAT PREDATES THE PARTS KEEPS THE REFERENCE.
 //
 // A rolling upgrade puts such a build on the run's row, and it writes the row
 // whole on every step of the lifecycle it takes — a claim of ownership during
-// recovery, a box attached. The reference adds no field for it to drop: it
-// lives in execute_state, a map that build decodes and encodes whole. So what
-// that build writes back still names the parts, and the resume that follows
-// reads the conversation whole. Its write is a decode of the row and an encode
-// of what it decoded, which is what its store does on every step.
+// recovery, a box attached — decoding it into its own type and encoding what
+// it decoded. Whatever that type has no field for is gone after its first
+// write. The reference survives because it has no field of its own: it lives
+// in execute_state, a map that build carries whole, so what it writes back
+// still names the parts and the resume that follows reads the conversation
+// whole.
 func TestAWriteByABuildThatPredatesThePartsKeepsTheReference(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1530,7 +1581,7 @@ func TestAWriteByABuildThatPredatesThePartsKeepsTheReference(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("SandboxRun = %v, %v", found, err)
 	}
-	var row sandbox.PendingRun
+	var row predatingRun
 	if err := json.Unmarshal(record.Value, &row); err != nil {
 		t.Fatal(err)
 	}
@@ -1550,5 +1601,82 @@ func TestAWriteByABuildThatPredatesThePartsKeepsTheReference(t *testing.T) {
 	if got, err := store.Suspension(ctx, after); err != nil || !sameJSON(t, got, state) {
 		t.Errorf("after the peer's write the conversation reads back as %d keys, %v; want it whole",
 			len(got), err)
+	}
+}
+
+// A REFERENCE THAT DOES NOT DECODE IS UNREADABLE, NOT A CONVERSATION. A row's
+// execute_state holding the reference's one key names a suspension kept in
+// parts, whatever its value; one this build cannot decode names parts nothing
+// can find. Read as a conversation instead, the resume would re-enter a turn
+// whose messages are a single key and no call to answer.
+func TestASuspensionReferenceThatDoesNotDecodeIsUnreadable(t *testing.T) {
+	t.Parallel()
+	run := sandbox.PendingRun{TurnID: "t-garbled", LaunchID: "launch-1", ExecuteState: map[string]any{
+		"suspension_in_parts": "not a reference",
+	}}
+	got, err := sandbox.NewCoordStore(memory.NewFleet()).Suspension(t.Context(), run)
+	if !errors.Is(err, sandbox.ErrSuspensionUnreadable) {
+		t.Errorf("a reference that does not decode = %d keys, %v; want ErrSuspensionUnreadable", len(got), err)
+	}
+}
+
+// A SUSPENSION ON THE ROW LEAVES THE ROW ITS LIFECYCLE. The row is one record,
+// rewritten whole by every step after the suspension — the park on a question
+// above all, which adds a question no fit bounds — and older builds' view of
+// the run's calls may already fill it by the time the conversation arrives. So
+// the suspension refits that view into what the row's half of the ceiling
+// leaves, dropping from the middle and counting what it dropped, and a park
+// with a question of megabytes still lands. Without the refit the view keeps
+// its size beside the conversation, and that park is refused as too large.
+func TestASuspensionOnTheRowRefitsTheCallsViewSoAParkStillLands(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	begun(t, store, "t-refit")
+
+	const calls = 30
+	for i := range calls {
+		if ok, err := store.AppendBridgeCall(ctx, "t-refit", sandbox.BridgeCall{
+			Name: fmt.Sprintf("read_%d", i), Output: strings.Repeat("r", 100<<10),
+		}); err != nil || !ok {
+			t.Fatalf("AppendBridgeCall %d = %v, %v", i, ok, err)
+		}
+	}
+	before, _, err := store.Get(ctx, "t-refit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.BridgeCalls) != calls || before.BridgeCallsElided != 0 {
+		t.Fatalf("the view holds %d calls with %d elided before the suspension, want all %d: the premise",
+			len(before.BridgeCalls), before.BridgeCallsElided, calls)
+	}
+
+	state := map[string]any{
+		"version": float64(2), "pending_tool_call_id": "call_1",
+		"messages": []any{map[string]any{"Role": "assistant", "Content": strings.Repeat("w", 3<<20)}},
+	}
+	if ok, err := store.MarkSuspended(ctx, "t-refit", state); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+	after, _, err := store.Get(ctx, "t-refit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameJSON(t, after.ExecuteState, state) {
+		t.Fatalf("the row holds %d keys of conversation, want the suspension itself: it fits the row",
+			len(after.ExecuteState))
+	}
+	if after.BridgeCallsElided == 0 || len(after.BridgeCalls)+after.BridgeCallsElided != calls {
+		t.Errorf("the view holds %d calls with %d elided after the suspension, want its middle "+
+			"dropped and counted", len(after.BridgeCalls), after.BridgeCallsElided)
+	}
+
+	if err := store.MarkAwaiting(ctx, "t-refit", sandbox.Clarification{
+		Question: strings.Repeat("q", 3<<20), Audience: "requester",
+	}); err != nil {
+		t.Fatalf("a park with a question of 3 MiB = %v, want it landed beside the conversation", err)
+	}
+	if got, _, err := store.Get(ctx, "t-refit"); err != nil || got.Status != sandbox.StatusAwaiting {
+		t.Fatalf("the run is %q, %v; want it parked on its question", got.Status, err)
 	}
 }

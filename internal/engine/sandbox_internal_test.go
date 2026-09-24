@@ -8,15 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -435,10 +439,250 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	}
 }
 
+// belowCeilingRuns is the fleet's run records behind a NATS server whose
+// max_payload is below the contract's ceiling: it refuses, as too large, every
+// update of a run's record and every part of a suspension longer than limit.
+type belowCeilingRuns struct {
+	*memory.Fleet
+	limit int
+}
+
+func (f belowCeilingRuns) refuses(value []byte) error {
+	if len(value) > f.limit {
+		return fmt.Errorf("the server announces %d bytes: %w", f.limit, coord.ErrTooLarge)
+	}
+	return nil
+}
+
+func (f belowCeilingRuns) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if err := f.refuses(value); err != nil {
+		return false, err
+	}
+	return f.Fleet.UpdateSandboxRun(ctx, turnID, value, version)
+}
+
+func (f belowCeilingRuns) CreateSuspensionPart(ctx context.Context, turnID, launchID string, part int, value []byte) (bool, error) {
+	if err := f.refuses(value); err != nil {
+		return false, err
+	}
+	return f.Fleet.CreateSuspensionPart(ctx, turnID, launchID, part, value)
+}
+
+// unreachableRuns is the fleet's run records with a store that stops
+// answering writes to them once down is set.
+type unreachableRuns struct {
+	*memory.Fleet
+	down *atomic.Bool
+}
+
+func (u unreachableRuns) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if u.down.Load() {
+		return false, fmt.Errorf("broker restarting: %w", coord.ErrUnavailable)
+	}
+	return u.Fleet.UpdateSandboxRun(ctx, turnID, value, version)
+}
+
+// suspendedState is a suspended executor conversation whose one message carries
+// content bytes of text, ending on the run_sandbox call it is waiting on.
+func suspendedState(content int) execstate.State {
+	return execstate.State{
+		Messages: []llm.Message{{
+			Role: "assistant", Content: strings.Repeat("w", content),
+			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "run_sandbox"}},
+		}},
+		PendingCallID: "call-1", PendingCallName: "run_sandbox",
+		Task: "fix the flaking api test",
+	}
+}
+
+// launchedRun opens a launch on a fresh box and attaches it, as the run_sandbox
+// tool does before the turn suspends: the run is launching, with a job running
+// in its box and no conversation on its record yet.
+func launchedRun(t *testing.T, store sandbox.PendingStore, provider *sandbox.FakeProvider) sandbox.Sandbox {
+	t.Helper()
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: chargeAgent, Role: "SWE", CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := store.AttachSandbox(t.Context(), "t1", sandbox.BoxRef{
+		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	return box
+}
+
+// A SUSPENSION NO RECORD WOULD TAKE FAILS ITS RUN SAYING WHAT TO DO. The run's
+// failure is its only lasting account — its record is deleted and its box
+// reclaimed — so its detail is the sentence an operator acts on. A conversation
+// a server refused as too large, down to the smallest part the store splits
+// to, is a server whose max_payload is below the contract's ceiling, and the
+// detail names that setting and the value to raise it to. Any other failure is
+// the store's, and the detail does not claim a remedy it does not have.
+func TestASuspensionNoRecordTakesFailsItsRunNamingTheRemedy(t *testing.T) {
+	down := &atomic.Bool{}
+	for _, tc := range []struct {
+		name    string
+		records sandbox.RunRecords
+		// fail is what makes the store fail once the run has launched.
+		fail func()
+		// names is what the detail must say; not, what it must not.
+		names, not []string
+	}{
+		{
+			name: "a server below the ceiling",
+			// The run's own record is well under the limit, so the
+			// launch lands; the conversation is not.
+			records: belowCeilingRuns{Fleet: memory.NewFleet(), limit: 32 << 10},
+			fail:    func() {},
+			names:   []string{"max_payload", fmt.Sprint(queue.MaxPayloadBytes), "every server"},
+		},
+		{
+			name:    "a store that stopped answering",
+			records: unreachableRuns{Fleet: memory.NewFleet(), down: down},
+			fail:    func() { down.Store(true) },
+			names:   []string{"sandbox_suspension_unwritable"},
+			not:     []string{"max_payload"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := sandbox.NewCoordStore(tc.records)
+			provider := sandbox.NewFakeProvider()
+			manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+				Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+				Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+			})
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			published := &publishRecorder{}
+			e := &Engine{sandboxPending: store}
+			coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+				Queue: published, Pending: store, Manager: manager, Resume: &resumer{engine: e},
+			})
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+			e.sandboxCoordinator = coordinator
+			box := launchedRun(t, store, provider)
+			tc.fail()
+
+			e.keepSuspension(t.Context(), "t1", suspendedState(100<<10))
+
+			if got, found, err := store.Get(t.Context(), "t1"); err != nil || found {
+				t.Fatalf("Get = %+v, found %v, %v; want the run ended and its record gone", got, found, err)
+			}
+			if killed := provider.KilledIDs(); len(killed) != 1 || killed[0] != box.ID() {
+				t.Fatalf("killed %v, want the running job's box %q reclaimed", killed, box.ID())
+			}
+			failed := published.failures()
+			if len(failed) != 1 || failed[0].Reason != types.SandboxFailureSuspensionUnrecorded {
+				t.Fatalf("announced %+v, want the run failed as %q", failed,
+					types.SandboxFailureSuspensionUnrecorded)
+			}
+			for _, want := range tc.names {
+				if !strings.Contains(failed[0].Detail, want) {
+					t.Errorf("the detail %q does not name %q", failed[0].Detail, want)
+				}
+			}
+			for _, unwanted := range tc.not {
+				if strings.Contains(failed[0].Detail, unwanted) {
+					t.Errorf("the detail %q names %q, a remedy this failure does not have",
+						failed[0].Detail, unwanted)
+				}
+			}
+		})
+	}
+}
+
+// THE ENGINE'S OWN RESUMER RE-ENTERS A CONVERSATION KEPT IN PARTS, WHOLE.
+//
+// A conversation past what the run's record keeps one within is held in parts,
+// with a reference to them on the record in its place — a map the resumer
+// cannot decode, since it names no version this build writes. So the resume has
+// to be handed the whole the parts hold, and this drives the real path: the
+// coordinator's claim and read, then the engine's resumer decoding the state.
+// A node with no applied company answers ErrResumeUnavailable only AFTER the
+// state decoded, so that answer is the proof the whole arrived; the reference
+// arriving instead is refused as an unknown version first.
+func TestTheEnginesResumerReentersAConversationKeptInPartsWhole(t *testing.T) {
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	provider, runner := sandbox.NewFakeProvider(), sandbox.NewFakeRunner("claude-code")
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	e := &Engine{sandboxPending: store}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: &publishRecorder{}, Pending: store, Manager: manager, Resume: &resumer{engine: e},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	e.sandboxCoordinator = coordinator
+	box := launchedRun(t, store, provider)
+
+	blob, err := execstate.Encode(suspendedState(5 << 20))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if suspended, err := store.MarkSuspended(t.Context(), "t1", blob); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	run, found, err := store.Get(t.Context(), "t1")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if _, whole := run.ExecuteState["messages"]; whole || len(run.ExecuteState) != 1 {
+		t.Fatalf("the record holds %d keys of the conversation, want the reference to its "+
+			"parts alone: the premise", len(run.ExecuteState))
+	}
+	runner.Finish(sandbox.Result{Success: true, Text: "fixed"})
+
+	completion := types.SandboxRunCompleted{
+		TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: "swe", Agent: chargeAgent,
+		RoleName: "SWE", SandboxID: box.ID(), CodingAgent: "claude-code",
+	}
+	err = coordinator.OnCompleted(t.Context(), completion, events.New(completion, events.TraceContext{}))
+	if errors.Is(err, execstate.ErrUnknownVersion) {
+		t.Fatalf("the resumer was handed the reference rather than the conversation: %v", err)
+	}
+	if !errors.Is(err, sandbox.ErrResumeUnavailable) || !strings.Contains(err.Error(), "no applied company") {
+		t.Fatalf("OnCompleted = %v, want the conversation decoded and the resume sent on for "+
+			"want of a company", err)
+	}
+}
+
 // publishRecorder is the slice of the queue a coordinator publishes through.
 type publishRecorder struct {
 	mu     sync.Mutex
 	events []*events.Event
+}
+
+// failures is every run failure announced, once each: a failure goes to the
+// board's topic and to the seat's control topic, as one event.
+func (r *publishRecorder) failures() []types.SandboxRunFailed {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []types.SandboxRunFailed
+	seen := map[string]bool{}
+	for _, ev := range r.events {
+		failed, ok := ev.Data.(*types.SandboxRunFailed)
+		if !ok || seen[ev.ID.String()] {
+			continue
+		}
+		seen[ev.ID.String()] = true
+		out = append(out, *failed)
+	}
+	return out
 }
 
 func (r *publishRecorder) Publish(_ context.Context, _ string, ev *events.Event) error {

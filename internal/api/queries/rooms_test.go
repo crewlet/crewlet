@@ -260,8 +260,8 @@ func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
 	return tracker.RoutingAnswer{}, nil
 }
 
-func (emptyWork) Search(context.Context, string, int) ([]tracker.Ranked, error) {
-	return nil, nil
+func (emptyWork) Search(context.Context, string, int) (tracker.Ranking, error) {
+	return tracker.Ranking{}, nil
 }
 
 // emptyConversations and emptyCounterparties are the two per-seat stores with

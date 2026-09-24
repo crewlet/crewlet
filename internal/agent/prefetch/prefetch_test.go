@@ -178,6 +178,8 @@ func (o onboarding) Onboarded(context.Context, string, string) (bool, error) {
 type searcher struct {
 	mu      sync.Mutex
 	hits    []knowledge.Hit
+	partial *knowledge.Partial
+	failed  bool
 	queries []knowledge.Query
 	cannot  bool
 
@@ -191,11 +193,11 @@ func (s *searcher) CanSearch(*org.Role, *org.Organization) bool { return !s.cann
 
 func (s *searcher) Building(context.Context) bool { return s.building }
 
-func (s *searcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return s.hits
+	return knowledge.Answer{Hits: s.hits, Partial: s.partial, Failed: s.failed}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -645,6 +647,106 @@ func TestTheModelWritesTheSearchQuery(t *testing.T) {
 	// on the first two hundred characters of a runbook.
 	if !strings.HasSuffix(got, prefetch.KnowledgeReadHint) {
 		t.Fatalf("the block does not say how to open a page:\n%s", got)
+	}
+}
+
+// A PARTIAL ANSWER SAYS WHAT IT IS MISSING, in the block as in the tool.
+//
+// A slice of the knowledge base that did not answer in time, or a query the
+// meaning half could not run, leaves an answer that is real and not whole —
+// and a seat reading it as whole concludes a page it was not shown does not
+// exist. So the block carries the sentence whether or not it found anything,
+// and names each of the two causes, because they send a seat to different
+// places: asking again shortly, or asking in the words a page would use.
+func TestAPartialKnowledgeAnswerSaysWhatItIsMissing(t *testing.T) {
+	t.Parallel()
+	buckets := &knowledge.Partial{BucketsAnswered: 42, BucketsMissing: 22,
+		AbsentNodes: []string{"node-b"}}
+	meaning := &knowledge.Partial{BucketsAnswered: 64, SemanticSkipped: true}
+	for name, tc := range map[string]struct {
+		partial *knowledge.Partial
+		says    string
+	}{
+		"a slice did not answer":   {buckets, "22 of the knowledge base's 64 slices"},
+		"the meaning half skipped": {meaning, "matches by meaning did not run"},
+	} {
+		note := prefetch.PartialKnowledgeNote(tc.partial)
+		if !strings.Contains(note, tc.says) {
+			t.Errorf("%s: the note %q does not say %q", name, note, tc.says)
+		}
+		for _, found := range [][]knowledge.Hit{{{Title: "Staging runbook"}}, nil} {
+			got := fetch(t, prefetch.Sources{
+				Knowledge: &searcher{hits: found, partial: tc.partial},
+				Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+			}, request(t)).RelevantKnowledge
+			if !strings.Contains(got, note) {
+				t.Errorf("%s, %d hit(s): the block does not carry the note:\n%s",
+					name, len(found), got)
+			}
+		}
+	}
+	// A WHOLE ANSWER CARRIES NONE: a caveat on every block is one nobody
+	// reads.
+	if note := prefetch.PartialKnowledgeNote(nil); note != "" {
+		t.Errorf("a whole answer's note is %q", note)
+	}
+	whole := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t)).RelevantKnowledge
+	if strings.Contains(whole, "partial") {
+		t.Errorf("a whole answer's block carries a partial caveat:\n%s", whole)
+	}
+}
+
+// A SEARCH THAT FAILED SAYS IT FAILED, and counts nothing. "No team documents
+// surfaced" is a claim about the knowledge base that a search which did not run
+// cannot make; the tool says the same state in the same sentence.
+func TestAFailedKnowledgeSearchSaysItFailed(t *testing.T) {
+	t.Parallel()
+	block := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{failed: true},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t))
+	if block.RelevantKnowledge != prefetch.FailedKnowledgeHint {
+		t.Errorf("a failed search rendered %q, want %q", block.RelevantKnowledge,
+			prefetch.FailedKnowledgeHint)
+	}
+	if block.RelevantKnowledgeHits != 0 {
+		t.Errorf("a failed search counted %d pages", block.RelevantKnowledgeHits)
+	}
+}
+
+// A QUERY PAST THE SEAM'S BOUND IS REFUSED, NEVER CUT, and the block says to
+// search again rather than showing pages about half of what the model wrote.
+//
+// The model was asked for one line of keywords; a line of prose longer than
+// [knowledge.MaxQueryBytes] searched on its first four hundred bytes would put
+// real, ranked pages about a different question in front of the seat as what
+// the company knows. The control is a line at the bound, which is searched.
+func TestAKnowledgeQueryPastTheBoundIsRefused(t *testing.T) {
+	t.Parallel()
+	over := &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}}
+	got := fetch(t, prefetch.Sources{Knowledge: over,
+		Models: models{provider: &aux{answers: []string{
+			strings.Repeat("z", knowledge.MaxQueryBytes+1)}}},
+	}, request(t)).RelevantKnowledge
+	if asked := over.asked(); len(asked) != 0 {
+		t.Errorf("a %d-byte query was searched: %d byte(s) reached the backend",
+			knowledge.MaxQueryBytes+1, len(asked[0].Text))
+	}
+	if got != prefetch.EmptyKnowledgeHint {
+		t.Errorf("a refused query rendered %q, want the hint to search again", got)
+	}
+
+	at := &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}}
+	fetch(t, prefetch.Sources{Knowledge: at,
+		Models: models{provider: &aux{answers: []string{
+			strings.Repeat("z", knowledge.MaxQueryBytes)}}},
+	}, request(t))
+	if asked := at.asked(); len(asked) != 1 ||
+		len(asked[0].Text) != knowledge.MaxQueryBytes {
+		t.Errorf("a query at the bound was not searched whole: %+v", asked)
 	}
 }
 
