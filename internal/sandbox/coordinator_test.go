@@ -1608,6 +1608,15 @@ func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
 		t.Fatalf("status = %q, want the run still waiting on its answer", got.Status)
 	}
+	// THE QUESTION NAMES THE ITEM THE RUN IS ON, off the row: it is shown
+	// against the work it is about, and the row is the only thing that
+	// still knows which work that is. And the park kept it on the row.
+	if asked := rig.questions()[0]; asked.WorkItem == nil || *asked.WorkItem != rigItem {
+		t.Errorf("the question names %+v, want the run's item", asked.WorkItem)
+	}
+	if got := rig.get("t1"); got.WorkItem == nil || *got.WorkItem != rigItem {
+		t.Errorf("the parked row holds %+v, want the run's item", got.WorkItem)
+	}
 }
 
 // staleFind answers the parked-run lookup from a snapshot taken before the

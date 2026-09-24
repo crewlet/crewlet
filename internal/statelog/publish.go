@@ -825,7 +825,14 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// adopted one arrives with an empty table — and reading that
 		// absence as "somebody else won" would re-decide against a row
 		// that moved because of this very write.
-		return Result{Outcome: OutcomeUnknown, Position: at, OpID: req.OpID}, nil
+		//
+		// NO POSITION, which is the whole content of unknown ([Result]):
+		// the record at at was found above the anchor rather than
+		// acknowledged, so it may be somebody else's, and a caller
+		// handed its position would read it as where ITS record landed —
+		// a session barrier on another writer's record, or a turn charged
+		// to an item on the strength of a write nobody heard back from.
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
 	}
 
 	// Somebody else won. Re-decide.

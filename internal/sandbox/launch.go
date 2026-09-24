@@ -67,6 +67,11 @@ type TurnRef struct {
 	// Depth and Chain are the delegation state a resumed turn inherits.
 	Depth int
 	Chain []string
+
+	// WorkItem is the item the launching turn is charged to, nil when it is
+	// on nothing. Written onto the row, because the resumed turn has no
+	// trigger to resolve it from — see [PendingRun.WorkItem].
+	WorkItem *types.WorkItem
 }
 
 // LaunchRequest is everything one detached coding run needs.
@@ -154,6 +159,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
+		WorkItem:  req.Turn.WorkItem,
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -216,6 +222,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// this run for" is the durable thread rather than the batch the
 		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
+		WorkItem:        req.Turn.WorkItem,
 		Task:            summarise(req.Brief),
 	}
 	ev := events.New(started, events.TraceContext{

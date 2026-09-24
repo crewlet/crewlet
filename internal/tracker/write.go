@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -208,6 +209,10 @@ type Writer struct {
 	// [Writer.After].
 	after statelog.Position
 
+	// written is [Provenance.Written], carried per party like the rest of
+	// the provenance. See [Writer.publish] for what reaches it.
+	written WriteLog
+
 	// refusal is set by [Writer.As] when the identity it was handed
 	// cannot author a record. It is checked at the one funnel every write
 	// passes through — see the comment there for why it is carried rather
@@ -274,6 +279,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	clone.TurnID = provenance.TurnID
 	clone.Chain = provenance.Chain
 	clone.Seat = provenance.Seat
+	clone.written = provenance.Written
 	return &clone
 }
 
@@ -417,6 +423,22 @@ type Provenance struct {
 	// delegation path that reached it.
 	TurnID string
 	Chain  []string
+
+	// Written is where the tasks this writer's records COMMIT to are
+	// reported — the turn's own set, so the engine can charge a turn that
+	// nothing at dispatch named an item for to the one item it wrote. Nil
+	// reports nothing, which is every writer that is not a turn's.
+	Written WriteLog
+}
+
+// WriteLog is what a turn's writer reports the tasks it committed to into.
+//
+// Declared here, by the one caller, and kept to the one method it calls: the
+// set itself is the turn's (internal/agent/turnctx), and this package has no
+// business knowing a turn exists beyond "somebody wants to hear which items
+// this writer wrote".
+type WriteLog interface {
+	Add(types.WorkItem)
 }
 
 // NewWriter builds the tracker's write authority.
@@ -1074,15 +1096,109 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 	// published. Zero — every write a surface makes on its own — waits for
 	// nothing.
 	req.Session = w.after
+	wrote := w.recording(ctx, &req)
 	result, err := w.publisher.Publish(ctx, req)
 	switch {
 	case err == nil:
+		w.report(wrote, result)
 		return result, nil
 	case errors.Is(err, statelog.ErrExists):
 		return result, fmt.Errorf("tracker: %s already exists: %w",
 			req.Subject.ID, err)
 	}
 	return result, err
+}
+
+// recording arranges for a task record's item to be reported to the turn's
+// [WriteLog] once it commits, and answers where the item will be.
+//
+// THE ITEM IS READ INSIDE THE DECIDE'S OWN SNAPSHOT, the only place a key and
+// a project are known for certain: a patch carries neither, and a read after
+// the append would race the applier on a `pending` write. The task's own row
+// answers an edit; a create has no row yet, and its record carries the whole
+// task. The LAST round's answer is the one kept, because that round's record
+// is the one the broker took.
+//
+// ONLY A TASK SUBJECT, because only a task is a work item: a project's
+// settings, a person's list and a rank order are writes, but charging a turn
+// to one would charge it to something no per-item figure can name.
+//
+// BEST EFFORT on the item and never on the write. A read that fails here
+// leaves the item unreported — the turn is then charged by a rule that does
+// not need it, or to nothing — rather than failing a write the caller asked
+// for over a question only the spend attribution asks.
+func (w *Writer) recording(ctx context.Context, req *statelog.Request) *committing {
+	wrote := &committing{}
+	if w.written == nil || req.Subject.Kind != string(KindTask) || req.Decide == nil {
+		return wrote
+	}
+	id, decide := req.Subject.ID, req.Decide
+	req.Decide = func(tx *sql.Tx) (statelog.Decision, error) {
+		decision, err := decide(tx)
+		if err != nil || len(decision.Payload) == 0 {
+			// A round that decided nothing appends nothing, and names no
+			// item for the turn to be charged to.
+			wrote.item = nil
+			return decision, err
+		}
+		named := writtenItem(ctx, tx, id, decision.Payload)
+		wrote.item = &named
+		return decision, nil
+	}
+	return wrote
+}
+
+// committing is the item one write will report once it commits, set by the
+// last round of its decide.
+type committing struct{ item *types.WorkItem }
+
+// report hands the turn's [WriteLog] the item a write named, once the write is
+// known to have committed.
+//
+// COMMITTED IS READ OFF THE OUTCOME, never off the position: `applied` and
+// `pending` are both a record this write appended, and `unknown` is
+// deliberately left out — the record may not exist, and charging a whole turn
+// to an item on the strength of a write nobody heard back from is a guess this
+// set exists to replace. A position is not the same test: it is what an
+// outcome carries rather than what it means, and the ambiguous path is where
+// the two have come apart before. A write whose decide appended nothing names
+// no item in the first place ([Writer.recording]).
+func (w *Writer) report(wrote *committing, result statelog.Result) {
+	if wrote.item == nil || w.written == nil {
+		return
+	}
+	switch result.Outcome {
+	case statelog.OutcomeApplied, statelog.OutcomePending:
+		w.written.Add(*wrote.item)
+	case statelog.OutcomeUnknown:
+	}
+}
+
+// writtenItem is the task one record commits to, named as a work item.
+//
+// The id is the subject's and always known; the key and project are labels,
+// and a record whose labels could not be read still names its item by id.
+func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) types.WorkItem {
+	named := types.WorkItem{Backend: types.WorkNative, ID: id}
+	if task, found, err := readTask(ctx, tx, id); err == nil && found {
+		named.Key, named.Project = task.Key, task.Project
+		return named
+	}
+	record, err := Decode(payload)
+	if err != nil {
+		return named
+	}
+	if record.Notify != nil && record.Notify.Snapshot.Key != "" {
+		named.Key, named.Project = record.Notify.Snapshot.Key, record.Notify.Snapshot.Project
+		return named
+	}
+	if record.Op == OpCreate {
+		var task Task
+		if json.Unmarshal(record.Mutation, &task) == nil {
+			named.Key, named.Project = task.Key, task.Project
+		}
+	}
+	return named
 }
 
 // MoveTask drops one task between two neighbours, re-spreading inline when the

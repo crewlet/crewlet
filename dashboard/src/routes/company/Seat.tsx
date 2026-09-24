@@ -1527,12 +1527,12 @@ export function SeatScreen({ handle }: { handle: string }) {
                           <span className="truncate">
                             {t.summary || <span className="muted">no summary recorded</span>}
                           </span>
-                          {t.task_id && (
+                          {t.work_item && (
                             <span
                               className="mono t-caption"
                               title="the work item this turn was about"
                             >
-                              {t.task_id}
+                              {t.work_item.key || `${t.work_item.backend}:${t.work_item.id}`}
                             </span>
                           )}
                         </span>

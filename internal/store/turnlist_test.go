@@ -39,7 +39,10 @@ func seedTurn(t *testing.T, log *store.EventLog, id string, at time.Time,
 	}
 	payload, err := json.Marshal(map[string]any{
 		"turn_id": id, "duration_ms": 4200, "plan_summary": "did the thing",
-		"task_id": "ENG-1",
+		"work_item": map[string]string{
+			"backend": "native", "id": "task-1", "key": "ENG-1", "project": "ENG",
+		},
+		"work_item_basis": "trigger",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +97,9 @@ func TestTurnsFoldOneRowPerTurn(t *testing.T) {
 			one.DurationMS)
 	case one.Summary != "did the thing":
 		t.Errorf("t-1's summary is %q", one.Summary)
-	case one.TaskID != "ENG-1":
-		t.Errorf("t-1's task is %q", one.TaskID)
+	case one.WorkItem == nil || *one.WorkItem != (types.WorkItem{
+		Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
+		t.Errorf("t-1's work item is %+v, want the completion's", one.WorkItem)
 	case one.Trigger != "chat":
 		t.Errorf("t-1's trigger is %q, want the phase records' own", one.Trigger)
 	case one.AgentRole != "PM":
@@ -528,5 +532,37 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	if len(clean) != 0 {
 		t.Errorf("failed=false returned %d turns, want none — every turn here died",
 			len(clean))
+	}
+}
+
+// A TURN LISTS THE ITEM ITS COMPLETION WAS CHARGED TO, AND NO OTHER.
+//
+// A completion with no `work_item` is a turn on nothing, and a `task_id` on it
+// is never read as one: that key means a delegated worker's task or a schedule
+// fire's run, and the row that joined it to the tracker listed an item for
+// turns that were on none.
+func TestATurnWithNoItemListsNone(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	payload, err := json.Marshal(map[string]any{
+		"turn_id": "t-9", "duration_ms": 10, "task_id": "run-42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "t-9-done", Type: "turn_completed", Time: at,
+		Category: "lifecycle", Tags: map[string]string{"turn_id": "t-9"},
+		Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Turns = %+v, %v", got, err)
+	}
+	if got[0].WorkItem != nil {
+		t.Fatalf("a turn on nothing lists %+v", got[0].WorkItem)
 	}
 }

@@ -34,10 +34,18 @@ const (
 
 // Episode is one completed agent turn, or one compacted cluster.
 type Episode struct {
-	ID        string
-	Handle    string
-	Role      string
-	TaskID    string
+	ID     string
+	Handle string
+	Role   string
+	// WorkItem is the work item the turn was charged to, as its
+	// backend-qualified ref (`native:<id>`, `jira:<id>`) — the one identity
+	// that is unique across trackers — and empty for a turn on nothing and
+	// for a compacted row, whose cluster spans items by construction.
+	//
+	// STORED IN THE task_id COLUMN until node migration 0031 renames it, and
+	// the Go name moved first because the column never held anything: the
+	// turn event it was copied from declared a task id and never set one.
+	WorkItem  string
 	TurnID    string
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -135,7 +143,7 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 		return false, err
 	}
 	res, err := e.db.SQL().ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
+		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
 		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
@@ -201,7 +209,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		consolidated, workKey, conversationKey sql.NullString
 	)
 	if err := rows.Scan(
-		&ep.ID, &ep.Handle, &ep.Role, &ep.TaskID, &ep.TurnID,
+		&ep.ID, &ep.Handle, &ep.Role, &ep.WorkItem, &ep.TurnID,
 		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
 		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,

@@ -279,7 +279,12 @@ agent_turn_started         # a turn, or a resumed segment of one, beginning —
                            # unless the turn died in its own frames — then a
                            # turn.guard_breach under its turn_id says so, or
                            # its process died under it
-agent_turn_completed       # full LLM reasoning cycle with tokens and tools
+agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
+                           # names the work item the turn was charged to —
+                           # including by `sole_write`, which only a
+                           # completion can conclude — and carries
+                           # `suspended` on a segment that parked on a
+                           # coding run rather than ended
 agent_phase_started, agent_phase_completed
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —

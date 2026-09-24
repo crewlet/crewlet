@@ -55,7 +55,7 @@ func TestAnEpisodeRoundTrips(t *testing.T) {
 	want.SkillsUsed = []string{"weekly-summary"}
 	want.WorkKey = "wk-1"
 	want.ConversationKey = "slack:C1"
-	want.TaskID = "T-9"
+	want.WorkItem = "native:T-9"
 	mustAppend(t, e, want)
 
 	got, err := e.Recent(context.Background(), "ceo", 10)
@@ -66,7 +66,7 @@ func TestAnEpisodeRoundTrips(t *testing.T) {
 		t.Fatalf("recent = %d episodes", len(got))
 	}
 	g := got[0]
-	if g.ID != "a" || g.Role != "CTO" || g.TaskID != "T-9" || g.TurnID != "turn-a" {
+	if g.ID != "a" || g.Role != "CTO" || g.WorkItem != "native:T-9" || g.TurnID != "turn-a" {
 		t.Errorf("identity fields lost: %+v", g)
 	}
 	if !g.EndedAt.Equal(base) || g.Duration != 3*time.Second {

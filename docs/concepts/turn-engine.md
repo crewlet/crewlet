@@ -665,6 +665,56 @@ Where that shows on the screens:
 
 `adr/0017` records the decision and what folding the two into one value cost.
 
+## Which work a turn is on
+
+A turn is charged to **one work item or to none** — never split between two —
+and every turn-level record says which, as `work_item{backend, id, key,
+project}` beside `work_item_basis`, the rule that named it. `backend` is
+`native`, `jira`, `github` or `gitlab`; `id` is the identity (`key` is the label
+a person reads, and a rename or a move changes it); and
+`<backend>:<id>` is what is unique across trackers. The rules are tried in
+order, and the first that names an item wins:
+
+| Basis | When | Where the item comes from |
+|---|---|---|
+| `trigger` | the wake is about one item | a native tracker wake names its task; a Jira webhook names its issue by **issue id**; a GitHub event names `<repository id>#<number>` and a GitLab one `<project id>!<iid>` (or `#<iid>` for an issue). A code host's numeric repository or project id is what a rename or a transfer does not change, and GitHub's own global id is not used because a pull request has two — a comment carries its issue face's and a review its pull request face's |
+| `asked_by` | the turn answers a colleague's `a2a_ask` | the item the **asking** turn was on, carried on the `a2a_request` wake: help given on a task is work on it, and the colleague's own trigger names nothing |
+| `resume` | the turn re-enters a parked coding run | the item the run's row recorded at launch — the event that resumes it, a box's completion or a person's chat answer, names none |
+| `sole_write` | nothing above named an item, and the turn's own writes committed to **exactly one** task | resolved at completion only, because only then is "exactly one" a fact |
+
+Otherwise the turn is on nothing, which is the ordinary case for a chat wake,
+and the keys are **absent** rather than null. A wake that names no item — a
+person's priority list changing, a branch build, a Jira delivery that carried
+an issue key and no issue id — names nothing rather than an item keyed on a
+label.
+
+The first three are known before the turn runs, so `agent_turn_started`, every
+phase record and the live frames carry them from the start. The fourth appears
+only on the two completion records. **What counts as a write** is a task record
+the tracker's writer *committed* — `applied` or `pending` — made through any of
+the turn's tools or its delegated workers; a write the broker refused, one whose
+outcome is `unknown`, and a write to something that is not a task (a project's
+settings, somebody's list) count for nothing.
+
+**A turn that parks on a coding run** is one turn in several segments. What it
+wrote before the park travels on its suspended conversation, and a segment that
+parks concludes no sole write — the resumed half may write a second item — so
+the segment that finishes the turn judges "exactly one" over the whole turn.
+
+### A turn's stages
+
+One `turn_id` moves through four stages, and the records say which it is in:
+
+| Stage | What says so |
+|---|---|
+| **context** | `agent_turn_started` published, no phase open yet — the prefetch is reading its thread and knowledge |
+| **phases** | an `agent_phase_started` open, `agent_turn_progress` frames streaming |
+| **parked** | the newest `agent_turn_completed` / `turn_completed` carries `suspended: true` — the segment ended on a detached coding run, and the same `turn_id` completes again when the run is collected |
+| **done** | a completion **without** `suspended` |
+
+A reader that took any completion for the end listed a parked turn as finished,
+with its first segment's duration.
+
 ---
 
 ## Events and tracing
@@ -837,7 +887,7 @@ Each phase row in that view is keyed to its **phase colour** (execute / review /
 | Event | Purpose |
 |-------|---------|
 | `agent_turn_started` | A turn beginning, published **before** its context is gathered, so a seat whose prefetch is reading a long thread is visibly working and a turn that dies there still leaves a row naming its run. Carries `turn_id`, `work_key`, the seat (`agent_id`, `agent_handle`, `role`), the `trigger` descriptor, `conversation_key` and `started_at` (the same instant `turn_completed` reports), plus `work_item` / `work_item_basis`, which are **absent** while nothing named the item the turn is on. Its depth and chain are the envelope's `delegation_depth` / `delegation_chain`. A resumed coding run publishes one per segment with `resumed: true` under the **same** `turn_id`, once the segment is certain to run — a resume that could not start is retried as the same run, so it announces nothing. Every start is paired with the turn's `agent_turn_completed`, a turn whose runner could not be built included. A start with no completion is a turn that died in its own frames: a panic recovered outside the loop, which the `turn.guard_breach` under the same `turn_id` names, or a process that died under it |
-| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
+| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`; it has no `task_id` |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`, `unhandled_exception`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which is what draws the exchange on that turn's page; a close performed by the idle sweep carries neither, because no turn finished it |
 | `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes** whatever the keys say: that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and the two agree on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The keys are frozen by [ADR-0006](https://github.com/crewlet/crewlet/blob/main/adr/0006-event-evolution-is-additive-only.md) — renaming them would read back as a rendered `0` on every row already stored. The array is counted because both HTTP providers bill it as input and the `cli-agent` text backend writes it into the prompt literally; the figure is **round one's**, since a mid-phase `activate_tool` adds to what later rounds send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any backend's own, so that one number is comparable across providers — which makes it a **floor**: OpenAI wraps each entry in `{"type":"function","function":{…}}`, Anthropic spells the schema `input_schema` and adds a cache breakpoint, and the `cli-agent` catalogue is larger again, so every backend sends more than the row says. A resumed phase's conversation is counted with the **reasoning** each parked round carries and the arguments of its tool calls, for the same reason: Anthropic hands every thinking block back into the request and is billed for it, and the `cli-agent` text backend writes the reasoning prose into the prompt. The reasoning counts **once** per round — the structured blocks where a round has them, the prose where it does not — because on Anthropic the prose is a rendering of those same blocks |
@@ -910,6 +960,7 @@ All fields are optional; defaults apply when absent.
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |
 | `internal/agent/builtin/a2a.go` | `a2a_ask`, the only colleague wrapper; outreach to a third-party app goes through that app's MCP tools directly (`colleague.go` beside it is `lookup_colleague`) |
 | `internal/notify/status.go` | Working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |
+| `internal/engine/worksubject.go` | Which work item a turn is on: the four rules, in order, and the sources whose wakes can name one |
 
 ---
 

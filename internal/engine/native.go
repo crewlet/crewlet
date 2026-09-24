@@ -1139,11 +1139,11 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
 		// tracker's rule is that a writer acts as exactly one party, and
 		// the party here is the immutable seat the tool surface bound
-		// rather than anything a model can name.
+		// rather than anything a model can name. Its provenance carries
+		// the turn's write log, so every task it commits to is one the
+		// turn can be charged by (see [builtin.Actor.Provenance]).
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return e.native.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// AND THE PROJECT SETTINGS, which every surface has rather than
 		// the operator's alone: declaring a tag is open to every seat by
@@ -1152,23 +1152,17 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// `labels` argument on the tools it already holds. The authority
 		// for every other facet is resolved per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return e.native.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
 		// third shape: a dependency is two commits on two subjects, so
 		// it needs the replicated estate to check its counterparties
 		// before the first of them — and this writer has one.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return e.native.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return e.native.writer.As(actor.Handle, actor.Kind, actor.Provenance())
 		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to

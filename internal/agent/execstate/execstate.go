@@ -127,6 +127,22 @@ type State struct {
 	CacheReadTokens  int                `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int                `json:"cache_write_tokens,omitempty"`
 
+	// Written is the work items the turn's writes had committed to when it
+	// suspended, in first-write order, and WrittenMany whether there were
+	// more than it lists: the turn's own write set (turnctx.Written), carried.
+	//
+	// HERE because a turn nothing at dispatch named an item for is charged
+	// at its END to the one item it wrote, and a suspended turn ends in
+	// another segment, often in another process. Without this the resumed
+	// segment would judge "exactly one" over only what it wrote itself: a
+	// turn that filed its task before launching a coding run would end
+	// having written nothing, and be charged to nothing.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, and resumes judging only what its second half writes.
+	Written     []types.WorkItem `json:"written,omitempty"`
+	WrittenMany bool             `json:"written_many,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.

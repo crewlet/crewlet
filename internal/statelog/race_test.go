@@ -299,6 +299,11 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		if res.OpID != "op-1" {
 			t.Error("unknown must carry the op id to retry under")
 		}
+		if !res.Position.IsZero() {
+			t.Errorf("unknown named position %s: the record found there was "+
+				"never acknowledged as this write's, and a caller reads a "+
+				"position as where its own record landed", res.Position)
+		}
 	})
 }
 

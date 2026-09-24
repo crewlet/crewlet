@@ -2463,12 +2463,12 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // which is exactly what happened to [tracker.Provenance.Seat], the field that
 // decides whose person record a write lands on.
 func operatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
-	return w.As(actor.Handle, actor.Kind, tracker.Provenance{
-		// THE CREDENTIAL AND THE PERSON IT NAMES, which are two
-		// different facts: the author stays the token, and the seat is
-		// only ever the subject of that person's own state.
-		OperatorID: actor.OperatorID, Seat: actor.Seat,
-	})
+	// THE CREDENTIAL AND THE PERSON IT NAMES, which are two different
+	// facts: the author stays the token, and the seat is only ever the
+	// subject of that person's own state. Through the actor's own
+	// provenance, the one construction a seat's writers use too, so the two
+	// surfaces cannot carry different trails for one actor.
+	return w.As(actor.Handle, actor.Kind, actor.Provenance())
 }
 
 // operatorSurface builds the operator surface — the one tool catalogue every

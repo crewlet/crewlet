@@ -476,3 +476,25 @@ func TestTheProjectIdIsFoundInEitherPlace(t *testing.T) {
 		t.Fatalf("targets = %v", got)
 	}
 }
+
+// A MERGE REQUEST'S ITEM IS KEYED ON THE PROJECT'S ID, which a rename or a
+// transfer does not change, and keeps its `!` — an issue and a merge request
+// share an iid in one project and are two items.
+func TestAMergeRequestNamesItsWorkItemByTheProjectsID(t *testing.T) {
+	t.Parallel()
+	body := hook("pipeline", map[string]any{
+		"object_attributes": map[string]any{"status": "failed"},
+		"merge_request":     map[string]any{"iid": 42},
+	})
+	body.Body["user"] = map[string]any{"username": agentSWE}
+	routed := parse(t, parser(nil), body, registry(t))
+	if len(routed) == 0 {
+		t.Fatal("nothing routed, so this case asserts nothing")
+	}
+	meta := routed[0].Metadata
+	got, ok := gitlab.Prompt{}.WorkItem(meta)
+	if !ok || got.Backend != types.WorkGitLab || got.ID != meta[gitlab.ProjectIDField]+"!42" ||
+		meta[gitlab.ProjectIDField] == "" || got.Key != gitlab.ItemRef(meta) {
+		t.Fatalf("the merge request names %+v (%v) from %v", got, ok, meta)
+	}
+}

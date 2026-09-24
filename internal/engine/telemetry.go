@@ -77,6 +77,18 @@ type turnTelemetry struct {
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
 	skills []string
+
+	// workItem is the item this turn is on as dispatch resolved it — the
+	// trigger's, the asker's or the parked row's — and workItemBasis the
+	// rule that named it; both empty for a turn nothing named an item for.
+	// See worksubject.go for the rules and their order.
+	workItem      *types.WorkItem
+	workItemBasis types.WorkItemBasis
+
+	// written is the set of items this turn's writes commit to, shared with
+	// every tool call and delegate worker through the turn context and read
+	// back at completion for the one rule dispatch cannot decide.
+	written *turnctx.Written
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -137,6 +149,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
+	// THE ITEM, from the same first event the trigger is described from,
+	// and a fresh set for what the turn is about to write.
+	t.workItem, t.workItemBasis = workItemOf(req)
+	t.written = &turnctx.Written{}
 	return t
 }
 
@@ -190,6 +206,13 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
+			// THE ITEM THIS TURN IS ON, and the set its writes report
+			// into. The item rides every phase event and the row of any
+			// coding run this turn detaches; the set is the one mutable
+			// thing a turn points at, shared by every tool call.
+			WorkItem:      t.workItem,
+			WorkItemBasis: t.workItemBasis,
+			Written:       t.written,
 		},
 	}
 }
@@ -218,10 +241,11 @@ func (t turnTelemetry) runnerTurn(company *Company,
 // arguments, on the terms [turnTelemetry.runnerTurn] takes them: the dispatch
 // reads them off the trigger and the resume off the parked row.
 //
-// Nothing names a work item here yet: the resolution that fills `work_item`
-// and `work_item_basis` at dispatch is the turn engine's, and until it runs a
-// start carries neither key, which is the documented shape of an unattributed
-// turn rather than a null.
+// It names the item dispatch resolved (see worksubject.go) and no other: a
+// turn that ends up charged by a sole write starts WITHOUT one, because at the
+// start that write has not happened. Neither key is present on a turn on
+// nothing, which is the documented shape of an unattributed turn rather than a
+// null.
 func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 	depth int, chain []string, resumed bool,
 ) {
@@ -233,6 +257,8 @@ func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 		WorkKey:         t.workKey,
 		Trigger:         t.trigger,
 		ConversationKey: t.convKey,
+		WorkItem:        t.workItem,
+		WorkItemBasis:   t.workItemBasis,
 		// THE SAME INSTANT turn_completed reports as the turn's start, so
 		// the two records of one run can never disagree about when it
 		// began — both read it off the telemetry assembled once.
@@ -258,6 +284,11 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	ended := time.Now().UTC()
 	failed := err != nil || res.Decision == phase.Failed
 	decision := string(res.Decision)
+	// THE ITEM THIS COMPLETION IS CHARGED TO: dispatch's, or — for a turn
+	// nothing named one for — the one item its writes committed to, which
+	// only a segment that FINISHED the turn may conclude. Both records carry
+	// the same answer, read once.
+	item, basis := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
 
 	summary := types.AgentTurnCompleted{
 		Agent:    t.agentID,
@@ -285,8 +316,20 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// would double-count them — and the split is the only thing that
 		// answers "how much of this turn was fan-out" when a seat's spend
 		// jumps and its own rounds did not.
-		SubagentCount:   spend.Workers,
-		SubagentTokens:  spend.WorkerTokens(),
+		SubagentCount:        spend.Workers,
+		SubagentTokens:       spend.WorkerTokens(),
+		SubagentInputTokens:  spend.WorkerInput,
+		SubagentOutputTokens: spend.WorkerOutput,
+		// The cache's share of InputTokens over the turn's own phases,
+		// as the phase records state it.
+		CacheReadTokens:  spend.CacheRead,
+		CacheWriteTokens: spend.CacheWrite,
+		WorkItem:         item,
+		WorkItemBasis:    basis,
+		// A SEGMENT THAT PARKED says so, because the same turn id completes
+		// again when its coding run is collected: read as an end, this
+		// record would list a parked turn as finished.
+		Suspended:       res.Suspended,
 		Iterations:      res.Rounds,
 		Decision:        decision,
 		Failed:          failed,
@@ -321,16 +364,19 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	e.publishFailure(ctx, t, res, err)
 
 	e.publishEvent(ctx, events.New(types.TurnCompleted{
-		Agent:       t.agentID,
-		AgentHandle: t.handle,
-		RoleName:    t.role,
-		TurnID:      t.runID,
-		WorkKey:     t.workKey,
-		StartedAt:   t.startedAt,
-		EndedAt:     ended,
-		DurationMS:  int(ended.Sub(t.startedAt) / time.Millisecond),
-		TaskSummary: t.trigger.Summary,
-		PlanSummary: planSummary(res),
+		Agent:         t.agentID,
+		AgentHandle:   t.handle,
+		RoleName:      t.role,
+		TurnID:        t.runID,
+		WorkKey:       t.workKey,
+		WorkItem:      item,
+		WorkItemBasis: basis,
+		Suspended:     res.Suspended,
+		StartedAt:     t.startedAt,
+		EndedAt:       ended,
+		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
+		TaskSummary:   t.trigger.Summary,
+		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
 		// decision except where a guard ended it first — so it is read off
 		// the result rather than off the last review, and the two differ
@@ -528,6 +574,13 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	if in.Trigger != nil {
 		t.trigger = types.DescribeTrigger(in.Trigger)
 	}
+	// RULE 3: the item the parked row recorded, never one read off the
+	// event that resumed it — a person's answer is a chat message, and it
+	// names no item. And the set the turn had written before it parked,
+	// carried on the suspension, so a completion concluding a sole write
+	// judges the whole turn rather than its second half.
+	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
+	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {

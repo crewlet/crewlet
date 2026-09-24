@@ -362,6 +362,13 @@ type Actor struct {
 	RequestKey string
 
 	Chain []string
+
+	// Written is the turn's own record of the work items its writes
+	// committed to — see [turnctx.Written]. The writer reports each
+	// committed task into it, which is what lets the engine charge a turn
+	// nothing at dispatch named an item for to the one it wrote. Nil
+	// outside a turn: an operator's write is charged to no turn at all.
+	Written *turnctx.Written
 }
 
 // OperationSeed is what a derived, idempotent id is built from.
@@ -470,7 +477,28 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		TurnID:  turn.RunID,
 		WorkKey: turn.WorkKey,
 		Chain:   turn.Chain,
+		Written: turn.Written,
 	}, nil
+}
+
+// Provenance is the trail this actor's writes carry, and where they report
+// the items they commit to.
+//
+// ONE CONSTRUCTION for every writer a surface derives — the task writer, the
+// project settings, the dependency sequence, the merge — because each is the
+// same writer in another shape, and a shape that dropped the turn's write log
+// would be a tool whose writes a turn could never be charged by.
+func (a Actor) Provenance() tracker.Provenance {
+	provenance := tracker.Provenance{
+		OperatorID: a.OperatorID, Seat: a.Seat, TurnID: a.TurnID, Chain: a.Chain,
+	}
+	// NIL STAYS NIL. A nil *Written in the interface is a non-nil log that
+	// reports into nothing, and the writer would do the work of naming an
+	// item for every write only to discard it.
+	if a.Written != nil {
+		provenance.Written = a.Written
+	}
+	return provenance
 }
 
 // actor resolves who this call writes as — see [WorkDeps.Actor].

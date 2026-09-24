@@ -3181,7 +3181,20 @@ export interface TurnRow {
   models?: string;
   summary?: string;
   trigger?: string;
-  task_id?: string;
+  /** The one work item the turn is charged to, off its completion record.
+   *  Absent for a turn on nothing — which includes one still running, since a
+   *  sole write names its item only at the end. */
+  work_item?: TurnWorkItem;
+}
+
+/** The work item a turn is charged to — `work_item` on the turn events. The
+ *  `id` is the identity and `key` the label a person reads; `<backend>:<id>`
+ *  is unique across trackers, the bare id is not. */
+export interface TurnWorkItem {
+  backend: "native" | "jira" | "github" | "gitlab" | (string & {});
+  id: string;
+  key: string;
+  project: string;
 }
 
 export interface TurnsAnswer {

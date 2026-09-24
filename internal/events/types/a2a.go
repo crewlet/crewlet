@@ -80,6 +80,19 @@ type A2ARequest struct {
 	SenderRole string `json:"sender_role"`
 	// Content is the brief — the question itself, verbatim.
 	Content string `json:"content"`
+	// WorkItem is the item the ASKING turn was charged to when it asked,
+	// and WorkItemBasis the rule that charged it there. Absent when the
+	// asker was on nothing.
+	//
+	// It rides the ask because the answering turn inherits it: help given
+	// on a task is work on that task, and the answering seat's own trigger
+	// names no item at all — the ask is the only thing that knows which one
+	// the colleague was on. The answering turn records it under
+	// [BasisAskedBy]; the basis carried here is the ASKER's, so a reader
+	// can tell an ask made from a task assignment from one made by a turn
+	// that was itself answering somebody.
+	WorkItem      *WorkItem     `json:"work_item,omitempty"`
+	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
 }
 
 // EventType is the "a2a_request" wire type.

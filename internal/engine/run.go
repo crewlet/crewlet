@@ -1615,7 +1615,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// facts, and this call is where the second one is established. See
 	// [stillWorking].
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase

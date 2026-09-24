@@ -144,6 +144,12 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// only its phases. See ADR-0017.
 		TurnID:  turn.RunID,
 		WorkKey: turn.WorkKey,
+		// AND THE ITEM THIS TURN IS ON, which the answering turn inherits:
+		// help given on a task is work on it, and the colleague's own
+		// trigger names no item — this ask is the only thing that knows
+		// which one. Nil when this turn is on nothing, and then the
+		// answering turn is on nothing either.
+		WorkItem: turn.WorkItem, WorkItemBasis: turn.WorkItemBasis,
 	})
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil

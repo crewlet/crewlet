@@ -91,6 +91,30 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	}
 }
 
+// A LAUNCH RECORDS THE ITEM ITS TURN IS ON, on the row and on the announcement.
+//
+// The row is what the resumed turn reads its item from — the event that
+// resumes it names none — and the announcement is what a running-runs panel
+// reads, which cannot join back to a turn that parked days ago.
+func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	item := types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+	req.Turn.WorkItem = &item
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if run := rig.get("t1"); run.WorkItem == nil || *run.WorkItem != item {
+		t.Fatalf("the row records %+v, want the turn's item", run.WorkItem)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	if started.WorkItem == nil || *started.WorkItem != item {
+		t.Fatalf("the announcement names %+v, want the turn's item", started.WorkItem)
+	}
+}
+
 // The full brief lives on the row; the wire carries a label for one panel row.
 func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
 	rig := newWaiterRig(t)

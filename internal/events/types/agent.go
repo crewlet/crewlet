@@ -207,8 +207,8 @@ type AgentTurnStarted struct {
 	// tells it apart by the missing key. A sole write names an item only at
 	// completion, so a turn that ends up charged by one starts without it.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// WorkItemBasis is the rule that named WorkItem, and empty with it.
-	WorkItemBasis WorkItemBasis `json:"work_item_basis"`
+	// WorkItemBasis is the rule that named WorkItem, and absent with it.
+	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
 	// Trigger is what woke the turn — see DescribeTrigger. A resumed
 	// segment carries the event that resumed it.
 	Trigger         Trigger `json:"trigger"`
@@ -279,8 +279,32 @@ type AgentTurnCompleted struct {
 	ReviewModel    string `json:"review_model"`
 	SubagentCount  int    `json:"subagent_count"`
 	SubagentTokens int    `json:"subagent_tokens"`
-	Iterations     int    `json:"iterations"`
-	Decision       string `json:"decision"`
+	// SubagentInputTokens and SubagentOutputTokens split SubagentTokens
+	// into its two halves, because a per-item charge is input plus output
+	// on each side and a sum cannot be split back.
+	SubagentInputTokens  int `json:"subagent_input_tokens,omitempty"`
+	SubagentOutputTokens int `json:"subagent_output_tokens,omitempty"`
+	// CacheReadTokens and CacheWriteTokens are the prompt cache's share of
+	// InputTokens over this segment's own phases — a breakdown of it, never
+	// an addition to it (see [AgentPhaseCompleted.CacheReadTokens]).
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// WorkItem is the one item this turn is charged to, and WorkItemBasis
+	// the rule that charged it — see [AgentTurnStarted.WorkItem]. Unlike
+	// the start's, this can be [BasisSoleWrite]: a turn nothing at
+	// dispatch named an item for is charged here to the one item its
+	// writes committed to, when there was exactly one. Absent when the
+	// turn is on nothing, never null.
+	WorkItem      *WorkItem     `json:"work_item,omitempty"`
+	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
+	// Suspended marks a SEGMENT that ended by parking on a detached coding
+	// run rather than a turn that ended. The same turn id completes again
+	// when the run is collected and the loop resumes, so a reader that
+	// took this record for the turn's end would list a parked turn as
+	// finished, with its first segment's duration.
+	Suspended  bool   `json:"suspended,omitempty"`
+	Iterations int    `json:"iterations"`
+	Decision   string `json:"decision"`
 	// Failed is true when the turn ended on a failure path rather than
 	// finishing. Decision already reads "failed" in that case, but the REASON
 	// lived only on the separate LLMUnavailable / TurnGuardBreach events, which
@@ -341,7 +365,20 @@ type TurnCompleted struct {
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
 	WorkKey string `json:"work_key,omitempty"`
-	TaskID  string `json:"task_id"`
+	// WorkItem and WorkItemBasis are the item this turn is charged to and
+	// why — the same pair [AgentTurnCompleted] carries, so an episode is
+	// filed against the item its turn was on.
+	//
+	// THERE IS NO task_id HERE ANY MORE. The field was declared and never
+	// assigned, so every turn row listed no item; a typed, backend-qualified
+	// item replaced it, and `task_id` keeps only its other meanings — a
+	// delegated worker's own task, a schedule fire's run id — which no
+	// reader may join to a tracker item (TestWorkItemIsNeverReadFromTaskID).
+	WorkItem      *WorkItem     `json:"work_item,omitempty"`
+	WorkItemBasis WorkItemBasis `json:"work_item_basis,omitempty"`
+	// Suspended marks a segment that parked rather than a turn that ended —
+	// see [AgentTurnCompleted.Suspended].
+	Suspended bool `json:"suspended,omitempty"`
 	// StartedAt / EndedAt bound the turn; DurationMS is the span the learning
 	// workers actually reason about.
 	StartedAt   time.Time `json:"started_at"`

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -331,6 +332,36 @@ func ItemRef(metadata map[string]string) string {
 		return project + "#" + issue
 	}
 	return ""
+}
+
+// ProjectIDField is the metadata key carrying the project's numeric id: the
+// one part of an item's identity a rename or a transfer does not change.
+const ProjectIDField = "project_id"
+
+// WorkItem is the issue or merge request an event names, as the work item a
+// turn it wakes is charged to.
+//
+// THE ID IS `<project id>!<iid>` FOR A MERGE REQUEST AND `<project id>#<iid>`
+// FOR AN ISSUE — the reference [ItemRef] renders, with the project's numeric
+// id in place of its path. The path is what a rename or a transfer changes; the
+// id is not. The separator stays, because GitLab numbers issues and merge
+// requests in two sequences, so `!1` and `#1` are two different items in one
+// project. The key is [ItemRef] itself and the project is the path.
+//
+// An event naming no item — a pipeline for a branch push — names nothing, and
+// so does one from a delivery that carried no project id.
+func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
+	projectID, key := metadata[ProjectIDField], ItemRef(metadata)
+	if projectID == "" || key == "" {
+		return types.WorkItem{}, false
+	}
+	id := projectID + "#" + metadata["issue_iid"]
+	if mr := metadata["mr_iid"]; mr != "" {
+		id = projectID + "!" + mr
+	}
+	return types.WorkItem{
+		Backend: types.WorkGitLab, ID: id, Key: key, Project: metadata["project"],
+	}, true
 }
 
 // senderLabel renders the actor as a colleague where the registry knows one.

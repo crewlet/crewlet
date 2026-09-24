@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -446,6 +447,40 @@ func ItemRef(metadata map[string]string) string {
 		return repo + "#" + issue
 	}
 	return ""
+}
+
+// RepoIDField is the metadata key carrying the repository's numeric id: the
+// one part of an item's identity a rename or a transfer does not change.
+const RepoIDField = "repo_id"
+
+// WorkItem is the issue or pull request an event names, as the work item a
+// turn it wakes is charged to.
+//
+// THE ID IS `<repository id>#<number>`, NOT GITHUB'S OWN GLOBAL ID, because a
+// pull request has TWO of those: an issue comment on it carries the issue
+// object's id and a review carries the pull request's, and keyed on either
+// one pull request would be two items depending on which event woke the turn.
+// Issues and pull requests share one number sequence per repository, which is
+// what makes the number the single identity both faces agree on; the
+// repository's numeric id rather than its name is what keeps it stable across
+// a rename or a transfer. The key is the reference a person pastes, and the
+// project is the repository's full name.
+//
+// An event naming no item — a workflow run on a branch push — names nothing,
+// and so does one from a delivery that carried no repository id.
+func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
+	repoID, key := metadata[RepoIDField], ItemRef(metadata)
+	number := metadata["pr_number"]
+	if number == "" {
+		number = metadata["issue_number"]
+	}
+	if repoID == "" || key == "" || number == "" {
+		return types.WorkItem{}, false
+	}
+	return types.WorkItem{
+		Backend: types.WorkGitHub, ID: repoID + "#" + number,
+		Key: key, Project: metadata["repo"],
+	}, true
 }
 
 // senderLabel renders the actor as a colleague where the registry knows one.

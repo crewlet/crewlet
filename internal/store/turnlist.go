@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -148,7 +149,15 @@ type Turn struct {
 	// Trigger is what woke it, from the first phase record.
 	Trigger string `json:"trigger,omitempty"`
 
-	TaskID string `json:"task_id,omitempty"`
+	// WorkItem is the one work item the turn is charged to, read off its
+	// completion record, and absent for a turn on nothing — including one
+	// still running, since a sole write names its item only at the end.
+	//
+	// It replaces a `task_id` that read a completion field no build ever
+	// assigned, so every row listed no item; `task_id` means a delegated
+	// worker's own task or a schedule fire's run, and is never joined to a
+	// tracker item.
+	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 }
 
 // TurnQuery selects a page of turns.
@@ -302,7 +311,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		       MAX(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
 		       MAX(CASE WHEN event_type = ?
-		                THEN COALESCE(json_extract(payload, '$.task_id'), '') END),
+		                THEN json_extract(payload, '$.work_item') END),
 		       MAX(COALESCE(json_extract(tags, '$.trigger'), ''))
 		  FROM crewlet_events
 		 WHERE `+strings.Join(where, " AND ")+`
@@ -329,13 +338,13 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			started, ended    int64
 			failed, complete  int
 			models, summary   sql.NullString
-			taskID, trigger   sql.NullString
+			item, trigger     sql.NullString
 			in, outTok, total sql.NullInt64
 			duration          sql.NullInt64
 		)
 		if err := rows.Scan(&t.TurnID, &workKey, &agentID, &role, &started, &ended,
 			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
-			&complete, &duration, &summary, &taskID, &trigger); err != nil {
+			&complete, &duration, &summary, &item, &trigger); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
@@ -349,7 +358,16 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		t.OutputTokens = int(outTok.Int64)
 		t.TotalTokens = int(total.Int64)
 		t.Models, t.Summary = models.String, summary.String
-		t.TaskID, t.Trigger = taskID.String, trigger.String
+		t.Trigger = trigger.String
+		if item.Valid && item.String != "" {
+			// A record whose item does not decode is a row with no item,
+			// not a failed listing: the item is a label on the row, and
+			// one unreadable completion must not cost the page.
+			var named types.WorkItem
+			if json.Unmarshal([]byte(item.String), &named) == nil && named.ID != "" {
+				t.WorkItem = &named
+			}
+		}
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {

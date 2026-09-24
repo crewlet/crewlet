@@ -108,6 +108,10 @@ type team struct {
 }
 
 type repository struct {
+	// ID is the repository's numeric id, which survives a rename or a
+	// transfer that changes FullName — the half of an item's identity a
+	// work item is keyed on (see [Prompt.WorkItem]).
+	ID       int64  `json:"id"`
 	FullName string `json:"full_name"`
 	Name     string `json:"name"`
 	Owner    user   `json:"owner"`

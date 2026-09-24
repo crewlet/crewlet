@@ -182,7 +182,9 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		ID:     w.newID(),
 		Handle: t.Event.AgentHandle,
 		Role:   t.Event.RoleName,
-		TaskID: t.Event.TaskID,
+		// THE ITEM THE TURN WAS CHARGED TO, as its backend-qualified
+		// ref, and empty for a turn on nothing — see [Episode.WorkItem].
+		WorkItem: workItemRef(t.Event.WorkItem),
 		// TWO DIFFERENT IDENTITIES, and they stopped being the same
 		// value when a turn id started naming one RUN: TurnID is the
 		// execution that produced this row, and WorkKey is the unit of
@@ -225,4 +227,12 @@ func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
 		return nil
 	}
 	return vector
+}
+
+// workItemRef is an item's cross-backend identity, or "" for none.
+func workItemRef(item *types.WorkItem) string {
+	if item == nil || item.ID == "" {
+		return ""
+	}
+	return item.Ref()
 }

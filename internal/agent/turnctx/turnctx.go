@@ -264,6 +264,24 @@ type Written struct {
 	many  bool
 }
 
+// WrittenFrom rebuilds a set a suspended turn carried across its park: the
+// items it listed, in their order, and whether it had already written more.
+//
+// A RESUMED TURN IS THE SAME TURN, so its set continues rather than starting
+// empty — see execstate.State.Written for what an empty start cost.
+func WrittenFrom(items []types.WorkItem, many bool) *Written {
+	w := &Written{}
+	for _, item := range items {
+		w.Add(item)
+	}
+	if many {
+		w.mu.Lock()
+		w.many = true
+		w.mu.Unlock()
+	}
+	return w
+}
+
 // Add records one committed write to item. An item with no id names nothing
 // and is not recorded; one already recorded is not recorded again; one past
 // [MaxWritten] marks the set as having more than it lists.

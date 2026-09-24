@@ -708,6 +708,9 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// display, and the durable thread is what a person reading the
 		// feed means by the run's conversation.
 		ConversationKey: run.Conversation(),
+		// The item the run recorded at launch, so the question is shown
+		// against the work it is about.
+		WorkItem: run.WorkItem,
 	}
 	ev := events.New(announcement, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,

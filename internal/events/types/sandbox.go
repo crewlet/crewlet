@@ -29,7 +29,11 @@ type SandboxRunStarted struct {
 	SandboxID       string `json:"sandbox_id"`
 	CodingAgent     string `json:"coding_agent"`
 	ConversationKey string `json:"conversation_key"`
-	TaskID          string `json:"task_id"`
+	// WorkItem is the item the launching turn is charged to, absent when
+	// it is on nothing. The run is part of that turn, so a running-runs
+	// panel can say which item a box is working on without joining back to
+	// a turn that may have parked days ago.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 	// Task is a short human-readable summary for the running-sandboxes panel;
 	// the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
@@ -123,6 +127,10 @@ type SandboxClarificationRequested struct {
 	Question        string `json:"question"`
 	Audience        string `json:"audience"`
 	ConversationKey string `json:"conversation_key"`
+	// WorkItem is the item the parked turn is charged to — the one its row
+	// recorded at launch — so a question can be shown against the work it
+	// is about. Absent when the turn is on nothing.
+	WorkItem *WorkItem `json:"work_item,omitempty"`
 }
 
 // EventType is the "sandbox_clarification_requested" wire type.

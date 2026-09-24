@@ -2,9 +2,11 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -383,6 +385,30 @@ type PendingRun struct {
 	Question string `json:"question"`
 	Audience string `json:"audience"`
 
+	// WorkItem is the one work item the launching turn was charged to, nil
+	// when it was on nothing.
+	//
+	// ON THE ROW because the resumed turn has no trigger to resolve it from:
+	// the dispatch that named the item is gone, and a person's answer that
+	// resumes a parked run is an ordinary chat message naming nothing. The
+	// resume reads it back as its own item, under
+	// [types.BasisResume] — the same turn, still on the same work.
+	WorkItem *types.WorkItem `json:"work_item,omitempty"`
+
+	// AudienceHandles are the seats a parked question may be answered by,
+	// and AudienceFallback whether that set fell back to a default rather
+	// than being named by the run.
+	//
+	// DECLARED WITH THE ITEM AND WITH [PendingRun.Extra], in one change,
+	// because all three answer the same hazard: a key an older build does
+	// not know is a key its compare-and-swap drops. This build carries both
+	// through every write and resolves neither; the park that fills them
+	// resolves [PendingRun.Audience] against the chart, and until it does
+	// they are empty, which every reader takes as "the audience string is
+	// all there is".
+	AudienceHandles  []string `json:"audience_handles,omitempty"`
+	AudienceFallback bool     `json:"audience_fallback,omitempty"`
+
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
 	// work minutes later.
@@ -473,6 +499,23 @@ type PendingRun struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// Extra is every key on the stored record THIS BUILD DOES NOT KNOW,
+	// kept verbatim and written back on every re-encode.
+	//
+	// THE ROW IS READ, MODIFIED AND WRITTEN WHOLE by every node that touches
+	// it — every status flip, claim and release is a compare-and-swap of the
+	// entire value — and a fleet mid-upgrade has two builds doing that to
+	// one row. Decoded into this struct alone, an older build's flip wrote
+	// back only the fields IT knew, so the first claim or release it made
+	// silently deleted whatever a newer build had added: the item the run
+	// is charged to, the audience its question is waiting on. Nothing
+	// failed; the newer node simply read the row back without them.
+	//
+	// Filled by the decode in [CoordStore] and re-emitted by its encode,
+	// never set by a caller: a known field always wins over a key of the
+	// same name here, so this can only ever carry what the struct cannot.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Paused reports whether a pause was RECORDED for this run's box.

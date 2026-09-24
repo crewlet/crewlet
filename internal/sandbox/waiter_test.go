@@ -142,6 +142,9 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
 		ConversationKey: "chat:D1",
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
+		// The item the launching turn was on, so every case runs over a
+		// row that carries one — and a write that dropped it would show.
+		WorkItem: &rigItem,
 	}
 	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
@@ -154,6 +157,9 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 	}
 	return r.get(turnID)
 }
+
+// rigItem is the work item every rig launch is charged to.
+var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 
 // suspend writes the execute_state a real suspending turn would have written,
 // which is what opens the run to the completion poll.
