@@ -562,11 +562,12 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		// READ BACK only where every record is applied HERE: a pending
 		// one is durable and not yet in the rows this node would read,
 		// so a read-back would answer the old row under a 200.
-		if done := sequence(opID, steps...); done.Outcome != statelog.OutcomeApplied {
+		done := sequence(opID, steps...)
+		if done.Outcome != statelog.OutcomeApplied {
 			s.answerWrite(w, r, opID, done, nil, map[string]any{"id": id})
 			return
 		}
-		s.answerRead(w, r, id)
+		s.answerWritten(w, r, id, opID, done)
 		return
 	}
 	updated, err := writer.UpdatePerson(r.Context(), iamdomain.PersonUpdate{
@@ -764,15 +765,38 @@ func callerOperator(ctx context.Context) string {
 	return iam.ActorFor(principal).OperatorID
 }
 
-// answerRead answers a write that turned out to change nothing by reading the
-// row back, so a caller sees the same shape whatever they sent.
-func (s *Service) answerRead(w http.ResponseWriter, r *http.Request, id string) {
+// answerWritten answers an edit whose every record landed HERE and left
+// nothing for the person's own document — a seat, a login, a link or a stage
+// moved — by reading the row back, so the caller sees the person as the edit
+// left them.
+//
+// WITH THE WRITE'S OWN THREE FACTS beside the row — its outcome, its op id and
+// its position — because it answers a WRITE, and every write answer carries
+// them: this one used to be the bare row, so a client reading the outcome of
+// a bind, a suspension or a link found none, and `crewlet iam` printed
+// "applied at" an empty position.
+func (s *Service) answerWritten(w http.ResponseWriter, r *http.Request, id,
+	opID string, done statelog.Result) {
+
 	row, err := s.directory.Person(r.Context(), id)
 	if err != nil {
 		s.unavailable(w, r, "read a person", err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, s.viewOf(r.Context(), row))
+	httpjson.Write(w, http.StatusOK, writtenView{
+		personView: s.viewOf(r.Context(), row),
+		Outcome:    string(done.Outcome),
+		OpID:       opID,
+		Position:   done.Position.String(),
+	})
+}
+
+// writtenView is a person read back after a write that landed here.
+type writtenView struct {
+	personView
+	Outcome  string `json:"outcome"`
+	OpID     string `json:"op_id"`
+	Position string `json:"position"`
 }
 
 // reasonOr is the caller's reason, or the surface's own.

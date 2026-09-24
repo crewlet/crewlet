@@ -549,6 +549,7 @@ variable at all.
 | `-stage S` | every stage | `invited`, `enrolling`, `active`, `suspended` or `retired` |
 | `-since POSITION` / `-at TIME` | — | Where the trail starts. `-since` is a log position; `-at` is an RFC 3339 instant the route resolves to one |
 | `-limit N` | 50 (100 for the trail) | How many rows |
+| `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read, on `token` (a mint's retry would hand back a record whose value was shown to nobody, so an unknown mint is minted again) and on `bootstrap-code` (a re-issue is its own retry) |
 
 **`-grants none` strips and an omitted `-grants` leaves alone.** They are
 opposite intentions and an empty flag value cannot carry both, so the word is
@@ -561,8 +562,18 @@ token. Lost one is re-issued rather than recovered.
 
 **Every write prints its outcome rather than "done".** `applied` means this
 node has the change; `pending` means it is durable and this node has not
-applied it yet, and carries the position to read at; `unknown` means nothing
-can be established from here.
+applied it yet, and carries the position to read at — each with the op id it
+was published under. `unknown` means nothing can be established from here, and
+it fails naming the op id and the one safe retry: the **same** command with
+`-idempotency-key <op id>`. A fresh attempt would be a second operation — for
+`create` and `invite` a second person or a second invitation, refused as a
+conflict by the address the first may already hold.
+
+**An edit refused partway says what landed.** `bind`, `link`, `suspend` and the
+rest are one `PATCH`, which moves a seat before a login and a link before the
+stage and the grants; everything the node can judge is refused before the
+first record, and what only a record can decide — a login somebody took a
+moment ago — fails listing the changes that did land before it.
 
 ### `crewlet iam check`
 

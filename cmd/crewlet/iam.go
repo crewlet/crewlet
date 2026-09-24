@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -76,6 +77,14 @@ Flags:
   -api URL       The running node's API; default is its own api.host:port
   -json          Print the raw answer rather than a table
   -reason TEXT   Recorded on the change, and read by whoever audits it
+  -idempotency-key OP
+                 Retry a write whose outcome was unknown, as the SAME operation
+
+Every write prints its outcome: "applied" means this node has the change,
+"pending" that it is durable and this node has not applied it yet. A write
+nothing could establish fails naming its op id; run the same command again
+with -idempotency-key <op id> — a fresh attempt would be a second operation,
+and for create and invite a second person or invitation.
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
@@ -146,6 +155,8 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	event := fs.String("event", "", "narrow the trail to one operation")
 	since := fs.Uint64("since", 0, "the oldest log POSITION to include")
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
+	key := fs.String("idempotency-key", "",
+		"retry a write whose outcome was unknown: the op id its answer named")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -158,6 +169,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	// problem they do not have.
 	if err := iamSubjects.check(sub, subject, second); err != nil {
 		return err
+	}
+	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
+		return iamUnkeyed(sub)
 	}
 	// A CREATE NAMES ITS LOGIN, and is told so here rather than by the
 	// node: every principal enrols with one — it is the name their changes
@@ -207,6 +221,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	client.key = strings.TrimSpace(*key)
 
 	switch sub {
 	case "people":
@@ -345,6 +360,41 @@ var iamSubjects = subjectTable{
 	"revoke-credential": {"a credential id"},
 }
 
+// iamKeyed is every subcommand whose route reads an Idempotency-Key: each a
+// write, and each one whose `unknown` answer prescribes the SAME operation
+// again — which a command that could not send the key could never perform, so
+// the retry an operator could actually run was a fresh operation.
+//
+// TWO WRITES ARE MISSING, deliberately, and [iamUnkeyed] says why to whoever
+// asks: a mint answers a value only its first attempt could show, and a
+// re-issue is its own retry.
+var iamKeyed = map[string]bool{
+	"invite": true, "create": true, "bind": true, "unbind": true,
+	"link": true, "unlink": true, "grant": true, "suspend": true,
+	"activate": true, "remove": true, "revoke": true,
+	"revoke-credential": true, "reset-mfa": true, "invalidate-all": true,
+}
+
+// iamUnkeyed refuses -idempotency-key on a subcommand whose route reads none,
+// saying what to do instead: sent anyway, the key would be ignored and the
+// operator told nothing, which is the one outcome worse than the refusal.
+func iamUnkeyed(sub string) error {
+	switch sub {
+	case "token":
+		return errors.New("a mint takes no -idempotency-key: its retry would " +
+			"answer the first attempt's record beside a value that verifies " +
+			"against nothing, so a mint whose outcome was unknown is minted " +
+			"again, and the one that may have landed is a token nobody holds, " +
+			"which expires")
+	case "bootstrap-code":
+		return errors.New("a re-issue takes no -idempotency-key: it is its own " +
+			"retry — run it again, and it withdraws every outstanding code " +
+			"and mints one")
+	}
+	return fmt.Errorf("-idempotency-key retries a write whose outcome was "+
+		"unknown, and `iam %s` writes nothing", sub)
+}
+
 // subjectTable maps a subcommand to what its positional arguments are.
 type subjectTable map[string][]string
 
@@ -438,6 +488,11 @@ type iamClient struct {
 	base  string
 	token string
 	http  *http.Client
+
+	// key is the operation a write RETRIES — the op id an unknown answer
+	// named — sent as the Idempotency-Key on every write this command
+	// makes, and never on a read.
+	key string
 }
 
 func newIAMClient(boot *config.Bootstrap, override string) (*iamClient, error) {
@@ -501,6 +556,9 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.key != "" && method != http.MethodGet {
+		req.Header.Set(iamapi.IdempotencyHeader, c.key)
+	}
 	// NO ORIGIN, deliberately. The node's cross-site check admits a
 	// BEARER with none — a browser cannot make one travel — and refuses a
 	// PRESENT Origin that is not an address the deployment is reached at.
@@ -536,6 +594,14 @@ const iamMaxAnswer = 8 << 20
 // THE CODE AND THE DETAIL, because the engine's refusals carry both and the
 // detail is the half that names the seat, the grant or the holder. A status
 // alone would make `409` indistinguishable from `409`.
+//
+// AND WHAT THE ANSWER SAYS ABOUT THE OPERATION: the changes an edit stopped
+// partway had already made (`landed`), and — on a 503 that carries an op id —
+// the retry that is safe, spelled as THIS command's flag. The node's own
+// sentence says to send the id back as a header, which is right for a client
+// holding the request and useless to an operator holding a terminal; the id
+// used to be dropped here altogether, so the retry the answer prescribed was
+// one nobody at the terminal could make.
 func iamRefusal(status int, answer map[string]any, raw []byte) error {
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
@@ -545,16 +611,33 @@ func iamRefusal(status int, answer map[string]any, raw []byte) error {
 	if detail == "" {
 		detail, _ = answer["message"].(string)
 	}
+	var said string
 	switch {
 	case code != "" && detail != "":
-		return fmt.Errorf("%s: %s", code, detail)
+		said = code + ": " + detail
 	case code != "":
-		return errors.New(code)
+		said = code
 	case len(raw) > 0:
-		return fmt.Errorf("the node answered %d: %s", status,
+		said = fmt.Sprintf("the node answered %d: %s", status,
 			strings.TrimSpace(string(raw)))
+	default:
+		said = fmt.Sprintf("the node answered %d", status)
 	}
-	return fmt.Errorf("the node answered %d", status)
+	if landed := joinAny(answer["landed"]); landed != "" {
+		said += "\nthese changes DID land before it: " + landed
+	}
+	if hint := str(answer["hint"]); hint != "" {
+		said += "\n" + hint
+	}
+	if op := str(answer["op_id"]); op != "" {
+		if status == http.StatusServiceUnavailable {
+			said += "\nnothing can say whether it landed; retry it as the " +
+				"same operation with -idempotency-key " + op
+		} else {
+			said += "\nop " + op
+		}
+	}
+	return errors.New(said)
 }
 
 // --- printing ------------------------------------------------------------ //
@@ -844,6 +927,11 @@ func (p *iamPrinter) bootstrap(answer map[string]any, err error) error {
 
 // written prints a write's outcome, which is the three-valued answer rather
 // than "done".
+//
+// READ OFF THE ANSWER'S `outcome`, never off the status: it printed "applied"
+// for every 2xx, so a write the node had made durable and NOT applied — a 202,
+// whose read here does not show it yet — was reported as applied. The third
+// value never reaches here; it is a 503, and [iamRefusal] says it.
 func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if err != nil {
 		return err
@@ -854,7 +942,15 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if id := str(answer["id"]); id != "" {
 		fmt.Fprintf(p.w, "%s\n", id)
 	}
-	fmt.Fprintf(p.w, "applied at %s\n", str(answer["position"]))
+	position, op := dash(str(answer["position"])), dash(str(answer["op_id"]))
+	switch outcome := str(answer["outcome"]); outcome {
+	case "applied", "pending":
+		fmt.Fprintf(p.w, "%s at %s (op %s)\n", outcome, position, op)
+	default:
+		// AN OUTCOME THIS BUILD CANNOT NAME is printed as what it is,
+		// never promoted to "applied" — that was the bug.
+		fmt.Fprintf(p.w, "outcome %q at %s (op %s)\n", outcome, position, op)
+	}
 	if detail := str(answer["detail"]); detail != "" {
 		fmt.Fprintln(p.w, detail)
 	}

@@ -420,3 +420,106 @@ func TestIamLinkPinsTheSubjectTheOperatorTyped(t *testing.T) {
 		t.Errorf("a link with no subject answered %v, want the subject named", err)
 	}
 }
+
+// A WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome.
+//
+// The printer said "applied at" for every 2xx, so a write the node had made
+// durable and not yet applied — a 202, which a read there does not show yet —
+// was reported as applied. Mutation: print "applied" for every success again
+// and the pending case reads as applied.
+func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		outcome string
+	}{
+		{http.StatusOK, "applied"},
+		{http.StatusAccepted, "pending"},
+	} {
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(tc.status)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p-1",
+				"outcome": tc.outcome, "position": "CREWLET_IAM_LOG@0:9",
+				"op_id": "people:update:p-1:k"})
+		}))
+		t.Setenv(apiTokenEnv, "a-tier-a-token")
+		cfg := bootstrapWithKeyring(t, "k1")
+		var out, errs bytes.Buffer
+		err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api",
+			node.URL}, &out, &errs)
+		node.Close()
+		if err != nil {
+			t.Fatalf("a %s suspension failed: %v", tc.outcome, err)
+		}
+		want := tc.outcome + " at CREWLET_IAM_LOG@0:9 (op people:update:p-1:k)"
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("a %s write printed %q, want it to say %q", tc.outcome,
+				out.String(), want)
+		}
+		if tc.outcome == "pending" && strings.Contains(out.String(), "applied") {
+			t.Errorf("a pending write was reported as applied: %q", out.String())
+		}
+	}
+}
+
+// AN UNKNOWN WRITE NAMES ITS RETRY, AND THE RETRY CAN BE MADE.
+//
+// The node answers an unknown outcome 503 with the op id and says the only
+// safe retry is the same operation, sent back as the Idempotency-Key. The CLI
+// dropped the op id from the refusal and had no way to send a key, so the
+// retry an operator could actually run was a fresh operation — for a create,
+// a second person. Mutation: drop the op id from the refusal, or the header
+// from the request, and each half goes red.
+func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
+	var keys []string
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
+			"detail": "this node cannot establish what happened to this change",
+			"op_id":  "people:update:p-1:k7", "landed": []string{"seat"}})
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := run([]string{"iam", "bind", "p-1", "sre", "-config", cfg, "-api",
+		node.URL}, &out, &errs)
+	if err == nil {
+		t.Fatal("an unknown write was reported as a success")
+	}
+	for _, want := range []string{"-idempotency-key people:update:p-1:k7",
+		"these changes DID land before it: seat"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	_ = run([]string{"iam", "bind", "p-1", "sre", "-idempotency-key",
+		"people:update:p-1:k7", "-config", cfg, "-api", node.URL}, &out, &errs)
+	if len(keys) != 2 || keys[0] != "" || keys[1] != "people:update:p-1:k7" {
+		t.Errorf("the node saw keys %q, want none and then the retried op id",
+			keys)
+	}
+
+	// A KEY ON A COMMAND THAT READS NONE is refused before anything is
+	// sent, saying why: the node would ignore it and the operator would be
+	// told nothing.
+	for _, args := range [][]string{
+		{"iam", "token", "-person", "svc-1"},
+		{"iam", "bootstrap-code"},
+		{"iam", "show", "p-1"},
+	} {
+		err := run(append(args, "-idempotency-key", "k", "-config", cfg,
+			"-api", node.URL), &out, &errs)
+		if err == nil || !strings.Contains(err.Error(), "idempotency-key") {
+			t.Errorf("%v with a key answered %v, want it refused naming the flag",
+				args, err)
+		}
+	}
+	if len(keys) != 2 {
+		t.Errorf("a refused key still reached the node: %q", keys)
+	}
+}

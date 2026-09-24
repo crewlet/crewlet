@@ -1348,6 +1348,32 @@ func TestALoginOrASeatIsMovedNeverReleasedAndReclaimed(t *testing.T) {
 	}
 }
 
+// AN EDIT THAT MOVED ONLY A CLAIM ANSWERS ITS OUTCOME, beside the row.
+//
+// An edit with nothing left for the person's own document reads the row back,
+// and that answer was the bare row: a bind, a suspension or a link answered no
+// outcome, no op id and no position, so a client reading them — `crewlet iam`
+// among them — reported "applied at" nothing. Mutation: answer the bare view
+// again and all three are gone.
+func TestAnEditThatMovedOnlyAClaimAnswersItsOutcome(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+		map[string]any{"seat": "sre", "stage": "suspended"})
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if got.body["outcome"] != "applied" || got.body["op_id"] == nil ||
+		got.body["position"] == nil {
+		t.Errorf("the read-back carries outcome %v, op id %v, position %v — "+
+			"want the write's own three", got.body["outcome"], got.body["op_id"],
+			got.body["position"])
+	}
+	if got.body["id"] != bob.String() || got.body["login"] != "bob.sre" {
+		t.Errorf("the read-back lost the row: %v", got.body)
+	}
+}
+
 // A REFUSAL ONLY A RECORD COULD DECIDE NAMES WHAT LANDED BEFORE IT.
 //
 // A login taken between the surface's read and its record is the one refusal
