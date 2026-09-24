@@ -710,3 +710,39 @@ func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
 		t.Errorf("the refusal is not the session wait's: %v", err)
 	}
 }
+
+// A SUBJECT'S END IS ITS OWN LAST RECORD, and nobody else's.
+//
+// It is what a gesture waits for when its decision turns on an object it does
+// not publish on: the position the broker holds for THAT subject, so a node
+// behind on it is made to catch up before it decides. A position from a
+// neighbouring subject, or the stream's own end, would either wait for nothing
+// or wait for every write in the domain. Mutation: answer the stream's last
+// sequence and the first subject's end moves when its neighbour is written.
+func TestASubjectsEndIsItsOwnLastRecord(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for _, write := range []struct{ subject, op string }{
+		{"a", "op-a1"}, {"b", "op-b1"}, {"a", "op-a2"}, {"b", "op-b2"},
+	} {
+		if _, err := h.write(probeSubject(write.subject), write.op, write.op); err != nil {
+			t.Fatalf("write %s: %v", write.op, err)
+		}
+	}
+	for subject, want := range map[string]uint64{"a": 3, "b": 4} {
+		end, found, err := h.pub.SubjectEnd(t.Context(), probeSubject(subject))
+		if err != nil || !found {
+			t.Fatalf("the end of %s: %v (found %v)", subject, err, found)
+		}
+		if end.Seq != want || end.Stream != probeStream || end.Generation != h.gen.Load() {
+			t.Errorf("the end of %s is %s, want sequence %d on %s", subject, end,
+				want, probeStream)
+		}
+	}
+	// A SUBJECT NOTHING WAS WRITTEN TO holds no end, which is a fact rather
+	// than a failure.
+	if end, found, err := h.pub.SubjectEnd(t.Context(), probeSubject("c")); err != nil ||
+		found || !end.IsZero() {
+		t.Errorf("an unwritten subject answered %s (found %v, %v)", end, found, err)
+	}
+}

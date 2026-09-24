@@ -1023,6 +1023,32 @@ func (p *Publisher) subjectOf(s Subject) string {
 	return p.prefix + "." + s.String()
 }
 
+// SubjectEnd is the position of the last record ONE subject holds on the log,
+// or false where it holds none — the broker's own answer, read without an
+// append.
+//
+// # What it is for, which a subject's anchor cannot give
+//
+// A write decides from this node's snapshot, and the broker refuses it only
+// where the SUBJECT IT PUBLISHES ON moved underneath that snapshot. A gesture
+// whose decision turns on ANOTHER object's state therefore meets no refusal
+// when this node is behind on that object: it decides from a row the log has
+// already superseded and lands. Setting the gesture's session mark to this
+// position makes every step decide from a state holding everything the object
+// had been written by the moment it began — the same wait a caller's own
+// previous write gets, pointed at somebody else's.
+//
+// NOT A READ INDEX. It proves nothing about the log as a whole and costs no
+// barrier; it is the one subject a caller names, which is all a decision about
+// one object needs.
+func (p *Publisher) SubjectEnd(ctx context.Context, s Subject) (Position, bool, error) {
+	seq, found, err := p.log.LastSeq(ctx, p.subjectOf(s))
+	if err != nil || !found {
+		return Position{}, false, err
+	}
+	return Position{Stream: p.stream, Generation: p.generation(), Seq: seq}, true, nil
+}
+
 // observe records the write path's own instruments.
 //
 // A REFUSAL IS NOT AN OUTCOME and is counted separately. The three outcomes
