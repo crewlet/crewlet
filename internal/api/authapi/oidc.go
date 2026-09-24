@@ -25,7 +25,8 @@ import (
 const flightCookieName = "crewlet_oidc_flight"
 
 // OIDCStart sends the browser to the provider: an ordinary sign-in, or — with
-// `?step_up=` — a signed-in person confirming who they are.
+// `?step_up=<window>` — a signed-in person confirming who they are, inside the
+// window a `step_up_required` refusal named.
 //
 // # It keeps its state in the BROWSER, sealed, and on no node
 //
@@ -58,9 +59,10 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	want := oidc.Flight{Return: returnPath(query.Get("return_to"))}
-	if query.Get("step_up") != "" {
+	if query.Has("step_up") {
 		var ok bool
-		if want, ok = s.stepUpFlight(w, r, want); !ok {
+		if want, ok = s.stepUpFlight(w, r, want,
+			iam.Recency(query.Get("step_up"))); !ok {
 			return
 		}
 	}
@@ -261,8 +263,9 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // stepUpFlight is what a provider STEP-UP start seals: the window the provider
-// is asked to have authenticated the person inside. Answers false once it has
-// written the refusal.
+// is asked to have authenticated the person inside, which is the window the
+// refusal that sent them here named. Answers false once it has written the
+// refusal.
 //
 // # Why this is the provider's own round trip and not the password route
 //
@@ -273,25 +276,73 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // provider's: asked with `prompt=login` and `max_age`, and accepted only on an
 // `auth_time` inside the window ([oidc.Flight.ProvedAt]).
 //
+// # The window is the one the refusal named, and it is `max_age`
+//
+// A `403 step_up_required` says which window its gesture needs — `step_up` or
+// `step_up_sensitive`, its `window` — and the confirmation asks the provider
+// for exactly that. It used to ask for the ordinary window whatever the
+// gesture needed, counting on `prompt=login` to make the answer fresh; but
+// `prompt=login` is a request a provider may ignore (OpenID Connect Core
+// 3.1.2.1 says SHOULD), and one that honoured `max_age` alone answered from
+// its own session half an hour old — inside the hour, so accepted, and outside
+// the fifteen minutes, so the sensitive gesture refused it again, round after
+// round, until the provider's session was old enough to prompt. With the
+// window as `max_age`, such a provider must authenticate the person to answer
+// at all.
+//
+// # Who may ask
+//
 // A SIGNED-IN PERSON, and never a machine: a token proves nobody is present,
-// and the step-up exists to prove somebody is.
+// and the step-up exists to prove somebody is. This route is unguarded, so
+// the guard hands a request it could not resolve through rather than
+// answering it — and a node that cannot establish who is signed in says so
+// with a 503, never the 401 that tells a browser to sign in again.
 func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
-	want oidc.Flight) (oidc.Flight, bool) {
+	want oidc.Flight, window iam.Recency) (oidc.Flight, bool) {
 
+	maxAge, ok := s.windowOf(window)
+	if !ok {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			map[string]string{"detail": "step_up names the window to confirm " +
+				"inside: " + string(iam.RecencyStepUp) + " or " +
+				string(iam.RecencySensitive) + ", the window a " +
+				"step_up_required refusal carries"})
+		return oidc.Flight{}, false
+	}
 	principal, how := iam.From(r.Context())
-	if how != iam.Resolved || principal.Kind != iam.KindPerson {
+	switch {
+	case how == iam.Unknown:
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		return oidc.Flight{}, false
+	case how != iam.Resolved:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return oidc.Flight{}, false
-	}
-	if machineToken(w, r, iam.RecencyStepUp) {
+	case principal.Kind != iam.KindPerson:
+		refuseStepUp(w, window, "a machine credential cannot confirm a person's identity")
 		return oidc.Flight{}, false
 	}
-	// THE ORDINARY WINDOW, which is the design's: the provider is asked
-	// to have authenticated the person within it, and `prompt=login`
-	// asks for now — so what comes back is fresh for the sensitive
-	// window too, and the deadlines the guard composes from it say so.
-	want.MaxAge = s.boot.API.Auth.Session.StepUp()
+	if machineToken(w, r, window) {
+		return oidc.Flight{}, false
+	}
+	want.MaxAge = maxAge
 	return want, true
+}
+
+// windowOf is how long a proof counts for inside window, by this node's own
+// settings, or false for a value that names no window a gesture asks for.
+//
+// THIS NODE'S, as the guard's are ([auth] composes both deadlines from its
+// own): the callback judges `auth_time` against the value sealed here, so the
+// window a confirmation is held to is the one it was asked for, whichever node
+// finishes it.
+func (s *Service) windowOf(window iam.Recency) (time.Duration, bool) {
+	switch window {
+	case iam.RecencyStepUp:
+		return s.boot.API.Auth.Session.StepUp(), true
+	case iam.RecencySensitive:
+		return s.boot.API.Auth.Session.StepUpSensitive(), true
+	}
+	return 0, false
 }
 
 // personForSubject resolves the provider's subject to somebody this estate

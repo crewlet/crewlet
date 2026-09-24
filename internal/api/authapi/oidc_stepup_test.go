@@ -2,11 +2,15 @@ package authapi_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,6 +72,11 @@ func TestAProviderSignInIsProvedWhenTheProviderSaysItWas(t *testing.T) {
 type providerEstate struct {
 	*estate
 	blind string
+
+	// other, once it holds a sighting, is who the subject resolves to in
+	// place of the estate's own person: somebody other than whoever holds
+	// the session cookie.
+	other *atomic.Pointer[iamdomain.Sighting]
 }
 
 func (e providerEstate) PersonBySubjectBlind(_ context.Context, blind string,
@@ -75,6 +84,9 @@ func (e providerEstate) PersonBySubjectBlind(_ context.Context, blind string,
 
 	if blind != e.blind {
 		return iamdomain.Sighting{}, nil
+	}
+	if other := e.other.Load(); other != nil {
+		return *other, nil
 	}
 	return e.person, nil
 }
@@ -85,6 +97,7 @@ type providerStepUp struct {
 	idp      *provider
 	mux      *http.ServeMux
 	estate   *estate
+	other    *atomic.Pointer[iamdomain.Sighting]
 	audit    *recordingAudit
 	lineage  uuid.UUID
 	cookie   string
@@ -105,6 +118,7 @@ func newProviderStepUp(t *testing.T) *providerStepUp {
 		ID: "0192f00d-0000-7000-8000-00000000000a", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Login: "jane.doe",
 	}}
+	other := &atomic.Pointer[iamdomain.Sighting]{}
 	material, err := secrets.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +141,7 @@ func newProviderStepUp(t *testing.T) *providerStepUp {
 		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
 		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
 	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
-		o.Directory = providerEstate{estate: e, blind: blind}
+		o.Directory = providerEstate{estate: e, blind: blind, other: other}
 		o.Writer = e
 		o.Sessions = rows{identity}
 		o.Cipher = cipher
@@ -149,25 +163,30 @@ func newProviderStepUp(t *testing.T) *providerStepUp {
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	return &providerStepUp{idp: idp, mux: mux, estate: e, audit: audit,
-		lineage: lineage, cookie: cookie, absolute: absolute}
+	return &providerStepUp{idp: idp, mux: mux, estate: e, other: other,
+		audit: audit, lineage: lineage, cookie: cookie, absolute: absolute}
 }
 
-// confirm runs a step-up start and, when it redirects, the provider and the
-// callback — as the signed-in person when signedIn, presenting their cookie.
-func (r *providerStepUp) confirm(t *testing.T, signedIn bool) (
-	started, finished *httptest.ResponseRecorder) {
+// signedIn is the start resolved as the guard resolves the person holding
+// the cookie: an unguarded route is handed what the guard found.
+func (r *providerStepUp) signedIn(ctx context.Context) context.Context {
+	return iam.WithPrincipal(ctx, iam.Principal{
+		ID:    uuid.MustParse(r.estate.person.ID),
+		Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,
+	})
+}
+
+// confirm runs a step-up start carrying query, resolved by as, and — when it
+// redirects — the provider and the callback, presenting the person's cookie
+// on both legs.
+func (r *providerStepUp) confirm(t *testing.T, query string,
+	as func(context.Context) context.Context) (started, finished *httptest.ResponseRecorder) {
 
 	t.Helper()
 	start := httptest.NewRequest(http.MethodGet,
-		auth.PathAuthOIDCStart+"?step_up=true&return_to=/settings", nil)
+		auth.PathAuthOIDCStart+"?"+query+"&return_to=/settings", nil)
 	start.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: r.cookie})
-	if signedIn {
-		start = start.WithContext(iam.WithPrincipal(start.Context(), iam.Principal{
-			ID:    uuid.MustParse(r.estate.person.ID),
-			Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,
-		}))
-	}
+	start = start.WithContext(as(start.Context()))
 	started = httptest.NewRecorder()
 	r.mux.ServeHTTP(started, start)
 	if started.Code != http.StatusFound {
@@ -186,104 +205,256 @@ func (r *providerStepUp) confirm(t *testing.T, signedIn bool) (
 	return started, finished
 }
 
+// changes is what the estate was asked to end and open, read under its lock.
+func (r *providerStepUp) changes() ([]closedSession, []iamdomain.SessionStart) {
+	r.estate.mu.Lock()
+	defer r.estate.mu.Unlock()
+	return slices.Clone(r.estate.closes), slices.Clone(r.estate.starts)
+}
+
 // A PROVIDER STEP-UP CONFIRMS AT THE PROVIDER AND REPLACES THE SESSION.
 //
 // Somebody who signs in only through their provider holds no password here,
 // so the password step-up has nothing to verify — and with the surfaces that
 // change a company asking for a recent proof, such a person could otherwise
 // never make one of those changes. The confirmation is the provider's own:
-// asked with `prompt=login` and `max_age`, accepted on an `auth_time` inside
-// the window, and recorded the way the password step-up records one — the
-// session it was made from ENDED first, the replacement keeping its absolute
-// deadline and proved at the provider's instant.
+// asked with `prompt=login` and `max_age` — the WINDOW the refusal named, in
+// seconds — accepted on an `auth_time` inside it, and recorded the way the
+// password step-up records one: the session it was made from ENDED first, the
+// replacement keeping its absolute deadline and proved at the provider's
+// instant.
 func TestAProviderStepUpConfirmsAtTheProviderAndReplacesTheSession(t *testing.T) {
 	t.Parallel()
-	r := newProviderStepUp(t)
-	r.idp.authTime = clock.Add(-30 * time.Second)
-	started, finished := r.confirm(t, true)
-	if started.Code != http.StatusFound {
-		t.Fatalf("the start answered %d (%s)", started.Code, started.Body)
-	}
-	asked, err := url.Parse(started.Header().Get("Location"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	window := strconv.Itoa(int(config.DefaultSessionStepUp / time.Second))
-	if asked.Query().Get("prompt") != "login" || asked.Query().Get("max_age") != window {
-		t.Errorf("the provider was asked prompt=%q max_age=%q, want login and %s",
-			asked.Query().Get("prompt"), asked.Query().Get("max_age"), window)
-	}
-	if finished == nil || finished.Code != http.StatusFound ||
-		finished.Header().Get("Location") != "/settings" {
-		t.Fatalf("the callback answered %+v, want a redirect to /settings", finished)
-	}
-	r.estate.mu.Lock()
-	closes, starts := slices.Clone(r.estate.closes), slices.Clone(r.estate.starts)
-	r.estate.mu.Unlock()
-	if len(closes) != 1 || closes[0].lineage != r.lineage.String() {
-		t.Errorf("ended %+v, want exactly the session the confirmation was "+
-			"made from", closes)
-	}
-	if len(starts) != 1 {
-		t.Fatalf("opened %d sessions, want the replacement", len(starts))
-	}
-	if !starts[0].ProvedAt.Equal(r.idp.authTime) {
-		t.Errorf("the replacement was proved at %s, want the provider's %s",
-			starts[0].ProvedAt, r.idp.authTime)
-	}
-	if !starts[0].AbsoluteExpiresAt.Equal(r.absolute) {
-		t.Errorf("the replacement ends at %s, want the replaced session's %s",
-			starts[0].AbsoluteExpiresAt, r.absolute)
-	}
-	emitted, _ := r.audit.snapshot()
-	confirmed := false
-	for _, e := range emitted {
-		if up, ok := e.(types.IAMStepUpCompleted); ok &&
-			up.Replaces == r.lineage.String() {
-			confirmed = true
-		}
-	}
-	if !confirmed {
-		t.Errorf("announced %#v, want a step-up naming the session it replaced",
-			emitted)
+	for window, maxAge := range map[iam.Recency]time.Duration{
+		iam.RecencyStepUp:    config.DefaultSessionStepUp,
+		iam.RecencySensitive: config.DefaultSessionStepUpSensitive,
+	} {
+		t.Run(string(window), func(t *testing.T) {
+			t.Parallel()
+			r := newProviderStepUp(t)
+			r.idp.authTime = clock.Add(-30 * time.Second)
+			started, finished := r.confirm(t, "step_up="+string(window), r.signedIn)
+			if started.Code != http.StatusFound {
+				t.Fatalf("the start answered %d (%s)", started.Code, started.Body)
+			}
+			asked, err := url.Parse(started.Header().Get("Location"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strconv.Itoa(int(maxAge / time.Second))
+			if asked.Query().Get("prompt") != "login" || asked.Query().Get("max_age") != want {
+				t.Errorf("the provider was asked prompt=%q max_age=%q, want login "+
+					"and %s — the window the refusal named",
+					asked.Query().Get("prompt"), asked.Query().Get("max_age"), want)
+			}
+			if finished == nil || finished.Code != http.StatusFound ||
+				finished.Header().Get("Location") != "/settings" {
+				t.Fatalf("the callback answered %+v, want a redirect to /settings", finished)
+			}
+			closes, starts := r.changes()
+			if len(closes) != 1 || closes[0].lineage != r.lineage.String() {
+				t.Errorf("ended %+v, want exactly the session the confirmation "+
+					"was made from", closes)
+			}
+			if len(starts) != 1 {
+				t.Fatalf("opened %d sessions, want the replacement", len(starts))
+			}
+			if !starts[0].ProvedAt.Equal(r.idp.authTime) {
+				t.Errorf("the replacement was proved at %s, want the provider's %s",
+					starts[0].ProvedAt, r.idp.authTime)
+			}
+			if !starts[0].AbsoluteExpiresAt.Equal(r.absolute) {
+				t.Errorf("the replacement ends at %s, want the replaced session's %s",
+					starts[0].AbsoluteExpiresAt, r.absolute)
+			}
+			emitted, _ := r.audit.snapshot()
+			confirmed := false
+			for _, e := range emitted {
+				if up, ok := e.(types.IAMStepUpCompleted); ok &&
+					up.Replaces == r.lineage.String() {
+					confirmed = true
+				}
+			}
+			if !confirmed {
+				t.Errorf("announced %#v, want a step-up naming the session it "+
+					"replaced", emitted)
+			}
+		})
 	}
 }
 
 // A PROVIDER STEP-UP THE PROVIDER DID NOT CONFIRM CHANGES NOTHING.
 //
 // `max_age` makes `auth_time` required in the answer, so a token without one,
-// or one saying the person authenticated outside the window, is a provider
-// that answered from a session it already had — not a confirmation. And the
-// start is a signed-in person's gesture: nobody signed in has nothing to
-// confirm.
+// or one saying the person authenticated outside the window ASKED FOR, is a
+// provider that answered from a session it already had — not a confirmation.
+// The sensitive window's cases are the ones the review measured: a provider
+// that ignores `prompt=login` and honours `max_age` answered a confirmation
+// asked with the ordinary hour from a session half an hour old, which was
+// accepted here and then refused by the sensitive gesture it was for.
+//
+// Mutation: seal the ordinary window whatever the start named, and the
+// half-hour-old authentication is accepted.
 func TestAProviderStepUpTheProviderDidNotConfirmChangesNothing(t *testing.T) {
 	t.Parallel()
-	for name, authTime := range map[string]time.Time{
-		"no auth_time":            {},
-		"outside the window":      clock.Add(-2 * time.Hour),
-		"just outside the window": clock.Add(-config.DefaultSessionStepUp - time.Second),
+	for name, tc := range map[string]struct {
+		window   iam.Recency
+		authTime time.Time
+	}{
+		"no auth_time":            {iam.RecencyStepUp, time.Time{}},
+		"outside the window":      {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
+		"just outside the window": {iam.RecencyStepUp, clock.Add(-config.DefaultSessionStepUp - time.Second)},
+		"half an hour old, asked for the sensitive window": {iam.RecencySensitive,
+			clock.Add(-30 * time.Minute)},
+		"just outside the sensitive window": {iam.RecencySensitive,
+			clock.Add(-config.DefaultSessionStepUpSensitive - time.Second)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := newProviderStepUp(t)
-			r.idp.authTime = authTime
-			_, finished := r.confirm(t, true)
+			r.idp.authTime = tc.authTime
+			_, finished := r.confirm(t, "step_up="+string(tc.window), r.signedIn)
 			if finished == nil || finished.Code != http.StatusUnauthorized {
 				t.Fatalf("the callback answered %+v, want 401", finished)
 			}
-			if len(r.estate.closes) != 0 || len(r.estate.starts) != 0 {
+			if closes, starts := r.changes(); len(closes) != 0 || len(starts) != 0 {
 				t.Errorf("an unconfirmed step-up ended %+v and opened %+v",
-					r.estate.closes, r.estate.starts)
+					closes, starts)
 			}
 		})
 	}
-	t.Run("nobody signed in", func(t *testing.T) {
-		t.Parallel()
-		r := newProviderStepUp(t)
-		started, _ := r.confirm(t, false)
-		if started.Code != http.StatusUnauthorized {
-			t.Errorf("a step-up start with nobody signed in answered %d, want 401",
-				started.Code)
-		}
+}
+
+// A PROVIDER STEP-UP IS ASKED BY A SIGNED-IN PERSON, AND A NODE THAT CANNOT
+// TELL WHO THAT IS SAYS SO.
+//
+// The start is unguarded, so the guard hands it whatever it resolved rather
+// than refusing: nobody, a machine, a token acting as a person, or — on a node
+// whose identity estate it cannot read — nothing it could establish. The last
+// used to answer 401, which a browser reads as "sign in again", discarding a
+// cookie that was fine on a node that merely could not vouch for it; it is
+// 503 with a Retry-After, as it is on every other route. A machine and a
+// token are refused naming the window, as every `step_up_required` is.
+//
+// Mutation: answer the unknown arm with the anonymous one's 401.
+func TestAProviderStepUpStartAsksWhoIsSignedIn(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		as     func(r *providerStepUp) func(context.Context) context.Context
+		status int
+		code   string
+	}{
+		"nobody signed in": {func(*providerStepUp) func(context.Context) context.Context {
+			return iam.WithAnonymous
+		}, http.StatusUnauthorized, "invalid_token"},
+		"a node that cannot tell": {func(*providerStepUp) func(context.Context) context.Context {
+			return func(ctx context.Context) context.Context {
+				return iam.WithUnresolved(ctx, errors.New("the identity estate is behind"))
+			}
+		}, http.StatusServiceUnavailable, "identity_unavailable"},
+		"a machine": {func(*providerStepUp) func(context.Context) context.Context {
+			return func(ctx context.Context) context.Context {
+				return iam.WithPrincipal(ctx, iam.Principal{
+					ID: uuid.New(), Login: "token:ops", Kind: iam.KindMachine,
+					Stage: iam.StageActive,
+				})
+			}
+		}, http.StatusForbidden, "step_up_required"},
+		"a machine token acting as the person": {func(r *providerStepUp) func(context.Context) context.Context {
+			return func(ctx context.Context) context.Context {
+				return iam.WithPrincipal(ctx, iam.Principal{
+					ID:    uuid.MustParse(r.estate.person.ID),
+					Login: "jane.doe", Kind: iam.KindPerson, Stage: iam.StageActive,
+					Via: iam.MachineTokenName("0192f00d-0000-7000-8000-0000000000aa"),
+				})
+			}
+		}, http.StatusForbidden, "step_up_required"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newProviderStepUp(t)
+			started, _ := r.confirm(t, "step_up="+string(iam.RecencySensitive), tc.as(r))
+			if started.Code != tc.status {
+				t.Fatalf("the start answered %d (%s), want %d", started.Code,
+					started.Body, tc.status)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(started.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body["error"] != tc.code {
+				t.Errorf("error %v, want %s", body["error"], tc.code)
+			}
+			switch tc.status {
+			case http.StatusServiceUnavailable:
+				if started.Header().Get("Retry-After") == "" {
+					t.Error("a 503 carried no Retry-After")
+				}
+			case http.StatusForbidden:
+				if body["window"] != string(iam.RecencySensitive) {
+					t.Errorf("the refusal named window %v, want the one asked "+
+						"for — a ceremony needs it to know which proof to ask",
+						body["window"])
+				}
+			}
+			if flight := flightSet(started); flight != "" {
+				t.Errorf("a refused start set a flight: %q", flight)
+			}
+		})
+	}
+}
+
+// A PROVIDER STEP-UP NAMES THE WINDOW IT CONFIRMS INSIDE.
+//
+// The window is what `max_age` is sealed as and what the callback holds the
+// provider's `auth_time` to, so a value that names none — the `true` this
+// route used to take, the `any` no gesture asks for, nothing at all — is a
+// request the start cannot make, refused before the provider is asked.
+func TestAProviderStepUpNamesTheWindowItConfirmsInside(t *testing.T) {
+	t.Parallel()
+	for _, query := range []string{"step_up=true", "step_up=any", "step_up="} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+			r := newProviderStepUp(t)
+			started, _ := r.confirm(t, query, r.signedIn)
+			if started.Code != http.StatusBadRequest ||
+				!strings.Contains(started.Body.String(), string(iam.RecencySensitive)) {
+				t.Fatalf("the start answered %d (%s), want 400 naming the windows",
+					started.Code, started.Body)
+			}
+			if flight := flightSet(started); flight != "" {
+				t.Errorf("a refused start set a flight: %q", flight)
+			}
+		})
+	}
+}
+
+// A PROVIDER STEP-UP FOR SOMEBODY ELSE REPLACES NOTHING.
+//
+// The confirmation replaces the session the browser PRESENTED, so the person
+// the provider comes back as must be the one that cookie is for. A provider
+// account linked to somebody else — a colleague's, signed in on a shared
+// machine — would otherwise end this person's session and open one for the
+// colleague under this browser's step-up. It is refused as the guard would
+// refuse a cookie that no longer names its holder, and nothing is ended or
+// opened.
+//
+// Mutation: drop the person comparison when the step-up reads the session it
+// replaces, and the colleague's session is opened.
+func TestAProviderStepUpForSomebodyElseReplacesNothing(t *testing.T) {
+	t.Parallel()
+	r := newProviderStepUp(t)
+	r.idp.authTime = clock.Add(-30 * time.Second)
+	r.other.Store(&iamdomain.Sighting{
+		ID: "0192f00d-0000-7000-8000-00000000000b", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Login: "somebody.else",
 	})
+	_, finished := r.confirm(t, "step_up="+string(iam.RecencyStepUp), r.signedIn)
+	if finished == nil || finished.Code != http.StatusUnauthorized {
+		t.Fatalf("the callback answered %+v, want 401", finished)
+	}
+	if closes, starts := r.changes(); len(closes) != 0 || len(starts) != 0 {
+		t.Errorf("a step-up that came back as somebody else ended %+v and "+
+			"opened %+v", closes, starts)
+	}
 }

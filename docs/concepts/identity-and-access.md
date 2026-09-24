@@ -1610,8 +1610,8 @@ only to be refused by a rule the confirmation never changes. A proof that is too
 old is `403 step_up_required` naming the window it needs, and the remedy is the
 caller's own: confirm who you are and send the same request again —
 `POST /auth/step-up` with your password and second factor, or, if you sign in
-through the identity provider, `/auth/oidc/start?step_up=true`, which asks the
-provider to authenticate you *now*.
+through the identity provider, `/auth/oidc/start?step_up=<window>` with the
+window the refusal named, which asks the provider to authenticate you *now*.
 
 **A provider's proof is dated by the provider.** A provider answers a sign-in
 from its own session whenever it can, so the instant a token reaches this engine
@@ -1619,9 +1619,13 @@ says nothing about when anybody typed anything: somebody who signed in at their
 provider last week arrives here in a second. A provider sign-in is therefore
 proved at the ID token's `auth_time`, and one whose token asserts none proved
 nothing this engine can date — stale in both windows. The provider step-up asks
-with `prompt=login` and `max_age` (which makes `auth_time` required) and is
-accepted only on an `auth_time` inside the `step_up` window; like the password
-step-up it replaces the session it was made from.
+with `prompt=login` and a `max_age` of the window it was asked for (which makes
+`auth_time` required), and is accepted only on an `auth_time` inside that
+window; like the password step-up it replaces the session it was made from. The
+window is `max_age` because `prompt=login` is only a request: a provider free
+to ignore it answered a confirmation asked with the ordinary hour from its own
+session half an hour old — accepted, and then refused again by the sensitive
+gesture it was for, round after round.
 
 What counts as having proved is a fact about the **credential**. A session
 proved when it signed in or stepped up, and each node composes the two
