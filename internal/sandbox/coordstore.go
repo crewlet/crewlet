@@ -49,9 +49,10 @@ import (
 // caller that loses re-reads, which is what makes the SECOND writer see the
 // first one's decision instead of overwriting it.
 type CoordStore struct {
-	runs  coord.SandboxRuns
-	calls coord.BridgeCalls
-	now   func() time.Time
+	runs     coord.SandboxRuns
+	awaiting coord.AwaitingRuns
+	calls    coord.BridgeCalls
+	now      func() time.Time
 
 	// log is where the store's own lines go: the package's logger, unless a
 	// suite hands it one to read ([CoordStore.WithLogger]).
@@ -59,16 +60,18 @@ type CoordStore struct {
 }
 
 // RunRecords is the slice of the fleet's coordination store a [CoordStore]
-// reads and writes: the run records, and the log of the calls a bridged run
-// makes. Declared here, by the consumer.
+// reads and writes: the run records, the index of the runs parked on an answer,
+// and the log of the calls a bridged run makes. Declared here, by the consumer.
 type RunRecords interface {
 	coord.SandboxRuns
+	coord.AwaitingRuns
 	coord.BridgeCalls
 }
 
-// NewCoordStore wraps the fleet's run records and bridged-call log.
+// NewCoordStore wraps the fleet's run records, their awaiting index and the
+// bridged-call log.
 func NewCoordStore(records RunRecords) *CoordStore {
-	return &CoordStore{runs: records, calls: records}
+	return &CoordStore{runs: records, awaiting: records, calls: records}
 }
 
 var _ PendingStore = (*CoordStore)(nil)
@@ -197,8 +200,13 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
-		// counted, and the company would never be billed for it.
+		// counted, and the company would never be billed for it. The
+		// record that a phase record counted the carried spend goes for
+		// the same reason: this launch's suspension carries forward only
+		// what no record has counted, and a resume told it was counted
+		// would report none of it.
 		existing.Charged = false
+		existing.CarriedCounted = false
 		return true
 	})
 	if err != nil || !reset || replaced == "" {
@@ -269,14 +277,30 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		run.CarriedCounted = run.CarriedCounted || release.CarriedCounted
 		return true
 	})
 	return released, err
 }
 
 // MarkAwaiting parks a run until a person answers.
+//
+// THE INDEX ENTRY FIRST, then the flip: the index may name a run that is not
+// waiting — a reader confirms every entry against the run's record — but it
+// must never miss one that is, or the answer is taken for a new turn and the
+// run waits for it for good. See [CoordStore.FindAwaitingByConversation].
 func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
-	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	current, _, found, err := s.read(ctx, turnID)
+	if err != nil || !found {
+		return err
+	}
+	if entry, indexed := awaitingEntry(current); indexed {
+		if fileErr := s.awaiting.FileAwaitingRun(ctx, entry); fileErr != nil {
+			return fmt.Errorf("sandbox: index run %s as awaiting an answer on %s: %w",
+				turnID, current.ConversationKey, fileErr)
+		}
+	}
+	_, _, err = s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
 		run.Question = q.Question
 		run.Audience = q.Audience
@@ -1477,20 +1501,130 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 }
 
 // FindAwaitingByConversation finds the parked run a reply belongs to.
+//
+// ONE KEYED READ OF THE INDEX, and a read of each run it names — not a read of
+// every run the fleet holds, which this is asked on every delivery a seat
+// receives on a conversation ([coord.AwaitingRuns] says why the index exists).
+//
+// EVERY ENTRY IS CONFIRMED against the run's own record, because an entry is a
+// hint: it is filed before the park and dropped after the finish, so it can
+// name a run that was claimed, relaunched or ended since. Only a run of this
+// seat, on this conversation, in one of the [Awaiting] statuses is an answer's
+// run, and an entry whose run is gone is dropped here — the finish that should
+// have dropped it failed.
+//
+// A RUN AN OLDER BUILD PARKED HAS NO ENTRY: a build that predates the index
+// flips the row and files nothing. The entry is filed when a build that has
+// the index lists the run — the node that acquires the seat does, before the
+// seat's mailbox opens, and so does the completion poll on every tick
+// ([CoordStore.IndexAwaiting]). An answer that reaches a seat before either
+// has listed its run is not matched to it.
 func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error) {
-	if conversation == "" {
+	if handle == "" || conversation == "" {
 		return PendingRun{}, false, nil
 	}
-	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && r.ConversationKey == conversation &&
-			slices.Contains(Awaiting, r.Status)
-	})
-	if err != nil || len(got) == 0 {
-		return PendingRun{}, false, err
+	turnIDs, err := s.awaiting.AwaitingRunsOn(ctx, handle, conversation)
+	if err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: read the runs awaiting an answer on %s: %w",
+			conversation, err)
+	}
+	var waiting []PendingRun
+	for _, turnID := range turnIDs {
+		run, _, found, err := s.read(ctx, turnID)
+		if err != nil {
+			return PendingRun{}, false, err
+		}
+		if !found {
+			s.dropAwaiting(ctx, coord.AwaitingRun{Handle: handle, Conversation: conversation, TurnID: turnID})
+			continue
+		}
+		if run.AgentHandle == handle && run.ConversationKey == conversation &&
+			slices.Contains(Awaiting, run.Status) {
+			waiting = append(waiting, run)
+		}
+	}
+	if len(waiting) == 0 {
+		return PendingRun{}, false, nil
 	}
 	// Newest first: a seat can have parked more than one question on one
-	// thread, and the answer belongs to what the person was just asked.
-	return got[len(got)-1], true, nil
+	// thread, and the answer belongs to what the person was just asked. The
+	// order is the listings' own, oldest first.
+	slices.SortStableFunc(waiting, olderFirst)
+	return waiting[len(waiting)-1], true, nil
+}
+
+// IndexAwaiting brings the index of runs parked on an answer into line with a
+// listing of every active run of one seat, or of every seat when handle is
+// empty. See [PendingStore.IndexAwaiting].
+func (s *CoordStore) IndexAwaiting(ctx context.Context, handle string, runs []PendingRun) error {
+	filed, err := s.awaiting.AllAwaitingRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("sandbox: read the runs awaiting an answer: %w", err)
+	}
+	have := make(map[coord.AwaitingRun]bool, len(filed))
+	for _, entry := range filed {
+		have[entry] = true
+	}
+	listed := make(map[string]bool, len(runs))
+	var errs []error
+	for _, run := range runs {
+		listed[run.TurnID] = true
+		entry, indexed := awaitingEntry(run)
+		if !indexed || !slices.Contains(Awaiting, run.Status) || have[entry] {
+			continue
+		}
+		// A run parked by a build that files no entry, or by a park whose
+		// entry was lost: without one no answer finds it.
+		if err := s.awaiting.FileAwaitingRun(ctx, entry); err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: index run %s as awaiting an answer: %w", run.TurnID, err))
+			continue
+		}
+		s.logger().InfoContext(ctx, "sandbox_awaiting_run_indexed", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "conversation_key", run.ConversationKey,
+			"detail", "a run parked on a question had no entry in the index an answer is "+
+				"matched through, which is how a build that predates the index parks one; "+
+				"it has one now")
+	}
+	for _, entry := range filed {
+		if (handle != "" && entry.Handle != handle) || listed[entry.TurnID] {
+			continue
+		}
+		// NAMED BY NO RUN THE LISTING HOLDS, and the listing is a snapshot:
+		// the run is read again, and only one that is gone loses its entry.
+		_, _, found, err := s.read(ctx, entry.TurnID)
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case !found:
+			if err := s.awaiting.DropAwaitingRun(ctx, entry); err != nil {
+				errs = append(errs, fmt.Errorf("sandbox: drop the index entry of ended run %s: %w",
+					entry.TurnID, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// awaitingEntry is the index entry a run is filed under while it waits on an
+// answer, and false for a run no answer can be matched to: one naming no seat
+// or no conversation.
+func awaitingEntry(run PendingRun) (coord.AwaitingRun, bool) {
+	if run.AgentHandle == "" || run.ConversationKey == "" {
+		return coord.AwaitingRun{}, false
+	}
+	return coord.AwaitingRun{Handle: run.AgentHandle, Conversation: run.ConversationKey, TurnID: run.TurnID}, true
+}
+
+// dropAwaiting drops a run's index entry, best effort: an entry left behind
+// names a run that is gone, which every reader confirms before acting, and
+// the next [CoordStore.IndexAwaiting] over its seat drops it.
+func (s *CoordStore) dropAwaiting(ctx context.Context, entry coord.AwaitingRun) {
+	if err := s.awaiting.DropAwaitingRun(ctx, entry); err != nil {
+		s.logger().WarnContext(ctx, "sandbox_awaiting_entry_not_dropped", "turn_id", entry.TurnID,
+			"agent", entry.Handle, "error", err.Error(),
+			"detail", "the index names a run that has ended; readers skip it, and the next "+
+				"listing of its seat drops it")
+	}
 }
 
 // Finish ends a run by deleting its record. See the contract on
@@ -1520,6 +1654,11 @@ func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence) (bo
 			// resumed phase's record, or nowhere — is each caller's to
 			// say (see [PendingStore.Finish]).
 			s.purgeCalls(ctx, turnID, run.LaunchID)
+			// The index entry after the record too, for the index's own
+			// rule: an entry may outlive its run, never the reverse.
+			if entry, indexed := awaitingEntry(run); indexed {
+				s.dropAwaiting(ctx, entry)
+			}
 			return true, nil
 		}
 	}
@@ -1586,10 +1725,11 @@ func (s *CoordStore) mutate(ctx context.Context, turnID string, decide func(*Pen
 // list decodes every record and returns the ones that match, oldest first.
 //
 // The filters are the caller's because coordination cannot see the fields they
-// read — the seat, the status, the conversation key, the pause instant. The
-// set is bounded by the seats that can be mid-run at once, which is what makes
-// one read and a local filter the right shape rather than a scan to apologise
-// for.
+// read — the seat and the status. The set is bounded by the seats that can be
+// mid-run at once, which is what makes one read and a local filter the right
+// shape for a pass that runs per poll or per seat acquired. It is the wrong
+// shape for a question asked per DELIVERY, which is why an answer is matched
+// through an index instead ([CoordStore.FindAwaitingByConversation]).
 func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]PendingRun, error) {
 	records, err := s.runs.SandboxRuns(ctx)
 	if err != nil {
@@ -1608,10 +1748,14 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 	// Oldest first, so a recovery pass works its runs in the order they
 	// were launched: a listing that reordered every boot would make two
 	// runs of the same failure look like different failures.
-	slices.SortStableFunc(out, func(a, b PendingRun) int {
-		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.TurnID, b.TurnID))
-	})
+	slices.SortStableFunc(out, olderFirst)
 	return out, nil
+}
+
+// olderFirst orders runs by when they were launched, and by turn id among runs
+// launched at one instant.
+func olderFirst(a, b PendingRun) int {
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.TurnID, b.TurnID))
 }
 
 // outranked reports whether a fence has been overtaken by a newer lease.

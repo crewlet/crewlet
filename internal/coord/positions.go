@@ -36,6 +36,19 @@ type DomainPosition struct {
 	Generation     uint32 `json:"generation"`
 	AppliedThrough uint64 `json:"applied_through"`
 
+	// StreamCreatedAt is the creation instant of the stream this node's
+	// applier runs on — the broker's own identity for the log these
+	// numbers were counted on.
+	//
+	// THE GENERATION CANNOT SAY IT. A stream rebuilt under a running fleet
+	// leaves every node at the generation it had, counting on a log that
+	// no longer exists, so "same generation" reads a whole fleet as
+	// caught up on a stream none of them has applied a record of. The
+	// instant is what tells the two apart. Zero from a build that does not
+	// publish it, which a reader must treat as "not stated" rather than as
+	// a stream of its own.
+	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
+
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
 	// generation travels with it: a snapshot from before a reanchor is not
 	// a donor for a node that needs one after it, and a bare sequence

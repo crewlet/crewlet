@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -76,9 +77,11 @@ type Dispatcher struct {
 	// turn, and every one about to be parked behind the seat's other running
 	// job, so a seat is answered whether or not it is busy — less, on both
 	// paths, what the completion ledger has recorded, which is how an answer
-	// already handed over is kept from the run's next question. Each offer
-	// reads the fleet's run records, which is the price of recognising an
-	// answer on a seat that holds no run in memory.
+	// already handed over is kept from the run's next question. An offer is
+	// a read of the fleet's index of runs parked on an answer, keyed by the
+	// seat and the conversation, and a read of each run it names — the price
+	// of recognising an answer on a seat that holds no run in memory (see
+	// [sandbox.CoordStore.FindAwaitingByConversation]).
 	//
 	// Nil is a node with no coordinator, where no run can be parked.
 	Answer func(ctx context.Context, handle, conversation, answer string,
@@ -226,23 +229,32 @@ func (r Request) Ask() []*events.Event {
 // position was earned by a specific failure — see internal/agent/inbox, which
 // owns the guard sequence and the reasons.
 //
-// What this frame adds around it is the two ledger reads and the one ledger
-// write, and their placement is equally deliberate:
+// What this frame adds around it is the two ledgers and the offer of a
+// delivery as an answer, and their placement is equally deliberate:
 //
-//   - the completion read comes AFTER every parking branch, so a parked
-//     partition is never marked done, and BEFORE coalescing, so recorded
-//     constituents drop out and only the remainder merges;
+//   - the completion READ comes after every parking branch but one, so a
+//     parked partition is never marked done, and BEFORE coalescing, so
+//     recorded constituents drop out and only the remainder merges. The one
+//     park that reads it is the park behind a seat's running coding job,
+//     which first offers what the ledger has not recorded to the seat's other
+//     run parked on a question, and parks the whole partition when that is
+//     not the answer;
+//   - the ANSWER OFFER comes after the completion read, on both paths that
+//     make it, because an answer handed over is recorded there: a copy of it
+//     redelivered after a lost ack is dropped by the read rather than
+//     offered again, where it would be taken as the reply to whatever the run
+//     asked next. A delivery handed over as an answer is recorded — a
+//     completion WRITE of its own — and acked, and becomes no turn;
 //   - the conversation read comes after that, because it is keyed on a
 //     conversation the surviving events name;
-//   - the completion WRITE comes after the turn, and a turn that failed is
-//     still recorded: the ledger answers "has this trigger been worked", not
-//     "did the work succeed", and re-running a failing turn on every
-//     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when its own record proves it had
-//     already reached outside the engine — see [Dispatcher.abandon] for why
-//     that is a different question from "did it fail", and why answering it
-//     with `err != nil` alone replayed a turn's external writes up to
-//     twenty-five times.
+//   - the completion WRITE after the turn records a turn that failed as
+//     well: the ledger answers "has this trigger been worked", not "did the
+//     work succeed", and re-running a failing turn on every redelivery is how
+//     one bad trigger becomes an infinite loop. A turn whose PHASE broke is
+//     recorded too, but only when [turn.Abandon] says it must not run again
+//     — it panicked, or its own record proves it had already reached outside
+//     the engine; see [Dispatcher.abandon] for why that is a different
+//     question from "did it fail".
 //
 // NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
 // loop and comes back as an ordinary broken turn; anything else that panics
@@ -721,7 +733,15 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return false, nil
 	}
 	handled, err := d.Answer(ctx, handle, conversation, DescribeTrigger(evs), first(evs))
-	if err != nil {
+	switch {
+	case errors.Is(err, sandbox.ErrNoBudgetRoom):
+		// NOT A FAILURE, and said once already: the coordinator announces
+		// a wait for budget room when it starts, and every redelivery of
+		// this answer until there is room lands here.
+		log.DebugContext(ctx, "sandbox_answer_waiting_for_budget",
+			"agent_handle", handle, "conversation_key", conversation)
+		return false, err
+	case err != nil:
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
 			"agent_handle", handle, "conversation_key", conversation, "error", err)
 		return false, err

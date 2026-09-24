@@ -531,12 +531,15 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return nil, nil, fmt.Errorf("tracker: project %s is archived, so it "+
 			"takes no new work; unarchive it first", task.Project)
 	}
-	// A PURGED PARENT IS REFUSED BEFORE THE MINT, so a create that can
-	// never land takes no key number with it. The task's own append reads
-	// it again ([Writer.writeTask]), which is what covers a purge landing
-	// between the two.
+	// A PURGED OR REMOVED PARENT IS REFUSED BEFORE THE MINT, so a create
+	// refused for it takes no key number with it. The task's own append
+	// reads both again ([Writer.writeTask]), which is what covers a purge or
+	// a removal landing between the two.
 	if task.Parent != nil && *task.Parent != "" {
 		if err := refusePurged(ctx, tx, *task.Parent, "parent"); err != nil {
+			return nil, nil, err
+		}
+		if err := refuseRemovedParent(ctx, tx, *task.Parent); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -1182,22 +1185,39 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	}
 
 	for i, descendant := range subtree {
+		// THE KEY BY PLACE, THE STEP BY TASK. The number is the range's
+		// offset in the (depth, id) order, which is what the range is a
+		// function of; the step is named by the descendant for the trash
+		// walks' reason ([descendantStep]).
 		n := base + uint64(i) + 1
-		step := stepID(opID, fmt.Sprintf("d%d", i))
-		if _, err := w.moveOne(ctx, step, descendant, target,
+		moved, err := w.moveOne(ctx, descendantStep(opID, descendant.ID),
+			descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: n}); err != nil {
-			// NAMING WHAT IS LEFT BEHIND rather than promising a
-			// repair: no duty job completes this walk, and the root is
-			// already in the target by now, so re-issuing the gesture
-			// is refused by the pre-flight above. The subtree is split
-			// until somebody moves the rest, and a caller told
-			// "idempotent, it will sort itself out" would never look.
+			&KeyMint{N: n})
+		// NAMING WHAT IS LEFT BEHIND rather than promising a repair: no
+		// duty job completes this walk, and the root is already in the
+		// target by now, so re-issuing the gesture is refused by the
+		// pre-flight above. The subtree is split until somebody moves the
+		// rest, and a caller told "idempotent, it will sort itself out"
+		// would never look.
+		switch {
+		case err != nil:
 			return result, fmt.Errorf("tracker: task %s moved to %s with %d of "+
 				"%d descendants; the rest are still in %s and nothing "+
 				"completes this walk on its own — re-issuing the move is "+
 				"refused because the root has already moved: %w",
 				taskID, target, i, len(subtree), root.Project, err)
+		case moved.Outcome == statelog.OutcomeUnknown:
+			// AN UNRESOLVED STEP STOPS THE WALK TOO, for [unresolved]'s
+			// reason: stepping past it reports a subtree this node cannot
+			// vouch for.
+			return result, fmt.Errorf("tracker: task %s moved to %s with %d of "+
+				"%d descendants, and the move of %s is unresolved — its record "+
+				"may be on the log and may not; the rest are still in %s and "+
+				"nothing completes this walk on its own — re-issuing the move "+
+				"is refused because the root has already moved: %w",
+				taskID, target, i, len(subtree), descendant.ID, root.Project,
+				statelog.ErrUnavailable)
 		}
 	}
 	result.Key, result.Rank = rootKey, rootRank

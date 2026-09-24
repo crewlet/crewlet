@@ -179,7 +179,11 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record, rather than having a delivery inferred from the prose
 // the CLI happened to end with.
-func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
+//
+// EVERY CALL IS CARRIED ([turn.Work.Carried]): the run made them all in its
+// box before this pass began, and a retry of the pass reads the same log and
+// replays the same submission without making any of them again.
+func (r *Runner) resumeAgentRun(ctx context.Context, round int, state execstate.State,
 	answer string, bridged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
 	snapshot := r.cfg.Registry.Snapshot()
@@ -190,19 +194,22 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 			func() []ledger.Call { return bridged },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, state.Iterations, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, round, state.Iterations, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
 
-	work, described := r.finishWork(ctx, state.Round, work{
+	// What the run reported it cost is its carried spend, counted by this
+	// record unless an earlier attempt's did — see [Resume.CarriedCounted].
+	_, run := r.carried(toolloop.Result{}, r.cfg.Resume.Run)
+	work, described := r.finishWork(ctx, round, work{
 		submit:   submit,
 		res:      agentRunResult(answer, bridged),
 		surface:  surface,
 		snapshot: snapshot,
-		run:      r.cfg.Resume.Run,
+		run:      run,
 		// The calls the log does not hold, said on the record of the pass
 		// whose calls they were. See [Resume.BridgedDropped].
 		notes: droppedNote(r.cfg.Resume.BridgedDropped),
@@ -210,8 +217,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 		// submission tool before it is read.
 		replay: bridged,
 	})
+	r.noteCountedCarried()
 	// The RUN's calls, not this process's surface's — see the doc above.
-	work.Calls = bridged
+	work.Calls, work.Carried = bridged, len(bridged)
 	return work, described, nil
 }
 

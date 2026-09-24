@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -317,6 +315,21 @@ type Actor struct {
 	WorkKey string
 
 	Chain []string
+
+	// MintedAt is the earliest instant the operation ids this actor's
+	// writes carry can have been minted — the turn's
+	// [turnctx.Turn.TriggeredAt] — and it rides every writer derived for
+	// this actor, as [tracker.Provenance.MintedAt].
+	//
+	// NOT the instant of the call that writes: a derived id is minted by
+	// the first attempt that wrote under it, and a redelivered turn's call
+	// comes later — after, perhaps, a snapshot adoption the first attempt
+	// predates, where a write stamped with the later instant is decided a
+	// second time.
+	//
+	// Zero outside a turn, where every id is fresh and minted by the call
+	// that carries it.
+	MintedAt time.Time
 }
 
 // OperationSeed is what a derived, idempotent id is built from.
@@ -325,12 +338,11 @@ type Actor struct {
 // reproduces and therefore the only one that can collapse a re-run's writes
 // into the first attempt's.
 //
-// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a scheduled
-// fire, a resumed run whose dispatch is long gone — has no cross-run duplicate
-// to collapse, but it still has ROUNDS: an executor that calls the same update
-// twice in one run should write once, and seeding from "" made every such call
-// mint a fresh id and write again. Falling back to the run keeps the
-// within-run guarantee without inventing a cross-run one.
+// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger has no
+// cross-run duplicate to collapse, but a run can still repeat its own calls: a
+// resumed coding turn that fails is retried, re-entering the same conversation
+// and making its calls again under the same run. Seeding from the run names
+// those again, and invents no cross-run guarantee.
 //
 // EMPTY OUTSIDE A TURN, which is the operator surface: their MCP client made
 // one call, nothing will redeliver it, and an invented key would be a lie
@@ -383,11 +395,12 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		return Actor{}, err
 	}
 	return Actor{
-		Handle:  seat.Handle(),
-		Kind:    tracker.AuthorAgent,
-		TurnID:  turn.RunID,
-		WorkKey: turn.WorkKey,
-		Chain:   turn.Chain,
+		Handle:   seat.Handle(),
+		Kind:     tracker.AuthorAgent,
+		TurnID:   turn.RunID,
+		WorkKey:  turn.WorkKey,
+		Chain:    turn.Chain,
+		MintedAt: turn.TriggeredAt,
 	}, nil
 }
 
@@ -399,9 +412,9 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 	return actorFor(turn)
 }
 
-// turnKey is the idempotency key a comment carries, or "" outside a turn.
+// turnKey is the idempotency key a page comment carries, or "" outside a turn.
 //
-// NIL-SAFE, because these tools serve two callers now. A TURN's key makes a
+// NIL-SAFE, because these tools serve two callers. A TURN's key makes a
 // comment idempotent: the engine's redelivery guarantees make a re-run turn
 // ordinary, and without it a seat says the same thing twice. An OPERATOR has
 // no turn and no redelivery — their MCP client made one call — so there is
@@ -409,10 +422,9 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 // what produced the comment.
 //
 // THROUGH [Actor.OperationSeed] rather than reading a field, because which of
-// a turn's two identities an idempotent id is built from is one rule and this
-// is its second caller. Written out here it would be the same rule spelled
-// twice, free to disagree — the shape internal/whsec and internal/textcut
-// exist because of.
+// a turn's two identities an idempotent id is built from is one rule. Written
+// out here it would be the same rule spelled twice, free to disagree — the
+// shape internal/whsec and internal/textcut exist because of.
 func turnKey(turn *turnctx.Turn) string {
 	if turn == nil {
 		return ""
@@ -1156,6 +1168,11 @@ func shownBody(body string, whole bool) string {
 type createWorkItem struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*createWorkItem)(nil)
+var _ tools.Sequenced = (*createWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*createWorkItem) Sequenced() {}
 
 func (t *createWorkItem) Name() string { return CreateWorkItemTool }
 
@@ -1268,10 +1285,16 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	writer := t.deps.Writer(actor)
 
+	// THE TASK'S ID IS DERIVED IN A TURN, with the operation that files it,
+	// so a redelivered turn files this task again rather than a second one.
+	// Named here and reported only once a write is made: a call refused
+	// before that named nothing a later create has to be counted after.
+	earlier := operationsBefore(turn)
+	taskID, createOp := createFor(actor, earlier)
 	now := t.deps.now()
 	task := tracker.Task{
 		V:           tracker.DocumentVersion,
-		ID:          uuid.NewString(),
+		ID:          taskID,
 		Title:       strings.TrimSpace(argString(args, "title")),
 		Body:        argString(args, "body"),
 		Type:        strings.TrimSpace(argString(args, "type")),
@@ -1366,15 +1389,6 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// later would be built from a row that has moved on.
 	task.Watchers = handles(actor.Handle, task.Assignee)
 
-	// THE LABELS BEFORE THE TASK, because the create refuses one the
-	// project has not declared and the declare is a separate record on a
-	// separate subject: doing it after would file the task that already
-	// failed.
-	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
-		task.Project, task.Tags)
-	if refusal := labelRefusal; refusal != "" {
-		return failed(refusal), nil
-	}
 	notify := tracker.Wake{
 		Kind: tracker.ChangeCreated, After: task,
 	}.Notify(t.deps.Leads)
@@ -1390,11 +1404,23 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		blockers = append(blockers, id)
 	}
 	if len(blockers) > 0 && t.deps.Dependencies == nil {
-		return failed(unconfiguredText(CreateWorkItemTool)), nil
+		return failed(noDependencies(CreateWorkItemTool, "`waiting_on`")), nil
 	}
-	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
+
+	// THE LABELS BEFORE THE TASK, because the create refuses one the
+	// project has not declared and the declare is a separate record on a
+	// separate subject: doing it after would file the task that already
+	// failed. And after every refusal above, because it is a write.
+	declared, labelsOp, refusal := t.deps.declareLabels(ctx, actor, earlier,
+		args, task.Project, task.Tags)
+	ops := appendOp(nil, labelsOp)
+	if refusal != "" {
+		return refusedAfter(refusal, ops...), nil
+	}
+	ops = append(ops, createOp)
+	got, err := writer.CreateTask(ctx, createOp, task, notify)
 	if err != nil {
-		return failed(writeFailure(CreateWorkItemTool, err)), nil
+		return refusedAfter(writeFailure(CreateWorkItemTool, err), ops...), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -1409,23 +1435,25 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// between two items that exist: the mirror commit names this task,
 	// and writing it before the create would name a task no node holds.
 	if len(blockers) > 0 {
-		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", task.ID), tracker.DependencyChange{
+		op := opIDFor(actor, earlier, "depend", task.ID)
+		ops = append(ops, op)
+		result, err := t.deps.Dependencies(actor).Depend(ctx, op,
+			tracker.DependencyChange{
 				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
 			}, t.deps.Leads)
 		if err != nil {
 			// THE ITEM EXISTS AND IS REPORTED. Failing the call would
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one.
-			answer["dependencies_failed"] = writeFailure(CreateWorkItemTool, err)
-			return jsonResult(answer)
+			answer["dependencies_failed"] = dependencyFailure(err)
+			return receipt(answer, ops...)
 		}
 		t.deps.settle(ctx, result.Position)
 		if len(result.OneSided) > 0 {
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return jsonResult(answer)
+	return receipt(answer, ops...)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -1566,39 +1594,6 @@ func handles(all ...string) []string {
 	return out
 }
 
-// opIDFor is the operation id one tool call writes under.
-//
-// DERIVED FROM THE TURN AND THE OBJECT rather than minted fresh, so a re-run
-// turn — which the engine's redelivery guarantees make ordinary — writes ONCE.
-//
-// OUTSIDE A TURN IT IS FRESH PER CALL, and that is the whole of the second
-// branch: there is nothing to be idempotent against, because nothing is going
-// to redeliver an operator's tool call. It used to return `verb + "-" + object`
-// here on the reasoning that "the object's own id is enough to make it unique"
-// — which is true of two DIFFERENT objects and false of the same one twice, so
-// the id was stable for the life of the deployment and the operation ledger
-// collapsed every write after the first as a redelivery.
-//
-// Measured through `/operator/mcp`, which is the ONLY write path the dashboard
-// offers and what an operator's own assistant connects to: a work item could
-// be updated exactly once. The second update, and every one after it, wrote
-// nothing and answered `outcome: "applied"` with the FIRST write's position —
-// the worst shape a write surface has, because the caller is told it worked.
-// The same held for a dependency change, a re-removal after a restore, a
-// merge, and (through [callKey]) a priority list, a pin set and an inbox
-// mark.
-//
-// [commentID] three hundred lines below has always had this right, and is
-// where the shape comes from: the turn's key where there is one, a fresh uuid
-// where there is not.
-func opIDFor(actor Actor, verb, object string) string {
-	seed := actor.OperationSeed()
-	if seed == "" {
-		return verb + "-" + object + "-" + uuid.NewString()
-	}
-	return seed + "-" + verb + "-" + object
-}
-
 // ---- update_work_item -------------------------------------------------- //
 
 type updateWorkItem struct {
@@ -1615,6 +1610,11 @@ type updateWorkItem struct {
 }
 
 var _ tools.SeatCallable = (*updateWorkItem)(nil)
+var _ tools.Sequenced = (*updateWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*updateWorkItem) Sequenced() {}
 
 func (t *updateWorkItem) Name() string { return UpdateWorkItemTool }
 
@@ -1766,7 +1766,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// it to validate one field.
 		//
 		// The outer refusal was checked empty above and is next WRITTEN
-		// by declareLabels, so nothing reads a stale one.
+		// by inertRelations, so nothing reads a stale one.
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
 			"`assignee`", *patch.Assignee)
@@ -1774,15 +1774,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return failed(refusal), nil
 		}
 		patch.Assignee = &assignee
-	}
-	var declared []string
-	if patch.Tags != nil {
-		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
-		// the write is checked against — never the caller's default.
-		if declared, refusal = t.deps.declareLabels(ctx, actor, args,
-			before.Task.Project, *patch.Tags); refusal != "" {
-			return failed(refusal), nil
-		}
 	}
 	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
 	// exactly one delta, and the new unit's lead hears it as an ORDINARY
@@ -1828,16 +1819,42 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// A CALL THAT CHANGES NOTHING IS REFUSED rather than answered: this
+	// tool is a delivery, and an answer with no write behind it would count
+	// as one.
+	if patch.Empty() && change.Empty() {
+		return failed("update_work_item changes nothing: name at least one " +
+			"thing to change on the item."), nil
+	}
+	// EVERY REFUSAL BEFORE THE FIRST WRITE, this one included: a refusal
+	// after it is a call that changed the item and reported that it had not.
+	if !change.Empty() && t.deps.Dependencies == nil {
+		return failed(noDependencies(UpdateWorkItemTool, "`waiting_on` or `blocking`")), nil
+	}
 
-	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
+	earlier := operationsBefore(turn)
+	var ops []string
+	answer := map[string]any{"key": before.Task.Key}
+	if patch.Tags != nil {
+		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
+		// the write is checked against — never the caller's default.
+		declared, labels, refusal := t.deps.declareLabels(ctx, actor, earlier,
+			args, before.Task.Project, *patch.Tags)
+		ops = appendOp(ops, labels)
+		if refusal != "" {
+			return refusedAfter(refusal, ops...), nil
+		}
+		answer["labels_created"] = declared
+	}
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
 	// this item would put a `fields` commit in the feed that changed no
 	// fields.
 	if !patch.Empty() {
-		got, err := writer.UpdateTask(ctx,
-			opIDFor(actor, "update", before.Task.ID), before.Task.ID,
+		op := opIDFor(actor, earlier, "update", before.Task.ID)
+		ops = append(ops, op)
+		got, err := writer.UpdateTask(ctx, op, before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
 				Kind:   kind,
@@ -1846,7 +1863,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
 			}.Notify(t.deps.Leads))
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return refusedAfter(writeFailure(UpdateWorkItemTool, err), ops...), nil
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
@@ -1862,13 +1879,18 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	if !change.Empty() {
-		if t.deps.Dependencies == nil {
-			return failed(unconfiguredText(UpdateWorkItemTool)), nil
-		}
-		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
+		op := opIDFor(actor, earlier, "depend", before.Task.ID)
+		ops = append(ops, op)
+		result, err := t.deps.Dependencies(actor).Depend(ctx, op, change, t.deps.Leads)
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			if patch.Empty() {
+				return refusedAfter(writeFailure(UpdateWorkItemTool, err), ops...), nil
+			}
+			// THE ITEM'S OWN CHANGE LANDED and is reported with it. A
+			// failed call here would tell a model the whole edit did not
+			// happen, and its next attempt would make it again.
+			answer["dependencies_failed"] = dependencyFailure(err)
+			return receipt(answer, ops...)
 		}
 		t.deps.settle(ctx, result.Position)
 		if _, held := answer["outcome"]; !held {
@@ -1884,7 +1906,34 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return jsonResult(answer)
+	return receipt(answer, ops...)
+}
+
+// appendOp adds an operation a step named, or nothing when the step named none.
+func appendOp(ops []string, op string) []string {
+	if op == "" {
+		return ops
+	}
+	return append(ops, op)
+}
+
+// noDependencies is the refusal when a call names a dependency and this
+// surface has no sequence to write one — naming the arguments, because the
+// rest of the tool still works.
+func noDependencies(tool, arguments string) string {
+	return tool + " cannot write " + arguments + " here: this surface has no " +
+		"dependency writer. Make the call without them."
+}
+
+// dependencyFailure is what a call answers when its own write landed and the
+// dependency change after it did not.
+//
+// NOT [writeFailure], whose last words are that the change was not made: here
+// the rest of the call was, and a model told otherwise makes it again.
+func dependencyFailure(err error) string {
+	return fmt.Sprintf("The dependency change did not land (%v). The rest of "+
+		"this call did — send only `waiting_on` or `blocking` again, with "+
+		"update_work_item.", err)
 }
 
 // declareLabels declares the labels a write is about to use that its project
@@ -1899,32 +1948,35 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // the difference between them, and it is the only thing that can be.
 //
 // It returns what it created, so a caller that set the flag by habit still
-// sees a typo in the answer rather than on a board three weeks later.
-func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
-	args map[string]any, project string, labels []string) ([]string, string) {
+// sees a typo in the answer rather than on a board three weeks later, and the
+// operation it declared under, which is empty when it wrote nothing.
+//
+// It is a WRITE, so its callers make it after every refusal they can make:
+// a call refused after it has declared a label in a project it then did not
+// file into.
+func (d WorkDeps) declareLabels(ctx context.Context, actor Actor, earlier operations,
+	args map[string]any, project string, labels []string) (created []string, op, refusal string) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
-		return nil, ""
+		return nil, "", ""
 	}
 	if d.ProjectWriter == nil {
-		// THE REFUSAL NAMES THE OTHER ROUTE rather than failing the
-		// write: a build with no project writer still has a lead who
-		// can declare the tag, and the create that follows will say
-		// which label is missing.
-		return nil, "This build cannot declare labels at a write. Ask the " +
+		// THE REFUSAL NAMES THE OTHER ROUTE: a build with no project
+		// writer still has a lead who can declare the tag.
+		return nil, "", "This build cannot declare labels at a write. Ask the " +
 			"project lead to declare it, or file without the label."
 	}
-	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
-		"tags-"+uuid.NewString(), project, labels)
+	op = opIDFor(actor, earlier, "labels", tracker.ProjectKey(project))
+	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx, op, project, labels)
 	if err != nil {
-		return nil, writeFailure(tracker.WriteProjectTool, err)
+		return nil, op, writeFailure(tracker.WriteProjectTool, err)
 	}
 	if len(warnings) > 0 {
 		// THE WARNINGS RIDE THE CREATED LIST, because they are about
 		// exactly these slugs and the caller has one answer to read.
 		created = append(created, warnings...)
 	}
-	return created, ""
+	return created, op, ""
 }
 
 // patchFromArgs builds the patch and the change kind, or the refusal to show
@@ -2031,12 +2083,6 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	return patch, kind, ""
 }
 
-// patched is the task as the write will leave it, for the wake's snapshot.
-//
-// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
-// state this change produces and the change has not landed yet — a read after
-// the write would race every other writer, and on a lagging node would return
-// the state before it.
 // remove is a handle set minus one handle, order preserved.
 func remove(all []string, handle string) []string {
 	out := make([]string, 0, len(all))
@@ -2056,6 +2102,12 @@ func appendMissing(all []string, handle string, add bool) []string {
 	return append(all, handle)
 }
 
+// patched is the task as the write will leave it, for the wake's snapshot.
+//
+// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
+// state this change produces and the change has not landed yet — a read after
+// the write would race every other writer, and on a lagging node would return
+// the state before it.
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
 	// reimplementation, so every field added to [tracker.TaskPatch] had to
@@ -2088,6 +2140,11 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 type commentOnWorkItem struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*commentOnWorkItem)(nil)
+var _ tools.Sequenced = (*commentOnWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*commentOnWorkItem) Sequenced() {}
 
 func (t *commentOnWorkItem) Name() string { return CommentOnWorkTool }
 
@@ -2168,12 +2225,14 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	now := t.deps.now()
+	// THE ID IS DERIVED, not minted fresh, so a re-run turn posts each of
+	// its comments once rather than saying the same thing twice — and from
+	// the comment's place in the turn, so a second comment is a second
+	// comment. The engine's redelivery guarantees make a re-run turn
+	// ordinary rather than exceptional.
+	commentID, op := commentFor(actor, operationsBefore(turn), before.Task.ID)
 	comment := &tracker.Comment{
-		// THE ID IS DERIVED FROM THE OPERATION, not minted fresh, so a
-		// re-run turn posts once rather than saying the same thing
-		// twice. The engine's redelivery guarantees make a re-run turn
-		// ordinary rather than exceptional.
-		ID:         commentID(actor, before.Task.ID),
+		ID:         commentID,
 		Task:       before.Task.ID,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
@@ -2233,8 +2292,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Handle: actor.Handle, Watch: true, Auto: true,
 		},
 	}
-	got, err := writer.UpdateTask(ctx,
-		opIDFor(actor, "comment", comment.ID), before.Task.ID, before.Task.Project,
+	got, err := writer.UpdateTask(ctx, op, before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
@@ -2254,7 +2312,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Thread: thread.ThreadParties,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(CommentOnWorkTool, err)), nil
+		return refusedAfter(writeFailure(CommentOnWorkTool, err), op), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -2276,7 +2334,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if warning := unansweredWarning(before.Task, actor, comment); warning != "" {
 		answer["warnings"] = []string{warning}
 	}
-	return jsonResult(answer)
+	return receipt(answer, op)
 }
 
 // unansweredWarning says when a comment will wake somebody who is not being
@@ -2292,23 +2350,6 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 		"Use ask: %s, or @-mention them, if you are expecting a reply.",
 		task.Assignee, task.Assignee)
 }
-
-// commentID is the comment's own id, derived so a re-run turn posts once.
-//
-// A UUIDv5 over the operation and the task, because the id is a PRIMARY KEY on
-// every node: two nodes applying one record must write one row, so an id
-// generated at apply time would produce two.
-func commentID(actor Actor, taskID string) string {
-	seed := actor.OperationSeed()
-	if seed == "" {
-		seed = uuid.NewString()
-	}
-	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+actor.Handle)).String()
-}
-
-// commentNamespace is the uuid namespace comment ids are derived under. Fixed
-// for the life of the format: it is durable in every comment row.
-var commentNamespace = uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
 // ---- shared rendering -------------------------------------------------- //
 

@@ -54,6 +54,20 @@ type Work struct {
 	// Calls is what the phase actually invoked, engine-recorded.
 	Calls []ledger.Call
 
+	// Carried is how many of Calls, from the front, were answered before
+	// this round re-entered a suspended conversation: the calls the phase
+	// made before it suspended, the call it suspended on, and — for an
+	// agentic run — every call the run made in its box. Zero on a round
+	// that re-entered nothing.
+	//
+	// Every question about DELIVERY reads the whole of Calls, because a
+	// post made before the suspend reached the person whichever round made
+	// it. The one question that must not is [Acted]'s — would running this
+	// round again repeat something irreversible — because a retry re-enters
+	// the conversation the pending-run row holds, in which every carried
+	// call is already answered and none is made again. See [Work.Made].
+	Carried int
+
 	// MissingTools are names the phase called that the surface did not
 	// have. Surfaced to the reviewer, which is what turns "the model
 	// hallucinated a tool" into a next round naming the real one.
@@ -70,6 +84,16 @@ type Work struct {
 	// Rescued marks an outcome the ENGINE synthesised because the executor
 	// never submitted one. See [OutcomeIncomplete].
 	Rescued bool
+}
+
+// Made is the calls this round made itself: [Work.Calls] after its carried
+// prefix, and what a retry of the round would make again.
+//
+// A Carried outside the list is clamped rather than trusted: past the end it
+// leaves nothing, which [Acted] reads as proving nothing — the direction that
+// keeps a trigger's retry — and below zero it leaves every call.
+func (w Work) Made() []ledger.Call {
+	return w.Calls[min(max(w.Carried, 0), len(w.Calls)):]
 }
 
 // Review is what the reviewer produced.
@@ -154,7 +178,15 @@ type Phases interface {
 	// Called INSTEAD OF Execute for the first round of a resumed turn. A
 	// resumed turn that started over would re-derive work already half
 	// done; everything after that round is an ordinary round.
-	Resume(ctx context.Context, history []ledger.Iteration) (Work, Surface, error)
+	//
+	// Round is the number the loop gives the round that re-enters — one
+	// past the highest round in history, see [Input.History] — and the
+	// phase files its record under it, so the re-entered round and its
+	// review are one round on every record.
+	//
+	// The Work it returns carries the whole phase's calls and says, in
+	// [Work.Carried], how many of them were answered before the re-entry.
+	Resume(ctx context.Context, round int, history []ledger.Iteration) (Work, Surface, error)
 }
 
 // Input is one turn's starting state.
@@ -175,6 +207,13 @@ type Input struct {
 	// History is the ledger carried across a sandbox suspend. The resumed
 	// turn re-enters mid-loop, so without this it would forget every round
 	// the suspended one closed and could re-fire their deliveries.
+	//
+	// It is also where this run's round numbers start: the rounds in it are
+	// the same turn's, under the same turn id, so this run numbers its own
+	// on from the highest of them, and [Settings.MaxIterations] counts them.
+	// A resumed turn that numbered from 1 again would file a second round 1
+	// in the ledger recall_iteration reads and beside the first one's
+	// records, and its cap would bound each resume rather than the turn.
 	History []ledger.Iteration
 
 	// Resume re-enters a suspended executor rather than starting a fresh
@@ -193,6 +232,12 @@ type Settings struct {
 	// round, because a turn that runs no rounds cannot be what anyone
 	// configured — and treating it as unbounded would let a misconfiguration
 	// spend a company's whole budget on one trigger.
+	//
+	// It caps the TURN, the rounds in [Input.History] included, with one
+	// exception: the first round a run starts always runs. A turn parked on
+	// a detached run while its cap was lowered to or below the rounds it
+	// had already closed still re-enters its conversation, because leaving
+	// the coding run's answer unread would lose the work the run did.
 	MaxIterations int
 
 	// DelegationDepthLimit caps colleague-to-colleague chains. 0 disables.
@@ -244,7 +289,10 @@ type Result struct {
 	// fired.
 	Iterations []ledger.Iteration
 
-	// Rounds is how many executor passes actually ran.
+	// Rounds is the number of the last round the turn reached. A resumed
+	// turn numbers its rounds on from the ones it closed before it
+	// suspended (see [Input.History]), so this names a round of the whole
+	// turn rather than counting this run's.
 	Rounds int
 
 	// Breach names the guard that ended the turn, if one did.
@@ -345,23 +393,27 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	res := Result{Decision: phase.Failed, Iterations: slices.Clone(in.History)}
 	stall := StallDetector{}
 	notes := ""
-	maxRounds := set.iterations()
+	// THE TURN'S NUMBERING, not this run's: see [Input.History]. The cap is
+	// the turn's too, except that the first round this run starts always
+	// runs — see [Settings.MaxIterations].
+	first := nextRound(in.History)
+	lastRound := max(set.iterations(), first)
 
 	started := set.now()
 	resuming := in.Resume
-	for round := 1; round <= maxRounds; round++ {
-		// The wall-clock cap, at a ROUND BOUNDARY. Round one always runs:
-		// a cap that refused before any work started would report a turn
-		// as timed out having done nothing, which is a misconfiguration
-		// rather than a slow turn and reads better as one.
-		if elapsed := set.now().Sub(started); round > 1 &&
+	for round := first; round <= lastRound; round++ {
+		// The wall-clock cap, at a ROUND BOUNDARY. The first round always
+		// runs: a cap that refused before any work started would report a
+		// turn as timed out having done nothing, which is a
+		// misconfiguration rather than a slow turn and reads better as one.
+		if elapsed := set.now().Sub(started); round > first &&
 			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
 			res.Breach = &Breach{
 				Kind: types.GuardScheduledTimeout,
 				Detail: fmt.Sprintf(
 					"the turn ran %s across %d round(s), past its %s cap, so no "+
 						"further round was started", elapsed.Round(time.Second),
-					round-1, set.MaxWallClock),
+					round-first, set.MaxWallClock),
 			}
 			return res, nil
 		}
@@ -378,10 +430,10 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		if resuming {
 			// The first round of a resumed turn re-enters the suspended
 			// conversation, and only this round: if the resumed executor
-			// loops back, round two is an ordinary round.
+			// loops back, the round after it is an ordinary round.
 			resuming, entered = false, "resume"
 			err = guarded(ctx, in.RunID, entered, round, func() (callErr error) {
-				work, surface, callErr = ph.Resume(ctx, res.Iterations)
+				work, surface, callErr = ph.Resume(ctx, round, res.Iterations)
 				return callErr
 			})
 		} else {
@@ -397,8 +449,12 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// reads the turn through it.
 		//
 		// Accumulated with ||, never assigned: a round that read nothing
-		// must not un-say what round one posted.
-		res.Acted = res.Acted || Acted(work.Calls, surface)
+		// must not un-say what round one posted. And read off the calls the
+		// round MADE, never the ones it carried into a re-entered
+		// conversation: a retry re-enters that conversation with every
+		// carried call already answered, so none of them is what a retry
+		// would repeat — see [Work.Carried].
+		res.Acted = res.Acted || Acted(work.Made(), surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
 		res.Delivered = Answered(work.Calls, surface, in.Reply)
@@ -517,14 +573,28 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		})
 	}
 
-	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.RunID, "max", maxRounds)
+	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.RunID, "max", lastRound)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
 		Kind: types.GuardMaxIter,
 		Detail: fmt.Sprintf("executor/review loop exhausted at %d rounds without done",
-			maxRounds),
+			lastRound),
 	}
 	return res, nil
+}
+
+// nextRound is the number of the first round a run starts: one past the
+// highest round in history, or 1 when there is none.
+//
+// The HIGHEST rather than the last entry's, so a ledger that holds one number
+// twice still yields a number no closed round has — a ledger that crossed a
+// build which numbered a resumed turn's rounds from 1 holds exactly that.
+func nextRound(history []ledger.Iteration) int {
+	highest := 0
+	for _, it := range history {
+		highest = max(highest, it.Iteration)
+	}
+	return highest + 1
 }
 
 // guarded runs one phase call, turning a panic inside it into a [PanicError].

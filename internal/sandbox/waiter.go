@@ -78,6 +78,11 @@ type WaiterOptions struct {
 	// ClaimDuty gates the tick in a fleet. Nil means single-node.
 	ClaimDuty DutyFunc
 
+	// Headroom is read before a finished job's completion is raised (see
+	// [Waiter.hasRoom]). Nil raises every completion, which is what a node
+	// with no budget to enforce does.
+	Headroom Headroom
+
 	// Now is the clock, injectable so a test can expire a pause without
 	// waiting half an hour.
 	Now func() time.Time
@@ -95,8 +100,9 @@ type WaiterOptions struct {
 // push signal could only shave less than one interval off jobs that run for
 // minutes.
 //
-// On detected completion it publishes SandboxRunCompleted; the coordinator does
-// the at-most-once claim, the collection, and the resume of the suspended
+// On detected completion it publishes SandboxRunCompleted, once the seat's
+// budget has room for the turn it resumes ([Waiter.hasRoom]); the coordinator
+// does the at-most-once claim, the collection, and the resume of the suspended
 // Execute loop. A duplicate signal is harmless — successive ticks can both fire
 // before the first claim lands, and queue delivery is at-least-once, but the
 // coordinator claims once.
@@ -113,6 +119,7 @@ type Waiter struct {
 
 	interval  time.Duration
 	claimDuty DutyFunc
+	headroom  Headroom
 	now       func() time.Time
 
 	mu sync.Mutex
@@ -120,6 +127,10 @@ type Waiter struct {
 	// on any success. Per-turn rather than per-box because a box id can be
 	// cleared and re-minted on a reseed while the run continues.
 	failures map[string]connectStreak
+	// waits is the launch of every run whose completion this waiter is
+	// withholding for want of budget room, by turn: what says a wait was
+	// already announced ([Waiter.hasRoom]).
+	waits map[string]string
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -138,8 +149,10 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		manager:   opts.Manager,
 		interval:  opts.Interval,
 		claimDuty: opts.ClaimDuty,
+		headroom:  opts.Headroom,
 		now:       opts.Now,
 		failures:  map[string]connectStreak{},
+		waits:     map[string]string{},
 		stopped:   make(chan struct{}),
 	}
 	if w.interval <= 0 {
@@ -211,6 +224,13 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	w.forget(runs)
+	// The one listing of every run the fleet makes, so it is where the
+	// index an answer is matched through is kept whole: a run a build that
+	// predates the index parked gets its entry here within a tick, whatever
+	// seat it is on. Not a reason to skip the poll when it cannot be kept.
+	if err := w.pending.IndexAwaiting(ctx, "", runs); err != nil {
+		log.WarnContext(ctx, "sandbox_awaiting_index_not_repaired", "error", err.Error())
+	}
 
 	fired := 0
 	for _, run := range runs {
@@ -239,6 +259,13 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 			// gone → the box vanished; fire anyway so the coordinator frees
 			// the seat and marks the run failed (collect will fail to
 			// reconnect) instead of hanging.
+			//
+			// Either way only once the seat's budget has room: the
+			// coordinator claims no completion before that, gone box or
+			// not, since the event does not say which.
+			if !w.hasRoom(ctx, run) {
+				continue
+			}
 			if err := w.publishCompletion(ctx, run); err != nil {
 				log.WarnContext(ctx, "sandbox_completion_publish_failed",
 					"turn_id", run.TurnID, "error", err.Error())
@@ -303,6 +330,75 @@ func (w *Waiter) forget(runs []PendingRun) {
 			delete(w.failures, id)
 		}
 	}
+	for id := range w.waits {
+		if !active[id] {
+			delete(w.waits, id)
+		}
+	}
+}
+
+// hasRoom reports whether a finished job's completion may be raised: whether
+// its seat's budget has room for the model call the turn it resumes sends
+// first.
+//
+// A COMPLETION WITH NO ROOM IS WITHHELD, which is what keeps a budget wait
+// quiet. The coordinator claims no completion whose turn its budget would stop
+// ([Coordinator.OnCompleted]), and the run stays running with its job done, so
+// a completion raised anyway would be raised again on every poll for as long
+// as the cap held — each one a `sandbox_run_completed` the event store keeps,
+// and each one declined. Withheld, the box is still polled, and
+// so kept alive, and the first poll that finds room raises the completion like
+// any other.
+//
+// THE WAIT IS SAID ONCE by this waiter, when it first withholds a run's
+// completion: a warning, and one budget_exhausted naming the run's turn. Later
+// polls that still find no room are quiet, and the first to find room says the
+// wait is over. The record of which waits were said is this process's, so a
+// waiter that takes the duty over mid-wait says it once more. A counter that
+// cannot be read withholds too, and says so on every poll: the turn's first
+// round would be refused on it as well.
+func (w *Waiter) hasRoom(ctx context.Context, run PendingRun) bool {
+	if w.headroom == nil || run.AgentHandle == "" {
+		return true
+	}
+	room, err := w.headroom.Room(ctx, run.AgentHandle)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_completion_budget_unreadable", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "error", err.Error(),
+			"detail", "the job's completion is withheld until a poll can read the seat's token "+
+				"budget: the resumed turn's first round is refused on a counter that cannot be read")
+		return false
+	case room.OK:
+		w.mu.Lock()
+		_, waited := w.waits[run.TurnID]
+		delete(w.waits, run.TurnID)
+		w.mu.Unlock()
+		if waited {
+			log.InfoContext(ctx, "sandbox_completion_budget_room", "turn_id", run.TurnID,
+				"agent", run.AgentHandle, "detail", "the seat's token budget has room again, so "+
+					"the job's completion is raised")
+		}
+		return true
+	}
+	w.mu.Lock()
+	said := w.waits[run.TurnID] == run.LaunchID
+	w.waits[run.TurnID] = run.LaunchID
+	w.mu.Unlock()
+	if said {
+		log.DebugContext(ctx, "sandbox_completion_still_waiting_for_budget", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit)
+		return false
+	}
+	log.WarnContext(ctx, "sandbox_completion_waiting_for_budget", "turn_id", run.TurnID,
+		"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit,
+		"detail", "the job has finished and its turn cannot continue until the token budget has "+
+			"room: its first round would be refused before it was sent, so the completion is "+
+			"withheld, and every poll reads the budget again")
+	announceBudgetWait(ctx, w.queue, resumeOfRun(run), room, events.TraceContext{
+		TraceID: run.TraceID, ParentSpanID: run.SpanID,
+	})
+	return false
 }
 
 type pollState int

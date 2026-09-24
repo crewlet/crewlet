@@ -42,6 +42,11 @@ import (
 type mergeWorkItem struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*mergeWorkItem)(nil)
+var _ tools.Sequenced = (*mergeWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*mergeWorkItem) Sequenced() {}
 
 func (t *mergeWorkItem) Name() string { return tracker.MergeWorkItemTool }
 
@@ -131,21 +136,21 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	cancelled := before.Task
 	cancelled.Status = tracker.StatusCancelled
 	cancelled.StatusGroup = tracker.StatusCancelled.Group()
-	got, err := t.deps.Merges(actor).MergeDuplicates(ctx,
-		opIDFor(actor, "merge", before.Task.ID), before.Task.ID, survivor,
-		moveSubtasks(args), tracker.Wake{
+	op := opIDFor(actor, operationsBefore(turn), "merge", before.Task.ID)
+	got, err := t.deps.Merges(actor).MergeDuplicates(ctx, op, before.Task.ID,
+		survivor, moveSubtasks(args), tracker.Wake{
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.MergeWorkItemTool, err)), nil
+		return refusedAfter(writeFailure(tracker.MergeWorkItemTool, err), op), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"key": before.Task.Key, "merged_into": survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
 		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, op)
 }
 
 // moveSubtasks reads the one knob this verb has, and ABSENT IS TRUE.

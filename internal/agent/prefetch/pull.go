@@ -61,10 +61,10 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 	// is [ErrNoSimilarity] and a reason to use another mode, the second is
 	// an outage worth retrying, and naming one as the other sends the
 	// model the wrong way.
-	if f.src.Embed == nil {
+	if !f.src.Embed.Usable() {
 		return nil, ErrNoSimilarity
 	}
-	vector, err := f.src.Embed(ctx, text)
+	vector, err := f.src.Embed.Embed(ctx, text)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("prefetch: embed the search text for %s: %w", handle, err)
@@ -73,8 +73,8 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 			"vector for %s's search text", handle)
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: limit, Offset: offset,
-		Filter: filter,
+		Handle: handle, Embedding: vector, Model: f.src.Embed.Model,
+		Limit: limit, Offset: offset, Filter: filter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)

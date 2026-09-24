@@ -54,15 +54,15 @@ type Record struct {
 	AgentRole string `json:"agent_role"`
 
 	Phase string `json:"phase"`
-	// HostPhase is the phase a nested call ran under: an auxiliary
-	// learning worker's own LLM call, or the round-cap extension judge.
+	// HostPhase is the phase a nested call ran under: the executor round
+	// that delegated a "subagent" task, or the phase that asked the
+	// round-cap extension judge.
 	HostPhase string `json:"host_phase"`
 	// Worker names the worker behind the call: on a "subagent" phase the
-	// `workers:` template the delegated task ran, and on an "auxiliary"
-	// one the learning worker — the event catalogue's own definition of
-	// the field. Empty on every other phase, and on a delegation that
-	// wrote its prompt inline rather than naming a template. The worker
-	// rollup keys on the PAIR; see [workerOf].
+	// `workers:` template the delegated task ran — the event catalogue's
+	// own definition of the field. Empty on every other phase, and on a
+	// delegation that wrote its prompt inline rather than naming a
+	// template. The worker rollup keys on the PAIR; see [workerOf].
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
 
@@ -140,12 +140,14 @@ type ModelRow struct {
 }
 
 // WorkerRow is the per-worker breakdown of a rollup: a delegated task's
-// `workers:` template, or a learning worker.
+// `workers:` template.
 //
 // ONE ROW PER PHASE AND NAME, and Phase says which kind of worker the row is.
-// Nothing keeps the two kinds' names apart — a template may be called anything
-// the `workers:` key grammar admits, a learning worker's name included — so a
-// row keyed on the name alone would sum two unrelated workers into one figure.
+// [workerOf] admits a second kind, the "auxiliary" phase, whose name a
+// template may share — a template may be called anything the `workers:` key
+// grammar admits — so a row keyed on the name alone would be one two workers
+// could sum into. No record of this build carries that second kind: a learning
+// worker's calls publish no phase record (see [PhaseAuxiliary]).
 type WorkerRow struct {
 	Phase  string `json:"phase"`
 	Worker string `json:"worker"`
@@ -410,8 +412,10 @@ func Aggregate(records []Record, opts Options) Rollup {
 	return out
 }
 
-// The phases whose records name a worker: a learning worker's own call, and a
-// delegated task. Named here rather than imported from the event catalogue so
+// The phases whose records may name a worker: a delegated task, and the
+// "auxiliary" name of a learning worker's call — which no record of this build
+// carries, since those calls publish no phase record, so their spend is in no
+// rollup here. Named here rather than imported from the event catalogue so
 // this package stays a leaf; a test holds them to the catalogue's values.
 const (
 	PhaseAuxiliary = "auxiliary"
@@ -437,8 +441,8 @@ func (id workerID) band() string { return id.phase + "/" + id.worker }
 //
 // Keyed on the PHASE as well as the name, for two reasons. A Worker on a phase
 // that names none is a stray value, and a bare non-empty check would fold it
-// into a worker's total as spend that worker never made. And a template and a
-// learning worker may carry one name (see [WorkerRow]), which only the phase
+// into a worker's total as spend that worker never made. And the two phases
+// admitted here may carry one name (see [WorkerRow]), which only the phase
 // tells apart.
 //
 // ONE PREDICATE for [Aggregate] and [Bucketed], which is what keeps the

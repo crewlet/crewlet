@@ -216,6 +216,12 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
+		// THE TURN'S OWN SEARCH, said so. It changes nothing about the
+		// answer; it files the search's duration apart from somebody's
+		// deliberate search, because the two are held to different
+		// latency figures and a series holding both describes neither
+		// (see [knowledge.Query.Prefetch]).
+		Prefetch: true,
 	})
 	if answer.Failed {
 		return FailedKnowledgeHint, 0

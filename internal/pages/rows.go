@@ -118,9 +118,9 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 
 // Evicted reports this node's own eviction, FROM ITS OWN APPLIED ROWS.
 //
-// Not from coordination, which is the point: a wedged coordination path is a
-// precondition of an eviction being permitted at all, so the source that is
-// still fresh in exactly that failure is this node's own replicated table.
+// Not from coordination: an eviction is a record on this log, so the rows this
+// node applied from it answer on every append without a round trip, and answer
+// whether or not coordination does.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	if f == nil || f.db == nil || f.nodeID == "" {
 		return false, nil

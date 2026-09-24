@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -39,7 +42,10 @@ import (
 // instant; the audit row written without the checkpoint's instant names the
 // year one as the stream walked away from; and the audit row's record id
 // spelled apart from the op id the record was published under names a record
-// nothing published.
+// nothing published; a heartbeat that states no instant leaves every peer
+// judging this node by its generation alone; and one that states the live
+// stream's rather than the one its applier runs on tells every peer this node
+// holds the live stream's history before it has applied a record of it.
 func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -127,6 +133,27 @@ func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 	}
 	live := rebuilt.CachedInfo().Created.UTC()
 	s.publishPositions(t.Context())
+	// THE ROW STATES THE STREAM THE APPLIER RUNS ON — the deleted one, until
+	// this node follows the live one — because that is what a peer's
+	// reanchor judges this node's history by.
+	stated := func() time.Time {
+		t.Helper()
+		rows, err := back.Fleet.Positions(t.Context())
+		if err != nil {
+			t.Fatalf("read the positions register: %v", err)
+		}
+		for _, row := range rows {
+			if row.NodeID == s.nodeID {
+				return row.Domains[tracker.Domain{}.Name()].StreamCreatedAt
+			}
+		}
+		t.Fatalf("the register holds no row for %s", s.nodeID)
+		return time.Time{}
+	}
+	if got := stated(); !got.Truncate(time.Microsecond).Equal(was) {
+		t.Fatalf("after the rebuild this node's row states stream %s, want the "+
+			"deleted %s its applier still runs on", got, was)
+	}
 
 	// THE STATUS NAMES THE LIVE STREAM, not the one this node booted on.
 	created, generation, err := e.ReanchorStatus(t.Context(), spec.Name)
@@ -194,6 +221,10 @@ func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 			"live %s", running.identity(), live)
 	}
 	s.publishPositions(t.Context())
+	if got := stated(); !got.Equal(live) {
+		t.Errorf("after following, this node's row states stream %s, want the "+
+			"live %s", got, live)
+	}
 	health, err := s.health(t.Context(), running)
 	if err != nil {
 		t.Fatalf("health: %v", err)
@@ -241,9 +272,13 @@ func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 // and a second reanchor halts and relaunches the loop the first is holding
 // down.
 //
+// Each refusal is a REFUSAL — the operator waits for the transition that is
+// running — rather than a failure to run again at once.
+//
 // Mutation: drop the reanchor from the rejoin's single-flight check and the
 // adoption starts mid-transition; drop either check from beginReanchor and the
-// reanchor starts mid-adoption, or beside another.
+// reanchor starts mid-adoption, or beside another; drop the refusal from
+// either and it reads as a failure.
 func TestAReanchorAndARuntimeAdoptionExcludeEachOther(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
@@ -265,7 +300,8 @@ func TestAReanchorAndARuntimeAdoptionExcludeEachOther(t *testing.T) {
 	if adopting() {
 		t.Fatal("an adoption started while a reanchor was running")
 	}
-	if err := s.beginReanchor(); !errors.Is(err, errTransitionRunning) {
+	if err := s.beginReanchor(); !errors.Is(err, errTransitionRunning) ||
+		!errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a second reanchor beside the first = %v, want it refused", err)
 	}
 	s.endReanchor()
@@ -274,7 +310,8 @@ func TestAReanchorAndARuntimeAdoptionExcludeEachOther(t *testing.T) {
 	if !adopting() {
 		t.Fatal("no adoption started once the reanchor had finished")
 	}
-	if err := s.beginReanchor(); !errors.Is(err, errTransitionRunning) {
+	if err := s.beginReanchor(); !errors.Is(err, errTransitionRunning) ||
+		!errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor during an adoption = %v, want it refused", err)
 	}
 	close(release)
@@ -283,4 +320,224 @@ func TestAReanchorAndARuntimeAdoptionExcludeEachOther(t *testing.T) {
 		t.Fatalf("a reanchor after the adoption finished: %v", err)
 	}
 	s.endReanchor()
+}
+
+// ONLY A PEER ON THE LIVE STREAM HOLDS HISTORY A REANCHOR WOULD DISCARD.
+//
+// ONE DEFINITION, because the permission check counts these and the refusal
+// names them: if the two disagreed, a reanchor would refuse naming nobody, or
+// permit while naming someone. What a row is judged on is the stream its
+// numbers count on — the instant it states — at any generation, because the
+// peer that holds the live stream's history is the one that re-anchored onto
+// it, a generation above this node. A row from a build that states no instant
+// is judged by this node's generation, the only test it allows.
+//
+// Mutation: judge a stated instant by the generation instead and the
+// re-anchored peer goes uncounted while the rebuilt peer is counted.
+func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T) {
+	t.Parallel()
+	deleted := time.Date(2031, 4, 1, 3, 0, 0, 0, time.UTC)
+	live := time.Date(2031, 4, 2, 3, 0, 0, 123_456_789, time.UTC)
+	rows := []coord.NodePositions{
+		{NodeID: "self", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 3, AppliedThrough: 900, StreamCreatedAt: deleted},
+		}},
+		{NodeID: "re-anchored", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 5, StreamCreatedAt: live},
+		}},
+		{NodeID: "on-the-deleted-stream", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 3, AppliedThrough: 900, StreamCreatedAt: deleted},
+		}},
+		{NodeID: "followed-applied-nothing", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 0, StreamCreatedAt: live},
+		}},
+		{NodeID: "older-build-this-generation", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 3, AppliedThrough: 900},
+		}},
+		{NodeID: "older-build-another-generation", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 2, AppliedThrough: 900},
+		}},
+		{NodeID: "runs-another-domain", Domains: map[string]coord.DomainPosition{
+			"vectors": {Generation: 4, AppliedThrough: 900, StreamCreatedAt: live},
+		}},
+	}
+	got := hydratedPeers(rows, "tracker", 3, live, "self")
+	want := []string{"re-anchored", "older-build-this-generation"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("hydrated peers = %v, want %v: this node is not its own peer, a "+
+			"peer still counting on the deleted stream holds none of the live "+
+			"one's history, one that has applied nothing holds no history, and "+
+			"a row stating no instant is judged by this node's generation",
+			got, want)
+	}
+}
+
+// A FLEET WHOSE STREAM WAS REBUILT UNDER IT CAN RE-ANCHOR.
+//
+// A rebuild leaves every node at the generation it had, having applied records
+// off a stream that no longer exists. Counted by generation, every node would
+// count every other as hydrated, each one's reanchor would be refused naming
+// the others — and no flag overrides that refusal and nothing expires it, so
+// the fleet could never follow its own log. Counted by the stream each row
+// states, nobody is hydrated on the live stream until somebody re-anchors onto
+// it, and then that node is exactly the one the others are told to adopt from.
+//
+// And the most-caught-up rule compares one stream's numbers: the node furthest
+// along the deleted stream is the one permitted, whatever a node still on an
+// older stream reports.
+//
+// Mutation: count by generation alone and the furthest node is refused naming
+// its peers; take the highest position across every stream and it is refused
+// over node-d's number on a stream the fleet left before this one.
+func TestAFleetWhoseStreamWasRebuiltCanReanchor(t *testing.T) {
+	t.Parallel()
+	older := time.Date(2031, 3, 1, 3, 0, 0, 0, time.UTC)
+	deleted := time.Date(2031, 4, 1, 3, 0, 0, 0, time.UTC)
+	live := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	on := func(seq uint64, generation uint32, stream time.Time) coord.DomainPosition {
+		return coord.DomainPosition{Seq: seq, AppliedThrough: seq,
+			Generation: generation, StreamCreatedAt: stream}
+	}
+	// node-d NEVER FOLLOWED the reanchor before this one: it still reports
+	// a position on the stream the fleet left then.
+	fleet := func(b coord.DomainPosition) []coord.NodePositions {
+		var rows []coord.NodePositions
+		for node, at := range map[string]coord.DomainPosition{
+			"node-a": on(900, 3, deleted), "node-b": b,
+			"node-c": on(880, 3, deleted), "node-d": on(5000, 2, older),
+		} {
+			rows = append(rows, coord.NodePositions{NodeID: node,
+				Domains: map[string]coord.DomainPosition{"tracker": at}})
+		}
+		return rows
+	}
+	inputs := func(rows []coord.NodePositions, self string, position uint64) statelog.ReanchorInputs {
+		return statelog.ReanchorInputs{
+			StreamCreatedAt: live, Generation: 3, Position: position,
+			Highest:          highestOn(rows, "tracker", 3, deleted),
+			PeersHydrated:    len(hydratedPeers(rows, "tracker", 3, live, self)),
+			RegisterReadable: true,
+		}
+	}
+	confirmed := statelog.ReanchorGuard{Confirm: live.Format(time.RFC3339)}
+
+	rows := fleet(on(905, 3, deleted))
+	for _, self := range []string{"node-a", "node-b", "node-c"} {
+		if got := hydratedPeers(rows, "tracker", 3, live, self); len(got) != 0 {
+			t.Errorf("%s counts %v as hydrated on the live stream, and every one "+
+				"of them is counting on another", self, got)
+		}
+	}
+	if _, err := statelog.PermitReanchor(inputs(rows, "node-b", 905), confirmed); err != nil {
+		t.Fatalf("the rebuilt fleet's furthest node was refused: %v", err)
+	}
+	if _, err := statelog.PermitReanchor(inputs(rows, "node-a", 900), confirmed); err == nil {
+		t.Fatal("a node behind its peers on the deleted stream was permitted " +
+			"unforced, so the records only node-b applied are what it discards")
+	}
+
+	// ONCE node-b HAS RE-ANCHORED AND APPLIED ITS RECORD, it is the peer the
+	// others adopt from — a generation above them.
+	rows = fleet(on(1, 4, live))
+	if got := hydratedPeers(rows, "tracker", 3, live, "node-a"); !slices.Equal(got, []string{"node-b"}) {
+		t.Fatalf("after node-b re-anchored, node-a counts %v as hydrated, want "+
+			"[node-b]", got)
+	}
+}
+
+// A REFUSED REANCHOR LEAVES THE DOMAIN'S APPLIER RUNNING.
+//
+// A refusal is the ordinary answer on a healthy fleet — a confirmation that
+// names another instant, a peer hydrated on the live stream — and a transition
+// that stopped the loop before deciding would interrupt the domain it refused:
+// every caller waiting on the loop told it stopped, the caught-up latch
+// cleared when it started again. The permission is decided while the loop
+// runs, so a refusal touches nothing.
+//
+// Mutation: halt the applier before the permission is decided and each
+// refusal below ends the loop it found and starts another.
+func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	s := e.native.log
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	running := s.Domain(tracker.Domain{}.Name())
+	spec := tracker.Domain{}.Stream()
+
+	// THE LOOP'S OWN DONE CHANNEL, which a halt closes and a relaunch
+	// replaces: the same open channel after a call is the same loop,
+	// never interrupted.
+	loop := func() chan struct{} {
+		s.applyMu.Lock()
+		defer s.applyMu.Unlock()
+		return running.applyDone
+	}
+	stillRunning := func(refusal string, before chan struct{}) {
+		t.Helper()
+		if after := loop(); after != before {
+			t.Fatalf("%s: the refused reanchor ended the tracker's apply loop "+
+				"and started another", refusal)
+		}
+		select {
+		case <-before:
+			t.Fatalf("%s: the refused reanchor ended the tracker's apply loop", refusal)
+		default:
+		}
+	}
+
+	created, _, err := e.ReanchorStatus(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+
+	before := loop()
+	if before == nil {
+		t.Fatal("the tracker's applier is not running")
+	}
+	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: spec.Name, Confirm: created.Add(time.Hour).Format(time.RFC3339),
+		By: "ops",
+	}); !errors.Is(err, statelog.ErrReanchorRefused) {
+		t.Fatalf("a confirmation naming another instant = %v, want a refusal", err)
+	}
+	stillRunning("a confirmation naming another instant", before)
+
+	// A PEER HYDRATED ON THE LIVE STREAM, which is what a healthy fleet's
+	// every other node is.
+	if err := back.Fleet.PutPositions(t.Context(), coord.NodePositions{
+		NodeID: "node-peer", At: time.Now().UTC(),
+		Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {
+			Seq: 7, AppliedThrough: 7,
+			Generation:      running.runner.Committed().Generation,
+			StreamCreatedAt: created,
+		}},
+	}); err != nil {
+		t.Fatalf("publish the peer's row: %v", err)
+	}
+	_, err = e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: spec.Name, Confirm: created.Format(time.RFC3339Nano), By: "ops",
+	})
+	if !errors.Is(err, statelog.ErrReanchorRefused) {
+		t.Fatalf("a reanchor beside a hydrated peer = %v, want a refusal", err)
+	}
+	if !strings.Contains(err.Error(), "node-peer") {
+		t.Errorf("the refusal does not name the hydrated peer: %v", err)
+	}
+	stillRunning("a hydrated peer", before)
 }

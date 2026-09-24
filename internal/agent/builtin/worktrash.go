@@ -47,6 +47,11 @@ type TrashWriter interface {
 type removeWorkItem struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*removeWorkItem)(nil)
+var _ tools.Sequenced = (*removeWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*removeWorkItem) Sequenced() {}
 
 func (t *removeWorkItem) Name() string { return tracker.RemoveWorkItemTool }
 
@@ -113,20 +118,20 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Removed = &tracker.Tombstone{
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
-	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx,
-		opIDFor(actor, "remove", before.Task.ID), before.Task.ID,
+	op := opIDFor(actor, operationsBefore(turn), "remove", before.Task.ID)
+	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx, op, before.Task.ID,
 		before.Task.Project, argBool(args, "subtree"),
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RemoveWorkItemTool, err)), nil
+		return refusedAfter(writeFailure(tracker.RemoveWorkItemTool, err), op), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"key": before.Task.Key, "removed": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, op)
 }
 
 // ---- restore_work_item -------------------------------------------------- //
@@ -134,6 +139,11 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 type restoreWorkItem struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*restoreWorkItem)(nil)
+var _ tools.Sequenced = (*restoreWorkItem)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*restoreWorkItem) Sequenced() {}
 
 func (t *restoreWorkItem) Name() string { return tracker.RestoreWorkItemTool }
 
@@ -195,18 +205,18 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	after := before.Task
 	after.Removed = nil
-	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx,
-		opIDFor(actor, "restore", before.Task.ID), before.Task.ID,
+	op := opIDFor(actor, operationsBefore(turn), "restore", before.Task.ID)
+	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx, op, before.Task.ID,
 		before.Task.Project,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RestoreWorkItemTool, err)), nil
+		return refusedAfter(writeFailure(tracker.RestoreWorkItemTool, err), op), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"key": before.Task.Key, "restored": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, op)
 }

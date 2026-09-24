@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -781,13 +782,16 @@ type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
 
-	// SandboxRuns returns every record, by turn id.
+	// SandboxRuns returns every record, by turn id, and nothing that is not
+	// a run's record: the index of runs parked on an answer
+	// ([AwaitingRuns]) is not among them.
 	//
-	// Every listing this serves — the seat's busy check, the boot recovery
-	// pass, the pause reaper, the clarification match — filters on fields
+	// Every listing this serves — the seat's busy check, the recovery pass,
+	// the completion poll and its pause reaper — filters on fields
 	// coordination cannot see, so there is one read and the caller decodes.
 	// The set is bounded by the number of seats that can be mid-run at
-	// once, which is what makes that affordable.
+	// once, which is what makes that affordable for a pass per poll or per
+	// seat acquired; a question asked per delivery reads the index instead.
 	SandboxRuns(ctx context.Context) ([]Record, error)
 
 	// CreateSandboxRun writes a new record, reporting whether it was new.
@@ -808,6 +812,73 @@ type SandboxRuns interface {
 	// DeleteSandboxRun removes a record at a version, reporting whether
 	// that version still held.
 	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
+}
+
+// AwaitingRun is one entry of the index of detached runs parked on a person's
+// answer: the seat the run belongs to, the conversation its answer arrives on,
+// and the run.
+type AwaitingRun struct {
+	Handle       string
+	Conversation string
+	TurnID       string
+}
+
+// Validate reports why an entry cannot be filed: every field is part of its
+// address, and an address with an empty segment is one no listing reads back.
+func (a AwaitingRun) Validate() error {
+	if a.Handle == "" || a.Conversation == "" || a.TurnID == "" {
+		return fmt.Errorf("coord: an awaiting run names its seat, its conversation and its "+
+			"run, and this one is %+v", a)
+	}
+	return nil
+}
+
+// AwaitingRuns is the fleet's index of detached runs parked on a person's
+// answer, by the seat and the conversation the answer arrives on.
+//
+// # Why there is an index
+//
+// The answer arrives as an ordinary delivery on the seat's inbox, and every
+// delivery on a conversation is offered to the run parked on it before it can
+// become a turn. [SandboxRuns] is keyed by run alone, so answering "is a run
+// parked on this conversation" there reads every run record the fleet holds —
+// each up to [MaxRecordBytes] — on every delivery. The index answers it with
+// the entries of one seat's one conversation.
+//
+// # An entry is a hint, and the run's record is the answer
+//
+// An entry can name a run that has moved on — claimed, relaunched, finished —
+// so a reader reads the run it names and acts only on what that record says: a
+// stale entry resolves to "not waiting", never to a run it does not describe.
+// What the index must never do is MISS a parked run, so its writer files an
+// entry BEFORE the run's record says the run is waiting, and drops it only
+// AFTER the record is gone.
+//
+// # RAISES rather than answering empty
+//
+// "Nothing is parked here" turns an answer into a new turn and leaves the run
+// that asked waiting for it, so a read that failed must never be able to say
+// that.
+//
+// # No retention
+//
+// The index has the runs' own, for their reason: a parked run waits days.
+type AwaitingRuns interface {
+	// FileAwaitingRun files one entry. Filing an entry already filed is not
+	// an error. An entry [AwaitingRun.Validate] refuses is an error.
+	FileAwaitingRun(ctx context.Context, entry AwaitingRun) error
+
+	// AwaitingRunsOn returns the runs filed for one seat and one
+	// conversation, by turn id. None is an empty slice and no error.
+	AwaitingRunsOn(ctx context.Context, handle, conversation string) ([]string, error)
+
+	// AllAwaitingRuns returns every entry, ordered by seat, conversation and
+	// run.
+	AllAwaitingRuns(ctx context.Context) ([]AwaitingRun, error)
+
+	// DropAwaitingRun removes one entry. Dropping one that is not filed is
+	// not an error.
+	DropAwaitingRun(ctx context.Context, entry AwaitingRun) error
 }
 
 // BridgeCallRecord is one tool call a bridged coding run made, as the fleet
@@ -1354,6 +1425,7 @@ type Fleet interface {
 	Follows
 	Fires
 	SandboxRuns
+	AwaitingRuns
 	BridgeCalls
 	Secrets
 	Integrations

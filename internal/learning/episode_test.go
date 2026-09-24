@@ -30,11 +30,18 @@ func episodes(t *testing.T, opts ...func(*store.Options)) *learning.Episodes {
 	return learning.NewEpisodes(db)
 }
 
+// testModel is the embedding model every fixture vector is filed under, and
+// every recall in these tests asks with.
+const testModel = "test-model"
+
+// ep is one episode by a seat. It names [testModel] as its embedding model,
+// which the store keeps only on a row that is given a vector.
 func ep(id, handle string, at time.Time) learning.Episode {
 	return learning.Episode{
 		ID: id, Handle: handle, Role: "CTO", TurnID: "turn-" + id,
 		StartedAt: at, EndedAt: at, TaskSummary: "did " + id,
 		ReviewOutcome: "done", Duration: 3 * time.Second,
+		EmbeddingModel: testModel,
 	}
 }
 
@@ -323,6 +330,14 @@ func TestAnEmbeddingSurvivesAndAMissingOneIsNotAFailure(t *testing.T) {
 	if byID["b"].Embeddings != nil {
 		t.Errorf("an absent embedding came back as %v", byID["b"].Embeddings)
 	}
+	// THE MODEL IS KEPT BESIDE A VECTOR AND ONLY THERE: both rows were
+	// handed one, and a row with no vector names no model it was made by.
+	if got := byID["a"].EmbeddingModel; got != testModel {
+		t.Errorf("the embedded row came back filed under model %q, want %q", got, testModel)
+	}
+	if got := byID["b"].EmbeddingModel; got != "" {
+		t.Errorf("a row with no vector came back naming the model %q", got)
+	}
 }
 
 func TestAWrongWidthEmbeddingIsRefusedAtWrite(t *testing.T) {
@@ -359,7 +374,7 @@ func TestRecallRanksBySimilarity(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -413,7 +428,7 @@ func TestRecallFiltersBeforeItRanks(t *testing.T) {
 	recall := func(f learning.EpisodeFilter, limit, offset int) []string {
 		t.Helper()
 		hits, err := e.Recall(t.Context(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+			Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 			Limit: limit, Offset: offset, Filter: f,
 		})
 		if err != nil {
@@ -451,7 +466,7 @@ func TestRecallSkipsRowsWithNoEmbedding(t *testing.T) {
 	mustAppend(t, e, seen)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -479,7 +494,7 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	}
 
 	hits, _ := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 	})
 	if len(hits) != 1 || hits[0].Episode.ID != "mine" {
 		t.Errorf("hits = %v, want only this seat's raw episode", hitIDs(hits))
@@ -487,7 +502,7 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	// Asking for clusters explicitly returns them, or the compaction
 	// worker's output would be unreadable.
 	hits, _ = e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 		Kinds: []learning.Kind{learning.KindCompacted},
 	})
 	if len(hits) != 1 || hits[0].Episode.ID != "cluster" {
@@ -507,7 +522,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, e, x)
 	}
 	first, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 2,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -519,7 +534,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := e.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+			Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 2,
 		})
 		if len(again) != len(first) || again[0].Episode.ID != first[0].Episode.ID {
 			t.Fatalf("unstable ranking: %v then %v", hitIDs(first), hitIDs(again))
@@ -539,7 +554,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, same, x)
 	}
 	tied, err := same.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -550,7 +565,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := same.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+			Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 3,
 		})
 		if got := hitIDs(again); !slices.Equal(got, want) {
 			t.Fatalf("fully-tied ranking is unstable: %v then %v", want, got)
@@ -594,7 +609,7 @@ func TestAnEpisodeFromAnotherEmbeddingSpaceNeverSpendsARecallSlot(t *testing.T) 
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0}, Limit: 1,
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0}, Limit: 1,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -614,6 +629,70 @@ func TestRecallRefusesAQueryItCannotAnswer(t *testing.T) {
 	}
 	if _, err := e.Recall(context.Background(), learning.RecallQuery{Embedding: []float32{1}}); err == nil {
 		t.Error("a recall with no seat was accepted")
+	}
+	if _, err := e.Recall(context.Background(), learning.RecallQuery{
+		Handle: "ceo", Embedding: []float32{1},
+	}); !errors.Is(err, learning.ErrNoModel) {
+		t.Errorf("a query vector naming no model: err = %v, want ErrNoModel", err)
+	}
+}
+
+// A STORED VECTOR IS RANKED ONLY AGAINST A QUERY OF ITS OWN MODEL.
+//
+// Two models can share a width, and a company that changed
+// `providers.embeddings.model` holds rows from both at one width: the width
+// guard lets every one of them through, so the model is the only thing that
+// keeps a row the query's model did not embed out of the ranking. A row whose
+// model was never recorded — written before the column existed, or carried
+// from a build that does not write it — is unknown and matches no query.
+//
+// ONE-WINDOW AND MULTI-WINDOW ROWS BOTH, because the recall statement ranks
+// them in two branches and each carries its own copy of the predicate.
+//
+// Mutation: drop the model predicate from either branch and that branch's
+// other-model row, identical to the query, ranks first.
+func TestRecallRanksOnlyTheQuerysOwnModel(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	mine := ep("mine", "ceo", base)
+	mine.Embeddings = win(0.9, 0.436, 0, 0)
+	longMine := ep("long-mine", "ceo", base)
+	longMine.Embeddings = [][]float32{{0, 1, 0, 0}, {0.9, 0.436, 0, 0}}
+	other := ep("other", "ceo", base.Add(time.Hour))
+	other.EmbeddingModel = "another-model"
+	other.Embeddings = win(1, 0, 0, 0)
+	longOther := ep("long-other", "ceo", base.Add(time.Hour))
+	longOther.EmbeddingModel = "another-model"
+	longOther.Embeddings = [][]float32{{0, 1, 0, 0}, {1, 0, 0, 0}}
+	unknown := ep("unknown", "ceo", base.Add(2*time.Hour))
+	unknown.EmbeddingModel = ""
+	unknown.Embeddings = win(1, 0, 0, 0)
+	longUnknown := ep("long-unknown", "ceo", base.Add(2*time.Hour))
+	longUnknown.EmbeddingModel = ""
+	longUnknown.Embeddings = [][]float32{{0, 1, 0, 0}, {1, 0, 0, 0}}
+	for _, x := range []learning.Episode{mine, longMine, other, longOther, unknown, longUnknown} {
+		mustAppend(t, e, x)
+	}
+
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{testModel, []string{"long-mine", "mine"}},
+		{"another-model", []string{"long-other", "other"}},
+	} {
+		hits, err := e.Recall(context.Background(), learning.RecallQuery{
+			Handle: "ceo", Model: tc.model, Embedding: []float32{1, 0, 0, 0}, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("Recall under %s: %v", tc.model, err)
+		}
+		got := hitIDs(hits)
+		slices.Sort(got)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("a query embedded by %s recalled %v, want only that model's "+
+				"rows %v", tc.model, got, tc.want)
+		}
 	}
 }
 
@@ -640,7 +719,7 @@ func TestUndefinedSimilarityIsSkippedRatherThanRanked(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 10,
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -729,7 +808,7 @@ func TestAPoisonedEmbeddingDoesNotCostARealHit(t *testing.T) {
 	mustAppend(t, e, poison)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Model: testModel, Embedding: []float32{1, 0, 0, 0}, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)

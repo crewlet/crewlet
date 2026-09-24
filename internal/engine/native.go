@@ -1165,7 +1165,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// rather than anything a model can name.
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
 			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
+				TurnID: actor.TurnID, Chain: actor.Chain, MintedAt: actor.MintedAt,
 			})
 		},
 		// AND THE PROJECT SETTINGS, which every surface has rather than
@@ -1176,7 +1176,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// for every other facet is resolved per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
 			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
+				TurnID: actor.TurnID, Chain: actor.Chain, MintedAt: actor.MintedAt,
 			})
 		},
 		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
@@ -1185,12 +1185,12 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// before the first of them — and this writer has one.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
 			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
+				TurnID: actor.TurnID, Chain: actor.Chain, MintedAt: actor.MintedAt,
 			})
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
 			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
+				TurnID: actor.TurnID, Chain: actor.Chain, MintedAt: actor.MintedAt,
 			})
 		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:

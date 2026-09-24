@@ -97,19 +97,26 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 	}
 	if gen != 2 {
 		t.Fatalf("the new generation is %d, want 2 — it is DERIVED LOCALLY from "+
-			"the estate's own audit table, because this verb runs when the "+
+			"this node's own checkpoint, because this verb runs when the "+
 			"broker estate is exactly what was lost", gen)
 	}
 
-	// AND A FORCE OVERRIDES THE POSITION RULE and nothing else: an
-	// operator can know something the register does not say, and cannot
-	// know that two hydrated peers will not diverge.
+	// AND A FORCE OVERRIDES THE TWO REFUSALS THAT REST ON THE REGISTER and
+	// nothing else: an operator can know something the register does not
+	// say, and cannot know that two hydrated peers will not diverge.
 	behind := reanchorInputs()
 	behind.Position = 4_000
 	if _, err := statelog.PermitReanchor(behind, statelog.ReanchorGuard{
 		Confirm: confirmed().Confirm, Force: true,
 	}); err != nil {
-		t.Fatalf("a forced reanchor was refused: %v", err)
+		t.Fatalf("a forced reanchor behind the fleet was refused: %v", err)
+	}
+	unread := reanchorInputs()
+	unread.RegisterReadable = false
+	if _, err := statelog.PermitReanchor(unread, statelog.ReanchorGuard{
+		Confirm: confirmed().Confirm, Force: true,
+	}); err != nil {
+		t.Fatalf("a forced reanchor over an unreadable register was refused: %v", err)
 	}
 	hydrated := reanchorInputs()
 	hydrated.PeersHydrated = 1
@@ -189,12 +196,49 @@ func TestAnIdentityClaimingReanchorPublishesItsRecord(t *testing.T) {
 	}
 }
 
-// THE TRANSITION MOVES EVERY CURSOR AND THE AUDIT ROW IN ONE TRANSACTION.
+// A GENERATION ANOTHER REANCHOR HOLDS IS A REFUSAL, NOT A FAILURE.
 //
-// A crash between them would leave the fleet on a generation nothing recorded
-// — so the re-run would derive the same number, and the cursors that DID move
-// would be a generation ahead of the audit table that decides it.
-func TestAReanchorMovesEveryCursorAndItsAuditRowTogether(t *testing.T) {
+// The record is a claim, and a second node that derived the same number meets
+// the first one's record. Nothing about that is retried into success, and no
+// checkpoint of this node's has moved — so it is the transition declining,
+// named as one, with the holder in it; answered as a failure, it sends an
+// operator to run again a reanchor that can never land.
+//
+// Mutation: return the claim's error unwrapped and the refusal is not one.
+func TestAGenerationAnotherReanchorHoldsIsRefused(t *testing.T) {
+	t.Parallel()
+	db := reanchorStore(t)
+	holder := &statelog.ClaimedElsewhere{
+		Subject: statelog.Subject{Kind: "generation", ID: "2"},
+		Holder:  "reanchor:2:1700000000000000000:node-b",
+	}
+	_, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
+		Domain: probeDomain{}, DB: db,
+		PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error {
+			return holder
+		},
+	}, reanchorInputs(), confirmed())
+	if !errors.Is(err, statelog.ErrReanchorRefused) {
+		t.Fatalf("a reanchor meeting another's generation record = %v, want a "+
+			"refusal", err)
+	}
+	var elsewhere *statelog.ClaimedElsewhere
+	if !errors.As(err, &elsewhere) || elsewhere.Holder != holder.Holder {
+		t.Errorf("the refusal does not carry the record's holder: %v", err)
+	}
+	if got := cursorGeneration(t, db); got != 0 {
+		t.Fatalf("the refused reanchor moved the cursor to generation %d", got)
+	}
+}
+
+// THE TRANSITION MOVES THE DOMAIN'S CURSOR AND THE AUDIT ROW IN ONE
+// TRANSACTION.
+//
+// ONE CURSOR, the named domain's: a recreation is a fact about one stream. And
+// the audit row is the one record of the stream the transition walked away
+// from — that stream is gone — so a cursor committed without it leaves this
+// node following a generation whose provenance exists nowhere.
+func TestAReanchorMovesItsCursorAndItsAuditRowTogether(t *testing.T) {
 	t.Parallel()
 	db := reanchorStore(t)
 	var reset, published, recorded atomic.Int64
@@ -241,11 +285,12 @@ func TestAReanchorMovesEveryCursorAndItsAuditRowTogether(t *testing.T) {
 	}
 }
 
-// A FAILED AUDIT ROW ROLLS THE CURSORS BACK WITH IT.
+// A FAILED AUDIT ROW ROLLS THE CURSOR BACK WITH IT.
 //
-// The two commit together or not at all: cursors a generation ahead of the
-// table that decides the generation is a fleet that reanchors to the same
-// number twice.
+// The two commit together or not at all: a cursor moved into the new
+// generation without its audit row is a transition whose record of the stream
+// it walked away from exists nowhere, and a re-run would derive the generation
+// after it rather than finish this one.
 func TestAReanchorWhoseAuditRowFailsMovesNoCursor(t *testing.T) {
 	t.Parallel()
 	db := reanchorStore(t)
@@ -273,9 +318,9 @@ func TestAReanchorWhoseAuditRowFailsMovesNoCursor(t *testing.T) {
 		t.Fatalf("read the cursors: %v", err)
 	}
 	if rows != 0 {
-		t.Fatalf("%d cursor row(s) survive a rolled-back reanchor — a cursor a "+
-			"generation ahead of the table that decides the generation is a "+
-			"fleet that reanchors to the same number twice", rows)
+		t.Fatalf("%d cursor row(s) survive a rolled-back reanchor — a cursor in "+
+			"the new generation with no audit row is a transition with no "+
+			"record of the stream it walked away from", rows)
 	}
 }
 
@@ -401,13 +446,14 @@ func cursorGeneration(t *testing.T, db *store.DB) uint32 {
 
 // AN INTERRUPTED REANCHOR IS FINISHED BY RE-RUNNING IT, AND NEEDS NO REPAIRER.
 //
-// Step 4 rewrites every anchor in bounded transactions because half a million
-// of them cannot be one, and a process that dies partway leaves a table where
-// some rows carry the new generation and some carry the old. That state is
-// CORRECT rather than damaged, and the reason is contract 1's lazy rule: a row
-// below the current generation is "no anchor at this generation", so its next
-// write forms an expectation of zero and the broker arbitrates it against a
-// subject that genuinely holds nothing.
+// Step 4 resets the domain's rows in bounded transactions because half a
+// million of them cannot be one, and a process that dies partway leaves some
+// rows at the new generation and some at the old; the probe domain's reset
+// below stands its rows in with anchors. That state is CORRECT rather than
+// damaged, and the reason is the lazy rule: a write's expectation comes from
+// its subject's anchor, an anchor below the current generation is "no anchor
+// at this generation", and so the write asks the broker what the new stream
+// holds — on a subject it has never held, an expectation of zero.
 //
 // Both halves are asserted here — the re-run, and the rule that makes the
 // residue harmless — because either one alone is an argument rather than a
@@ -452,7 +498,7 @@ func TestAReanchorIsResumable(t *testing.T) {
 			t.Fatalf("Reanchor returned %v, want the crash — a failed reset must "+
 				"not be reported as a completed transition", err)
 		}
-		// NOTHING PAST STEP 4 RAN. The record and the cursors are what
+		// NOTHING PAST STEP 4 RAN. The record and the cursor are what
 		// make the transition fleet-visible, and a crash inside the
 		// reset must leave the fleet on the old generation.
 		if published.Load() != 0 || recorded.Load() != 0 {
@@ -465,10 +511,10 @@ func TestAReanchorIsResumable(t *testing.T) {
 		}
 
 		// THE RE-RUN DERIVES THE SAME GENERATION. It is derived from
-		// the estate's own audit table, which the crash did not move —
-		// so a second attempt is a retry rather than a second
-		// transition, and the record it publishes is the one the first
-		// attempt would have.
+		// this node's own checkpoint, which the crash did not move — so
+		// a second attempt is a retry rather than a second transition,
+		// and the record it publishes is the one the first attempt
+		// would have.
 		gen, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed())
 		if err != nil {
 			t.Fatalf("the re-run failed: %v", err)

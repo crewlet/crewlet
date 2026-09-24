@@ -615,38 +615,6 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 	}
 }
 
-// TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard.
-//
-// ONE DEFINITION, because the permission check counts these and the refusal
-// names them: if the two disagreed, a reanchor would refuse naming nobody, or
-// permit while naming someone.
-func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T) {
-	rows := []coord.NodePositions{
-		{NodeID: "self", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 900},
-		}},
-		{NodeID: "hydrated", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 900},
-		}},
-		{NodeID: "on-the-old-stream", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 2, AppliedThrough: 900},
-		}},
-		{NodeID: "applied-nothing", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 0},
-		}},
-		{NodeID: "runs-another-domain", Domains: map[string]coord.DomainPosition{
-			"vectors": {Generation: 3, AppliedThrough: 900},
-		}},
-	}
-	got := hydratedPeers(rows, "tracker", 3, "self")
-	if len(got) != 1 || got[0] != "hydrated" {
-		t.Fatalf("hydrated peers = %v, want exactly [hydrated]: this node is "+
-			"not its own peer, a peer at another generation is on the stream "+
-			"being replaced, and one that has applied nothing holds no history",
-			got)
-	}
-}
-
 // fleetStore is an alias so blindFleet can embed the memory fleet without the
 // field name shadowing [coord.Fleet]'s own Fleet method.
 type fleetStore = coordmem.Fleet

@@ -26,11 +26,20 @@ import (
 // versionedTables are the object tables whose `version` a reanchor resets:
 // every tracker table whose `version` is a composed position.
 //
-// `tracker_log_deferred` has a `version` column and is deliberately absent:
-// there it is the RECORD version a build could not decode, which is the number
-// an operator picks a build by, and a reset would overwrite it.
+// Two tables have a `version` column that is something else, and are absent
+// for that reason:
+//
+//   - `tracker_log_deferred`, where it is the RECORD version a build could not
+//     decode — the number an operator picks a build by, which a reset would
+//     overwrite.
+//   - `tracker_body_revisions`, where it is the BODY version: revision N is
+//     the body the task held at version N, and `(task_id, version)` is the
+//     table's primary key. A reset writes one floor value into every row it
+//     reaches, so a task with two revisions fails the primary key and stops
+//     the transition, and a task with one has its revision renumbered to a
+//     body version it never had.
 var versionedTables = []string{
-	"tracker_tasks", "tracker_body_revisions", "tracker_projects",
+	"tracker_tasks", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_views", "tracker_goals", "tracker_persons", "tracker_rank_orders",
 }

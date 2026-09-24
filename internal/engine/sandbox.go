@@ -266,6 +266,30 @@ func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens
 	return over, nil
 }
 
+// resumeRoom answers whether a seat's budget has room for the turn a completion
+// would resume, off the same meter that turn's rounds are charged through.
+//
+// The epoch is the one live NOW, which is the one the resume would run under
+// ([resumer.resume] reads it the same way), so a cap raised since the run
+// detached is the cap the wait ends on.
+type resumeRoom struct{ engine *Engine }
+
+var _ sandbox.Headroom = resumeRoom{}
+
+// Room reads the seat's meter. A company with no ceiling for the seat has no
+// meter, and so always has room.
+func (r resumeRoom) Room(ctx context.Context, handle string) (sandbox.Room, error) {
+	m := r.engine.meterFor(r.engine.Company(), handle)
+	if m == nil {
+		return sandbox.Room{OK: true}, nil
+	}
+	room, err := m.Room(ctx)
+	if err != nil {
+		return sandbox.Room{}, err
+	}
+	return sandbox.Room{OK: room.OK, Scope: room.Scope, Used: room.Used, Limit: room.Limit}, nil
+}
+
 // resumer re-enters a suspended turn on this node.
 //
 // It is the coordinator's one seam into the agent layer, and the direction
@@ -334,7 +358,10 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			// that run, and its writes stay idempotent against the
 			// trigger the run was dispatched for.
 			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
-			Seat: seat, Org: company.Org,
+			// Off the row as well, and the same instant the resumed
+			// turn's own telemetry reads — see [Engine.describeResume].
+			TriggeredAt: req.Run.CreatedAt,
+			Seat:        seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
 		Answer:        req.Answer,
@@ -521,6 +548,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				// passed over. See [Engine.resumeBridged].
 				Bridged:        bridged,
 				BridgedDropped: dropped,
+				// Off the row, where an earlier attempt's release wrote it:
+				// see [sandbox.PendingRun.CarriedCounted].
+				CarriedCounted: in.Run.CarriedCounted,
 			},
 		})
 	if err != nil {
@@ -552,17 +582,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			//
 			// A retry re-enters the conversation the pending-run row
 			// holds, in which every call made before the suspend is
-			// already answered and is not made again. So a round that
-			// broke while re-entering it is judged on the calls it made
-			// itself (see [runner.Runner.Resume]): a post or an ask it
-			// made before it broke is what a retry would repeat, and a
-			// provider that failed before it made either is retried. A
-			// round that re-entered it and FINISHED hands back the whole
-			// phase's calls — the launch among them, or an agentic run's
-			// own — so a turn that breaks after that round is judged on
-			// those, and the launch, being open-world, is enough to
-			// abandon it.
+			// already answered and is not made again. So the turn is
+			// judged on the calls its rounds made after re-entering it
+			// (see [turn.Work.Carried]): a post or an ask one of them
+			// made is what a retry would repeat, and a provider that
+			// failed before any was made is retried, whether it failed in
+			// the re-entered round, in its review or in a later round.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
+		}
+		if r.CountedCarried() {
+			// Handed back for a retry, whose records must not count the
+			// carried spend a record of this attempt already counted: the
+			// coordinator writes that onto the run's row with the release.
+			return fmt.Errorf("%w (%w)", err, sandbox.ErrCarriedCounted)
 		}
 		return err
 	}
@@ -1102,6 +1134,10 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// Read before a completion is claimed, so a turn the budget would
+		// stop at its first round waits rather than looping; see
+		// [sandbox.Coordinator.OnCompleted].
+		Headroom: resumeRoom{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -1136,6 +1172,10 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
 		ClaimDuty: sandbox.DutyFunc(duty),
+		// The room the coordinator reads before it claims, read here before
+		// a completion is raised at all, so a budget wait is not a
+		// completion raised and declined on every poll.
+		Headroom: resumeRoom{engine: e},
 	})
 	if err != nil {
 		return err

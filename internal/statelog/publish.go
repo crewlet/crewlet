@@ -76,9 +76,8 @@ type Fence interface {
 	//
 	// It must consult every source that is fresh in a failure mode the
 	// others are not — in particular this node's own applied eviction
-	// rows, which are the only source still fresh when the coordination
-	// path is wedged, and a wedged coordination path is a precondition of
-	// an eviction being permitted at all.
+	// rows: an eviction is a record on the domain's own log, so those rows
+	// answer whether or not the coordination path does.
 	Evicted(ctx context.Context) (bool, error)
 
 	// ClearForZero verifies, freshly, that publishing at an expectation
@@ -322,14 +321,26 @@ func NewPublisher(d Deps) (*Publisher, error) {
 // # What that leaves uncovered, and why
 //
 // A retry of a first record that is ON THE LOG AND NOT YET APPLIED HERE has no
-// ledger row to find. An arbitrated or first-writer-wins retry is still safe,
-// and appends nothing. With an anchor at this generation its expectation is
-// formed below the first record, so the broker refuses it. With none — a
-// create, or a write on a subject this node has consumed nothing on in this
-// generation — it forms no expectation at all: the subject's last sequence on
-// the broker says this node is behind. Either way the write waits for this
-// node to apply through that record, under the write path's budget and refused
-// `behind` past it, and the next round's snapshot finds the ledger row. A
+// ledger row to find. An arbitrated or first-writer-wins retry is still safe —
+// it lands no second record — by one of three routes:
+//
+//   - With no anchor at this generation — a create, or a write on a subject
+//     this node has consumed nothing on in this generation — it forms no
+//     expectation and appends nothing: the subject's last sequence on the
+//     broker says this node is behind, and the write waits for it.
+//   - With an anchor, its expectation is formed below the first record. A
+//     single-replica stream checks the expectation before the message id, so
+//     the broker refuses it, and the rejection is a lost race: the write waits
+//     for the subject's last record.
+//   - A REPLICATED stream checks the message id first. Inside the stream's
+//     duplicate window that same retry is acknowledged as the first record's
+//     duplicate, at the first record's position, and [Publisher.Resolve]
+//     answers it — `applied` once this node has applied through that record,
+//     `pending` at it past the budget. Past the window the id is forgotten and
+//     the expectation is refused, as on a single replica.
+//
+// A wait runs under the write path's budget and is refused `behind` past it;
+// when it succeeds, the next round's snapshot finds the ledger row. A
 // [PatternAdditive] retry carries no expectation, so past the duplicate window
 // nothing refuses it and a second record lands — which is why that pattern is
 // correct only where the apply folds a second record under one op id to

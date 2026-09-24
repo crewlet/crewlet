@@ -38,6 +38,9 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 type fakeStateLog struct {
 	generations map[string]uint32
 	asked       string
+
+	// reanchor is how a reanchor ends; nil lands it at the next generation.
+	reanchor error
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -60,8 +63,11 @@ func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
 	return generation, nil
 }
 
-func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32, error) {
-	return 0, errors.New("not exercised here")
+func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (uint32, error) {
+	if f.reanchor != nil {
+		return 0, f.reanchor
+	}
+	return f.generations[req.Stream] + 1, nil
 }
 
 func (f *fakeStateLog) SetCapacity(context.Context, engine.CapacityRequest) (
@@ -270,5 +276,74 @@ func TestAnEvictionAnswersForEveryLogItReached(t *testing.T) {
 
 	if code, _ := postAck(t, a, "/work/retention/evict/node-b?confirm=node-c"); code != http.StatusBadRequest {
 		t.Errorf("a confirmation naming another node answered %d, want 400", code)
+	}
+}
+
+// A REANCHOR IS ANSWERED BY HOW IT ENDED.
+//
+// Three endings send an operator three different ways: a stream no domain runs
+// on is a name to correct, which the status read beside this route already
+// answers `404`; a refusal — a hydrated peer, a confirmation for another
+// instant, a transition already running, a generation another reanchor holds —
+// is the transition declining, with nothing to retry into success; and a
+// failure partway is one the transition's step order makes safe to run again.
+// One conflict for all three would tell an operator who mistyped a stream, and
+// one whose disk filled mid-transition, that the fleet had refused them.
+//
+// Mutation: answer every error `409 reanchor_refused` and the unknown stream
+// and the failure are misfiled.
+func TestAReanchorIsAnsweredByHowItEnded(t *testing.T) {
+	t.Parallel()
+	const path = "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG" +
+		"&confirm=2031-04-02T03:00:00Z"
+	for name, tc := range map[string]struct {
+		err  error
+		code int
+		want string
+	}{
+		"a stream no domain runs on": {
+			err:  fmt.Errorf("%w: %q", engine.ErrNotADomainLog, "CREWLET_TRAKCER_LOG"),
+			code: http.StatusNotFound, want: "unknown_stream",
+		},
+		"a hydrated peer": {
+			err: fmt.Errorf("%w: 1 peer(s) are hydrated on the live stream",
+				statelog.ErrReanchorRefused),
+			code: http.StatusConflict, want: "reanchor_refused",
+		},
+		"a generation another reanchor holds": {
+			err: fmt.Errorf("%w: tracker's generation 4 is held by another "+
+				"reanchor's record: %w", statelog.ErrReanchorRefused,
+				&statelog.ClaimedElsewhere{Holder: "reanchor:4:1:node-b"}),
+			code: http.StatusConflict, want: "reanchor_refused",
+		},
+		"a failure partway": {
+			err: errors.New("statelog: move tracker's cursor into generation 4: " +
+				"the disk is full"),
+			code: http.StatusInternalServerError, want: "reanchor_failed",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node := &fakeStateLog{
+				generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3},
+				reanchor:    tc.err,
+			}
+			code, body := postAck(t, ackApp(t, &fakeBackupRegister{}, node), path)
+			if code != tc.code || body["error"] != tc.want {
+				t.Fatalf("the route answered %d %v, want %d %s", code, body,
+					tc.code, tc.want)
+			}
+			if body["detail"] != tc.err.Error() {
+				t.Errorf("the detail is %q, want the engine's own words %q",
+					body["detail"], tc.err.Error())
+			}
+		})
+	}
+
+	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
+	code, body := postAck(t, ackApp(t, &fakeBackupRegister{}, node), path)
+	if code != http.StatusOK || body["generation"] != float64(4) {
+		t.Fatalf("a landed reanchor answered %d %v, want 200 at generation 4",
+			code, body)
 	}
 }

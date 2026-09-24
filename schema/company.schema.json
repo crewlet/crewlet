@@ -268,7 +268,7 @@
       "additionalProperties": false,
       "properties": {
         "budget_fraction": {
-          "description": "Share of the parent's remaining budget one delegate call's rounds are admitted against.",
+          "description": "Share of the parent's remaining budget one delegate call's rounds are admitted against; a worker round that finds it spent is not sent.",
           "maximum": 1,
           "minimum": 0,
           "type": "number"

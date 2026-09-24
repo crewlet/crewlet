@@ -1,10 +1,10 @@
 package engine
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
@@ -99,21 +99,22 @@ func (e *Engine) storeWidth() int {
 }
 
 // embed is the epoch's embedder as the prefetch and the learning stores take
-// it, or nil.
+// it — the provider's call and the model id it embeds under — or nil.
 //
-// A FUNCTION rather than the interface, because that is what their seams ask
-// for — and because it is where the one rule the callers share lives: an
-// error is no vector, never a failure to propagate. Every consumer of a
-// vector here is ranking, and a ranking that could not be computed costs
-// relevance rather than correctness.
+// THE MODEL IS THE BACKEND'S OWN, read in the same resolution as the provider
+// it names ([Engine.buildEmbedder]): every learning vector is stored under it
+// and every learning recall compares only vectors stored under it, so it has
+// to be the model the provider actually asks for.
+//
+// The call is the one rule the callers share: an error is no vector, never a
+// failure to propagate. Every consumer of a vector here is ranking, and a
+// ranking that could not be computed costs relevance rather than correctness.
 //
 // NIL-SAFE on both counts — no epoch, and an epoch with no backend — because
-// nil is how every consumer learns there is no similarity search, and a
-// method value closing over a nil interface is not nil and panics on its
-// first call.
-func (c *Company) embed() func(context.Context, string) ([]float32, error) {
+// nil is how every consumer learns there is no similarity search.
+func (c *Company) embed() *learning.Embedder {
 	if c == nil || c.vectors == nil {
 		return nil
 	}
-	return c.vectors.embedder.Embed
+	return &learning.Embedder{Model: c.vectors.model, Embed: c.vectors.embedder.Embed}
 }

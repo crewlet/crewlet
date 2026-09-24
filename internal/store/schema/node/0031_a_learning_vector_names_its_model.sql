@@ -1,0 +1,50 @@
+-- A learning vector names the model that made it: `agent_diary` and `episodes`
+-- each gain `embedding_model`.
+--
+-- # What was wrong without it
+--
+-- Recall compared a query vector with every stored vector of the same WIDTH. A
+-- width says how many numbers a vector holds and nothing about what they mean:
+-- two embedding models can share one, and after `providers.embeddings.model`
+-- moves to another model of the same width, the cosine between a vector from
+-- each is a number with no meaning. Recall ranked a seat's diary and episodes
+-- on it, with no error and no log line. The width check recall makes (see
+-- 0030) keeps a query from failing on a vector of another width; it cannot
+-- tell two models of one width apart.
+--
+-- The knowledge corpus's vectors carry their model for this reason
+-- (`kb_vectors.model`, schema/replicated/0003), and these now do the same:
+-- recall compares a query only with the vectors of the model that embedded
+-- the query.
+--
+-- # What NULL means, and why nothing is backfilled
+--
+-- NULL is UNKNOWN. It is every row written before this migration, every row
+-- written with no vector, and every row a peer on a build without this column
+-- carried here through the memory changelog (internal/learning/memsync), whose
+-- import leaves a column the sender did not write at its default. A vector of
+-- unknown model cannot be shown to share the query's, so recall leaves such a
+-- row out of similarity ranking — the answer it already gave a row with no
+-- vector at all. The row's text is untouched, and every read that does not
+-- rank by similarity returns it as before.
+--
+-- The migration cannot fill the column in. It does not know which model the
+-- company ran when a row was written, and stamping today's would label the
+-- vectors a model change left behind with the model that replaced them — the
+-- one comparison this column exists to refuse.
+--
+-- Nor is such a row re-embedded, for the reason 0030 gives for its long
+-- episodes: a learning vector is made once, by the writer, as the row is
+-- written, and nothing revisits it. A re-embed on one node would not travel
+-- either — the changelog carries an append-only table's new rows and not its
+-- updates — so every node that ever held the seat would pay the provider for
+-- the same rows again.
+--
+-- # Why ALTER, and no index
+--
+-- A column added with no default is NULL on every existing row, which is the
+-- true statement about each of them. Recall's scans are driven by the per-seat
+-- indexes 0002 and 0030 ship and this column is only filtered on, so it needs
+-- no index of its own.
+ALTER TABLE agent_diary ADD COLUMN embedding_model TEXT;
+ALTER TABLE episodes ADD COLUMN embedding_model TEXT;

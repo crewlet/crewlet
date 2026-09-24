@@ -26,14 +26,42 @@ import (
 // registry — and a node that equipped only its first epoch would serve a
 // company whose agents lost every builtin at the first config change, with
 // nothing failing.
+//
+// # Two halves, because only one of them touches the node
+//
+// [Engine.equipEpoch] writes into the epoch it is handed and nowhere else: the
+// embedding backend, the builtins, the credential pools' ledger. Everything it
+// builds is unreachable until that epoch is installed, so a revision refused
+// after it leaves nothing behind. [Engine.startSharedServers] is the other
+// half: the shared MCP children are this NODE's processes, and reconciling
+// them to a revision stops the ones it dropped. An apply therefore runs the
+// first half while the revision can still be refused and the second only once
+// nothing can refuse it (see [Engine.Apply]).
 
-// equip registers the node-backed builtins into an epoch.
+// equip puts this node's tools into an epoch: [Engine.equipEpoch], then the
+// shared MCP servers filed into the same registry.
+//
+// BOOT'S COMPOSITION, and only boot's. Boot installs the epoch straight after
+// this with no step between them that can fail, and a boot that fails later
+// tears the children down with everything else it started, so at boot there
+// is no refusal for a started child to outlive. An apply has refusals after
+// its build, and runs the two halves apart.
+func (e *Engine) equip(ctx context.Context, c *Company) error {
+	if err := e.equipEpoch(c); err != nil {
+		return err
+	}
+	e.startSharedServers(ctx, c)
+	return nil
+}
+
+// equipEpoch registers the node-backed builtins and the embedding backend into
+// an epoch, and touches nothing outside it.
 //
 // A failure here fails the APPLY. The alternative — log it and serve the epoch
 // anyway — publishes a company whose agents cannot look up a colleague or
 // recall their own work, which looks from the outside like a model that has
 // stopped trying rather than a node that is missing half its tool surface.
-func (e *Engine) equip(ctx context.Context, c *Company) error {
+func (e *Engine) equipEpoch(c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
@@ -114,16 +142,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if _, err = builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
-	// THE SHARED MCP SERVERS, into the same registry and straight after
-	// the builtins, because this is the surface every seat's is cloned
-	// from. Per-role children are NOT here: they belong to a seat's lease
-	// rather than to the epoch, and this node holds only some of the
-	// company's seats — see mcp.go.
+	// THE SHARED MCP SERVERS ARE NOT STARTED HERE, although they file into
+	// this same registry: they are the node's processes rather than the
+	// epoch's values, so [Engine.equip] and [Engine.Apply] start them — the
+	// apply only once nothing can refuse the revision.
 	//
-	// A server that will not start does not fail the apply. It costs that
-	// server's tools; refusing the epoch over it would take a working
-	// company down because one vendor's binary was missing.
-	e.startSharedServers(ctx, c)
 	// The tool skills' ${var} map is NOT refreshed here, and their trigger
 	// audit does not run here: the map is written into the node's skill
 	// registry, which every seat reads, and the audit reads the epoch that
@@ -131,10 +154,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// ([Engine.installEpoch]).
 
 	// THE FLEET'S CREDENTIAL LEDGER, onto the pools this epoch just built.
-	// Local and infallible — it stores a handle — which is why it can sit
-	// after the steps here that can fail: an epoch that is refused never
-	// reaches this line, and one that is not must never be published with
-	// pools that publish nothing. See cooldowns.go.
+	// Local and infallible — it stores a handle on each pool — which is why
+	// it can sit after the steps here that can fail: an epoch that is
+	// refused never reaches this line, and one that is not must never be
+	// published with pools that publish nothing. See cooldowns.go.
 	e.shareCooldowns(c)
 	return nil
 }

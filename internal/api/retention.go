@@ -105,9 +105,11 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// so a stream this node does not run is refused rather than
 		// acknowledged at some other log's generation.
 		//
-		// 404 AND NOT 503, which is the classification GET
-		// /work/retention/reanchor already gives the same refusal from
-		// the same call: nothing here is transient, and a 503 tells an
+		// 404 AND NOT 503, which is how both reanchor routes classify the
+		// same refusal: all three reach [engine.ErrNotADomainLog] through
+		// the engine's one lookup of a stream's running domain — this
+		// route by way of StreamGeneration, those by way of ReanchorStatus
+		// and Reanchor. Nothing here is transient, and a 503 tells an
 		// operator who typed the stream name wrong to wait and try the
 		// identical request again.
 		writeJSON(w, http.StatusNotFound, map[string]string{
@@ -501,10 +503,25 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		Stream: stream, Confirm: confirm, By: operator,
 		Force: r.URL.Query().Get("force") == "true",
 	})
-	if err != nil {
+	// THREE ANSWERS, because they send an operator three different ways: a
+	// stream no domain runs on is a name to correct, a refusal is the
+	// transition declining — with its reason, and nothing to retry into
+	// success — and anything else is a failure, which the transition's own
+	// step order makes safe to run again ([statelog.Reanchor]).
+	switch {
+	case errors.Is(err, engine.ErrNotADomainLog):
+		writeJSON(w, http.StatusNotFound,
+			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		return
+	case errors.Is(err, statelog.ErrReanchorRefused):
 		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
 		writeJSON(w, http.StatusConflict,
 			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
+		return
+	case err != nil:
+		log.Warn("api_reanchor_failed", "stream", stream, "error", err)
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]string{"error": "reanchor_failed", "detail": err.Error()})
 		return
 	}
 	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)

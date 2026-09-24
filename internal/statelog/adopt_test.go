@@ -390,3 +390,66 @@ func TestTheFetchedArtefactLandsBesideTheLiveFile(t *testing.T) {
 			"leave a mixture", got, want)
 	}
 }
+
+// AN ADOPTION LEAVES NO COPY BEHIND, whatever became of it.
+//
+// The copy is not one file once anything has opened it: the inspection and
+// the verifications open it, which grows a -wal and this store's lock beside
+// it — the files [store.RemoveCopy] clears with the copy. So the part name is
+// cleared with them before a fetch, and again after the attempt, refused or
+// installed: the install renames the copy away and leaves its lock.
+//
+// Mutation: clear the part name alone and a refused adoption leaves the
+// copy's -wal and lock beside the live database, and an installed one its
+// lock.
+func TestAnAdoptionLeavesNoCopyBehind(t *testing.T) {
+	t.Parallel()
+	leftovers := func(t *testing.T, h *joinHarness) []string {
+		t.Helper()
+		found, err := filepath.Glob(h.joinPath + statelog.AdoptPartSuffix + "*")
+		if err != nil {
+			t.Fatalf("list the part files: %v", err)
+		}
+		return found
+	}
+
+	t.Run("a refused artefact", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarness(t)
+		h.manifest.SHA256 = strings.Repeat("0", 64)
+		if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrNoOffer) {
+			t.Fatalf("Join = %v, want the corrupted artefact refused", err)
+		}
+		if got := leftovers(t, h); len(got) != 0 {
+			t.Errorf("a refused adoption left %v beside the live database", got)
+		}
+	})
+
+	t.Run("an installed artefact", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarness(t)
+		if _, err := h.adopter(t).Join(t.Context()); err != nil {
+			t.Fatalf("Join: %v", err)
+		}
+		if got := leftovers(t, h); len(got) != 0 {
+			t.Errorf("an installed adoption left %v beside the live database", got)
+		}
+	})
+
+	t.Run("a crashed attempt's debris", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarness(t)
+		part := h.joinPath + statelog.AdoptPartSuffix
+		for _, name := range []string{part, part + "-wal", part + ".lock"} {
+			if err := os.WriteFile(name, []byte("left by a crashed attempt"), 0o600); err != nil {
+				t.Fatalf("stage %s: %v", name, err)
+			}
+		}
+		if _, err := h.adopter(t).Join(t.Context()); err != nil {
+			t.Fatalf("Join over a crashed attempt's debris: %v", err)
+		}
+		if got := leftovers(t, h); len(got) != 0 {
+			t.Errorf("an adoption over a crashed attempt's debris left %v", got)
+		}
+	})
+}

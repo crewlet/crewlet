@@ -145,7 +145,7 @@ type retention struct {
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
 
-	// mu guards the coverage cache and the eviction warning's stamp below.
+	// mu guards the coverage cache and the eviction warnings' stamps below.
 	// The tick and every API request assemble a report, on different
 	// goroutines.
 	mu sync.Mutex
@@ -169,12 +169,17 @@ type retention struct {
 	coverKnown    bool
 
 	// evictionsWarnedAt is when this loop last wrote
-	// `retention_evictions_unreadable`, and zero once a read of the
-	// eviction rows answers again. Reports read the rows on every pass, so
-	// a table that stays unreadable would otherwise write the same WARN on
-	// every node four times a minute; it is written once per
-	// [RetentionInterval] while the failure lasts.
-	evictionsWarnedAt time.Time
+	// `retention_evictions_unreadable` for each domain, and holds no entry
+	// for a domain whose eviction rows last answered. Reports read the rows
+	// on every pass, so a table that stays unreadable would otherwise write
+	// the same WARN on every node four times a minute; it is written once
+	// per [RetentionInterval] while the failure lasts.
+	//
+	// PER DOMAIN, because each gated log keeps its own table and a pass
+	// reads them one after another: a stamp shared by all of them is
+	// cleared by whichever table answers, so an unreadable one beside a
+	// readable one would be written down on every pass.
+	evictionsWarnedAt map[string]time.Time
 
 	// trimmedAt is when this node last took the trim's pass — asked for
 	// the duty, whatever the answer. Read and written by the loop's own
@@ -300,10 +305,14 @@ func (e *Engine) RunsStateLog() bool {
 //
 // # And why it refuses a node that is still talking
 //
-// [statelog.PermitEviction]: an eviction is safe only once the target has
-// missed enough coordination round trips to be out of contact. A presence
-// listing that cannot be read is a permission that cannot be established, so
-// it refuses too unless the operator forces it.
+// [statelog.PermitEviction]: a node holding its presence lease is still
+// reaching coordination, which is to say running, and an eviction takes a node
+// out of service — its records above the eviction apply nowhere, it refuses
+// its own reads once it has applied the eviction, and the trim stops counting
+// it. Done to a running node, that is an outage caused by the wrong node id,
+// so a live lease refuses unless the request forces it ([GateRequest.Force]).
+// A presence listing that cannot be read is a permission that cannot be
+// established, so it refuses too unless forced.
 //
 // THE RESULT CARRIES EVERY LOG IT REACHED, including on an error: a gesture
 // that landed on the first log and failed on the second has changed the fleet,
@@ -879,7 +888,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// it at WARN would put a line in every clean shutdown.
 		return nil
 	case err != nil:
-		if r.evictionsWarnDue(time.Now()) {
+		if r.evictionsWarnDue(running.domain.Name(), time.Now()) {
 			r.logs().WarnContext(ctx, "retention_evictions_unreadable", "err", err,
 				"domain", running.domain.Name(),
 				"detail", "an evicted node stays counted and pins the trim's "+
@@ -888,7 +897,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		}
 		return nil
 	}
-	r.evictionsReadable()
+	r.evictionsReadable(running.domain.Name())
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
 		if row.back {
@@ -941,25 +950,29 @@ func evictionRows(ctx context.Context, db *store.DB, d statelog.Domain) (
 	return nil, false, nil
 }
 
-// evictionsWarnDue reports whether an unreadable eviction table is worth a WARN
-// now — the first failure after a read that answered, or one a
-// [RetentionInterval] after the last line — and stamps it when it is.
-func (r *retention) evictionsWarnDue(now time.Time) bool {
+// evictionsWarnDue reports whether one domain's unreadable eviction table is
+// worth a WARN now — the first failure after a read of it that answered, or one
+// a [RetentionInterval] after its last line — and stamps it when it is.
+func (r *retention) evictionsWarnDue(domain string, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.evictionsWarnedAt.IsZero() && now.Sub(r.evictionsWarnedAt) < RetentionInterval {
+	if at, warned := r.evictionsWarnedAt[domain]; warned &&
+		now.Sub(at) < RetentionInterval {
 		return false
 	}
-	r.evictionsWarnedAt = now
+	if r.evictionsWarnedAt == nil {
+		r.evictionsWarnedAt = map[string]time.Time{}
+	}
+	r.evictionsWarnedAt[domain] = now
 	return true
 }
 
-// evictionsReadable clears the warning's stamp, so the next failure is written
-// at once rather than an interval after one that has since cleared.
-func (r *retention) evictionsReadable() {
+// evictionsReadable clears one domain's warning stamp, so its next failure is
+// written at once rather than an interval after one that has since cleared.
+func (r *retention) evictionsReadable(domain string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.evictionsWarnedAt = time.Time{}
+	delete(r.evictionsWarnedAt, domain)
 }
 
 // logs is where this loop writes: the logger it was built with, or the

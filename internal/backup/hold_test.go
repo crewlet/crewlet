@@ -47,9 +47,9 @@ func TestTheManifestNamesThePositionInsideTheCopy(t *testing.T) {
 	}
 
 	// AND THE ARTEFACT IS STILL A SET OF NAMED FILES. Reading a database
-	// creates a -wal and a -shm beside it even for a read, and both are
-	// debris carrying the reader's own umask rather than this directory's
-	// deliberate 0700.
+	// creates a -wal beside it even for a read, and a reader that opens it
+	// through the store adds the store's lock: a restore looking for a set
+	// of named files knows neither.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

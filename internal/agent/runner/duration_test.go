@@ -237,7 +237,7 @@ func TestAResumedPhaseReportsTheWholePhasesDuration(t *testing.T) {
 		pub:    pub,
 		resume: &runner.Resume{State: state, Answer: "the run succeeded"},
 	})
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+	if _, _, err := r.Resume(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 
@@ -331,7 +331,7 @@ func TestAResumeWithNoRecordedClockMeasuresTheReentry(t *testing.T) {
 		// written before the field existed.
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
 	})
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+	if _, _, err := r.Resume(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	if done := completedPhase(t, pub, "execute"); done.DurationMS > 60_000 {

@@ -491,12 +491,23 @@ operation that holds it, before any checkpoint of its own moves; and a
 reanchor interrupted after its record landed is simply run again — the re-run
 finds its own record there and finishes.
 
-It refuses while any peer reports a position at this node's generation with
-anything applied, naming the peer: adopting that peer's snapshot recovers what
-a reanchor would discard. No flag overrides that refusal. `-force` overrides
-the other two — a positions register that cannot be read, and a node that is
-not the most caught-up one — and what it accepts losing is every record the
-fleet applied above this node's own position.
+It refuses while any peer is hydrated on the live stream — reports a position
+on the stream the verb is about to follow, with anything applied — naming the
+peer: adopting that peer's snapshot recovers what a reanchor would discard. A
+peer is judged by the stream its position counts on, at any generation, so a
+fleet whose log was rebuilt under it is not refused on this ground: every node
+is still counting on the deleted stream until one re-anchors — the most
+caught-up one on it, unless forced — and that one is then the peer the others
+adopt from. A peer running a build that does not publish which stream it
+counts on is judged by this node's generation instead. No flag
+overrides that refusal. `-force` overrides the other two — a positions register
+that cannot be read, and a node that is not the most caught-up one on its
+stream — and what it accepts losing is every record the fleet applied above
+this node's own position.
+
+A refusal stops nothing: the permission is decided while the log's applier
+runs, and decided again once it has stopped for the transition, so a refused
+reanchor leaves the domain applying and serving as it was.
 
 **Every other node follows by restarting.** Its checkpoint on the log still
 names the old stream, so it goes on refusing reads on that log. At boot it

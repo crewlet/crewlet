@@ -22,6 +22,12 @@ type RecallQuery struct {
 	Handle    string
 	Embedding []float32
 
+	// Model is the model Embedding was made by, and it is required: a row
+	// is ranked only when it was embedded by the same model, and a row
+	// whose model is unknown is left out, because a matching width does
+	// not make two models' vectors comparable (see [Embedder]).
+	Model string
+
 	// Limit is how many hits to return. 0 takes a small default: recall
 	// goes into a prompt, and a dozen half-relevant memories crowd out the
 	// task they were fetched for.
@@ -98,6 +104,9 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if len(q.Embedding) == 0 {
 		return nil, ErrNoEmbedding
 	}
+	if q.Model == "" {
+		return nil, ErrNoModel
+	}
 	if q.Offset < 0 {
 		return nil, fmt.Errorf("learning: recall for %s needs an offset of zero "+
 			"or more, got %d", q.Handle, q.Offset)
@@ -118,7 +127,7 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
-	widest, err := e.widestWindowSet(ctx, q.Handle, width)
+	widest, err := e.widestWindowSet(ctx, q.Handle, width, q.Model)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -227,6 +236,12 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// dividing the length by a width would accept a row embedded in another
 	// model's space whenever the two divide.
 	//
+	// AND THE MODEL IS FILTERED BESIDE IT, because the width guard only
+	// keeps the distance call from failing: two models can share a width,
+	// and a row the query's model did not embed is ranked on a number that
+	// means nothing. A row with no model recorded is unknown and matches no
+	// query (see node migration 0031).
+	//
 	// The kind filter is a bound list of short literals rather than
 	// placeholders because it comes from a typed enum this package owns —
 	// see kindList.
@@ -236,7 +251,7 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// the episodes that match it.
 	statement, args := recallStatement(kinds, q.Filter)
 	rows, err := e.db.SQL().QueryContext(ctx, statement,
-		recallArgs(args, widest, probe, q.Handle, width, 1-floor, limit, q.Offset)...)
+		recallArgs(args, widest, probe, q.Handle, width, q.Model, 1-floor, limit, q.Offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -287,11 +302,11 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 // above one HAS a maximum of one — COALESCE supplies it — and one ordinal is
 // all a single-window row can use.
 //
-// SCOPED TO THE PROBE'S WIDTH, the same predicate the recall's own filter
-// applies, so the ordinal count is exactly as long as the rows it will score:
-// a row from another embedding space, or one whose count and blob disagree,
-// is excluded from both rather than lengthening the list for a row that is
-// never scored.
+// SCOPED TO THE PROBE'S WIDTH AND MODEL, the same predicates the recall's own
+// filter applies, so the ordinal count is exactly as long as the rows it will
+// score: a row from another embedding space, or one whose count and blob
+// disagree, is excluded from both rather than lengthening the list for a row
+// that is never scored.
 //
 // WHAT A CONCURRENT WRITE COSTS IS BOUNDED AND SELF-CORRECTING. A row written
 // between this read and the recall's own can hold MORE windows than this
@@ -303,10 +318,10 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 // transactions take the file's single write lock at BEGIN (see
 // internal/store/begin.go) — so an exact answer here would serialise every
 // seat's turn-start recall against every writer in the process.
-func (e *Episodes) widestWindowSet(ctx context.Context, handle string, width int) (int, error) {
+func (e *Episodes) widestWindowSet(ctx context.Context, handle string, width int, model string) (int, error) {
 	var widest int
 	err := e.db.SQL().QueryRowContext(ctx, widestWindowStatement,
-		handle, width).Scan(&widest)
+		handle, width, model).Scan(&widest)
 	if err != nil {
 		return 0, err
 	}
@@ -380,6 +395,7 @@ func recallStatement(kinds []Kind, f EpisodeFilter) (string, []any) {
 	          AND e.embedding IS NOT NULL
 	          AND e.embedding_windows = 1
 	          AND length(e.embedding) = ?
+	          AND e.embedding_model = ?
 	          AND e.kind IN (` + kindList(kinds) + `)` + filter + `
 	        UNION ALL
 	        SELECT e.id AS id, e.ended_at AS ended_at,
@@ -391,6 +407,7 @@ func recallStatement(kinds []Kind, f EpisodeFilter) (string, []any) {
 	          AND e.embedding IS NOT NULL
 	          AND e.embedding_windows > 1
 	          AND length(e.embedding) = e.embedding_windows * ?
+	          AND e.embedding_model = ?
 	          AND e.kind IN (` + kindList(kinds) + `)` + filter + `
 	    )
 	    WHERE distance <= ?
@@ -400,20 +417,20 @@ func recallStatement(kinds []Kind, f EpisodeFilter) (string, []any) {
 }
 
 // recallArgs binds [recallStatement], in the order its placeholders appear:
-// the ordinal count, then each branch's own (the left one's probe, seat and
-// width; the right one's window stride, window width, probe, seat and width),
-// each followed by its copy of the filter, then the distance ceiling, the
-// limit and the offset.
+// the ordinal count, then each branch's own (the left one's probe, seat, width
+// and model; the right one's window stride, window width, probe, seat, width
+// and model), each followed by its copy of the filter, then the distance
+// ceiling, the limit and the offset.
 //
 // ONE FUNCTION for the order, because the statement binds POSITIONALLY and the
 // recall and its plan test both have to bind it — a second hand-written list
 // is a second chance to pair a placeholder with the wrong value.
 func recallArgs(filterArgs []any, widest int, probe any, handle string, width int,
-	maxDistance float64, limit, offset int,
+	model string, maxDistance float64, limit, offset int,
 ) []any {
-	args := []any{widest, probe, handle, width}
+	args := []any{widest, probe, handle, width, model}
 	args = append(args, filterArgs...)
-	args = append(args, width, width, probe, handle, width)
+	args = append(args, width, width, probe, handle, width, model)
 	args = append(args, filterArgs...)
 	return append(args, maxDistance, limit, offset)
 }
@@ -421,11 +438,13 @@ func recallArgs(filterArgs []any, widest int, probe any, handle string, width in
 // widestWindowStatement is the ordinal-count read, and it is named for the
 // same reason recallStatement is: its plan is the whole point of the partial
 // index node migration 0030 adds, and the test that asserts it must read the
-// statement rather than a copy of it.
+// statement rather than a copy of it. It binds the seat, the width and the
+// model, in that order.
 const widestWindowStatement = `SELECT COALESCE(MAX(embedding_windows), 1) FROM episodes
 	 WHERE agent_handle = ?
 	   AND embedding_windows > 1
-	   AND length(embedding) = embedding_windows * ?`
+	   AND length(embedding) = embedding_windows * ?
+	   AND embedding_model = ?`
 
 // kindList renders a kind filter as SQL literals.
 //

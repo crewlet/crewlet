@@ -36,9 +36,10 @@ func init() {
 type Phase string
 
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
-// are the legs of the turn itself, in the order they run; PhaseSubagent,
-// PhaseAuxiliary and PhaseJudge are nested calls made under one of those, and
-// never appear without a host phase around them.
+// are the legs of the turn itself, in the order they run; PhaseSubagent and
+// PhaseJudge are nested calls made under one of those, and never appear without
+// a host phase around them. PhaseAuxiliary is a name no record of this build
+// carries; see its constant.
 //
 // The retired `plan` value has NO CONSTANT here, and that is not an oversight:
 // Phase is a plain string precisely so a value this build does not produce
@@ -51,8 +52,13 @@ const (
 	PhaseExecute    Phase = "execute"
 	PhaseReview     Phase = "review"
 	PhaseSubagent   Phase = "subagent"
-	// PhaseAuxiliary is a learning worker's own LLM call, nested under a host
-	// phase; PhaseJudge is the round-cap extension judge.
+	// PhaseAuxiliary names the auxiliary model the learning workers and the
+	// turn-start prefetch call, and NO RECORD OF THIS BUILD CARRIES IT:
+	// those calls publish no phase record at all. Where a cap is set their
+	// tokens are charged to the budget counter (internal/engine's
+	// learningbudget.go), and nothing that folds phase records counts them.
+	//
+	// PhaseJudge is the round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
 )
@@ -304,8 +310,9 @@ func (e TurnCompleted) SummaryFor(actor string) string {
 // agent is in. Pair them — started sets the current phase, completed leaves it,
 // the next started overwrites it, and task completion clears it.
 //
-// Not emitted for subagent, judge or auxiliary phases: those nest under a host
-// phase that is already showing.
+// Not emitted for subagent or judge phases: those nest under a host phase that
+// is already showing. No auxiliary call publishes a phase event of either kind
+// (see [PhaseAuxiliary]).
 type AgentPhaseStarted struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -365,13 +372,13 @@ type AgentPhaseCompleted struct {
 	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 	Phase     Phase  `json:"phase"`
-	// HostPhase / HostIteration are set only on a judge event: the phase that
-	// triggered the judge, so dashboards group it under that phase instead of
-	// rendering a standalone sibling.
+	// HostPhase / HostIteration are set on the two nested phases: on a judge
+	// event the phase that triggered the judge, and on a subagent event the
+	// executor round that delegated the task — so dashboards group each under
+	// that phase instead of rendering a standalone sibling.
 	HostPhase     Phase `json:"host_phase"`
 	HostIteration int   `json:"host_iteration"`
-	// Worker names the worker behind this call: the learning worker on a
-	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
+	// Worker names the delegate template behind a PhaseSubagent event.
 	// Empty on every other phase, and on an ad-hoc delegation that named
 	// no template.
 	Worker string `json:"worker"`
@@ -569,7 +576,7 @@ type AgentPhaseCompleted struct {
 // EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
 
-// Role is the seat the phase ran for — including for a judge or auxiliary
+// Role is the seat the phase ran for — including for a judge or subagent
 // phase, which is nested work done on that seat's behalf.
 func (e AgentPhaseCompleted) Role() string { return e.RoleName }
 

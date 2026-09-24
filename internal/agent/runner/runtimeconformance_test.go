@@ -199,7 +199,7 @@ func runAgent(t *testing.T, tc scenario) turn.Work {
 			agentRun: &recordingLauncher{},
 			resume:   &runner.Resume{State: state, Answer: tc.text, Bridged: tc.bridged},
 		})
-	w, _, err := resumed.Resume(context.Background(), nil)
+	w, _, err := resumed.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("agent Resume: %v", err)
 	}

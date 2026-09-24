@@ -26,10 +26,14 @@ func diary(t *testing.T) *learning.Diary {
 	return learning.NewDiary(db)
 }
 
+// longEntry is one durable note. It names [testModel] as the model of any
+// vector a test hands it, which the store keeps only when the note is written
+// with that vector rather than embedded by the store itself.
 func longEntry(id, agent, content string, at time.Time) learning.DiaryEntry {
 	return learning.DiaryEntry{
 		ID: id, AgentID: agent, Kind: learning.DiaryLong,
 		Content: content, CreatedAt: at, Source: "reflect",
+		EmbeddingModel: testModel,
 	}
 }
 
@@ -222,7 +226,7 @@ func TestDiaryRecallRanksAndFiltersLikeEpisodeRecall(t *testing.T) {
 	expired := learning.DiaryEntry{
 		ID: "expired", AgentID: "a", Kind: learning.DiaryShort,
 		Content: "stale", CreatedAt: base, TTLUntil: base.Add(time.Hour),
-		Embedding: []float32{1, 0, 0, 0},
+		Embedding: []float32{1, 0, 0, 0}, EmbeddingModel: testModel,
 	}
 	// Another agent's entry, identical in every way that matters to the
 	// ranking. Without it a recall that ignored the agent scope would still
@@ -235,7 +239,7 @@ func TestDiaryRecallRanksAndFiltersLikeEpisodeRecall(t *testing.T) {
 	}
 
 	hits, err := d.Recall(context.Background(), "a",
-		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}, base.Add(2*time.Hour))
+		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}, Model: testModel}, base.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -253,6 +257,57 @@ func TestDiaryRecallRefusesWhatItCannotAnswer(t *testing.T) {
 	if _, err := d.Recall(context.Background(), "",
 		learning.RecallQuery{Embedding: []float32{1}}, base); err == nil {
 		t.Error("a recall with no agent was accepted")
+	}
+	if _, err := d.Recall(context.Background(), "a",
+		learning.RecallQuery{Embedding: []float32{1}}, base); !errors.Is(err, learning.ErrNoModel) {
+		t.Errorf("a query vector naming no model: err = %v, want ErrNoModel", err)
+	}
+}
+
+// A NOTE IS RANKED ONLY AGAINST A QUERY OF THE MODEL THAT EMBEDDED IT.
+//
+// The diary's half of what [learning.RecallQuery.Model] protects: a company
+// that moved `providers.embeddings.model` to another model of the same width
+// keeps its old notes, and a query from the new model must not rank them on a
+// cosine between two embedding spaces. A note written by a store that embedded
+// it carries that store's model; one written with a vector and no model is
+// unknown, and matches no query.
+//
+// Mutation: drop the model predicate from the diary's recall and both the
+// other model's note and the unknown one, identical to the query, rank.
+func TestDiaryRecallRanksOnlyTheQuerysOwnModel(t *testing.T) {
+	t.Parallel()
+	embed := func(context.Context, string) ([]float32, error) {
+		return []float32{1, 0, 0, 0}, nil
+	}
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	before := learning.NewDiary(db, learning.WithEmbedding(
+		&learning.Embedder{Model: "old-model", Embed: embed}))
+	after := learning.NewDiary(db, learning.WithEmbedding(
+		&learning.Embedder{Model: "new-model", Embed: embed}))
+	mustWrite(t, before, longEntry("old", "a", "written under the old model", base))
+	mustWrite(t, after, longEntry("new", "a", "written under the new model", base))
+	unknown := longEntry("unknown", "a", "a vector nobody named the model of", base)
+	unknown.Embedding, unknown.EmbeddingModel = []float32{1, 0, 0, 0}, ""
+	mustWrite(t, after, unknown)
+
+	for _, tc := range []struct{ model, want string }{
+		{"new-model", "new"},
+		{"old-model", "old"},
+	} {
+		hits, err := after.Recall(context.Background(), "a", learning.RecallQuery{
+			Embedding: []float32{1, 0, 0, 0}, Model: tc.model,
+		}, base.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("Recall under %s: %v", tc.model, err)
+		}
+		if got := diaryHitIDs(hits); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("a query embedded by %s recalled %v, want only %q", tc.model, got, tc.want)
+		}
 	}
 }
 
@@ -368,14 +423,19 @@ func TestASeatOverTheCapKeepsEveryNoteAndIsStillRefused(t *testing.T) {
 
 // embeddingDiary is a diary with a vector backend attached, the way the
 // engine builds every diary it writes through.
-func embeddingDiary(t *testing.T, embed learning.Embed) *learning.Diary {
+func embeddingDiary(t *testing.T, embed func(context.Context, string) ([]float32, error)) *learning.Diary {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "e.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return learning.NewDiary(db, learning.WithEmbedding(embed))
+	return learning.NewDiary(db, learning.WithEmbedding(embedderOf(embed)))
+}
+
+// embedderOf files a test's embedding call under [testModel].
+func embedderOf(embed func(context.Context, string) ([]float32, error)) *learning.Embedder {
+	return &learning.Embedder{Model: testModel, Embed: embed}
 }
 
 // A note is embedded ON THE WAY IN, or recall can never see it.
@@ -391,7 +451,7 @@ func TestAWrittenNoteIsEmbeddedSoRecallCanFindIt(t *testing.T) {
 	embed := func(context.Context, string) ([]float32, error) {
 		return []float32{1, 0, 0, 0}, nil
 	}
-	query := learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}
+	query := learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}, Model: testModel}
 
 	wired := embeddingDiary(t, embed)
 	mustWrite(t, wired, longEntry("kept", "a", "the release train leaves on Thursdays", base))
@@ -461,7 +521,7 @@ func TestAWriterSuppliedVectorIsKeptAndNotReEmbedded(t *testing.T) {
 		t.Errorf("the embedder was called %d times for an entry that had a vector", calls)
 	}
 	hits, err := d.Recall(context.Background(), "a",
-		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}, base.Add(time.Hour))
+		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}, Model: testModel}, base.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -553,11 +613,11 @@ func TestADurableNoteAtTheCapIsRefusedRatherThanMadeRoomFor(t *testing.T) {
 func TestAFullDiarySpendsNoEmbeddingOnARefusedNote(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
-	d := fullDiary(t, learning.DiaryLongCap, learning.WithEmbedding(
+	d := fullDiary(t, learning.DiaryLongCap, learning.WithEmbedding(embedderOf(
 		func(context.Context, string) ([]float32, error) {
 			calls.Add(1)
 			return []float32{1, 0, 0, 0}, nil
-		}))
+		})))
 
 	err := d.Write(context.Background(), longEntry("one-more", "agent-a", "refused", base))
 	if _, ok := errors.AsType[*learning.DiaryFullError](err); !ok {
@@ -578,12 +638,12 @@ func TestTwoWritersRacingForTheLastSlotLandOne(t *testing.T) {
 	t.Parallel()
 	var arrived sync.WaitGroup
 	arrived.Add(2)
-	d := fullDiary(t, learning.DiaryLongCap-1, learning.WithEmbedding(
+	d := fullDiary(t, learning.DiaryLongCap-1, learning.WithEmbedding(embedderOf(
 		func(context.Context, string) ([]float32, error) {
 			arrived.Done()
 			arrived.Wait()
 			return []float32{1, 0, 0, 0}, nil
-		}))
+		})))
 
 	errs := make(chan error, 2)
 	for _, id := range []string{"left", "right"} {

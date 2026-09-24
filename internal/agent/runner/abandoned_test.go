@@ -192,7 +192,7 @@ func TestAnAttemptAbandonedBeforeASuspensionIsOnTheResumedRecord(t *testing.T) {
 	if err := resumedReg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, _, err := resumed.Resume(context.Background(), nil); err != nil {
+	if _, _, err := resumed.Resume(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 

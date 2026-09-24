@@ -140,6 +140,11 @@ type Release struct {
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
 
+	// CarriedCounted is whether a record the resumed turn published counted
+	// the phase's carried spend, recorded on the row by the release itself.
+	// See [PendingRun.CarriedCounted].
+	CarriedCounted bool
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -770,6 +775,33 @@ type PendingRun struct {
 	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
 
+	// CarriedCounted is whether a phase record already counts this launch's
+	// CARRIED SPEND: the tokens the suspended phase billed before it
+	// suspended, and what the collected run reported it cost.
+	//
+	// That spend was billed once, and the resumed phase's record is the one
+	// place it is reported, so exactly one record may count it — the first
+	// the resumed phase publishes, whichever attempt at the resume publishes
+	// it. A resume that fails is handed back for a retry that publishes a
+	// record of its own, and this is how the retry knows to count only what
+	// it bills itself.
+	//
+	// WRITTEN BY THE RELEASE that hands the claim back (see [Release]), for
+	// [PendingRun.Charged]'s reason: it is the only write through which a
+	// retry reaches the resume again. The resumer says a record counted it by
+	// wrapping [ErrCarriedCounted] in its error.
+	//
+	// Launch-scoped, and cleared by [PendingStore.BeginLaunch] alone: a
+	// relaunch suspends anew, and the suspension it writes carries forward
+	// only what no record has counted.
+	//
+	// A build that predates the field does not know it: it neither sets it
+	// nor honours it, and a write it makes to the row re-encodes the row
+	// without it. So while such a build shares the fleet, a resume one of its
+	// nodes retries counts the carried spend on each of its attempts'
+	// records, and a retry after one of its writes counts it again.
+	CarriedCounted bool `json:"carried_counted,omitempty"`
+
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
 	// PausedAt is when this run's box was paused, zero when it is not.
@@ -808,9 +840,9 @@ type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
 	// clearing the previous job's suspended conversation, the question
-	// it was parked on and the record of its charge, while keeping the
-	// row's identity and its box. Either way the launch gets a new
-	// [PendingRun.LaunchID].
+	// it was parked on, the record of its charge and the record that its
+	// carried spend was counted, while keeping the row's identity and its
+	// box. Either way the launch gets a new [PendingRun.LaunchID].
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
 	// run_sandbox call in one turn presents the same turn id as the first
@@ -840,9 +872,10 @@ type PendingStore interface {
 	// Anything else means the run has moved on from the claim (see
 	// [Release]), and a retry of the signal has nothing left to take.
 	//
-	// The claim's charge is recorded IN THE SAME WRITE, and never cleared
-	// by one: a run is reopened to a retry with its record or not at all
-	// (see [PendingRun.Charged]).
+	// The claim's charge, and whether a record counted the carried spend,
+	// are recorded IN THE SAME WRITE, and never cleared by one: a run is
+	// reopened to a retry with its records or not at all (see
+	// [PendingRun.Charged] and [PendingRun.CarriedCounted]).
 	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
@@ -1023,8 +1056,24 @@ type PendingStore interface {
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
 	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked.
+	// that asked: the newest of the seat's runs parked on that conversation,
+	// found through the index [PendingStore.MarkAwaiting] files ([coord.AwaitingRuns]),
+	// every entry confirmed against its run's record. A read that fails is an
+	// error, never "nothing is parked here".
 	FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error)
+
+	// IndexAwaiting brings that index into line with runs: a listing of
+	// every active run of the seat handle names, or of every seat when
+	// handle is empty. It files an entry for each run in the listing that is
+	// waiting on an answer and has none — which is every run a build that
+	// predates the index parked — and drops each entry of those seats whose
+	// run is in no listing and, read again, is gone.
+	//
+	// Called with the listings a node already makes: the completion poll's
+	// every tick, and the recovery pass of a node acquiring a seat, before
+	// the seat's mailbox opens. Its errors say what it could not repair and
+	// fail neither: the listing it was handed is still the answer.
+	IndexAwaiting(ctx context.Context, handle string, runs []PendingRun) error
 }
 
 // ErrSuspensionUnreadable reports a run whose suspended conversation was kept

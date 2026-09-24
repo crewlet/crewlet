@@ -476,6 +476,109 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// the budget
+// ---------------------------------------------------------------------
+
+// budgeted rebuilds the rig's waiter to read the seat's budget from room before
+// it raises a completion.
+func (r *waiterRig) budgeted(room Headroom) {
+	r.t.Helper()
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: r.queue, Pending: r.pending, Manager: r.manager, Headroom: room,
+		Now: func() time.Time { return r.now },
+	})
+	if err != nil {
+		r.t.Fatalf("NewWaiter: %v", err)
+	}
+	r.waiter = waiter
+}
+
+// events is every event published so far, in order.
+func (r *recorder) events() []*events.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*events.Event, 0, len(r.published))
+	for _, p := range r.published {
+		out = append(out, p.event)
+	}
+	return out
+}
+
+// A FINISHED JOB WHOSE SEAT HAS NO BUDGET ROOM RAISES NO COMPLETION, and says so
+// once. The coordinator claims none before there is room, so a completion
+// raised anyway is declined and raised again by the next poll: one stored
+// sandbox_run_completed per poll for as long as the cap holds. The box is still
+// polled, and so kept alive, and the first poll with room raises it.
+func TestACompletionWithNoBudgetRoomIsWithheldUntilThereIsRoom(t *testing.T) {
+	rig := newWaiterRig(t)
+	room := &roomSpy{}
+	room.set(Room{Scope: "agent", Used: 120, Limit: 100}, nil)
+	rig.budgeted(room)
+	run := rig.launch("t1")
+	box := rig.provider.Box(run.SandboxID)
+	rig.runner.Finish(Result{Success: true})
+
+	for tick := range 3 {
+		if fired := rig.tick(); fired != 0 {
+			t.Fatalf("tick %d fired %d completions with no budget room, want none", tick, fired)
+		}
+	}
+	published := rig.queue.events()
+	if len(published) != 1 {
+		t.Fatalf("published %d events over three polls of one wait, want its one announcement: %+v",
+			len(published), published)
+	}
+	exhausted, ok := published[0].Data.(*types.BudgetExhausted)
+	if !ok {
+		t.Fatalf("the wait was announced as %T, want budget_exhausted", published[0].Data)
+	}
+	if exhausted.TurnID != "t1" || exhausted.BudgetType != types.BudgetScopeAgent ||
+		exhausted.UsedTokens != 120 || exhausted.MaxTokens != 100 {
+		t.Errorf("announcement = %+v, want the run's turn and the seat's 120 of 100", exhausted)
+	}
+	if published[0].TraceID != "tr-1" || published[0].ParentSpanID != "sp-1" {
+		t.Errorf("announcement trace = %q/%q, want the launching turn's, where its completion nests",
+			published[0].TraceID, published[0].ParentSpanID)
+	}
+	if got := box.Keepalives(); got != 3 {
+		t.Errorf("the waiting box was heart-beaten %d times over three polls, want 3: it would be "+
+			"reaped before the budget had room", got)
+	}
+
+	room.set(Room{OK: true}, nil)
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d once the budget had room, want the completion", fired)
+	}
+	if _, ok := rig.queue.events()[1].Data.(*types.SandboxRunCompleted); !ok {
+		t.Errorf("after the wait the waiter published %T, want the completion",
+			rig.queue.events()[1].Data)
+	}
+}
+
+// A COUNTER THAT CANNOT BE READ WITHHOLDS THE COMPLETION TOO: the resumed
+// turn's first round is refused on it as well. It announces nothing, since no
+// scope was read at its cap.
+func TestACompletionWhoseBudgetCannotBeReadIsWithheld(t *testing.T) {
+	rig := newWaiterRig(t)
+	room := &roomSpy{}
+	room.set(Room{}, errors.New("coordination store unreachable"))
+	rig.budgeted(room)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("fired %d completions on a budget nobody could read, want none", fired)
+	}
+	if n := rig.queue.count(); n != 0 {
+		t.Fatalf("published %d events for an unreadable budget, want none", n)
+	}
+	room.set(Room{OK: true}, nil)
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d once the budget could be read and had room, want the completion", fired)
+	}
+}
+
+// ---------------------------------------------------------------------
 // the pause reaper
 // ---------------------------------------------------------------------
 

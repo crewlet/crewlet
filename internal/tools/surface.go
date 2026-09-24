@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -48,6 +49,11 @@ type Surface struct {
 	// surface that moved from one that did not without rebuilding what it
 	// renders to find out. See [Surface.Revision].
 	revision uint64
+
+	// sequence runs one [Sequenced] call at a time, from the moment it is
+	// handed the calls before it until it is recorded among them. See
+	// there for why.
+	sequence sync.Mutex
 }
 
 // Guard decides whether a tool may be called yet.
@@ -135,6 +141,31 @@ type SeatCallable interface {
 	// failed Result rather than an error: the model asked for something
 	// reasonable in a context that cannot serve it.
 	CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (Result, error)
+}
+
+// Sequenced is a tool that names what it writes after the calls before it.
+//
+// The native tracker's writes are keyed on the turn and on how many writes of
+// the same kind to the same object came earlier in it (see
+// internal/agent/builtin), which it reads off [turnctx.Turn.Calls]: the turn's
+// closed rounds, and the calls this surface recorded before the one it is
+// running. Two such calls in flight at once would each be handed the same
+// earlier calls and name two writes as one — and the operation ledger answers
+// the second `applied` without writing it.
+//
+// A surface CAN run two calls at once: the MCP bridge executes each call a
+// coding agent sends it as it arrives, and the SDK serving the bridge handles
+// calls asynchronously. So the surface runs these ONE AT A TIME, each from the
+// moment it is handed the calls before it until it is recorded among them.
+// Every other tool runs as it always has — a read serialised behind a write
+// would only be slower.
+//
+// Optional, like [SeatCallable], and for the same reason.
+type Sequenced interface {
+	Callable
+
+	// Sequenced marks the tool; the method does nothing.
+	Sequenced()
 }
 
 var _ toolloop.Surface = (*Surface)(nil)
@@ -349,6 +380,13 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		span.SetAttributes(attribute.String("crewlet.tool_server", server))
 	}
 
+	if _, ordered := e.Tool.(Sequenced); ordered {
+		// HELD ACROSS THE RECORD below, not only the invocation: the next
+		// sequenced call is handed the calls recorded before it, and this
+		// one is not among them until it is recorded.
+		s.sequence.Lock()
+		defer s.sequence.Unlock()
+	}
 	res, err := s.invoke(ctx, e.Tool, args)
 	if err != nil {
 		tracing.Fail(span, err)
@@ -416,14 +454,33 @@ func invokedOutcome(failed, suspended bool) string {
 func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (DetachedResult, error) {
 	switch t := tool.(type) {
 	case Detached:
-		return t.CallDetached(ctx, s.turn, args)
+		return t.CallDetached(ctx, s.turnNow(), args)
 	case SeatCallable:
-		res, err := t.CallForTurn(ctx, s.turn, args)
+		res, err := t.CallForTurn(ctx, s.turnNow(), args)
 		return DetachedResult{Result: res}, err
 	default:
 		res, err := tool.Call(ctx, args)
 		return DetachedResult{Result: res}, err
 	}
+}
+
+// turnNow is the Turn this surface is bound to, as of the call about to run:
+// the calls this surface has recorded follow whatever [turnctx.Turn.Earlier]
+// the bound Turn already carried. Nil outside a turn.
+func (s *Surface) turnNow() *turnctx.Turn {
+	if s.turn == nil {
+		return nil
+	}
+	s.mu.Lock()
+	earlier := make([]ledger.Call, 0, len(s.turn.Earlier)+len(s.called))
+	earlier = append(earlier, s.turn.Earlier...)
+	for _, c := range s.called {
+		earlier = append(earlier, ledger.Call{
+			Name: c.Name, Args: c.Args, Result: c.Output, Failed: c.Failed,
+		})
+	}
+	s.mu.Unlock()
+	return s.turn.WithEarlier(earlier)
 }
 
 func (s *Surface) record(c Call) {

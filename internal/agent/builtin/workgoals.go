@@ -108,6 +108,11 @@ func (t *listWorkGoals) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 type writeWorkGoal struct{ deps WorkDeps }
 
 var _ tools.Callable = (*writeWorkGoal)(nil)
+var _ tools.Sequenced = (*writeWorkGoal)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*writeWorkGoal) Sequenced() {}
 
 func (t *writeWorkGoal) Name() string { return tracker.WriteWorkGoalTool }
 
@@ -275,9 +280,13 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		goal.Updates = []tracker.GoalUpdate{{Health: health, Text: text}}
 	}
 
-	result, err := t.deps.GoalWriter(actor).WriteGoal(ctx, "goal-"+id, goal)
+	// THE OPERATION IS THE CALL'S, not the goal's, for the reason
+	// save_work_view gives: the second save of a goal under an id named
+	// after the goal alone would be answered `applied` and written nowhere.
+	op := opIDFor(actor, operationsBefore(turn), "goal", id)
+	result, err := t.deps.GoalWriter(actor).WriteGoal(ctx, op, goal)
 	if err != nil {
-		return failed(writeFailure(tracker.WriteWorkGoalTool, err)), nil
+		return refusedAfter(writeFailure(tracker.WriteWorkGoalTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	answer := map[string]any{
@@ -291,7 +300,7 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if len(result.Warnings) > 0 {
 		answer["warnings"] = result.Warnings
 	}
-	return jsonResult(answer)
+	return receipt(answer, op)
 }
 
 // goalParties is who a stored goal already names.

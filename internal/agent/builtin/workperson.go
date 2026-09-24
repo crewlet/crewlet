@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -103,6 +101,11 @@ type setPriorities struct {
 }
 
 var _ tools.Callable = (*setPriorities)(nil)
+var _ tools.Sequenced = (*setPriorities)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*setPriorities) Sequenced() {}
 
 func (t *setPriorities) Name() string { return tracker.SetPrioritiesTool }
 
@@ -188,21 +191,26 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		resolved = append(resolved, id)
 	}
-	result, err := writer.WritePriorities(ctx,
-		"prio-"+handle+"-"+callKey(turn), handle, resolved, authority)
+	op := callKey(actor, operationsBefore(turn), "prio-"+handle+"-")
+	result, err := writer.WritePriorities(ctx, op, handle, resolved, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
+		return refusedAfter(writeFailure(tracker.SetPrioritiesTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"handle": handle, "outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
-	})
+	}, op)
 }
 
 type setPins struct{ deps WorkDeps }
 
 var _ tools.Callable = (*setPins)(nil)
+var _ tools.Sequenced = (*setPins)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*setPins) Sequenced() {}
 
 func (t *setPins) Name() string { return tracker.SetPinsTool }
 
@@ -251,21 +259,26 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	result, err := writer.WritePins(ctx,
-		"pins-"+actor.Handle+"-"+callKey(turn), actor.Handle,
+	op := callKey(actor, operationsBefore(turn), "pins-"+actor.Handle+"-")
+	result, err := writer.WritePins(ctx, op, actor.Handle,
 		argStrings(args, "views"), favorites)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPinsTool, err)), nil
+		return refusedAfter(writeFailure(tracker.SetPinsTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, op)
 }
 
 type markInbox struct{ deps WorkDeps }
 
 var _ tools.Callable = (*markInbox)(nil)
+var _ tools.Sequenced = (*markInbox)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*markInbox) Sequenced() {}
 
 func (t *markInbox) Name() string { return tracker.MarkInboxTool }
 
@@ -359,19 +372,19 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		reasons = append(reasons, reason)
 	}
-	result, err := writer.WriteInbox(ctx,
-		"inbox-"+actor.Handle+"-"+callKey(turn), actor.Handle,
+	op := callKey(actor, operationsBefore(turn), "inbox-"+actor.Handle+"-")
+	result, err := writer.WriteInbox(ctx, op, actor.Handle,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
 	if err != nil {
-		return failed(writeFailure(tracker.MarkInboxTool, err)), nil
+		return refusedAfter(writeFailure(tracker.MarkInboxTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, op)
 }
 
 // person resolves the actor and the writer for a priority write.
@@ -395,29 +408,6 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 		return Actor{}, nil, &refusal
 	}
 	return actor, d.PersonWriter(actor), nil
-}
-
-// callKey is the idempotency scope of ONE tool call — the turn's own key
-// inside a turn, and a fresh value outside one.
-//
-// AN OPERATOR HAS NO TURN and no redelivery: their client made one call, so
-// there is nothing to deduplicate against and two calls in one session are two
-// writes, which is what the caller meant.
-//
-// THAT IS WHAT THIS ALWAYS CLAIMED AND NEVER DID. It returned the literal
-// string `operator`, so the operation id it is half of — `prio-<handle>-operator`,
-// `pins-…`, `inbox-…` — was stable for the
-// life of the deployment, and the ledger collapsed every write after the first
-// as a redelivery. `set_priorities` through `/operator/mcp` wrote one list per
-// person, ever; the second call answered `applied` with the FIRST call's
-// position and changed nothing. (The empty string the old comment named would
-// have done exactly the same: what makes a key unique is that it is fresh, not
-// that it is blank.) See [opIDFor], which had the same defect on the same day.
-func callKey(turn *turnctx.Turn) string {
-	if key := turnKey(turn); key != "" {
-		return key
-	}
-	return "operator-" + uuid.NewString()
 }
 
 // inboxEntries reads one of the three lists.

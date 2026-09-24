@@ -22,8 +22,12 @@ type ReanchorGuard struct {
 	// verb on the wrong estate — the one mistake that cannot be undone.
 	Confirm string
 
-	// Force overrides the "only the most caught-up node may reanchor"
-	// rule, and its message must name exactly what may be lost.
+	// Force overrides the two refusals that rest on the positions
+	// register — a register that could not be read, and a node that is not
+	// the most caught-up one — accepting the loss of every record the fleet
+	// applied above this node's own position. It never overrides a hydrated
+	// peer: two nodes re-anchored independently diverge silently, with no
+	// log left to reconcile them from.
 	Force bool
 }
 
@@ -47,7 +51,8 @@ type ReanchorInputs struct {
 	// cursor is one below it, which is zero on a fresh stream.
 	FirstSeq uint64
 
-	// PeersHydrated is how many peers are caught up on the LIVE stream.
+	// PeersHydrated is how many peers have applied records off the LIVE
+	// stream.
 	//
 	// ANY IS A REFUSAL, and the reason is not caution: two nodes that
 	// reanchor independently each keep whatever they applied off the old
@@ -57,9 +62,9 @@ type ReanchorInputs struct {
 	PeersHydrated int
 
 	// Position is this node's own committed sequence at the OLD
-	// generation, and Highest is the highest any counted node published.
-	// Only the most caught-up node may reanchor when nobody is hydrated,
-	// because whatever it did not apply is what the fleet loses.
+	// generation, and Highest is the highest any node on that same stream
+	// published. Only the most caught-up node may reanchor when nobody is
+	// hydrated, because whatever it did not apply is what the fleet loses.
 	Position uint64
 	Highest  uint64
 
@@ -211,8 +216,9 @@ type ReanchorDeps struct {
 //     stream: the re-run derives the SAME generation and op id, finds its own
 //     record holding the subject, and goes on to step 6 with nothing
 //     appended. A second node that derived the same number finds a record it
-//     did not write and is refused [ClaimedElsewhere], before any checkpoint
-//     of its own moves.
+//     did not write and is refused — [ErrReanchorRefused], carrying the
+//     [ClaimedElsewhere] that names the holder — before any checkpoint of its
+//     own moves.
 //  6. and 7. ONE transaction: the domain's cursor into the new generation, and
 //     the audit row. A crash rolls both back whole.
 //
@@ -267,6 +273,15 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 	// earlier attempt holds it as this attempt, and anybody else's refuses.
 	if d.PublishGeneration != nil {
 		if err := d.PublishGeneration(ctx, gen, in); err != nil {
+			// ANOTHER REANCHOR HOLDS THIS GENERATION, which is a refusal
+			// rather than a failure: nothing here is retried into success,
+			// and no checkpoint of this node's has moved.
+			var elsewhere *ClaimedElsewhere
+			if errors.As(err, &elsewhere) {
+				return 0, fmt.Errorf("%w: %s's generation %d is held by another "+
+					"reanchor's record: %w", ErrReanchorRefused, d.Domain.Name(),
+					gen, err)
+			}
 			return 0, fmt.Errorf("statelog: publish %s's generation %d: %w",
 				d.Domain.Name(), gen, err)
 		}

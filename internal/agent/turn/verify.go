@@ -316,6 +316,11 @@ func DeliverersFor(s Surface, reply Reply) []string {
 // not counted.
 //
 // SUCCESSFUL calls only, like Delivered: a post that failed did not post.
+//
+// [Run] hands it a round's [Work.Made], never the whole of [Work.Calls]: a
+// call carried into a re-entered conversation was answered before the round
+// began, so a retry of the round re-enters with it answered and does not make
+// it again.
 func Acted(calls []ledger.Call, s Surface) bool {
 	for _, c := range calls {
 		if c.Failed {

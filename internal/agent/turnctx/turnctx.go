@@ -50,8 +50,10 @@ package turnctx
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -149,6 +151,73 @@ type Turn struct {
 	// history it has closed so far, so nothing here is written after the
 	// Turn is built and the package's immutability rule holds unchanged.
 	Rounds []ledger.Iteration
+
+	// Earlier is every call this turn made before the one now running that
+	// no closed round in [Turn.Rounds] holds — above all the running
+	// phase's own calls so far, which the surface running a call derives
+	// into the Turn it hands that call. [Turn.Calls] is the two together.
+	//
+	// It travels because a write is NAMED after the calls before it: the
+	// native tracker's tools key each operation on the turn and on how many
+	// writes of the same kind to the same object came earlier in it, so a
+	// redelivered turn making the same calls re-derives the same names while
+	// a second write in one turn is a second write. A count that missed
+	// part of the turn would name a later write after an earlier one, and
+	// the operation ledger would answer it `applied` without writing it.
+	//
+	// A SNAPSHOT, like Rounds, and derived the same way: see
+	// [Turn.WithEarlier].
+	Earlier []ledger.Call
+
+	// TriggeredAt is the earliest instant an operation id derived from this
+	// turn's seed can have been minted — by this run, or by any other run
+	// that derives the same ids.
+	//
+	// The seed is the work key where there is one, and every run of that
+	// unit of work started after its triggers were published, so it is the
+	// earliest trigger's own envelope timestamp; with no work key the seed
+	// is the run, and it is the run's start. See [TriggerInstant]. What
+	// reads it is the write path's mint instant, which a node that adopted
+	// a snapshot compares against the adoption: a retry stamped with its
+	// OWN call time reads as newer than an adoption its first attempt
+	// predates, and is decided a second time.
+	//
+	// Zero means nothing is known, and each write is then stamped with its
+	// own call's instant.
+	TriggeredAt time.Time
+}
+
+// TriggerInstant is [Turn.TriggeredAt] for a turn a dispatch started.
+//
+// WITH A WORK KEY, the earliest envelope timestamp among the events the turn
+// was dispatched for: the work key is derived from those events, a redelivery
+// derives it again, and no attempt at the work can have minted anything before
+// the events it was woken by existed. NOT the dispatch's own instant, which on
+// a redelivery is later than the first attempt's writes.
+//
+// WITHOUT ONE, the run's own start, because the run is then the seed and
+// nothing but this run derives its ids.
+//
+// An event carrying no timestamp is passed over, and a work key none of whose
+// events carries one falls back to started, which precedes every write this
+// run makes but not an earlier attempt's.
+func TriggerInstant(workKey string, trigger []*events.Event, started time.Time) time.Time {
+	if workKey == "" {
+		return started
+	}
+	var earliest time.Time
+	for _, ev := range trigger {
+		if ev == nil || ev.Timestamp.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || ev.Timestamp.Before(earliest) {
+			earliest = ev.Timestamp
+		}
+	}
+	if earliest.IsZero() {
+		return started
+	}
+	return earliest.UTC()
 }
 
 // WithRounds derives a Turn carrying the rounds closed so far.
@@ -170,6 +239,39 @@ func (t *Turn) WithRounds(rounds []ledger.Iteration) *Turn {
 	next := *t
 	next.Rounds = slices.Clone(rounds)
 	return &next
+}
+
+// WithEarlier derives a Turn whose [Turn.Earlier] is calls, and it is derived
+// for [Turn.WithRounds]' reason: the calls grow during a phase, and a Turn
+// holding the recorder's live slice would read what a later call appended.
+//
+// It REPLACES rather than appends, so the frame deriving it states the whole
+// list: the surface running a call hands it what the Turn it was bound to
+// already carried followed by the calls it has recorded since.
+func (t *Turn) WithEarlier(calls []ledger.Call) *Turn {
+	if t == nil {
+		return nil
+	}
+	next := *t
+	next.Earlier = slices.Clone(calls)
+	return &next
+}
+
+// Calls is every call this turn made before the one now running: each closed
+// round's in round order, then [Turn.Earlier]. Nil outside a turn.
+func (t *Turn) Calls() []ledger.Call {
+	if t == nil {
+		return nil
+	}
+	n := len(t.Earlier)
+	for _, round := range t.Rounds {
+		n += len(round.Calls)
+	}
+	out := make([]ledger.Call, 0, n)
+	for _, round := range t.Rounds {
+		out = append(out, round.Calls...)
+	}
+	return append(out, t.Earlier...)
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.
@@ -235,6 +337,9 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // EXTENDS the delegation chain, refusing past the cap. The seat becomes the
 // child's own: a sub-agent acting as its parent would make the delegation cap
 // unenforceable, because nothing downstream could tell the two apart.
+//
+// The two identities and [Turn.TriggeredAt] travel together, because the
+// instant is a fact about the ids those identities seed.
 func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 	if t == nil {
 		return nil, ErrNoSeat
@@ -253,7 +358,7 @@ func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 		chain = append(chain, h)
 	}
 	return &Turn{
-		RunID: t.RunID, WorkKey: t.WorkKey,
+		RunID: t.RunID, WorkKey: t.WorkKey, TriggeredAt: t.TriggeredAt,
 		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
 	}, nil
 }

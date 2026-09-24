@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -68,6 +66,11 @@ type writeProject struct {
 }
 
 var _ tools.SeatCallable = (*writeProject)(nil)
+var _ tools.Sequenced = (*writeProject)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*writeProject) Sequenced() {}
 
 func (t *writeProject) Name() string { return tracker.WriteProjectTool }
 
@@ -232,15 +235,19 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
+	earlier := operationsBefore(turn)
+	var ops []string
 
 	// THE TAGS FIRST, because the policy half may archive the project and
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
-		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
+		op := opIDFor(actor, earlier, "tags", tracker.ProjectKey(key))
+		ops = append(ops, op)
+		result, err := writer.WriteTags(ctx, op, key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
+			return refusedAfter(writeFailure(tracker.WriteProjectTool, err), ops...), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		tags := map[string]any{
@@ -252,17 +259,28 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
+		op := opIDFor(actor, earlier, "policy", tracker.ProjectKey(key))
+		ops = append(ops, op)
+		result, err := writer.WriteProject(ctx, op, key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
+			if tagEdit.Empty() {
+				return refusedAfter(writeFailure(tracker.WriteProjectTool, err), ops...), nil
+			}
+			// THE TAGS LANDED and are reported beside the policy half
+			// that did not: a failed call would say neither changed, and
+			// the tag edit would be made again.
+			out["policy"] = map[string]any{
+				"failed": writeFailure("the policy half of "+tracker.WriteProjectTool, err),
+			}
+			return receipt(out, ops...)
 		}
 		t.deps.settle(ctx, result.Position)
 		out["policy"] = map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 	}
-	return jsonResult(out)
+	return receipt(out, ops...)
 }
 
 // projectTagEdit reads the three tag facets a caller sent.

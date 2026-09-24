@@ -78,12 +78,35 @@ const (
 // converted to uint, so this line simply fails to build.
 const _ = uint(EpisodeWindowBytes - 2*EpisodeWindowOverlap - 4)
 
-// Embed turns text into a vector, or reports that it cannot.
+// Embedder is the vector backend as this package takes it: the call that turns
+// a text into a vector, and the model every vector it returns was made by.
 //
-// A FUNCTION rather than the provider interface: it is the one thing this
-// worker wants from embeddings, and taking the interface would make every
-// test that writes an episode implement a Width it never reads.
-type Embed func(ctx context.Context, text string) ([]float32, error)
+// THE MODEL TRAVELS WITH THE CALL, because a vector is comparable only with
+// vectors of its own model. Two models can share a width, and the cosine
+// between their vectors is a number that means nothing — so every vector this
+// package writes is stored with the model that made it, and every recall
+// compares only vectors of its query's model (see [RecallQuery.Model]).
+//
+// A FUNCTION rather than the provider interface: embedding is the one thing
+// these writers and readers want from a provider, and taking the interface
+// would make every test that writes an episode implement a Width it never
+// reads.
+//
+// A NIL *Embedder is a company with no vector backend, which every consumer
+// reads as "no similarity search" rather than as a fault.
+type Embedder struct {
+	// Model is the model id the provider embeds with. A vector made by
+	// Embed is stored under it, and a query vector is compared only with
+	// vectors stored under it.
+	Model string
+
+	// Embed returns one vector for one text, or reports that it cannot.
+	Embed func(ctx context.Context, text string) ([]float32, error)
+}
+
+// Usable reports an embedder a caller can embed with: a nil one, and one
+// built without its call, are both a company with no vector backend.
+func (e *Embedder) Usable() bool { return e != nil && e.Embed != nil }
 
 // Episodist records one completed turn as an episode.
 //
@@ -108,7 +131,7 @@ type Embed func(ctx context.Context, text string) ([]float32, error)
 // nothing more than a re-embed.
 type Episodist struct {
 	episodes *Episodes
-	embed    Embed
+	embed    *Embedder
 	timeout  time.Duration
 	now      func() time.Time
 	newID    func() string
@@ -117,7 +140,7 @@ type Episodist struct {
 // EpisodistOptions configures the worker.
 type EpisodistOptions struct {
 	// Embed is the vector backend, or nil for a company with none.
-	Embed Embed
+	Embed *Embedder
 
 	// EmbedTimeout bounds one episode's whole embedding, across every
 	// window of its summary. Zero takes [DefaultEmbedTimeout].
@@ -210,6 +233,11 @@ func (w *Episodist) Skip(t Turn) string {
 func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	ep := w.episodeOf(t)
 	ep.Embeddings = w.vector(ctx, ep.TaskSummary)
+	if len(ep.Embeddings) > 0 {
+		// THE MODEL THAT MADE THEM, stored beside them: recall compares a
+		// query only with vectors of its own model. See [Embedder].
+		ep.EmbeddingModel = w.embed.Model
+	}
 
 	written, err := w.episodes.Append(ctx, ep)
 	if err != nil {
@@ -290,7 +318,7 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 // numbers, so a partly-embedded summary is a fact a reader can see rather than
 // a result they cannot explain.
 func (w *Episodist) vector(ctx context.Context, summary string) [][]float32 {
-	if w.embed == nil || summary == "" {
+	if !w.embed.Usable() || summary == "" {
 		return nil
 	}
 	windows := episodeWindows(summary)
@@ -302,7 +330,7 @@ func (w *Episodist) vector(ctx context.Context, summary string) [][]float32 {
 	out := make([][]float32, 0, len(windows))
 	var failure error
 	for _, window := range windows {
-		vector, err := w.embed(ctx, window)
+		vector, err := w.embed.Embed(ctx, window)
 		if err != nil {
 			failure = err
 			if ctx.Err() != nil {
