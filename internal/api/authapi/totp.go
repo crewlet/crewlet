@@ -257,10 +257,11 @@ func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Princip
 // machineToken refuses a request that presented a machine token, on a gesture
 // that manages the proof its owner signs in with, and says whether it did.
 //
-// ASKED OF THE CREDENTIAL AND NEVER OF THE PRINCIPAL: a token acts as its
-// owner, so the principal is a person with a fresh step-up clock and nothing
-// on it says a person is absent. What the request PRESENTED is the one fact
-// that does, and it is the guard's to state ([auth.PresentedToken]).
+// ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: a token
+// acts as its owner, so the principal is a person with a fresh step-up clock,
+// and both checks [Service.steppedUp] makes around this one pass it. The one
+// thing on it that says nobody is present is what it came THROUGH — its
+// [iam.Principal.Via], which the guard stamps and [auth.PresentedToken] reads.
 func machineToken(w http.ResponseWriter, r *http.Request) bool {
 	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
 		return false

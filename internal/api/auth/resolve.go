@@ -20,9 +20,11 @@ import (
 //
 // A Tier A token is the DEPLOYMENT's own machine credential: break-glass, the
 // operator CLI, a pipeline. It is not a person and is never a stand-in for
-// one. What every surface downstream needs is the same thing a session will
-// hand it once one exists — an [iam.Principal] — so the two credential shapes
-// meet HERE and nowhere else, and no route has to know which one arrived.
+// one. What every surface downstream needs is the same thing a session cookie
+// (sessions.go) and a machine token (tokens.go) hand it — an [iam.Principal] —
+// so this file composes one from the token, the three credential shapes meet
+// in [Guard.Resolve] and nowhere else, and no route has to know which one
+// arrived.
 //
 // Every field below is derived from something the configuration already says.
 // Nothing is read from a store, which is what lets this run before any node

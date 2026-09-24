@@ -851,7 +851,10 @@ name and gave it to the credential, which named nobody once the token's own
 row was swept. The identity estate's audit events carry it beside `by`, and
 its own trail, `GET /iam/audit`, beside the actor — which used to name the
 owner alone, so whatever a token did to the directory read there as done by
-them. The `pat` class is
+them. The one exception is a removal and a company-wide invalidation: their
+records are pinned at their first version for ever, so their trail rows name
+the actor alone and the events announcing them carry the token. The `pat`
+class is
 reserved for exactly this: no service account may enrol under a login that
 starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
