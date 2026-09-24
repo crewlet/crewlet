@@ -32,6 +32,7 @@
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, SeatCard, Section } from "~/components/common.tsx";
+import { WindowMeters } from "~/components/budget.tsx";
 import {
   ActivityStrip,
   BarList,
@@ -40,7 +41,6 @@ import {
   EmptyState,
   EmptyValue,
   Legend,
-  Meter,
   StatCard,
   StatGroup,
   Tag,
@@ -489,23 +489,11 @@ export function LiveNow() {
                 items={phaseSpend.map((p) => ({ id: p.id, label: p.label, color: p.color }))}
               />
             )}
-            {orgMeter && orgMeter.max > 0 && (
-              // THEIR LABEL IS THE ACCESSIBLE NAME, linked to the bar, so the
-              // separate `ariaLabel` ours needed is gone. `fullMeans="spent"`
-              // is gone too: theirs derives exactly that reading from the
-              // fill, which is the right one here. See the report for the
-              // reading it has no word for.
-              <Meter
-                value={orgMeter.used}
-                max={orgMeter.max}
-                label={
-                  <span title="spend in the budget window closest to its ceiling, against that window's cap; not comparable to the spend window above">
-                    Company budget meter
-                  </span>
-                }
-                valueText={`${fmtCount(orgMeter.used)} of ${fmtCount(orgMeter.max)} tokens`}
-                hint={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
-              />
+            {orgMeter && orgMeter.windows.length > 0 && (
+              // THE CALENDAR WINDOWS, not the spend window above: each bar is
+              // one capped window of the company's shared counter against its
+              // own ceiling, in the colour the engine judged it.
+              <WindowMeters windows={orgMeter.windows} whose="The company's" />
             )}
           </div>
         </Card>

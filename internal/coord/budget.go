@@ -205,9 +205,10 @@ type Spend struct {
 	// a ceiling being raised, and naming an earlier one would send a
 	// caller waiting for a window whose turnover changes nothing. Windows
 	// that end together — the last day of a month that is a Sunday — name
-	// the longer period, so every backend gives one answer. The stamps the
-	// refusal leaves make [Usage.Binding] choose this same window, so a
-	// reader stating one figure per scope names what the refusal named.
+	// the longer period, so every backend gives one answer, and every
+	// reader naming the window a scope waits on — the budget park
+	// ([Outlasts]), the dashboard's attention queue — chooses by the same
+	// rule, so none of them names a window the refusal did not.
 	RefusedPeriod period.Period
 	RefusedWindow period.Window
 	RefusedUsed   int
@@ -288,56 +289,6 @@ func (u Usage) In(p period.Period) WindowUsage {
 	return WindowUsage{}
 }
 
-// Binding is the window of this counter the gate turns a charge away in
-// first, under caps, with its ceiling — the one figure a reader that states a
-// single figure per scope states.
-//
-// A window that is REFUSING comes first: it is the one a scope is waiting on,
-// and a refusal is the gate's own record of saying no. Among several refusing
-// windows it is the one that ENDS LAST, the longer period where they end
-// together — the window [Spend.RefusedWindow] names for the same stamps, so
-// the answer that states this figure and the refusal event that announced it
-// never name two different windows. Otherwise it is the capped window with the
-// least room left, ties going the same way, so two nodes pick the same one.
-//
-// When caps caps nothing it answers false, with the MONTH and a ceiling of 0:
-// no window binds, and the month is the widest spend the counter keeps, so it
-// is the figure that says most about a scope nothing limits.
-func (u Usage) Binding(caps Caps) (WindowUsage, int, bool) {
-	best, bestCap, bestAt := u.In(period.Month), 0, -1
-	for i, p := range period.Periods {
-		ceiling, capped := caps[p]
-		if !capped {
-			continue
-		}
-		if slot := u.Windows[i]; bestAt < 0 || bindsBefore(slot, ceiling, i, best, bestCap, bestAt) {
-			best, bestCap, bestAt = slot, ceiling, i
-		}
-	}
-	return best, bestCap, bestAt >= 0
-}
-
-// bindsBefore reports whether slot a, under ceiling ac and at position ai in
-// [period.Periods], is the binding window over b under bc at bi: a refusal
-// over none, then among refusals the one that outlasts the other, and among
-// open windows the one with less room left before the one that outlasts it.
-func bindsBefore(a WindowUsage, ac, ai int, b WindowUsage, bc, bi int) bool {
-	aRefusing, bRefusing := !a.RefusedAt.IsZero(), !b.RefusedAt.IsZero()
-	switch {
-	case aRefusing != bRefusing:
-		return aRefusing
-	case aRefusing:
-		// Both refusing. The one a scope waits out, as [Tally.Refusal]
-		// names it: room left is not the question once the gate has said
-		// no in both, since neither admits anything until it turns over.
-		return outlasts(a.Window, ai, b.Window, bi)
-	}
-	if aLeft, bLeft := max(ac-a.Used, 0), max(bc-b.Used, 0); aLeft != bLeft {
-		return aLeft < bLeft
-	}
-	return outlasts(a.Window, ai, b.Window, bi)
-}
-
 // Outlasts reports whether a scope waits on window a longer than on b: a ends
 // later, or ends at the same instant and is the longer period.
 //
@@ -353,10 +304,10 @@ func Outlasts(a, b period.Window) bool {
 // [period.Periods], is the one a scope waits on longer than b at bi: it ends
 // later, or ends at the same instant and is the longer period.
 //
-// THE ONE TIE-BREAK every "which window" answer here takes — the refusal a
-// charge names and the binding window a reader states — so the two cannot
-// drift apart, and it turns on the window's end and the period, never on the
-// order windows arrive in.
+// THE ONE TIE-BREAK every "which window" answer takes — the refusal a charge
+// names here, and through [Outlasts] the window a parked seat waits on — so
+// they cannot drift apart, and it turns on the window's end and the period,
+// never on the order windows arrive in.
 func outlasts(a period.Window, ai int, b period.Window, bi int) bool {
 	if c := a.End.Compare(b.End); c != 0 {
 		return c > 0
@@ -694,7 +645,7 @@ func (t Tally) window(i int, w Windows) period.Window {
 // The choice turns on each window's END and, at a tie, on the period's length
 // — never on the order periods arrive in, so a caller that listed them in any
 // other order still gets the answer every backend gives. It is [outlasts], the
-// rule [Usage.Binding] chooses among refusing windows with too.
+// rule [Outlasts] exports to every caller choosing among windows.
 func (t Tally) Refusal(scope string, periods []period.Period, caps Caps, w Windows) Spend {
 	out := Spend{RefusedScope: scope}
 	named := -1

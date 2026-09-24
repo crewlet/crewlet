@@ -1,5 +1,11 @@
 package livestate
 
+import (
+	"encoding/json"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+)
+
 // applyBudget folds one meter report into the projection.
 //
 // Every node publishes a report of the SAME shared counter, each under its own
@@ -39,6 +45,15 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	case !at.empty() && !s.budgetAt.empty() && at.before(s.budgetAt):
 		return change
 	}
+	// DECODED INTO THE WIRE TYPE, not read field by field: the projection
+	// holds the windows exactly as the frame carried them, because a fold
+	// that picked named fields out of the payload is what dropped the
+	// refusal stamp on its way to the push. A frame that does not decode
+	// is not a reading, so it is dropped whole rather than half-applied.
+	var report types.BudgetMeters
+	if !decodePayload(payload, &report) {
+		return change
+	}
 	// Nothing is cleared here for a new meter, and that is deliberate
 	// rather than an omission: every seat this report does not mention
 	// loses its bar in the sweep at the end, which covers a node on another
@@ -47,12 +62,10 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	// with the first only for as long as nobody edits either.
 
 	s.budget = OrgBudget{
-		MeterID: meterID,
-		Seq:     seq,
-		Org: Meter{
-			Used: num(payload, "org_used_tokens"),
-			Max:  num(payload, "org_max_tokens"),
-		},
+		MeterID:  meterID,
+		Seq:      seq,
+		Timezone: report.Timezone,
+		Org:      BudgetMeter{Windows: windowsOrEmpty(report.Org.Windows)},
 	}
 	// Only an ADVANCE moves the guard. A report with no usable timestamp is
 	// still applied, for the reason every other guard here lets one
@@ -64,28 +77,20 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	change.Budget = true
 
 	// Only metered seats are reported. A seat that LOST its meter — a cap
-	// edited down to zero, a role decommissioned — must lose its bar
-	// rather than keep the last figure it had.
+	// removed, a role decommissioned — must lose its bar rather than keep
+	// the last figure it had.
 	reported := map[string]struct{}{}
-	for _, row := range list(payload, "agents") {
-		fields, ok := row.(map[string]any)
-		if !ok {
+	for _, seat := range report.Seats {
+		if seat.Role == "" {
 			continue
 		}
-		role := str(fields, "role")
-		if role == "" {
-			continue
-		}
-		reported[role] = struct{}{}
-		agent := s.ensureAgent(role)
+		reported[seat.Role] = struct{}{}
+		agent := s.ensureAgent(seat.Role)
 		if agent.runtimeID == "" {
-			agent.runtimeID = str(fields, "agent_id")
+			agent.runtimeID = seat.AgentID
 		}
-		agent.budget = &Meter{
-			Used: num(fields, "used_tokens"),
-			Max:  num(fields, "max_tokens"),
-		}
-		change.agentMoved(role)
+		agent.budget = &BudgetMeter{Windows: windowsOrEmpty(seat.Windows)}
+		change.agentMoved(seat.Role)
 	}
 	for _, agent := range s.agents {
 		if agent.budget != nil {
@@ -96,4 +101,23 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 		}
 	}
 	return change
+}
+
+// windowsOrEmpty is a window list the push states as `[]` rather than null
+// when a scope caps none: the client reads null as "not loaded yet".
+func windowsOrEmpty(ws []WindowMeter) []WindowMeter {
+	if ws == nil {
+		return []WindowMeter{}
+	}
+	return ws
+}
+
+// decodePayload reads a generic payload into its wire type, reporting whether
+// it decoded.
+func decodePayload(payload map[string]any, into any) bool {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, into) == nil
 }

@@ -619,6 +619,23 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	}
 }
 
+// THERE IS NO BUDGET RESET (ADR-0019). A ceiling is per calendar window and a
+// window's allowance comes back when it turns over; room before then is made by
+// raising the ceiling. Asked with a credential that could write, so a 404 is
+// the mux having nothing rather than the guard refusing a stranger.
+func TestThereIsNoBudgetResetRoute(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b})
+	req := httptest.NewRequest(http.MethodPost, "/budgets/reset", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST /budgets/reset = %d, want 404: nothing resets a window", rec.Code)
+	}
+}
+
 // THE NODE ID NAMES THE PROCESS THAT ANSWERED, and it is the RESOLVED one.
 //
 // The field that turns "the config apply failed" into "the config apply failed

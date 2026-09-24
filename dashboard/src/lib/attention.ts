@@ -22,7 +22,14 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type { AgentRow, OrgBudget, SandboxEntry, SandboxRun } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  BudgetWindow,
+  OrgBudget,
+  SandboxEntry,
+  SandboxRun,
+} from "~/protocol/index.ts";
+import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { MarkName } from "~/ui/glyph.tsx";
 import { roundLabel, runState, staleness } from "./seats.ts";
@@ -192,44 +199,35 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- budgets -------------------------------------------------------------
   //
-  // THE REFUSAL FIRST, THE METER AS A BACKSTOP. `refused_at` is the gate's own
-  // record of turning a charge away, kept in the shared counter beside the
-  // spend, so it is fleet-wide and every node reports the same one. It is what
-  // "exhausted" actually means: a refused charge increments NOTHING, so a
-  // company charged in rounds sits just short of its cap for ever and
-  // `used >= max` never comes true. That test is kept beside it because it is
-  // sufficient where it does fire — at or past the cap no further charge can
-  // be accepted — and it covers the moment before the first refusal is stamped.
-  const org = budget?.org;
-  if (org?.refused_at) {
+  // THE ENGINE'S OWN STATE, and no threshold of ours. Every window the live
+  // meter carries is judged where the counter is — `refusing` when the gate
+  // has turned a charge away in it or it has no room for a single token,
+  // `near` at the engine's near fraction — so this list, the Budgets screen
+  // and the meters all say the same thing about one window. A refusal outranks
+  // a near window; within each, the window NAMED is the one that turns over
+  // last, which is when the company has room again without a ceiling raised.
+  const org = budget?.org?.windows;
+  const orgRefusing = waitedOn(org, "refusing");
+  const orgNear = orgRefusing ? undefined : waitedOn(org, "near");
+  if (orgRefusing) {
     out.push({
       id: "org-budget",
       severity: "critical",
       subject: "budget",
       icon: "token",
-      title: "The company token budget is refusing charges",
-      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}. Raise token_budget, or wait for its window to turn over.`,
+      title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
+      detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
       path: ["cost"],
-      at: org.refused_at,
+      at: orgRefusing.refused_at,
     });
-  } else if (org && org.max > 0 && org.used >= org.max) {
-    out.push({
-      id: "org-budget",
-      severity: "critical",
-      subject: "budget",
-      icon: "token",
-      title: "The company token budget is spent",
-      detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
-      path: ["cost"],
-    });
-  } else if (org && org.max > 0 && org.used / org.max >= 0.9) {
+  } else if (orgNear) {
     out.push({
       id: "org-budget-near",
       severity: "caution",
       subject: "budget",
       icon: "token",
-      title: "The company token budget is nearly spent",
-      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget for this window is spent. Raise token_budget, or wait for the window to turn over.`,
+      title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
+      detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
       path: ["cost"],
     });
   }
@@ -319,31 +317,22 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         });
       }
     }
-    // THE SAME PAIR AS THE COMPANY ROW ABOVE: the gate's own refusal stamp
-    // first, the meter as the backstop it is sufficient for.
-    const meter = agent.budget;
-    if (meter?.refused_at) {
+    // A SEAT THAT IS REFUSING, by the engine's state as above. A seat merely
+    // near its own ceiling raises nothing: the company's row covers the one
+    // an operator acts on before it binds, and a caution per seat would bury
+    // it in a company of any size.
+    const refusing = waitedOn(agent.budget?.windows, "refusing");
+    if (refusing) {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
         subject: "budget",
         icon: "token",
-        title: `${agent.role}'s token budget is refusing charges`,
-        detail: `This seat's turns are being declined at the budget gate. Last refusal ${meter.refused_at}.`,
+        title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
+        detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
         path: ["company", "people", String(agent.handle ?? agent.id)],
         query: { tab: "cost" },
-        at: meter.refused_at,
-      });
-    } else if (meter && meter.max > 0 && meter.used >= meter.max) {
-      out.push({
-        id: `seat-budget-${agent.role}`,
-        severity: "caution",
-        subject: "budget",
-        icon: "token",
-        title: `${agent.role}'s token budget is spent`,
-        detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
-        path: ["company", "people", String(agent.handle ?? agent.id)],
-        query: { tab: "cost" },
+        at: refusing.refused_at,
       });
     }
   }
@@ -395,4 +384,18 @@ function waitingDetail(run: SandboxRun, now: number): string {
   const minutes = total % 60;
   const when = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   return `${asked} Its box is reclaimed in ${when}.`;
+}
+
+/** A refusing window in words: the gate's own stamp where it has one, and the
+ *  arithmetic where the window is full but no charge has been turned away yet. */
+function refusalWords(w: BudgetWindow): string {
+  const spent = `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window}.`;
+  return w.refused_at
+    ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
+    : `No further charge fits, so turns are being declined at the gate. ${spent}`;
+}
+
+/** A near window's spend in words. */
+function spentWords(w: BudgetWindow): string {
+  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window} are spent.`;
 }

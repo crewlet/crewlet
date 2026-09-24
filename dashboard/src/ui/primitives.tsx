@@ -19,11 +19,10 @@
  *     the one thing the package cannot know — which of the SIX phase strings
  *     the engine emits map onto the three hues it publishes, and that the
  *     other three take neutral.
- *  3. FOUR CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
+ *  3. THREE CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
  *     written at its own definition: `Segmented` (its `SegmentedControl`
  *     keeps the stop the arrows last pointed at, which is stale when the
- *     value is changed from OUTSIDE the row), `Meter` (no unknown ceiling, no
- *     direction), `CopyButton` (the package has the WRITE, which this now
+ *     value is changed from OUTSIDE the row), `CopyButton` (the package has the WRITE, which this now
  *     takes, but its `useClipboard` settles a refusal back to offering its
  *     action) and `DownloadButton` (no peer at all — there is a `CopyButton`
  *     and a `Copyable`, and nothing that saves). The CHROME of the last two
@@ -427,162 +426,6 @@ export function Segmented<T extends string>({
           {o.count != null && <span className="count-chip t-num">{o.count}</span>}
         </button>
       ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Measure
-// ---------------------------------------------------------------------------
-
-/**
- * A bar: how full something is, and WHICH WAY FULL MEANS.
- *
- * # Why this is not `@crewlethq/ui`'s `Meter`
- *
- * TWO GAPS, and each of them makes a bar say something untrue on a screen this
- * dashboard ships today.
- *
- *  1. THERE IS NO WAY TO SAY "NO CEILING". `Meter` draws `role="meter"`
- *     unconditionally with `aria-valuemax={max}`, and a company with no token
- *     budget reaches this component as `max={0}` — which states a range of
- *     ZERO WIDTH. The fraction a reader is offered is 0 of 0, and any value
- *     but zero breaches the role's own normative rule (WAI-ARIA 1.2: "the
- *     value of aria-valuenow MUST NOT fall below or exceed the computed
- *     values of aria-valuemin and aria-valuemax").
- *
- *     AND THE OBVIOUS ESCAPE IS THE WORSE ONE, which is what makes this a gap
- *     in the role rather than in the call: leaving `aria-valuemax` off to mean
- *     "no ceiling" is exactly when the spec fabricates one — it "defaults to
- *     100" when the attribute is missing or not a number. So `role="meter"`
- *     has no way to say that nobody set a limit, and the only honest move is
- *     to stop being a meter: a non-positive `max` draws the bar as decoration
- *     and leaves the legend to carry what IS known. Its `aria-valuenow` is
- *     unclamped too, which is the second half of the ARIA note further down.
- *
- *  2. `meterTone` HAS THE "SPENT" POLARITY WELDED IN — `>= 100` is `danger`,
- *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished
- *     outcome as a crisis and one three quarters of the way there as a
- *     warning. A caller can override with `tone`, but an override computed per
- *     call site from the same ratio is the rule spelled at every site rather
- *     than once, which is precisely what `fullMeans` exists to replace. What
- *     it would need is a `fullMeans`/`polarity` prop feeding `meterTone`, or a
- *     second exported ramp for the achieved direction.
- *
- * # The direction is the caller's to state, because it is not derivable
- *
- * A bar at 100% is two opposite pieces of news depending on what it measures.
- * A budget at 100% is refused charges; a completion bar at 100% is the thing
- * finished. The tone was derived from the fill alone — 75% caution, 100%
- * critical — which is exactly right for a budget and exactly backwards for
- * progress: three-quarters of the way there rendered as a WARNING, and fully
- * achieved would have rendered as a CRISIS.
- *
- * So `fullMeans` is REQUIRED rather than defaulted. A default would be the
- * wrong answer half the time, silently, and the one call site that had
- * noticed was passing `tone="accent"` to opt out of the rule rather than
- * fixing it — which is the shape a wrong default always leaves behind.
- *
- *   - `spent`    — a budget, a capacity, a quota. Full is bad, and the bar
- *                  warns before it gets there.
- *   - `achieved` — progress towards something wanted. Full is GOOD and says
- *                  so; nothing below it is a fault the bar can diagnose, so
- *                  everything short of done is simply the accent. NOTHING IN
- *                  THE PRODUCT MEASURES THIS TODAY — the goals screen did,
- *                  and it left with goals — which is exactly why the prop is
- *                  still required rather than defaulted: the next progress
- *                  bar has to state its direction instead of inheriting the
- *                  budget ramp in silence.
- *
- * `tone` still overrides both, for the cases a caller knows something the
- * ratio does not — a budget already refusing charges is critical at any fill.
- *
- * # And two things about the ARIA
- *
- * A `role="meter"` with no accessible name announces as "meter, 120000" and
- * nothing else — a number with no subject, on a screen that has several. The
- * visible legend is not the name: `label` is a ReactNode, several call sites
- * pass a percentage sentence rather than a noun, and two sites pass none at
- * all because the meter sits in a table cell whose column heading does the
- * naming for a sighted reader. So the name is a required prop of its own,
- * exactly as it is on [Segmented].
- *
- * And `aria-valuenow` may not exceed `aria-valuemax`. The fill is clamped —
- * a bar cannot be 130% long — but the value was not, so a budget LOWERED
- * under a counter that has already spent past it (which is the whole reason
- * an operator opens this screen) published an out-of-range value that a
- * screen reader is entitled to render as anything at all. The clamp goes on
- * the value and the true figures go in `aria-valuetext`, so the overage is
- * reported rather than hidden.
- */
-export function Meter({
-  used,
-  max,
-  label,
-  ariaLabel,
-  right,
-  tone,
-  fullMeans,
-}: {
-  used: number;
-  max: number;
-  label?: ReactNode;
-  /** What this meter measures, as a bare noun phrase — "Company budget", not
-      "94% used". The accessible name; see the note above. */
-  ariaLabel: string;
-  right?: ReactNode;
-  tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
-  /** Which way full means; see the note above. Required, never defaulted. */
-  fullMeans: "spent" | "achieved";
-}) {
-  const scaled = max > 0;
-  // CLAMPED AT BOTH ENDS, like `aria-valuenow` below. Only the top used to
-  // be, so a negative reading rendered `width: -5%` — which CSSOM drops,
-  // leaving a bar that silently keeps its previous width rather than reading
-  // empty. The doc above promises clamping; this is the half that was not.
-  const pct = scaled ? Math.max(0, Math.min(100, (used / max) * 100)) : 0;
-  // The tone is DERIVED from the fill AND from what full means, unless the
-  // caller overrides it — so a bar that is nearly full warns where warning is
-  // the right news, and celebrates where it is not.
-  const auto =
-    fullMeans === "achieved"
-      ? pct >= 100
-        ? "positive"
-        : "accent"
-      : pct >= 100
-        ? "critical"
-        : pct >= 75
-          ? "caution"
-          : "accent";
-  return (
-    <div className="meter">
-      {(label || right) && (
-        <div className="meter-legend">
-          <span className="truncate">{label}</span>
-          <span className="t-num">{right}</span>
-        </div>
-      )}
-      <div
-        className="meter-track"
-        // NO SCALE, NO METER. A non-positive `max` states a range of zero
-        // width, so the fraction on offer is 0 of 0 — and the escape is
-        // worse than the problem: `aria-valuemax` "defaults to 100" when it
-        // is missing or not a number, so omitting it to mean "no ceiling" is
-        // the one case that fabricates a confident one. The role cannot say
-        // that nobody set a limit, so this stops being a meter and the
-        // legend beside it carries whatever is actually known.
-        role={scaled ? "meter" : undefined}
-        aria-label={scaled ? ariaLabel : undefined}
-        aria-valuenow={scaled ? Math.max(0, Math.min(used, max)) : undefined}
-        aria-valuemin={scaled ? 0 : undefined}
-        aria-valuemax={scaled ? max : undefined}
-        // THE TRUE FIGURES, past the clamp. A meter reading "100%" when the
-        // counter is at 130% of a budget somebody just lowered is the one
-        // state where the exact numbers are the whole message.
-        aria-valuetext={scaled ? `${used} of ${max}` : undefined}
-      >
-        <div className="meter-fill" data-tone={tone ?? auto} style={{ width: `${pct}%` }} />
-      </div>
     </div>
   );
 }

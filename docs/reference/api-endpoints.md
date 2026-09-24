@@ -1544,28 +1544,69 @@ Two refusals, both **400** rather than a smaller answer:
 ### The live token meter
 
 `budget` carries the fleet's **shared token counters** as the budget gate
-enforces them: every node's spend in **one calendar window** per scope — the
-day, ISO week or month on the company's clock that is refusing charges (where
-several are, the one that ends last, which is the window the refusal named),
-else the capped window with the least room left — beside that window's cap in
-the active revision. It is the only figure that can honestly be divided into a
-configured cap, because both cover the same span. A scope that caps no window
-carries its spend this month under a cap of `0`. The dashboard's other token
-figures are spend rollups over a window of time the reader chose; dividing one
-of those into a cap produces a percentage that is wrong by however much was
-spent outside the window.
+enforces them: for the company and for every seat whose `token_budget` caps a
+window, **one entry per capped calendar window** — the day, the ISO week and the
+month on the company's clock — with that window's spend, its ceiling in the
+active revision, the gate's refusal stamp and the engine's judgement of it. It
+is the only figure that can honestly be divided into a configured ceiling,
+because both cover the same span. The dashboard's other token figures are spend
+rollups over a window of time the reader chose; dividing one of those into a
+ceiling produces a percentage that is wrong by however much was spent outside
+the window.
 
-Every node publishes a `budget_reported` snapshot of the counters every
+```json
+{
+  "meter_id": "node-a:7f3c…", "seq": 42, "timezone": "Europe/Berlin",
+  "org": {
+    "windows": [
+      {
+        "period": "day", "window": "2026-09-23",
+        "starts_at": "2026-09-22T22:00:00Z", "resets_at": "2026-09-23T22:00:00Z",
+        "used": 2710450, "limit": 3000000, "state": "near"
+      }
+    ]
+  }
+}
+```
+
+A seat's meter rides on its row of the `agents` push as `budget: {windows: […]}`
+in the same shape.
+
+- `period` is `day`, `week` or `month`, and `window` is its label on the
+  company's clock — the identity every node computes alike. `starts_at` and
+  `resets_at` are the window's half-open span in UTC; `resets_at` is when its
+  allowance comes back without a ceiling being raised. `timezone` names the
+  clock the windows were cut on.
+- Only **capped** windows are listed, each with its `limit`; a scope that caps
+  none carries `windows: []`, and a seat that caps none carries no meter.
+- `state` is the engine's own judgement, computed once beside the counter so
+  no screen holds a threshold of its own: `refusing` when the gate has turned a
+  charge away in the window or it has no room left for a single token — the
+  condition a seat is [parked](../concepts/agent-runtime.md#the-budget-park) on
+  — `near` once `used` reaches **nine tenths** of `limit`
+  (`engine.BudgetNearFraction`, served as `near_fraction` on
+  [`GET /budgets`](#get-budgets)), and `ok` otherwise.
+- `refused_at` is when the window last turned a charge away, in UTC, and
+  **absent** while it has not. That, and not `used >= limit`, is what the gate
+  said: a refused charge increments nothing, so the counter stops short of the
+  ceiling by the size of the round that would not fit. The stamp is kept in the
+  shared counter beside the spend, so every node reports the same one, and it
+  clears on the scope's next admitted charge or when the window turns over.
+
+Every node publishes a `budget_meters` snapshot of the counters every
 **15 seconds** (`engine.BudgetReportInterval`), and the projection folds each
-one in as it arrives. A company with no cap anywhere publishes none, and
+one in as it arrives. A company with no ceiling anywhere publishes none, and
 neither does a node while any node of a build before the windowed counters is
 still live — see [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
+That older build's `budget_reported` frame is ignored: it read the lifetime
+counters, which are not the ones the gate charges.
 
 - `meter_id` identifies the node incarnation whose report is held. Every node
   reads the same counter, so reports under different ids describe the same
   figures read at different moments. A report is a complete snapshot, so a
   consumer **replaces** what it holds rather than merging or taking a
-  maximum: a window turning over has to be able to lower the figure.
+  maximum: a window turning over has to be able to lower the figure, and a
+  ceiling removed has to take its window's bar with it.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
   **best-effort**: an ephemeral broadcast subscription that takes no acks,
   starts at the stream's tail on every (re)connect, and lets a slow consumer
@@ -1573,15 +1614,9 @@ still live — see [Coordination](../concepts/coordination.md#the-rolling-upgrad
   from the same meter is dropped, a report from another meter that was read
   **earlier** than the held one is dropped, and a gap is closed by the next
   report rather than replayed.
-- `refused_at` is when the window last turned a charge away, in UTC, and empty
-  while it is not refusing. That, and not `used >= max`, is what "exhausted"
-  means: a refused charge increments nothing, so the counter stops short of the
-  cap by the size of the round that would not fit. The stamp is kept in the
-  shared counter beside the spend, so every node reports the same one, and it
-  clears on the scope's next admitted charge or when the window turns over.
 - `{}` means no report has arrived yet. Per-agent, `budget: null` means the
-  same, or that the seat has no per-agent cap at all: the engine meters a seat
-  only when its `token_budget` caps a window.
+  same, or that the seat has no per-agent ceiling at all: the engine meters a
+  seat only when its `token_budget` caps a window.
 
 It is deliberately never persisted: a report is a reading of a counter that
 moves every round, so a copy replayed from history would show figures the
@@ -2559,71 +2594,86 @@ claim and a store blip is not evidence for it.
 
 ### `GET /budgets`
 
-Backs the dashboard's **Spend & budgets** screen. A token budget is described by
-two numbers that share a span, and one stamp — all three about **one calendar
-window** per scope:
+Backs the dashboard's **Budgets** screen and `crewlet budgets show`. Every scope
+— the company, and each agent seat — states **all three calendar windows**, the
+day, the ISO week and the month on the company's clock, cut at the moment of the
+answer:
 
-- the **cap** is configuration, from the active company revision: the ceiling
-  of the window this row describes (`max_tokens`), and `0` when the scope caps
-  no window;
-- **durable usage** is the fleet's shared counter for that window, in the
+- **`used`** is the fleet's shared counter for that window, in the
   [coordination store](../concepts/coordination.md#token-budgets-are-windows),
   written by every node running the company and surviving restarts. It is what
   the engine actually enforces against, and it is the same counter the
-  [live token meter](#the-live-token-meter) pushes;
-- **`refused_at`** is when that window last turned a charge away, kept in the
-  same counter and cleared by the scope's next admitted charge or by the window
-  turning over.
+  [live token meter](#the-live-token-meter) pushes. A window no ceiling caps is
+  still counted, because what a seat spent this week is a fact whether or not a
+  ceiling is written for the week;
+- **`limit`** is configuration, from the active company revision, and
+  **absent** where no ceiling caps the window — never `0`, which would state a
+  range of nothing that is already full;
+- **`refused_at`** is when a capped window last turned a charge away, kept in
+  the same counter and cleared by the scope's next admitted charge or by the
+  window turning over, and absent while it has not;
+- **`state`** is the engine's judgement — `refusing`, `near` or `ok`, exactly as
+  on the [live meter](#the-live-token-meter) — and `near_fraction` beside it is
+  the one threshold behind `near` (0.9), for a screen that draws it as a mark.
 
-The window is the one the scope is **refusing** in — where several are, the one
-that ends last, which is the window the refusal itself named — else the capped
-window with the **least room left**: the day, the ISO week or the month on the
-company's clock, cut at the moment of the answer, so the cap is never drawn
-beside another window's spend. Where the counter is already on a **later**
-window than that moment — a peer's clock a few seconds ahead across a boundary,
-or the company's `timezone` moved west — the row states the later window's
-spend, because that is what the gate refuses against. A scope that caps no
-window reports its spend this month. Each window's allowance comes back when it turns over; there is no route
-that resets a counter, and room before then is made by raising the ceiling.
+Where the counter is already on a **later** window than the moment of the
+answer — a peer's clock a few seconds ahead across a boundary, or the company's
+`timezone` moved west — the row states the later window's spend, because that
+is what the gate refuses against. Each window's allowance comes back when it
+turns over; there is no route that resets a counter, and room before then is
+made by raising the ceiling.
 
 What a seat *spent over a window you choose* is not here: that is the per-agent
 row of the [spend breakdown](#get-tokensbreakdown), a different span that must
-not be divided into a cap. The cap and the durable counter are the pair that
-can be, which is how this screen can say "this seat has burned 94% of today's
-cap across two restarts". `crewlet budgets show` is a client of this route.
+not be divided into a ceiling. The ceiling and the durable counter are the pair
+that can be, which is how this screen can say "this seat has burned 94% of
+today's ceiling across two restarts".
 
 ```json
 {
+  "timezone": "Europe/Berlin",
   "durable": true,
+  "near_fraction": 0.9,
   "org": {
-    "max_tokens": 5000000, "durable_used": 1284410,
-    "durable_updated_at": "2026-06-08T07:30:02Z",
-    "refused_at": ""
+    "windows": [
+      {"period": "day", "window": "2026-06-08", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-08T22:00:00Z", "used": 1284410, "limit": 5000000, "state": "ok"},
+      {"period": "week", "window": "2026-W24", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-14T22:00:00Z", "used": 4015220, "state": "ok"},
+      {"period": "month", "window": "2026-06", "starts_at": "2026-05-31T22:00:00Z",
+       "resets_at": "2026-06-30T22:00:00Z", "used": 9120045, "state": "ok"}
+    ]
   },
   "seats": [
     {
       "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
-      "max_tokens": 100000, "durable_used": 99120,
-      "durable_updated_at": "2026-06-08T07:29:51Z",
-      "refused_at": "2026-06-08T07:29:51Z"
+      "windows": [
+        {"period": "day", "window": "2026-06-08", "starts_at": "2026-06-07T22:00:00Z",
+         "resets_at": "2026-06-08T22:00:00Z", "used": 99120, "limit": 100000,
+         "refused_at": "2026-06-08T07:29:51Z", "state": "refusing"},
+        {"period": "week", "window": "2026-W24", "starts_at": "2026-06-07T22:00:00Z",
+         "resets_at": "2026-06-14T22:00:00Z", "used": 301877, "state": "ok"},
+        {"period": "month", "window": "2026-06", "starts_at": "2026-05-31T22:00:00Z",
+         "resets_at": "2026-06-30T22:00:00Z", "used": 702311, "state": "ok"}
+      ]
     }
   ]
 }
 ```
 
 `durable` carries the honesty. It is `false` when the shared counter could not
-be read: a counter that cannot be read is not a counter that reads zero, and
-without the flag a coordination blip renders every seat at the bottom of its
-cap, which is the most reassuring possible picture drawn at the moment nothing
-is known. Human seats have no row, because they spend nothing.
+be read, and every window list is then empty: a counter that cannot be read is
+not a counter that reads zero, and without the flag a coordination blip renders
+every seat at the bottom of its ceiling, which is the most reassuring possible
+picture drawn at the moment nothing is known. Human seats have no row, because
+they spend nothing.
 
-Exhaustion is `refused_at`, the moment a charge was turned away, never
-`durable_used >= max_tokens`. The gate refuses a charge that would exceed the
-cap and increments nothing, so a seat charged in 3k-token rounds against a 100k
-cap stalls near 99k and never compares equal to its own maximum. A ratio test
-shows a permanently blocked seat at 99% and calls it healthy. A scope known
-only for a refusal (refused on its very first charge) is listed with no spend
-and an empty `durable_updated_at`.
+Exhaustion is the engine's `refusing`, never a ratio a client computes. The
+gate refuses a charge that would exceed the ceiling and increments nothing, so
+a seat charged in 3k-token rounds against a 100k ceiling stalls near 99k and
+never compares equal to its own limit: a ratio test shows a permanently blocked
+seat at 99% and calls it healthy, and the Engineer above is refusing at 99 120
+of 100 000.
 
 ### `POST /backup`
 

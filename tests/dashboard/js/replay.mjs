@@ -153,6 +153,44 @@ if (!state.phases.length) {
   }
 }
 
+// THE LIVE TOKEN METERS. The company in the capture caps its day, so the
+// `budget` push must land as windows the screens can draw: a list per scope,
+// each window carrying its span, its spend, its ceiling and the engine's
+// state. The meters used to be one figure per scope, and the refusal stamp the
+// frame carried was dropped on its way to the push, so every "refusing
+// charges" row the dashboard renders was unreachable.
+const budget = state.budget;
+const orgWindows = budget && budget.org && budget.org.windows;
+if (!Array.isArray(orgWindows)) {
+  problems.push(
+    "the budget push has no `org.windows` list: the header meter and the " +
+      "Budgets screen have nothing to draw",
+  );
+} else {
+  const day = orgWindows.find((w) => w.period === "day");
+  if (!day) {
+    problems.push(
+      `the company caps its day and the budget push has no day window (saw ` +
+        `${orgWindows.map((w) => w.period).join(", ") || "none"})`,
+    );
+  } else {
+    for (const field of ["window", "starts_at", "resets_at", "state"]) {
+      if (!day[field]) {
+        problems.push(`the day window has no \`${field}\`: ${JSON.stringify(day)}`);
+      }
+    }
+    if (typeof day.used !== "number" || typeof day.limit !== "number") {
+      problems.push(`the day window's used and limit are not numbers: ${JSON.stringify(day)}`);
+    }
+    if (!["ok", "near", "refusing"].includes(day.state)) {
+      problems.push(`the day window's state ${JSON.stringify(day.state)} is not the engine's`);
+    }
+  }
+  if (!budget.timezone) {
+    problems.push("the budget push names no clock: its windows cannot be read as days");
+  }
+}
+
 // The spend rollup. The store takes it two ways and both have to work: a
 // snapshot is accepted only `if (snap.tokens && snap.tokens.totals)`, and a
 // push is stored as-is for the Spend screen to read its window off. A list of

@@ -2479,30 +2479,31 @@ facts are in the same places always. That is what lets a reader scan a list
 down a column instead of hunting each row, and a source is exactly the kind of
 thing somebody scans.
 
-### A bar has to be told which way full means
+### A budget bar is coloured by the engine, never by its fill
 
-`Meter` derived its tone from the fill alone — 75% caution, 100% critical —
-which is exactly right for a budget and exactly backwards for progress. A bar
-at 100% is two opposite pieces of news: a budget at 100% is refused charges, a
-completion bar at 100% is the thing finished. So progress three-quarters of the
-way there rendered as a **warning**, and fully achieved would have rendered as
-a **crisis**.
+A budget window arrives with the engine's own `state` — `ok`, `near` or
+`refusing` — computed once beside the shared counter, and every surface draws
+that and nothing else: the attention queue, the live meters on Now, Spend and a
+seat's page, the Budgets table and `crewlet budgets show`. There is **one
+threshold**, the engine's (`near` at nine tenths of a ceiling, served as the
+budgets answer's `near_fraction`), and no screen divides a counter by a ceiling
+to decide a colour.
 
-`fullMeans` is therefore **required**, not defaulted. A default is the wrong
-answer half the time, silently — and the one call site that had noticed was
-passing `tone="accent"` to opt out of the rule rather than fixing it, which is
-the shape a wrong default always leaves behind.
+There were three before. The Budgets table restated the 75% the old `Meter`
+primitive derived from the fill, the attention queue warned at 90%, and the
+kit's `Meter` ramp had its own — so one window read as healthy, nearly spent
+and full at once, depending on which screen it was drawn on. And a ratio is the
+wrong question at the one moment that matters: a refused charge increments
+nothing, so a scope the gate is turning away sits just below its ceiling and a
+fill-derived colour draws it as the calmest bar on the screen. `refusing` is the
+gate's own word — a refusal stamped in the window, or no room left for a single
+token — and it is the condition a seat is parked on, so a parked seat's bar can
+never read as merely near.
 
-- `spent` — a budget, a capacity, a quota. Full is bad and the bar warns
-  before it gets there.
-- `achieved` — progress towards something wanted. Full is GOOD and says so;
-  nothing below it is a fault the bar can diagnose. Nothing in the product
-  measures this today — the goals screen did, and it left with goals — which
-  is exactly why the prop stays required: the next progress bar has to state
-  its direction rather than inherit the budget ramp in silence.
-
-An explicit `tone` still wins, for what a caller knows and a ratio does not: a
-budget already refusing charges is critical at any fill.
+Each capped window is its own bar: a scope capped by the day and by the month
+has two ceilings, and one bar can only be drawn against one of them. `ok` is
+drawn neutral rather than in the accent, because the accent means where the
+reader is and a window with room is a number, not a state.
 
 ---
 

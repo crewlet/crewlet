@@ -502,7 +502,12 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The client is the compatibility reference and wins any disagreement
 	// — so a failure here is the SERVER's.
 	node := nodeBinary(t)
-	n := start(t)
+	// A CEILING the turn cannot reach, so the capture carries the live
+	// token meters as well: the `budget` push is a frame the client folds
+	// like any other, and one only a capped company is sent.
+	n := startWith(t, func(doc string) string {
+		return doc + "\ntoken_budget: {day: 100000000}\n"
+	})
 
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
@@ -519,6 +524,11 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitFor(t, "the turn to complete", func() bool {
 		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
+	})
+	// The meters are published on engine.BudgetReportInterval, so one
+	// lands within an interval of the turn at the latest.
+	waitFor(t, "a budget push", func() bool {
+		return slices.Contains(frames.kinds(t), "budget")
 	})
 	cancel()
 

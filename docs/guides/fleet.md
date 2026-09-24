@@ -334,7 +334,9 @@ The consequences worth stating plainly:
   counters until the last old node leaves.** The old nodes run every seat
   and charge the old lifetime counter; the new ones charge the windowed
   counters once they hold seats, which is exactly when the old ones have
-  gone. Until then only the old nodes publish the live budget meter, and a
+  gone. Until then only the old nodes publish a live budget meter — the old
+  `budget_reported` frame, which a dashboard served by a new node does not
+  read, so it draws no meter for the rollout rather than a wrong one — and a
   new node's `GET /budgets` reads windowed counters that start empty. The
   old counters are not carried over: each window starts from zero at the
   upgrade, and the retention sweep deletes the old bucket once no old node

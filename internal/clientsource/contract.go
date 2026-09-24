@@ -84,6 +84,7 @@ var contract = []Entry{
 
 	// spend.ts
 	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
+	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
 
 	// work.ts
 	{"WorkViewShape", ReadUnion, "internal/tracker.TestEveryViewShapeTheEngineMintsHasARenderer"},

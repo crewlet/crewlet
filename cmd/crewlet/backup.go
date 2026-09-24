@@ -93,9 +93,8 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	// The report NAMES WHAT IT GOT, per estate, for the same reason the
-	// budget reset names what it cleared: a backup an operator cannot
-	// inspect is one they have to trust, and the failure it hides — an
+	// The report NAMES WHAT IT GOT, per estate: a backup an operator
+	// cannot inspect is one they have to trust, and the failure it hides — an
 	// estate silently absent because this node does not run one — looks
 	// exactly like success.
 	fmt.Fprintf(stdout, "Backup written to %s on %s in %s\n",

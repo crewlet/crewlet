@@ -27,6 +27,7 @@
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { BudgetState } from "../contract/spend.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
   IntegrationsAnswer,
@@ -234,23 +235,37 @@ export interface LiveCall {
   started_at?: string;
 }
 
-/** A live token meter: the fleet's SHARED counter, as the budget gate enforces
- *  it — every node's spend in one calendar window (the day, ISO week or month
- *  on the company's clock that is refusing, else the one with the least room
- *  left), against that window's cap in the active revision. Never comparable
- *  to a spend rollup, which is a window over time a reader chose rather than
- *  the window a cap is written for. */
-export interface Meter {
+/** One calendar window of one scope's token counter — the day, the ISO week or
+ *  the month on the company's clock — as the engine states it
+ *  (`types.BudgetWindow`). Never comparable to a spend rollup, which is a
+ *  window over time a reader chose rather than the window a ceiling is written
+ *  for. */
+export interface BudgetWindow {
+  period: (typeof BUDGET_WINDOWS)[number]["period"];
+  /** The window's label on the company clock: `2026-09-23`, `2026-W39`,
+   *  `2026-09`. */
+  window: string;
+  /** The window's half-open span, in UTC. `resets_at` is when its allowance
+   *  comes back without a ceiling being raised. */
+  starts_at: string;
+  resets_at: string;
   used: number;
-  max: number;
-  /** When this scope last turned a charge away, in UTC; empty while it is not
-   *  refusing. The gate's own record, kept in the shared counter beside the
-   *  spend, so every node reports the same one and it clears on the scope's
-   *  next admitted charge or when its window turns over. It is what
-   *  "exhausted" means: a refused charge increments nothing, so
-   *  `used >= max` is sufficient but never necessary — a scope charged in
-   *  rounds stops short of its cap for ever. */
+  /** The ceiling, ABSENT where nothing caps the window — never 0. The live
+   *  push lists capped windows only, so there it is always present. */
+  limit?: number;
+  /** When the window last turned a charge away, in UTC; absent while it has
+   *  not. The gate's own record, kept in the shared counter beside the spend,
+   *  so every node reports the same one; it clears on the scope's next
+   *  admitted charge or when the window turns over. */
   refused_at?: string;
+  /** The engine's judgement of the window. The client computes none. */
+  state: BudgetState;
+}
+
+/** A live token meter: the fleet's SHARED counters for one scope, one entry per
+ *  CAPPED window. */
+export interface BudgetMeter {
+  windows: BudgetWindow[];
 }
 
 /** The live half of a seat row, merged onto its static config row. */
@@ -265,7 +280,7 @@ export interface Overlay {
   current_iteration?: number;
   live_call?: LiveCall | null;
   last_error?: ErrorInfo | null;
-  budget?: Meter | null;
+  budget?: BudgetMeter | null;
   /** Always present, even empty: an omitted key would read as "still AFK". */
   afk_reason?: string;
 }
@@ -516,33 +531,32 @@ export interface EventSeries {
   by_category: Record<string, number>;
 }
 
-/** The org-wide live meter, plus the identity of the engine run reporting it. */
+/** The org-wide live meter, plus the identity of the engine run reporting it
+ *  and the company clock its windows were cut on. */
 export interface OrgBudget {
   meter_id?: string;
   seq?: number;
-  org?: Meter;
+  timezone?: string;
+  org?: BudgetMeter;
 }
 
+/** The `budgets` answer: every scope's day, week and month, capped or not. */
 export interface BudgetsAnswer {
-  org: {
-    max_tokens: number;
-    durable_used: number;
-    durable_updated_at: string;
-    /** When the company cap last refused a charge; empty while it is not refusing. */
-    refused_at: string;
-  };
+  /** The company clock every window is cut on (IANA, or `UTC`). */
+  timezone: string;
+  /** False means the durable counters could not be READ — never that they are
+   *  zero — and every window list is then empty. */
+  durable: boolean;
+  /** The share of a ceiling at which the engine calls a window `near`: the
+   *  one threshold a screen may draw as a mark. */
+  near_fraction: number;
+  org: { windows: BudgetWindow[] };
   seats: {
+    agent_id: string;
     role: string;
     handle: string;
-    agent_id: string;
-    max_tokens: number;
-    durable_used: number;
-    durable_updated_at: string;
-    /** When this seat's cap last refused a charge; empty while it is not refusing. */
-    refused_at: string;
+    windows: BudgetWindow[];
   }[];
-  /** False means the durable counter could not be READ — never that it is zero. */
-  durable: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import {
   Section,
   StateBadge,
 } from "~/components/common.tsx";
+import { WindowMeters } from "~/components/budget.tsx";
 // THE TRACKER'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
 // redrawn. `components/work.tsx` states the rule this follows — one renderer,
 // screens pick the density — and a per-seat list that drew its own columns is
@@ -34,7 +35,6 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
-  Meter,
   Skeleton,
   StatCard,
   StatGroup,
@@ -2034,44 +2034,14 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Card>
                 <Card.Header
                   icon={<TargetGlyph size="sm" />}
-                  subtitle="the budget window closest to its ceiling, not the 7-day window"
+                  subtitle="each capped calendar window on the company clock, not the 7-day window"
                 >
                   <Card.Title>Live budget meter</Card.Title>
                 </Card.Header>
-                {/* THEIR `label` IS THE ACCESSIBLE NAME, tied to the bar, so
-                    the separate `ariaLabel` ours needed is gone — and with it
-                    the reason the visible word could not be the name. "Used"
-                    was never a name for anything; the seat's budget is.
-                    `fullMeans="spent"` is gone because that is the only
-                    reading theirs has, and it is the right one here. */}
-                <Meter
-                  value={agent.budget.used}
-                  max={agent.budget.max}
-                  label={`${agent.role}'s token budget`}
-                  valueText={`${fmtCount(agent.budget.used)} of ${fmtCount(agent.budget.max)} tokens`}
-                  hint={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
-                  // THE REFUSAL STAMP OR THE CAP. See the company meter on the
-                  // Cost screen: the stamp is the gate's own record and the
-                  // ratio is only ever sufficient.
-                  tone={
-                    agent.budget.refused_at || agent.budget.used >= agent.budget.max
-                      ? "danger"
-                      : undefined
-                  }
-                />
-                {agent.budget.refused_at ? (
-                  <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-                    This seat&rsquo;s turns are being declined at the budget gate. Last refusal{" "}
-                    {agent.budget.refused_at}.
-                  </p>
-                ) : (
-                  agent.budget.used >= agent.budget.max && (
-                    <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-                      This seat&rsquo;s meter is at its cap, so its turns are being declined at the
-                      gate.
-                    </p>
-                  )
-                )}
+                {/* One bar per window this seat's token_budget caps, each in
+                    the colour the engine judged it, and a refusing window
+                    says when its room comes back. */}
+                <WindowMeters windows={agent.budget.windows} whose={`${agent.role}'s`} />
               </Card>
             ) : (
               <Callout variant="neutral">

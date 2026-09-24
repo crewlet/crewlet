@@ -560,50 +560,6 @@ a.seat-chip:hover {
   outline: none;
 }
 
-/* ---- Meter --------------------------------------------------------------
-   A budget, a share, a fill. The track is always drawn: a bar with no track is
-   a bar whose maximum the reader has to guess. */
-
-.meter {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.meter-track {
-  height: 4px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
-  overflow: hidden;
-}
-.meter-fill {
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--accent);
-  transition: width var(--dur-slow) var(--ease-out);
-}
-
-.meter-fill[data-tone="caution"] {
-  background: var(--caution);
-}
-.meter-fill[data-tone="critical"] {
-  background: var(--critical);
-}
-.meter-fill[data-tone="positive"] {
-  background: var(--positive);
-}
-.meter-fill[data-tone="neutral"] {
-  background: var(--text-faint);
-}
-.meter-legend {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-}
-
 /* ---- Inline code -------------------------------------------------------- */
 
 code.inline {

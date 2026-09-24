@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, test } from "vitest";
+import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
 import { attentionQueue, SUBJECTS, WATCHED, type AttentionInput } from "./attention.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
@@ -27,6 +28,25 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     now,
     ...over,
   };
+}
+
+/** One capped window of a live meter, on 1 January's day. */
+function win(over: Partial<BudgetWindow> = {}): BudgetWindow {
+  return {
+    period: "day",
+    window: "2026-01-01",
+    starts_at: "2026-01-01T00:00:00Z",
+    resets_at: "2026-01-02T00:00:00Z",
+    used: 10,
+    limit: 100,
+    state: "ok",
+    ...over,
+  };
+}
+
+/** The company's live meter over the given windows. */
+function meter(...windows: BudgetWindow[]): OrgBudget {
+  return { meter_id: "m-1", seq: 1, timezone: "UTC", org: { windows } };
 }
 
 describe("what it surfaces", () => {
@@ -234,23 +254,64 @@ describe("what it surfaces", () => {
     expect(stalled[0]?.severity).toBe("critical");
   });
 
-  // A SPENT BUDGET OUTRANKS ONE MERELY NEAR ITS CAP, and both are read off
-  // the shared counter.
+  // THE ENGINE'S STATE, NOT A THRESHOLD OF OURS. A refusing window outranks a
+  // near one, and a healthy one raises nothing — whatever the arithmetic says,
+  // since the engine judged the window beside the counter.
   //
-  // They used to key on a `refused_at` the engine never wrote, so the critical
-  // branch was unreachable on every company — the exact case an operator needs
-  // it for. At or past the cap is what a fleet-wide counter can honestly say:
-  // sufficient, and not necessary, which is what the 90% rung below it is for.
-  test("a spent budget outranks one merely near its cap", () => {
-    const spent = attentionQueue(input({ budget: { org: { used: 100, max: 100 } } }));
-    expect(spent[0]?.severity).toBe("critical");
+  // The refusal used to ride a `refused_at` the live push dropped, so the
+  // critical branch was unreachable on every company — the exact case an
+  // operator needs it for.
+  test("a refusing window outranks one merely near its ceiling", () => {
+    const refusing = attentionQueue(input({ budget: meter(win({ state: "refusing", used: 97 })) }));
+    expect(refusing[0]?.severity).toBe("critical");
+    expect(refusing[0]?.title).toContain("daily");
 
-    const near = attentionQueue(input({ budget: { org: { used: 95, max: 100 } } }));
+    const near = attentionQueue(input({ budget: meter(win({ state: "near", used: 95 })) }));
     expect(near[0]?.severity).toBe("caution");
 
-    // AND A HEALTHY METER RAISES NOTHING, which is what stops the first
-    // two being a check that anything at all is pushed.
-    expect(attentionQueue(input({ budget: { org: { used: 10, max: 100 } } }))).toEqual([]);
+    // AND A HEALTHY METER RAISES NOTHING — even at 99%, because the engine
+    // said ok. That is what stops the first two being a check that anything
+    // at all is pushed, and what proves no threshold of ours is consulted.
+    expect(attentionQueue(input({ budget: meter(win({ state: "ok", used: 99 })) }))).toEqual([]);
+  });
+
+  // THE WINDOW NAMED IS THE ONE A COMPANY WAITS ON. Refused in its day and its
+  // month, a company has room again only when the month turns over.
+  test("a refusal names the window that turns over last", () => {
+    const [item] = attentionQueue(
+      input({
+        budget: meter(
+          win({ state: "refusing", refused_at: "2026-01-01T11:00:00Z" }),
+          win({
+            period: "month",
+            window: "2026-01",
+            resets_at: "2026-02-01T00:00:00Z",
+            state: "refusing",
+            refused_at: "2026-01-01T11:59:00Z",
+          }),
+        ),
+      }),
+    );
+    expect(item?.title).toContain("monthly");
+    expect(item?.detail).toContain("2026-02-01T00:00:00Z");
+    expect(item?.at).toBe("2026-01-01T11:59:00Z");
+  });
+
+  test("a seat refusing its own ceiling is raised against the seat", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "a",
+            role: "Dev A",
+            handle: "dev-a",
+            budget: { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] },
+          },
+        ],
+      }),
+    );
+    expect(items[0]?.id).toBe("seat-budget-Dev A");
+    expect(items[0]?.detail).toContain("11:59");
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -258,12 +319,12 @@ describe("what it surfaces", () => {
   // turning over, so an item that sent somebody looking for a reset would
   // send them to a command that no longer exists.
   test("a budget item advises raising the ceiling or waiting, never a reset", () => {
-    for (const org of [
-      { used: 99, max: 100, refused_at: "2026-01-01T11:59:00Z" },
-      { used: 95, max: 100 },
+    for (const w of [
+      win({ state: "refusing", used: 99, refused_at: "2026-01-01T11:59:00Z" }),
+      win({ state: "near", used: 95 }),
     ]) {
-      const [item] = attentionQueue(input({ budget: { org } }));
-      expect(item?.detail).toContain("token_budget");
+      const [item] = attentionQueue(input({ budget: meter(w) }));
+      expect(item?.detail).toContain("token_budget.day");
       expect(item?.detail).toContain("turn over");
       expect(item?.detail).not.toMatch(/reset/i);
     }
@@ -281,7 +342,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         engine: { status: "ok", configured: false },
-        budget: { org: { used: 100, max: 100 } },
+        budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
         agents: [
           {
@@ -314,7 +375,7 @@ describe("ordering", () => {
     const items = attentionQueue(
       input({
         connected: false,
-        budget: { org: { used: 95, max: 100 } },
+        budget: meter(win({ state: "near", used: 95 })),
         agents: [
           {
             id: "a",

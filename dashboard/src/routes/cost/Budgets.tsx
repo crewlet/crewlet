@@ -23,28 +23,52 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+
+import { stateTone, windowOf } from "~/lib/budget.ts";
+import type { BudgetWindow } from "~/protocol/types.ts";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Callout, Card, Skeleton } from "@crewlethq/ui";
+import { Callout, Card, EmptyValue, Skeleton } from "@crewlethq/ui";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
 
 /**
- * What a headroom bar's colour says.
+ * One seat's spend in one calendar window, and its ceiling where it has one.
  *
- * THE THRESHOLDS THE `Meter` PRIMITIVE DERIVES for a meter whose full end means
- * "spent", restated because a CELL takes its tone rather than deriving one. A
- * bar that stayed accent right up to the refusal would be colour saying nothing
- * at the only moment a budget is worth looking at — and colour is the one thing
- * here that carries STATE.
- *
- * A max of zero never reaches it: the cell refuses a max it cannot measure
- * against and draws its own dash before a tone is ever asked for.
+ * THE BAR'S COLOUR IS THE ENGINE'S `state`, never a fraction of ours: this
+ * table used to restate the 75% the old meter primitive derived, beside a 90%
+ * in the attention queue, so a seat could be amber here and fine there. And a
+ * refusing window outranks its ratio for the reason the engine's state does —
+ * a refused charge increments nothing, so the counter stops short of its
+ * ceiling by the size of the round that would not fit.
  */
-function headroomTone(used: number, max: number): "accent" | "caution" | "critical" {
-  const pct = (used / max) * 100;
-  return pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
+function WindowCell({ role, w }: { role: string; w: BudgetWindow | undefined }) {
+  if (!w) return <EmptyValue label="Not stated" />;
+  const words =
+    w.limit === undefined
+      ? `${role}: ${fmtExact(w.used)} tokens spent in ${w.window}, no ceiling`
+      : w.refused_at
+        ? `${role}: refusing charges since ${w.refused_at}, ${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens spent in ${w.window}`
+        : `${role}: ${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens spent in ${w.window}`;
+  return (
+    <span className="row" style={{ gap: 8, justifyContent: "flex-end" }} title={words}>
+      <TokenCell value={w.used} />
+      {w.limit === undefined ? (
+        // NOT A DASH: no ceiling is a SETTING somebody chose, not a number
+        // that went unrecorded, and the words are the only thing that say so.
+        <span className="muted">no ceiling</span>
+      ) : (
+        <MeterCell used={w.used} max={w.limit} tone={stateTone(w.state)} label={words} />
+      )}
+    </span>
+  );
+}
+
+/** A seat's spend this month, the widest window the counter keeps, which is
+ *  what the table opens sorted on. */
+function monthUsed(windows: readonly BudgetWindow[]): number {
+  return windowOf(windows, "month")?.used ?? 0;
 }
 
 export function Budgets() {
@@ -55,7 +79,10 @@ export function Budgets() {
   // walking a sequence nobody was shown. Sorted here to the same key, the
   // grid's sort is idempotent over them and the stepper matches the rows.
   const seats = useMemo(
-    () => (budgets.data?.seats ?? []).slice().sort((a, b) => b.durable_used - a.durable_used),
+    () =>
+      (budgets.data?.seats ?? [])
+        .slice()
+        .sort((a, b) => monthUsed(b.windows) - monthUsed(a.windows)),
     [budgets.data],
   );
   // WHAT `[` AND `]` WALK: the seats this table is showing. A column sort after
@@ -76,7 +103,7 @@ export function Budgets() {
       <Card padding="none">
         <Card.Header
           icon={<DatabaseGlyph size="sm" />}
-          subtitle="the fleet's shared ledger, not this process's meter"
+          subtitle={`the fleet's shared counters, cut on the company clock${budgets.data?.timezone ? ` (${budgets.data.timezone})` : ""}`}
         >
           <Card.Title>Durable budget counters</Card.Title>
         </Card.Header>
@@ -97,7 +124,7 @@ export function Budgets() {
             <DataGrid
               rows={seats}
               rowKey={(s) => s.agent_id || s.role}
-              defaultSort="-used"
+              defaultSort="-month"
               // THE SEAT BESIDE ITS BUDGET. This table is read the instant a
               // seat stops working, and the next question — what is it, what was
               // it doing — is one the rail answers without losing the row that
@@ -117,7 +144,7 @@ export function Budgets() {
                 }
                 rowPeekHandler(go)?.(e);
               }}
-              empty={{ title: "No per-seat budgets are configured" }}
+              empty={{ title: "No agent seats to count" }}
               columns={[
                 {
                   key: "seat",
@@ -130,62 +157,25 @@ export function Budgets() {
                   cell: (s) => <TextCell icon="memory">{s.role}</TextCell>,
                 },
                 {
-                  key: "used",
-                  header: "Durable used",
+                  key: "day",
+                  header: "Today",
                   align: "right",
-                  sortValue: (s) => s.durable_used,
-                  // THE CELL, so a token count is spelled here the way it is
-                  // spelled on the spend table and everywhere else — the two are
-                  // read one after the other and a figure that changed shape
-                  // between them would read as a different quantity.
-                  cell: (s) => <TokenCell value={s.durable_used} />,
+                  sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
+                  cell: (s) => <WindowCell role={s.role} w={windowOf(s.windows, "day")} />,
                 },
                 {
-                  key: "max",
-                  header: "Budget",
+                  key: "week",
+                  header: "This week",
                   align: "right",
-                  sortValue: (s) => s.max_tokens,
-                  // NOT A DASH, and therefore not the cell's absent branch: no
-                  // cap is a SETTING somebody chose, not a number that went
-                  // unrecorded, and the word is the only thing that says so.
-                  cell: (s) =>
-                    s.max_tokens > 0 ? (
-                      <TokenCell value={s.max_tokens} />
-                    ) : (
-                      <span className="muted">unlimited</span>
-                    ),
+                  sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
+                  cell: (s) => <WindowCell role={s.role} w={windowOf(s.windows, "week")} />,
                 },
                 {
-                  key: "headroom",
-                  header: "Headroom",
-                  // 120px rather than 160: the cell's bar is a fixed 64px, and
-                  // the rest was a gap the eye had to cross to reach the seat's
-                  // own row again.
-                  width: "120px",
-                  // `MeterCell` REFUSES A MAX OF ZERO itself, with the one dash
-                  // that is right here — there is nothing to measure an
-                  // unlimited seat against, which is a different absence from a
-                  // budget nobody recorded.
-                  // A REFUSING SEAT OUTRANKS THE RATIO. A refused charge
-                  // increments nothing, so the counter stops short of the cap by
-                  // the size of the round that would not fit: the seat that is
-                  // being turned away right now draws the calmest bar on the
-                  // table unless the stamp, not the fraction, decides the tone.
-                  cell: (s) => (
-                    <MeterCell
-                      used={s.durable_used}
-                      max={s.max_tokens}
-                      tone={s.refused_at ? "critical" : headroomTone(s.durable_used, s.max_tokens)}
-                      // The column heading names it for a sighted reader; a
-                      // screen reader lands on the bar alone, so it carries the
-                      // seat and the reading it is drawing.
-                      label={
-                        s.refused_at
-                          ? `${s.role}: refusing charges since ${s.refused_at}, ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
-                          : `${s.role}: ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
-                      }
-                    />
-                  ),
+                  key: "month",
+                  header: "This month",
+                  align: "right",
+                  sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
+                  cell: (s) => <WindowCell role={s.role} w={windowOf(s.windows, "month")} />,
                 },
               ]}
             />

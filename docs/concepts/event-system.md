@@ -311,9 +311,9 @@ long as retention keeps them; none may be registered or categorised again.
 
 **Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
 live-only per-round signal whose durable record is `agent_phase_completed`),
-`budget_reported` (a snapshot of the fleet's shared token counter, published
-by every node on a fixed tick, which the next report supersedes; the live
-projection reads it), `raw_webhook` (the delivery is already a row), and the two
+`budget_meters` (a snapshot of the fleet's shared token counters, every capped
+calendar window with its engine-computed state, published by every node on a
+fixed tick, which the next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row), and the two
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.

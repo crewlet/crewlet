@@ -129,11 +129,13 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // maxNodeResponseBytes bounds one answer read back from a node.
 //
 // An error body is a sentence; a proxy's error page is not. The largest
-// legitimate answer this client reads is /query/budgets, which is one row of
-// roughly two hundred bytes per seat — so a megabyte is three orders of
-// magnitude above a large company's answer and still small enough that a
-// misdirected -url cannot make the CLI buffer a website.
-const maxNodeResponseBytes = 1 << 20
+// legitimate answer this client reads is /query/budgets, which states every
+// seat's day, week and month — about two hundred bytes a window, so some seven
+// hundred a seat. Four megabytes is some six thousand seats, an order of
+// magnitude above a large company, because an answer past the bound fails the
+// command outright; and it is still small enough that a misdirected -url cannot
+// make the CLI buffer a website.
+const maxNodeResponseBytes = 4 << 20
 
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)

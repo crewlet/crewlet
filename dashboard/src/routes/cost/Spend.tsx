@@ -28,13 +28,13 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { WindowMeters } from "~/components/budget.tsx";
 import {
   BarList,
   Card,
   dataColor,
   EmptyValue,
   Legend,
-  Meter,
   StackedBar,
   StatCard,
   StatGroup,
@@ -73,7 +73,7 @@ import type { Offer, TimeRange } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
+import { fmtCount, fmtDate, fmtDateTime, fmtExact, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -403,50 +403,25 @@ export function Spend() {
 
       <SpendOverTime range={range} />
 
-      {org && org.max > 0 && (
+      {org && org.windows.length > 0 && (
         <Card>
           <Card.Header
             icon={<TargetGlyph size="sm" />}
-            subtitle="the budget window closest to its ceiling, not the window above"
-            // THE GATE'S OWN WORD FIRST. `refused_at` is stamped when a charge
-            // is actually turned away; `used >= max` is sufficient but never
-            // necessary, because a refused charge increments nothing and a
-            // company charged in rounds stops short of its cap for ever.
+            subtitle={`each capped calendar window on the company clock${orgBudget?.timezone ? ` (${orgBudget.timezone})` : ""}, not the window above`}
+            // THE ENGINE'S WORD. A window's state is judged beside the
+            // counter: `refusing` when the gate has turned a charge away in
+            // it or no charge fits, which the ratio alone cannot say — a
+            // refused charge increments nothing, so a company charged in
+            // rounds stops short of its ceiling for ever.
             actions={
-              org.refused_at ? (
+              org.windows.some((w) => w.state === "refusing") ? (
                 <Tag variant="danger">refusing charges</Tag>
-              ) : org.used >= org.max ? (
-                <Tag variant="danger">spent</Tag>
               ) : undefined
             }
           >
             <Card.Title>Company budget meter</Card.Title>
           </Card.Header>
-          {/* THEIR `label` IS THE ACCESSIBLE NAME, tied to the bar, so the
-              separate `ariaLabel` ours needed is gone — and with it the reason
-              the visible legend could not be the name. `valueText` carries the
-              true figures past the clamp, which is what ours put in
-              `aria-valuetext`. `fullMeans="spent"` is gone because that is the
-              only reading theirs has; see the report for what that costs the
-              screens measuring progress. */}
-          <Meter
-            value={org.used}
-            max={org.max}
-            label="Company token budget"
-            valueText={`${fmtExact(org.used)} of ${fmtExact(org.max)} tokens`}
-            hint={`${fmtPct(org.used, org.max, 1)} used · ${fmtExact(org.used)} / ${fmtExact(org.max)}`}
-            tone={org.refused_at || org.used >= org.max ? "danger" : undefined}
-          />
-          {org.used >= org.max && (
-            // AT THE CAP IS WHAT THE SHARED COUNTER CAN SAY. It is
-            // sufficient and not necessary — a refused charge increments
-            // nothing, so a company that is refusing can sit just short of
-            // its cap — which is why the attention queue also warns at 90%.
-            <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-              The meter is at its cap, so no further charge can be accepted and turns are being
-              declined at the gate.
-            </p>
-          )}
+          <WindowMeters windows={org.windows} whose="The company's" />
         </Card>
       )}
 

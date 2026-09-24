@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"text/tabwriter"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The two operator commands that read and write the store directly.
-//
-// Both exist because a node does these things implicitly and a deployment
-// sometimes needs them explicitly: migrations run at every open, and budget
-// counters are written by every turn — so neither is a gap in the engine.
-// What they are is a way to do them WITHOUT starting one.
+// Two operator commands for what a node otherwise does implicitly: migrations
+// run at every open, and the budget counters are charged by every turn — so
+// neither is a gap in the engine. `migrate` applies the store's schema WITHOUT
+// starting one; `budgets` reads the fleet's counters, which live in no file,
+// through the node that is running.
 
 // runMigrate is `crewlet migrate`.
 //
@@ -191,27 +191,33 @@ func runBudgets(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// budgetsShow prints what each scope has spent.
+// budgetWindow is one calendar window of a scope, as the budgets answer states
+// it.
+type budgetWindow struct {
+	Period    string `json:"period"`
+	Window    string `json:"window"`
+	ResetsAt  string `json:"resets_at"`
+	Used      int    `json:"used"`
+	Limit     *int   `json:"limit"`
+	RefusedAt string `json:"refused_at"`
+	State     string `json:"state"`
+}
+
+// budgetsShow prints what each scope has spent, window by window.
 func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	client, err := nodeClientFor(args, "budgets show", stderr, nil)
 	if err != nil {
 		return err
 	}
 	var answer struct {
-		Durable bool `json:"durable"`
-		Org     struct {
-			MaxTokens        int    `json:"max_tokens"`
-			DurableUsed      int    `json:"durable_used"`
-			DurableUpdatedAt string `json:"durable_updated_at"`
-			RefusedAt        string `json:"refused_at"`
+		Timezone string `json:"timezone"`
+		Durable  bool   `json:"durable"`
+		Org      struct {
+			Windows []budgetWindow `json:"windows"`
 		} `json:"org"`
 		Seats []struct {
-			Handle           string `json:"handle"`
-			AgentID          string `json:"agent_id"`
-			MaxTokens        int    `json:"max_tokens"`
-			DurableUsed      int    `json:"durable_used"`
-			DurableUpdatedAt string `json:"durable_updated_at"`
-			RefusedAt        string `json:"refused_at"`
+			Handle  string         `json:"handle"`
+			Windows []budgetWindow `json:"windows"`
 		} `json:"seats"`
 	}
 	if err := client.get(context.Background(), "/query/budgets", &answer); err != nil {
@@ -224,36 +230,55 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 		return errors.New("the node could not read the counter; " +
 			"its `durable` flag is false, so nothing here can be stated")
 	}
-	// REFUSING SINCE is the column that says a scope is out, and USED
-	// against CAP is not: a refused charge increments nothing, so a seat
-	// charged in rounds stalls short of its cap and its row would otherwise
-	// read as headroom.
-	const row = "%-32s %12s %12s  %-30s  %s\n"
-	fmt.Fprintf(stdout, row, "SCOPE", "USED", "CAP", "LAST CHARGED", "REFUSING SINCE")
-	fmt.Fprintf(stdout, row, "org", strconv.Itoa(answer.Org.DurableUsed),
-		capOrDash(answer.Org.MaxTokens), dashIfEmpty(answer.Org.DurableUpdatedAt),
-		dashIfEmpty(answer.Org.RefusedAt))
+	// THE CLOCK FIRST: every window below is cut on it, and a reader in
+	// another zone would otherwise read "2026-09-23" as their own day.
+	fmt.Fprintf(stdout, "Windows on the company clock: %s\n\n", dashIfEmpty(answer.Timezone))
+	// STATE is the engine's own judgement (ok, near, refusing), and
+	// REFUSING SINCE is the gate's record of saying no: a refused charge
+	// increments nothing, so a seat charged in rounds stalls short of its
+	// ceiling and USED against LIMIT alone would read as headroom.
+	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tREFUSING SINCE")
+	rows := func(scope string, windows []budgetWindow) {
+		for _, win := range windows {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+				scope, win.Period, win.Window, win.Used, limitOrUnlimited(win.Limit),
+				win.State, dashIfEmpty(win.ResetsAt), dashIfEmpty(win.RefusedAt))
+		}
+	}
+	rows("org", answer.Org.Windows)
 	for _, seat := range answer.Seats {
-		if seat.DurableUsed == 0 && seat.MaxTokens == 0 {
-			// A seat that has spent nothing under no cap has nothing
-			// to report, and printing a permanent zero for every
-			// seat in a large company buries the ones that matter.
+		if !worthPrinting(seat.Windows) {
+			// A seat that has spent nothing under no ceiling has
+			// nothing to report, and printing three permanent zeroes
+			// for every seat in a large company buries the ones that
+			// matter.
 			continue
 		}
-		fmt.Fprintf(stdout, row,
-			seat.Handle, strconv.Itoa(seat.DurableUsed), capOrDash(seat.MaxTokens),
-			dashIfEmpty(seat.DurableUpdatedAt), dashIfEmpty(seat.RefusedAt))
+		rows(seat.Handle, seat.Windows)
 	}
-	return nil
+	return w.Flush()
 }
 
-func capOrDash(limit int) string {
-	if limit <= 0 {
-		// A scope whose `token_budget` caps no window is served as 0, so
-		// a literal 0 in this column would read as the opposite.
+// worthPrinting reports whether a seat has spent anything or is capped in any
+// window.
+func worthPrinting(windows []budgetWindow) bool {
+	for _, win := range windows {
+		if win.Used > 0 || win.Limit != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// limitOrUnlimited is a window's ceiling, or "unlimited" where the answer
+// states none: an uncapped window carries no `limit` at all, and a blank or a
+// 0 in this column would read as the opposite of what it means.
+func limitOrUnlimited(limit *int) string {
+	if limit == nil {
 		return "unlimited"
 	}
-	return strconv.Itoa(limit)
+	return strconv.Itoa(*limit)
 }
 
 func dashIfEmpty(s string) string {

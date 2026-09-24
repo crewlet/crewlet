@@ -12,7 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) in the calendar window each is closest to its ceiling in, read from a running node, because the counters are the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away. There is no reset: a window's allowance comes back when the window turns over |
+| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -532,28 +532,40 @@ deliberately gets that one. There is no token *default* on the command line:
 a token typed as an argument is in the shell history, in `ps`, and in any CI
 log that echoes the command.
 
-The **caps** are not stored here — they come from the active company config
+The **ceilings** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
-derives the same numbers without coordinating. Only the usage is shared. Each
-row is **one window**: the one the scope is refusing in — where several are,
-the one that ends last, which is the window the refusal itself named — else the
-capped window with the least room left, so `USED` and `CAP` always describe the
-same day, week or month. A scope that caps no window shows its spend this
-month, with a `CAP` of `unlimited`.
+derives the same numbers without coordinating. Only the usage is shared.
 
-`show` prints a `REFUSING SINCE` column: when that window last turned a charge
-away, or `-` while it is not refusing. Read it rather than `USED` against
-`CAP`, because a refused charge increments nothing: a seat charged in 3 000-token
-rounds against a 100 000 cap stops near 99 000 and its row would otherwise read
-as headroom. The next charge the scope admits clears it, and so does the window
-turning over.
+`show` names the company clock the windows are cut on, then prints **one row
+per window**: the company's day, week and month, then each seat's.
+
+```
+Windows on the company clock: Europe/Berlin
+
+SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             REFUSING SINCE
+org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
+org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
+org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
+eng    day     2026-09-23  99120    100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
+…
+```
+
+A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
+`STATE` is the engine's own judgement, the one every surface shows: `refusing`
+when the gate has turned a charge away in the window or no charge fits, `near`
+at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
+window last turned a charge away, or `-` while it has not. Read those rather
+than `USED` against `LIMIT`, because a refused charge increments nothing: a seat
+charged in 3 000-token rounds against a 100 000 ceiling stops near 99 000 and
+its row would otherwise read as headroom. The next charge the scope admits
+clears the stamp, and so does the window turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
 could look at is not a counter that reads zero, and a table of zeros draws a
 company at 0% of its budget at exactly the moment nothing is known. Seats with
-no cap and no spend are left out for the same reason in reverse: a permanent
-zero row per seat buries the seats that matter.
+no ceiling and no spend in any window are left out for the same reason in
+reverse: three permanent zero rows per seat bury the seats that matter.
 
 **There is no `reset`.** A window's allowance comes back when the window
 turns over — at local midnight, on Monday, on the 1st — rolled inside the
