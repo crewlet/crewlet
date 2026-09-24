@@ -77,10 +77,10 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 	seat, err := turn.RequireSeat()
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
-		return failed("a2a_ask can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "a2a_ask can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.svc == nil {
-		return failed("Agent-to-agent messaging is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Agent-to-agent messaging is not configured on this deployment."), nil
 	}
 
 	target := strings.TrimSpace(argString(args, "target"))
@@ -96,9 +96,9 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 	// RESOLVED, not trusted. A model writes the handle it remembers, and an
 	// ask sent to a handle that does not exist is a turn spent waiting for
 	// an answer that can never come — with nothing failing.
-	resolved, why := t.resolve(turn, target)
-	if why != "" {
-		return failed(why), nil
+	resolved, refusal := t.resolve(turn, target)
+	if refusal != nil {
+		return *refusal, nil
 	}
 	if resolved.Kind == string(org.KindHuman) {
 		// A human seat is addressable and never spawned, so no turn will
@@ -146,7 +146,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		WorkKey: turn.WorkKey,
 	})
 	if err != nil {
-		return failed(fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil
 	}
 	return tools.Result{Output: fmt.Sprintf(
 		"Asked %s (%s). They answer in their own turn — their reply arrives "+
@@ -156,18 +156,22 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 }
 
 // resolve turns a model's spelling into a real seat, or explains why not.
-func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, string) {
+//
+// Two classes: a spelling that names nobody, or several, is the `target`
+// argument's fault; a turn with no organization in scope is this node's.
+func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *tools.Result) {
 	if turn.Org == nil {
-		return colleague.Seat{}, "No organization is in scope, so there is nobody to ask."
+		return colleague.Seat{}, refusalOf(refused(tools.RefusalUnavailable,
+			"No organization is in scope, so there is nobody to ask."))
 	}
 	found := colleague.Resolve(target, Corpus(turn.Org))
 	switch len(found) {
 	case 0:
-		return colleague.Seat{}, fmt.Sprintf(
+		return colleague.Seat{}, refusalOf(failed(fmt.Sprintf(
 			"No colleague matches %q. Call lookup_colleague to find the right handle.",
-			clip(target))
+			clip(target))))
 	case 1:
-		return found[0].Seat, ""
+		return found[0].Seat, nil
 	}
 	// EVERY candidate. The handle the model wants is as likely to sort past
 	// a cap as before it, and a truncated ambiguity list leaves it choosing
@@ -176,7 +180,7 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, str
 	for _, c := range found {
 		names = append(names, c.Seat.Handle)
 	}
-	return colleague.Seat{}, fmt.Sprintf(
+	return colleague.Seat{}, refusalOf(failed(fmt.Sprintf(
 		"%q is ambiguous — it could be %s. Ask again with one exact handle.",
-		clip(target), strings.Join(names, ", "))
+		clip(target), strings.Join(names, ", "))))
 }

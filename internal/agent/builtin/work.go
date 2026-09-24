@@ -515,16 +515,23 @@ func callSeed(turn *turnctx.Turn, requestKey string) string {
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
+//
+// [tools.RefusalForbidden]: nothing about the arguments is wrong — this caller,
+// with no seat and no bound person behind it, may not write as anybody.
 func notInATurn(name string) tools.Result {
-	return failed(name + " can only be called during a turn, on behalf of a seat.")
+	return refused(tools.RefusalForbidden,
+		name+" can only be called during a turn, on behalf of a seat.")
 }
 
 // unconfigured is the refusal when the company runs no native tracker.
-func unconfigured(name string) tools.Result { return failed(unconfiguredText(name)) }
-
-func unconfiguredText(name string) string {
-	return name + " is unavailable: this company does not run the native " +
-		"work tracker. Use the tracker tools your company has configured."
+//
+// [tools.RefusalUnavailable]: the call is well-formed and the object may well
+// exist in the tracker the company DOES run, so neither "invalid" nor "not
+// found" is true of it.
+func unconfigured(name string) tools.Result {
+	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+		"company does not run the native work tracker. Use the tracker tools "+
+		"your company has configured.")
 }
 
 // queryAlias is one argument this surface spells differently from the query
@@ -783,8 +790,8 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// comment about two lines from where this one is parsed.
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		id, refusal := t.deps.resolveRef(ctx, ListWorkItemsTool, "`parent`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		params["parent"] = id
 	}
@@ -890,7 +897,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// refusal's own sentence, which names what would narrow it.
 		return failed(fmt.Sprintf("%s: %v", ListWorkItemsTool, err)), nil
 	case err != nil:
-		return failed(readFailure(ListWorkItemsTool, err)), nil
+		return readFailure(ListWorkItemsTool, err), nil
 	}
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
 	// message has to ask about the groups too — a board with five columns
@@ -1119,14 +1126,14 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q. Check the key, or "+
 			"use list_work_items to find it.", clip(id))), nil
 	case errors.Is(err, tracker.ErrNoComment):
-		return failed(fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
 	case err != nil:
-		return failed(readFailure(GetWorkItemTool, err)), nil
+		return readFailure(GetWorkItemTool, err), nil
 	}
 	// THE CUT IS TAKEN HERE, where the budget is. The tracker answers the
 	// body whole because its other reader — the dashboard — renders a task
@@ -1350,8 +1357,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		task.Parent = &parent
 	}
@@ -1422,8 +1429,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// failed.
 	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
 		task.Project, task.Tags)
-	if refusal := labelRefusal; refusal != "" {
-		return failed(refusal), nil
+	if labelRefusal != nil {
+		return *labelRefusal, nil
 	}
 	notify := tracker.Wake{
 		Kind: tracker.ChangeCreated, After: task,
@@ -1434,17 +1441,17 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	var blockers []string
 	for _, ref := range argStrings(args, "waiting_on") {
 		id, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		blockers = append(blockers, id)
 	}
 	if len(blockers) > 0 && t.deps.Dependencies == nil {
-		return failed(unconfiguredText(CreateWorkItemTool)), nil
+		return unconfigured(CreateWorkItemTool), nil
 	}
 	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
 	if err != nil {
-		return failed(writeFailure(CreateWorkItemTool, err)), nil
+		return writeFailure(CreateWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -1467,7 +1474,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// THE ITEM EXISTS AND IS REPORTED. Failing the call would
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one.
-			answer["dependencies_failed"] = writeFailure(CreateWorkItemTool, err)
+			answer["dependencies_failed"] = writeFailure(CreateWorkItemTool, err).Output
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
@@ -1492,23 +1499,31 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // key is what it read; the resolution is therefore the tool's job.
 //
 // It returns the model-facing refusal rather than an error, because every
-// caller here answers a model rather than a process.
-func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, string) {
+// caller here answers a model rather than a process — and a RESULT rather
+// than a sentence, because its refusals are of two classes: an argument that
+// names no item is [tools.RefusalInvalid] (the ARGUMENT is what to change —
+// the call is not about that item), and a read this node could not serve is
+// [tools.RefusalUnavailable]. A sentence would leave the caller to pick one.
+func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, *tools.Result) {
 	if d.Reader == nil {
-		return "", unconfiguredText(tool)
+		return "", refusalOf(unconfigured(tool))
 	}
 	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
-			"Check the key with list_work_items rather than guessing — a link "+
-			"to an item that does not exist renders as a dead reference on "+
-			"everybody's board.", tool, field, clip(ref))
+		return "", refusalOf(failed(fmt.Sprintf("%s names %s %q and there is "+
+			"no such work item. Check the key with list_work_items rather than "+
+			"guessing — a link to an item that does not exist renders as a "+
+			"dead reference on everybody's board.", tool, field, clip(ref))))
 	case err != nil:
-		return "", readFailure(tool, err)
+		return "", refusalOf(readFailure(tool, err))
 	}
-	return got.Task.ID, ""
+	return got.Task.ID, nil
 }
+
+// refusalOf is a refusal as the optional second answer of a helper that
+// resolves something for a tool: nil when there is nothing to refuse.
+func refusalOf(r tools.Result) *tools.Result { return &r }
 
 // resolveHandle turns a handle a caller typed into one the company has.
 //
@@ -1766,9 +1781,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(UpdateWorkItemTool, err)), nil
+		return readFailure(UpdateWorkItemTool, err), nil
 	}
 
 	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
@@ -1786,9 +1801,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// one: the roster is on the deps, and a patch builder that
 		// reached for it would need the whole surface threaded through
 		// it to validate one field.
-		//
-		// The outer refusal was checked empty above and is next WRITTEN
-		// by declareLabels, so nothing reads a stale one.
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
 			"`assignee`", *patch.Assignee)
@@ -1801,9 +1813,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if patch.Tags != nil {
 		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
 		// the write is checked against — never the caller's default.
-		if declared, refusal = t.deps.declareLabels(ctx, actor, args,
-			before.Task.Project, *patch.Tags); refusal != "" {
-			return failed(refusal), nil
+		var labelRefusal *tools.Result
+		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, args,
+			before.Task.Project, *patch.Tags); labelRefusal != nil {
+			return *labelRefusal, nil
 		}
 	}
 	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
@@ -1825,7 +1838,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// `write_project` resolves, for the same reason.
 		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
 		if !lead && !actor.Kind.Person() {
-			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
+			return refused(tools.RefusalForbidden, fmt.Sprintf("Pointing %s at a different team is the "+
 				"lead of %s's decision, not yours. Ask them, or say in a "+
 				"comment why it belongs elsewhere.",
 				before.Task.Key, before.Task.Project)), nil
@@ -1852,10 +1865,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// a dependency has two ends: a `linked` edge is one collection on one
 	// item, while `waiting_on` is an authored edge on one item and a
 	// mirrored entry on another, which is a sequence rather than a field.
-	inert, refusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
+	inert, relationRefusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
 		before.Task)
-	if refusal != "" {
-		return failed(refusal), nil
+	if relationRefusal != nil {
+		return *relationRefusal, nil
 	}
 	if inert != nil {
 		patch.Relate = inert
@@ -1863,9 +1876,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			kind = tracker.ChangeRelations
 		}
 	}
-	change, refusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
-	if refusal != "" {
-		return failed(refusal), nil
+	change, dependencyRefusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
+	if dependencyRefusal != nil {
+		return *dependencyRefusal, nil
 	}
 
 	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
@@ -1885,7 +1898,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
 			}.Notify(t.deps.Leads))
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return writeFailure(UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
@@ -1902,12 +1915,12 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if !change.Empty() {
 		if t.deps.Dependencies == nil {
-			return failed(unconfiguredText(UpdateWorkItemTool)), nil
+			return unconfigured(UpdateWorkItemTool), nil
 		}
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
 			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return writeFailure(UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		if _, held := answer["outcome"]; !held {
@@ -1940,30 +1953,31 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // It returns what it created, so a caller that set the flag by habit still
 // sees a typo in the answer rather than on a board three weeks later.
 func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
-	args map[string]any, project string, labels []string) ([]string, string) {
+	args map[string]any, project string, labels []string) ([]string, *tools.Result) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
-		return nil, ""
+		return nil, nil
 	}
 	if d.ProjectWriter == nil {
 		// THE REFUSAL NAMES THE OTHER ROUTE rather than failing the
 		// write: a build with no project writer still has a lead who
 		// can declare the tag, and the create that follows will say
 		// which label is missing.
-		return nil, "This build cannot declare labels at a write. Ask the " +
-			"project lead to declare it, or file without the label."
+		return nil, refusalOf(refused(tools.RefusalUnavailable, "This build "+
+			"cannot declare labels at a write. Ask the project lead to "+
+			"declare it, or file without the label."))
 	}
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
 		"tags-"+uuid.NewString(), project, labels)
 	if err != nil {
-		return nil, writeFailure(tracker.WriteProjectTool, err)
+		return nil, refusalOf(writeFailure(tracker.WriteProjectTool, err))
 	}
 	if len(warnings) > 0 {
 		// THE WARNINGS RIDE THE CREATED LIST, because they are about
 		// exactly these slugs and the caller has one answer to read.
 		created = append(created, warnings...)
 	}
-	return created, ""
+	return created, nil
 }
 
 // patchFromArgs builds the patch and the change kind, or the refusal to show
@@ -2209,9 +2223,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnWorkTool, err)), nil
+		return readFailure(CommentOnWorkTool, err), nil
 	}
 
 	now := t.deps.now()
@@ -2244,7 +2258,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
-	thread, refusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
+	thread, threadRefusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
@@ -2256,8 +2270,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// the ask stayed open on the board.
 		Author: actor.Record(),
 	})
-	if refusal != "" {
-		return failed(refusal), nil
+	if threadRefusal != nil {
+		return *threadRefusal, nil
 	}
 	comment.Ask = thread.Asked
 	if thread.Answers != "" {
@@ -2308,7 +2322,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Thread: thread.ThreadParties,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(CommentOnWorkTool, err)), nil
+		return writeFailure(CommentOnWorkTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -2425,41 +2439,79 @@ func jsonResult(v any) (tools.Result, error) {
 // IT NEVER SAYS "NOTHING FOUND". A projection that has not caught up must not
 // be able to tell a seat the company has no work — it would file a duplicate,
 // or abandon work it was told to do.
-func readFailure(name string, err error) string {
-	return fmt.Sprintf("%s could not read the tracker right now (%v). This is "+
-		"NOT an empty result — do not conclude the item or the list does not "+
-		"exist. Try again, or say you could not check.", name, err)
+//
+// [tools.RefusalUnavailable], and never not-found, for the same reason: a
+// caller that is not a model reads the class rather than the sentence, and a
+// dashboard told "not found" about a read this node could not serve would
+// render the item as gone.
+func readFailure(name string, err error) tools.Result {
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s could not read "+
+		"the tracker right now (%v). This is NOT an empty result — do not "+
+		"conclude the item or the list does not exist. Try again, or say you "+
+		"could not check.", name, err))
 }
 
 // writeFailure explains a write that did not land, in terms the model can act
 // on: which of these it can fix by trying differently, and which it cannot.
-func writeFailure(name string, err error) string {
+//
+// EACH SENTINEL HAS ITS OWN CLASS, because the classes are what a person's
+// surface acts on: a stale version is re-read and offered again, a lost race
+// is retried, a spent hand-off budget is never retried, and a log that refused
+// the append is this node's condition rather than anything about the item.
+// Folding any two of them together would make one of those surfaces do the
+// other's thing.
+//
+// A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S. The
+// tracker's writer wraps [tracker.ErrInvalid] on every refusal it writes about
+// what was asked — a custom-field value it will not round, a tombstoned item
+// that must be restored first, a rank key that is not well formed — and its
+// sentence names what to change. What it does NOT write arrives unmarked from
+// places it does not own: a SQL read of the decide's snapshot, the log's last
+// message, the operation ledger, the apply gates, a re-spread window. The
+// opposite default was the one this used to take, and it told a person whose
+// write hit a disk error to fix their input; an unmarked refusal read as the
+// node's failure at worst invites a retry that fails the same way, which a
+// person can see for themselves, while a node failure read as theirs sends
+// them to edit a field that was never wrong.
+func writeFailure(name string, err error) tools.Result {
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
+	case errors.Is(err, tracker.ErrForbidden):
+		// NOT A RACE. The sentence names who may, which is the only part
+		// of it a caller can act on; re-reading changes nothing.
+		return refused(tools.RefusalForbidden, fmt.Sprintf("%s was refused: "+
+			"%v. Re-reading will not change this — ask whoever the refusal "+
+			"names.", name, err))
 	case errors.Is(err, statelog.ErrConflict):
-		return fmt.Sprintf("%s could not land: %v. Somebody else is editing "+
-			"this item. Read it again with get_work_item and decide from what "+
-			"it says now.", name, err)
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
+			"%v. Somebody else is editing this item. Read it again with "+
+			"get_work_item and decide from what it says now.", name, err))
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalExists, fmt.Sprintf("%s: %v", name, err))
 	case errors.Is(err, tracker.ErrStaleVersion):
 		// THE ONE REFUSAL WHOSE ANSWER IS "READ IT AGAIN". Nothing is
 		// wrong with the patch, so a model told only "it failed" would
 		// re-send the same one against the same moved item forever.
-		return fmt.Sprintf("%s was refused: %v. Nothing is wrong with your "+
-			"edit — somebody changed the item after you read it. Call "+
-			"get_work_item again and decide from what it says now.", name, err)
+		return refused(tools.RefusalStaleVersion, fmt.Sprintf("%s was "+
+			"refused: %v. Nothing is wrong with your edit — somebody "+
+			"changed the item after you read it. Call get_work_item again "+
+			"and decide from what it says now.", name, err))
 	case errors.Is(err, tracker.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a
 		// transient failure is exactly what keeps it circulating.
-		return fmt.Sprintf("%s was refused: %v. Do not reassign it again. "+
-			"Comment on the item saying what is blocking it and who you "+
-			"think should own it, and leave it where it is.", name, err)
+		return refused(tools.RefusalReassignmentBudget, fmt.Sprintf("%s was "+
+			"refused: %v. Do not reassign it again. Comment on the item "+
+			"saying what is blocking it and who you think should own it, "+
+			"and leave it where it is.", name, err))
 	}
-	return fmt.Sprintf("%s did not land (%v). The change was NOT made — do not "+
-		"report it as done.", name, err)
+	class := tools.RefusalUnavailable
+	if errors.Is(err, tracker.ErrInvalid) {
+		class = tools.RefusalInvalid
+	}
+	return refused(class, fmt.Sprintf("%s did not land (%v). The change was "+
+		"NOT made — do not report it as done.", name, err))
 }
 
 // now and zone are the clock a query resolves against, defaulted here so a

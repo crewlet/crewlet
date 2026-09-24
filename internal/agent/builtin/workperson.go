@@ -110,7 +110,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 		Who: t.deps.partyOf(handle), Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.GetPersonTool, err)), nil
+		return readFailure(tracker.GetPersonTool, err), nil
 	}
 	return jsonResult(state)
 }
@@ -215,15 +215,15 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for _, ref := range items {
 		id, refusal := t.deps.resolveRef(ctx, tracker.SetPrioritiesTool,
 			"`items`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		resolved = append(resolved, id)
 	}
 	result, err := writer.WritePriorities(ctx,
 		opIDFor(actor, "prio", handle), handle, resolved, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
+		return writeFailure(tracker.SetPrioritiesTool, err), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
@@ -291,7 +291,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		opIDFor(actor, "pins", whose), whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPinsTool, err)), nil
+		return writeFailure(tracker.SetPinsTool, err), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
@@ -407,7 +407,7 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
 	if err != nil {
-		return failed(writeFailure(tracker.MarkInboxTool, err)), nil
+		return writeFailure(tracker.MarkInboxTool, err), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
@@ -605,7 +605,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	}
 	answer, err := t.deps.Inbox.Inbox(ctx, q, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.WorkInboxTool, err)), nil
+		return readFailure(tracker.WorkInboxTool, err), nil
 	}
 	return jsonResult(answer)
 }

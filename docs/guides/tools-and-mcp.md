@@ -129,6 +129,53 @@ and how many arguments its schema declares. A tool whose server advertised
 nothing shows as `unknown` rather than as a read — which is the row to check
 before granting a seat a new server.
 
+### When a tool refuses
+
+A tool that cannot do what it was asked answers with a **failed result** rather
+than an error: the turn is fine, this call is not, and the sentence goes back to
+the model so it can try again with a better argument. That sentence is written
+for a model and tuned against how models behave, so it is not a contract anybody
+else can parse.
+
+The engine's **own** tools therefore also say what *kind* of refusal it was — a
+machine-readable class beside the sentence, which is what a surface that is not
+a model acts on:
+
+| Class | What it means | What a caller should do |
+|---|---|---|
+| `invalid` | An argument is wrong, and the sentence names which | Send something different |
+| `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
+| `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
+| `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
+| `conflict` | The write lost its race to other writers, or the object's state moved under it | Read it again; a retry may land |
+| `exists` | What the call would create is already there | Edit the existing one |
+| `already_answered` | The question this answers has an answer | Read the answer |
+| `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
+| `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
+| `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
+| `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — a read that failed, a log that refused the append (a maintenance or sealed fleet included), an unconfigured backend. **Never** "it does not exist" | Retry, or use the backend the company does run |
+| `peer_upgrading` | A node in the fleet is too old to carry this gesture | Retry after the rolling upgrade |
+
+An argument that merely *names* something missing — a `parent`, a `waiting_on`
+item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
+argument, and the call is not about that object.
+
+**`invalid` is claimed, never assumed.** A write the work tracker refuses on
+what it was asked — a field value it will not round, a tombstoned item, a cap
+the object would pass — is marked as such where the refusal is written. Any
+failure that is *not* marked is read as the node's: a store read or a log call
+that failed mid-write is `unavailable`, so a person is never told to change an
+input that was never wrong.
+
+**A call refused before any tool ran is classed too.** A tool name nothing
+registered is `not_found`; a real tool this phase was not offered, or one a
+skill guard holds back until its skill is loaded, is `forbidden`.
+
+**An MCP server's failure carries no class.** Its prose is the server's, and
+the engine will not guess a class from text it did not write; a reader that
+needs one treats an unclassified failure as the server's own.
+
 ---
 
 ## Extending the engine

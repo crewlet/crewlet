@@ -227,7 +227,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
+			return writeFailure(tracker.WriteProjectTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		tags := map[string]any{
@@ -242,7 +242,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
+			return writeFailure(tracker.WriteProjectTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["policy"] = map[string]any{

@@ -85,7 +85,8 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		return failed("lookup_colleague needs a `query`: a handle, a role name, or an id on any connected platform."), nil
 	}
 	if turn == nil || turn.Org == nil {
-		return failed("No organization is in scope, so there is nobody to look up."), nil
+		return refused(tools.RefusalUnavailable,
+			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
 	seats := Corpus(turn.Org)
@@ -95,7 +96,10 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	switch {
 	case len(found) == 0:
 		log.Debug("lookup_colleague_no_match", "query", safe, "corpus", len(seats))
-		return failed(fmt.Sprintf(
+		// NOT FOUND, because the colleague IS what this call is about —
+		// unlike a2a_ask's `target`, where an unmatched spelling is an
+		// argument to correct before the ask can be sent.
+		return refused(tools.RefusalNotFound, fmt.Sprintf(
 			"No colleague matches %q. Known handles: %s.",
 			safe, strings.Join(allHandles(seats), ", "))), nil
 

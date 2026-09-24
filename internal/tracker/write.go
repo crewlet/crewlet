@@ -45,6 +45,59 @@ var ErrStaleVersion = errors.New("tracker: the task has changed since it was rea
 // ErrReassignmentBudget reports a hand-off past [ReassignmentBudget].
 var ErrReassignmentBudget = errors.New("tracker: this task has been handed on too many times")
 
+// ErrForbidden reports a write this ACTOR may not make, whatever it carries:
+// somebody else's inbox, pins or priority list, a view protected for its owner,
+// a project's policy or tag vocabulary without the lead's or a person's own
+// authority.
+//
+// ITS OWN SENTINEL, and not the [statelog.ErrConflict] several of these used
+// to wrap, because the two ask for opposite things of the caller. A conflict
+// is a lost race: read again and the write may well land. A refusal of
+// authority lands the same way however many times it is re-read — so a model
+// told "somebody else is editing this, read it again" retried it for a round
+// that could never succeed, and any surface classing by the sentinel offered
+// a person a retry instead of the name of whom to ask. The sentence still
+// names who may.
+var ErrForbidden = errors.New("tracker: not this actor's to write")
+
+// ErrInvalid marks a write the tracker refuses on its CONTENT: a missing or
+// malformed argument, a value a field does not take, a cap the object would
+// exceed, a tombstoned or archived thing named as the target of new work.
+// Whatever carries it, the same request can never land and a different one
+// can — so the caller's answer is to change what it sent.
+//
+// A MARK RATHER THAN A DEFAULT, because the opposite default is the one that
+// lies. A write fails for two kinds of reason — what was asked, and what the
+// node could do — and the second arrives unwrapped from a dozen places a
+// writer does not own: a SQL read of the decide's snapshot, the log's last
+// message, the operation ledger, the apply gates, a re-spread window. Left
+// to fall through to "invalid", a disk error mid-write told a person to fix
+// their input. So the refusals this package WRITES are marked, and anything
+// unmarked is read as the node's failure. [pages.ErrInvalid] draws the same
+// line for the knowledge base.
+//
+// THE SENTENCE IS UNCHANGED by the mark — see [invalid] — because it is prompt
+// text a model was tuned against and the mark is for a reader that is not one.
+var ErrInvalid = errors.New("tracker: invalid")
+
+// ErrAlreadyAnswered reports an `answers` naming a question somebody already
+// answered. Its own sentinel because nothing about the comment is wrong and
+// nothing a caller could change makes it land: the answer it meant to give
+// exists, and the useful move is to read it.
+var ErrAlreadyAnswered = errors.New("tracker: that question is already answered")
+
+// invalidError carries [ErrInvalid] beside a refusal's own sentence.
+type invalidError struct{ err error }
+
+func (e *invalidError) Error() string   { return e.err.Error() }
+func (e *invalidError) Unwrap() []error { return []error{ErrInvalid, e.err} }
+
+// invalid is fmt.Errorf for a content refusal: the same sentence, and the same
+// %w chain, marked [ErrInvalid].
+func invalid(format string, args ...any) error {
+	return &invalidError{err: fmt.Errorf(format, args...)}
+}
+
 // NoIfMatch omits an update's version precondition, which MERGES the patch
 // onto whatever the task currently is. Named rather than a bare zero, because
 // a literal 0 in a seven-argument call says nothing about which of the two
@@ -421,9 +474,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 
 	switch {
 	case id == "":
-		return WriteResult{}, fmt.Errorf("tracker: an update names no task")
+		return WriteResult{}, invalid("tracker: an update names no task")
 	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: an update on task %s "+
+		return WriteResult{}, invalid("tracker: an update on task %s "+
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
@@ -503,7 +556,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// or relation of it can change — which is what makes a
 				// removal an entirely local decision with no walk
 				// behind it.
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s was "+
+				return statelog.Decision{}, invalid("tracker: task %s was "+
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
@@ -626,13 +679,13 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 		// than resolved in some order: one of them is a gesture about
 		// one person and the other is the whole set, and whichever won
 		// would silently discard the other.
-		return patch, fmt.Errorf("tracker: this patch carries both a watch "+
+		return patch, invalid("tracker: this patch carries both a watch "+
 			"gesture for %s and a whole watcher set — a caller states one or "+
 			"the other", patch.Watch.Handle)
 	}
 	handle := patch.Watch.Handle
 	if handle == "" {
-		return patch, fmt.Errorf("tracker: a watch gesture names no handle")
+		return patch, invalid("tracker: a watch gesture names no handle")
 	}
 	watchers := without(current.Watchers, []string{handle})
 	muted := without(current.Muted, []string{handle})
@@ -670,7 +723,7 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 			patch.Watch = nil
 			return patch, nil
 		}
-		return patch, fmt.Errorf("tracker: task %s already has %d watchers and "+
+		return patch, invalid("tracker: task %s already has %d watchers and "+
 			"the maximum is %d — an item this many people follow is an "+
 			"announcement, and a comment on it wakes all of them",
 			current.ID, len(current.Watchers), MaxWatchers)
@@ -744,16 +797,16 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 
 	switch {
 	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
+		return WriteResult{}, invalid("tracker: a move names no project")
 	case len(placements) == 0:
-		return WriteResult{}, fmt.Errorf("tracker: a move places no task")
+		return WriteResult{}, invalid("tracker: a move places no task")
 	case len(placements) > MaxBulkTasks+RankRespreadInline:
 		// THE CALLER'S OWN MOVES PLUS A RE-SPREAD'S WORTH OF
 		// NEIGHBOURS. The scope is the project CONTAINER rather than an
 		// enumeration precisely so the placement list is not bounded by
 		// the term cap: one drag can legitimately rewrite hundreds of
 		// neighbouring keys, and a covering term costs one path.
-		return WriteResult{}, fmt.Errorf("tracker: a move carries %d "+
+		return WriteResult{}, invalid("tracker: a move carries %d "+
 			"placements and one record carries at most %d — %d moves plus "+
 			"a re-spread's %d neighbours", len(placements),
 			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
@@ -771,7 +824,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
 			for _, placement := range placements {
 				if !placement.Rank.Valid() {
-					return statelog.Decision{}, fmt.Errorf("tracker: %q is not "+
+					return statelog.Decision{}, invalid("tracker: %q is not "+
 						"a well-formed rank key", placement.Rank)
 				}
 			}
@@ -803,7 +856,7 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	// one; a view chooses its own. Accepting one where it means nothing
 	// would let a caller file a person's record under a project.
 	if container != "" && !subject.Kind.HomedInAProject() {
-		return WriteResult{}, fmt.Errorf("tracker: a %s names container %q, "+
+		return WriteResult{}, invalid("tracker: a %s names container %q, "+
 			"and its own path is derived from its subject — a container here "+
 			"would file its deferral where no probe for it looks",
 			subject.Kind, container)
@@ -831,7 +884,7 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 	payload any) (WriteResult, error) {
 
 	if project == "" {
-		return WriteResult{}, fmt.Errorf("tracker: a turn on task %s names "+
+		return WriteResult{}, invalid("tracker: a turn on task %s names "+
 			"no project — a turn's path is its task's, so one without a project "+
 			"files under a container the task is not in", taskID)
 	}
@@ -875,26 +928,26 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 	switch {
 	case !subject.Kind.RecordsHistory():
 		if kind != "" {
-			return fmt.Errorf("tracker: a %s record names change kind %q, and "+
+			return invalid("tracker: a %s record names change kind %q, and "+
 				"an apply of it writes no history row for that kind to "+
 				"describe — see ObjectKind.RecordsHistory", subject.Kind, kind)
 		}
 		if notify != nil {
-			return fmt.Errorf("tracker: a %s record carries a notification, "+
+			return invalid("tracker: a %s record carries a notification, "+
 				"and an apply of it writes no history row a wake could be "+
 				"derived from", subject.Kind)
 		}
 		return nil
 	case kind == "":
-		return fmt.Errorf("tracker: a %s %s record names no change kind — its "+
+		return invalid("tracker: a %s %s record names no change kind — its "+
 			"apply writes a history row, and the kind is what every feed "+
 			"filter, report window and repair scan selects on", subject.Kind, op)
 	case !kind.Valid():
-		return fmt.Errorf("tracker: %q is not a change kind this build writes "+
+		return invalid("tracker: %q is not a change kind this build writes "+
 			"— every kind has exactly one writer, so an unknown one is a "+
 			"history row no filter can name", kind)
 	case notify != nil && notify.Kind != kind:
-		return fmt.Errorf("tracker: this %s record says it is a %q and its "+
+		return invalid("tracker: this %s record says it is a %q and its "+
 			"notification says %q — one fact with two carriers is one fact "+
 			"that can disagree with itself, and a reader would see the feed "+
 			"and the card name different things", subject.Kind, kind, notify.Kind)
@@ -922,7 +975,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 		return statelog.Decision{}, err
 	}
 	if scope.Subject && scope.Container == "" && subject.Kind.RequiresAProject() {
-		return statelog.Decision{}, fmt.Errorf("tracker: a %s record for %s "+
+		return statelog.Decision{}, invalid("tracker: a %s record for %s "+
 			"states no container, and there is no %s outside a project — an "+
 			"empty one resolves to the workspace and files its deferral where "+
 			"no project-scoped probe looks", op, subject, subject.Kind)
@@ -958,7 +1011,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 		// REFUSED NAMING THE SIZE, never cut to fit: a record silently
 		// trimmed is a row that cannot be rebuilt from it, which is the
 		// one property the whole record format exists to have.
-		return statelog.Decision{}, fmt.Errorf("tracker: the %s record for %s "+
+		return statelog.Decision{}, invalid("tracker: the %s record for %s "+
 			"is %d bytes and the design maximum is %d — a record is refused "+
 			"rather than trimmed, because a trimmed one cannot rebuild its row",
 			op, subject, len(encoded), MaxCommitBytes)
@@ -1057,9 +1110,9 @@ func (w *Writer) MoveTask(ctx context.Context, opID, project, taskID string,
 
 	switch {
 	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
+		return WriteResult{}, invalid("tracker: a move names no project")
 	case taskID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a move names no task")
+		return WriteResult{}, invalid("tracker: a move names no task")
 	}
 	placements, err := w.placeBetween(ctx, project, taskID, after, before)
 	if err != nil {
@@ -1075,7 +1128,7 @@ func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
 
 	key, err := KeyBetween(after, before)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: mint a key between %q and %q: %w",
+		return nil, invalid("tracker: mint a key between %q and %q: %w",
 			after, before, err)
 	}
 	if len(key) <= RankRenormaliseAt {
@@ -1126,7 +1179,7 @@ func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
 	// moved.
 	fresh, err := KeysBetween(after, before, len(neighbours)+1)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: re-spread %d neighbours between %q "+
+		return nil, invalid("tracker: re-spread %d neighbours between %q "+
 			"and %q: %w", len(neighbours), after, before, err)
 	}
 	placements := make([]Placement, 0, len(fresh))

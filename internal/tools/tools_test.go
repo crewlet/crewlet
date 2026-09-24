@@ -19,8 +19,11 @@ type fakeTool struct {
 	params map[string]any
 	out    string
 	failed bool
-	err    error
-	seen   []map[string]any
+	// refusal is the class a failed call carries, as a first-party tool
+	// sets it.
+	refusal tools.Refusal
+	err     error
+	seen    []map[string]any
 }
 
 func (f *fakeTool) Name() string               { return f.name }
@@ -31,7 +34,7 @@ func (f *fakeTool) Call(_ context.Context, args map[string]any) (tools.Result, e
 	if f.err != nil {
 		return tools.Result{}, f.err
 	}
-	return tools.Result{Output: f.out, Failed: f.failed}, nil
+	return tools.Result{Output: f.out, Failed: f.failed, Refusal: f.refusal}, nil
 }
 
 func tool(name string) *fakeTool { return &fakeTool{name: name, out: "ok"} }
@@ -430,6 +433,58 @@ func TestAnUnofferedToolAndAnUnknownOneReadDifferently(t *testing.T) {
 	}
 	if !res.Failed || !strings.Contains(res.Output, "Unknown tool") {
 		t.Errorf("an unknown tool reported %q", res.Output)
+	}
+}
+
+// denyAll is a guard that refuses every call, the way the skills guard refuses
+// a tool whose skill has not been loaded.
+type denyAll struct{}
+
+func (denyAll) Check(string, string) string    { return "load the skill first" }
+func (denyAll) Observe(string, map[string]any) {}
+
+func TestTheSurfaceClassesItsOwnRefusalsAndPassesAToolsThrough(t *testing.T) {
+	t.Parallel()
+	// A CALLER THAT IS NOT A MODEL reads the class, and the surface refuses
+	// some calls before any tool runs — an unknown name, one not offered
+	// here, a guard's refusal. Unclassified, those reached such a caller as
+	// a failure it could only render with a status it made up. Each class
+	// has to arrive on BOTH records: the result the caller acts on and the
+	// call the ledger keeps.
+	r := tools.NewRegistry()
+	refuses := tool("refuses")
+	refuses.failed, refuses.out, refuses.refusal = true, "no such item", tools.RefusalNotFound
+	mustRegister(t, r, refuses, tools.OriginBuiltin)
+	mustRegister(t, r, tool("registered"), tools.OriginBuiltin)
+	mustRegister(t, r, tool("guarded"), tools.OriginBuiltin)
+	open := tools.NewSurface("execute", r.Snapshot(), []string{"refuses"})
+	guarded := tools.NewSurface("execute", r.Snapshot(), []string{"guarded"}).WithGuard(denyAll{})
+
+	for _, c := range []struct {
+		name    string
+		surface *tools.Surface
+		call    string
+		want    tools.Refusal
+	}{
+		{"a name nothing registered", open, "ghost", tools.RefusalNotFound},
+		{"a registered tool not offered here", open, "registered", tools.RefusalForbidden},
+		{"a call the guard refuses", guarded, "guarded", tools.RefusalForbidden},
+		{"a first-party tool's own class", open, "refuses", tools.RefusalNotFound},
+	} {
+		res, err := c.surface.Execute(context.Background(), llm.ToolCall{Name: c.call})
+		if err != nil {
+			t.Fatalf("%s: Execute: %v", c.name, err)
+		}
+		if !res.Failed || res.Refusal != c.want {
+			t.Errorf("%s: result failed %v class %q, want %q",
+				c.name, res.Failed, res.Refusal, c.want)
+		}
+		calls := c.surface.Calls()
+		last := calls[len(calls)-1]
+		if last.Name != c.call || !last.Failed || last.Refusal != c.want {
+			t.Errorf("%s: recorded %+v, want a failed call classed %q",
+				c.name, last, c.want)
+		}
 	}
 }
 

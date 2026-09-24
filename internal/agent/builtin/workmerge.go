@@ -110,13 +110,13 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.MergeWorkItemTool, err)), nil
+		return readFailure(tracker.MergeWorkItemTool, err), nil
 	}
 	survivor, refusal := t.deps.resolveRef(ctx, tracker.MergeWorkItemTool, "`into`", into)
-	if refusal != "" {
-		return failed(refusal), nil
+	if refusal != nil {
+		return *refusal, nil
 	}
 	if survivor == before.Task.ID {
 		return failed(fmt.Sprintf("%s cannot be folded into itself.",
@@ -137,7 +137,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.MergeWorkItemTool, err)), nil
+		return writeFailure(tracker.MergeWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{

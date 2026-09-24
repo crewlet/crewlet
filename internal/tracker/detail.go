@@ -46,6 +46,16 @@ var ErrNoTask = errors.New("tracker: no such task")
 // it typed the key wrong.
 var ErrNoProject = errors.New("tracker: no such project")
 
+// ErrNoType reports a `for_type` that names no type this company files.
+//
+// NOT [ErrNoProject], which is what it used to wrap: the project the caller
+// named exists, and it is the NARROWING argument that is wrong — so every
+// reader classifying by the sentinel answered "there is no such project" (a
+// 404 on the query surface, a dead link to a person) about a project that was
+// right there. The fix a caller needs is the argument, and the refusal lists
+// the types it may name.
+var ErrNoType = errors.New("tracker: no such type")
+
 // ErrNoComment reports a comment this node has no row for on that task.
 //
 // ITS OWN SENTINEL beside the two above, and the caller's answer differs

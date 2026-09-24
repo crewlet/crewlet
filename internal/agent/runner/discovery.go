@@ -78,7 +78,10 @@ func (t *listMCPTools) Parameters() map[string]any {
 func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Result, error) {
 	server, _ := args["server"].(string)
 	if strings.TrimSpace(server) == "" {
-		return tools.Result{Output: "Name a server. " + t.knownServers(), Failed: true}, nil
+		return tools.Result{
+			Output: "Name a server. " + t.knownServers(), Failed: true,
+			Refusal: tools.RefusalInvalid,
+		}, nil
 	}
 	var lines []string
 	for _, e := range t.surface().Universe().Entries() {
@@ -94,8 +97,9 @@ func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Resul
 		// means "you have the name wrong". Listing what exists is what
 		// turns the second into a recoverable round.
 		return tools.Result{
-			Output: fmt.Sprintf("No tools found on MCP server %q. %s", server, t.knownServers()),
-			Failed: true,
+			Output:  fmt.Sprintf("No tools found on MCP server %q. %s", server, t.knownServers()),
+			Failed:  true,
+			Refusal: tools.RefusalNotFound,
 		}, nil
 	}
 	return tools.Result{Output: strings.Join(lines, "\n")}, nil
@@ -142,7 +146,10 @@ func (t *activateTool) Parameters() map[string]any {
 func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
 	name, _ := args["name"].(string)
 	if strings.TrimSpace(name) == "" {
-		return tools.Result{Output: "Name a tool to activate.", Failed: true}, nil
+		return tools.Result{
+			Output: "Name a tool to activate.", Failed: true,
+			Refusal: tools.RefusalInvalid,
+		}, nil
 	}
 	if t.surface().Activate(name) {
 		return tools.Result{Output: name + " is active; its schema arrives on the next message."}, nil
@@ -153,6 +160,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	return tools.Result{
 		Output: fmt.Sprintf("No tool named %q. If it belongs to an MCP server, call "+
 			"%s to see that server's real tool names.", name, ListMCPToolsTool),
-		Failed: true,
+		Failed:  true,
+		Refusal: tools.RefusalNotFound,
 	}, nil
 }

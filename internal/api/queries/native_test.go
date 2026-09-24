@@ -679,6 +679,33 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 	}
 }
 
+// A PROJECT THAT IS THERE IS NEVER ANSWERED AS MISSING. A `for_type` the
+// company does not file was refused wrapped in tracker.ErrNoProject, so the
+// route answered 404 about a project that exists — a dead link to a person,
+// for an argument they could fix. The key that names nothing is still 404.
+func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"no project", fmt.Errorf("tracker: no project \"ENGG\": %w", tracker.ErrNoProject),
+			queries.ErrNotFound},
+		{"no type", fmt.Errorf("tracker: no type \"epic\": %w", tracker.ErrNoType),
+			queries.ErrBadParams},
+	} {
+		_, err := askNative(t, queries.Sources{Work: &stubWork{err: tc.err}},
+			"work_project", map[string]any{"key": "ENG", "for_type": "epic"})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: answered %v, want %v", tc.name, err, tc.want)
+		}
+		if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrNotFound) {
+			t.Errorf("%s: an unknown type is also classed not-found", tc.name)
+		}
+	}
+}
+
 // A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
 //
 // `viewer=` selects WHOSE pins and personal views order the strip, and nothing

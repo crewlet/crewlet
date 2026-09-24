@@ -142,16 +142,16 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	pinnedViews = cleanHandles(pinnedViews)
 	switch {
 	case len(pinnedViews) > MaxPinnedViews:
-		return WriteResult{}, fmt.Errorf("tracker: %s pins %d views and the "+
+		return WriteResult{}, invalid("tracker: %s pins %d views and the "+
 			"maximum is %d — a strip where everything is first has no first",
 			handle, len(pinnedViews), MaxPinnedViews)
 	case len(favorites) > MaxFavorites:
-		return WriteResult{}, fmt.Errorf("tracker: %s stars %d things and the "+
+		return WriteResult{}, invalid("tracker: %s stars %d things and the "+
 			"maximum is %d", handle, len(favorites), MaxFavorites)
 	}
 	for _, favorite := range favorites {
 		if favorite.Kind == "" || favorite.ID == "" {
-			return WriteResult{}, fmt.Errorf("tracker: a favourite of %s names "+
+			return WriteResult{}, invalid("tracker: a favourite of %s names "+
 				"kind %q and id %q, and a star with neither points at nothing",
 				handle, favorite.Kind, favorite.ID)
 		}
@@ -208,9 +208,9 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 			"re-ordering a colleague's list is a hand-off in disguise, and it "+
 			"bypasses the guarded take and the reassignment budget. A lead, a "+
 			"human or an operator may: %w",
-			w.Actor, handle, handle, statelog.ErrConflict)
+			w.Actor, handle, handle, ErrForbidden)
 	case len(priorities) > MaxPriorities:
-		return WriteResult{}, fmt.Errorf("tracker: %s's priority list carries "+
+		return WriteResult{}, invalid("tracker: %s's priority list carries "+
 			"%d items and the maximum is %d — a list longer than that is not "+
 			"an order, it is the backlog again", handle, len(priorities),
 			MaxPriorities)
@@ -315,7 +315,7 @@ func (w *Writer) ownRecord(handle, what string) error {
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
 		"the one thing it must never allow: %w",
-		w.Record(), handle, what, statelog.ErrConflict)
+		w.Record(), handle, what, ErrForbidden)
 }
 
 // checkInbox refuses an inbox nothing could render.
@@ -327,14 +327,14 @@ func checkInbox(read, unread, snoozed []InboxEntry, reasons []Reason,
 		what    string
 	}{{read, "read"}, {unread, "unread"}, {snoozed, "snoozed"}} {
 		if len(part.entries) > MaxInboxEntries {
-			return fmt.Errorf("tracker: the %s list carries %d entries and the "+
+			return invalid("tracker: the %s list carries %d entries and the "+
 				"maximum is %d — entries at or below the seen-through position "+
 				"are pruned on every write, so a list this long is one nothing "+
 				"has read past", part.what, len(part.entries), MaxInboxEntries)
 		}
 		for _, entry := range part.entries {
 			if entry.RecordID == "" {
-				return fmt.Errorf("tracker: a %s entry names no record",
+				return invalid("tracker: a %s entry names no record",
 					part.what)
 			}
 		}
@@ -346,7 +346,7 @@ func checkInbox(read, unread, snoozed []InboxEntry, reasons []Reason,
 	horizon := now.Add(MaxSnoozeAhead)
 	for _, entry := range snoozed {
 		if entry.Until != nil && entry.Until.After(horizon) {
-			return fmt.Errorf("tracker: record %s is snoozed until %s, which is "+
+			return invalid("tracker: record %s is snoozed until %s, which is "+
 				"more than %s away — a snooze that far out is a delete that "+
 				"does not say so", entry.RecordID,
 				entry.Until.Format(time.RFC3339), MaxSnoozeAhead)
@@ -354,7 +354,7 @@ func checkInbox(read, unread, snoozed []InboxEntry, reasons []Reason,
 	}
 	for _, reason := range reasons {
 		if !slices.Contains(Reasons, reason) {
-			return fmt.Errorf("tracker: %q is not a wake reason", reason)
+			return invalid("tracker: %q is not a wake reason", reason)
 		}
 	}
 	return nil
@@ -436,7 +436,7 @@ func (w *Writer) writePersonNotifying(ctx context.Context, opID, handle string,
 	apply func(*sql.Tx, *Person, time.Time) (*Notify, error)) (WriteResult, error) {
 
 	if strings.TrimSpace(handle) == "" {
-		return WriteResult{}, fmt.Errorf("tracker: a person write names nobody")
+		return WriteResult{}, invalid("tracker: a person write names nobody")
 	}
 	subject := PersonSubject(handle)
 	// THE PERSON FAMILY, which is what a person subject resolves to

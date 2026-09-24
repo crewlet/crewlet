@@ -879,6 +879,13 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 	if !strings.Contains(got.Output, "get_work_item") {
 		t.Errorf("the refusal does not say to re-read: %q", got.Output)
 	}
+	// AND IT SAYS SO TO A READER THAT IS NOT A MODEL: the class is what a
+	// person's surface re-reads and re-offers on, where a lost race is
+	// retried as it stands.
+	if got.Refusal != tools.RefusalStaleVersion {
+		t.Errorf("a stale edit is classed %q, want %q", got.Refusal,
+			tools.RefusalStaleVersion)
+	}
 }
 
 // THE ANNOTATIONS ARE WHAT THE WORKER GUARD READS. A write to a surface the

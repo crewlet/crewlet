@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -17,10 +18,16 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
 
-	if _, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
-		tracker.ProjectAuthority{}); err == nil {
-
+	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
+		tracker.ProjectAuthority{})
+	switch {
+	case err == nil:
 		t.Fatal("a seat that does not lead ENG set its default assignee")
+	case !errors.Is(err, tracker.ErrForbidden):
+		// THE CLASS A CALLER BRANCHES ON: without it this refusal read
+		// as whatever the caller's default was, and a person's surface
+		// offered a retry of something no retry changes.
+		t.Fatalf("the refusal is %v, want an ErrForbidden", err)
 	}
 	if _, err := r.writer.WriteProject(t.Context(), "op-lead", "ENG", edit,
 		tracker.ProjectAuthority{Lead: true}); err != nil {

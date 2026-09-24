@@ -156,8 +156,9 @@ func (d PageDeps) reserved(container string) bool {
 }
 
 func unconfiguredKB(name string) tools.Result {
-	return failed(name + " is unavailable: this company does not run the native " +
-		"knowledge base. Use the tools your company has configured.")
+	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
+		"company does not run the native knowledge base. Use the tools your "+
+		"company has configured.")
 }
 
 // ---- list_pages -------------------------------------------------------- //
@@ -227,7 +228,7 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Limit:     argInt(args, "limit", 0),
 	}, seatRead)
 	if err != nil {
-		return failed(readFailure(ListPagesTool, err)), nil
+		return pageReadFailure(ListPagesTool, err), nil
 	}
 	if len(got.Pages) == 0 {
 		return tools.Result{Output: "No pages match that filter."}, nil
@@ -291,10 +292,10 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q. Check the container and "+
 			"title, or use search_knowledge to find it.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(GetPageTool, err)), nil
+		return pageReadFailure(GetPageTool, err), nil
 	}
 	return jsonResult(detail)
 }
@@ -377,7 +378,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		}
 	}
 	if t.deps.reserved(in.Container) {
-		return failed(fmt.Sprintf(
+		return refused(tools.RefusalForbidden, fmt.Sprintf(
 			"%s is a reserved container and pages written there are excluded "+
 				"from every search. Write this somewhere a reader will find it.",
 			clip(in.Container))), nil
@@ -385,7 +386,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
-		return failed(pageWriteFailure(WritePageTool, err)), nil
+		return pageWriteFailure(WritePageTool, err), nil
 	}
 	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -471,9 +472,9 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(SavePageTool, err)), nil
+		return pageReadFailure(SavePageTool, err), nil
 	}
 
 	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
@@ -495,7 +496,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 
 	got, err := t.deps.Writer.SavePage(ctx, actor, detail.Page.ID, save)
 	if err != nil {
-		return failed(pageWriteFailure(SavePageTool, err)), nil
+		return pageWriteFailure(SavePageTool, err), nil
 	}
 	at := got.Outcome.Position
 	revision := got.Revision
@@ -515,9 +516,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		want := strings.TrimSpace(fmt.Sprint(title))
 		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
 		if err != nil {
-			return failed(fmt.Sprintf("The edit was saved and the rename to %q "+
-				"was not: %s", clip(want),
-				pageWriteFailure(SavePageTool, err))), nil
+			// THE RENAME'S CLASS, because the rename is the half that
+			// failed: the save already landed and nothing about it is
+			// what a caller has to act on.
+			refusal := pageWriteFailure(SavePageTool, err)
+			return refused(refusal.Refusal, fmt.Sprintf("The edit was saved "+
+				"and the rename to %q was not: %s", clip(want),
+				refusal.Output)), nil
 		}
 		got.Page = renamed.Page
 		// THE LATER OF THE TWO, never the rename's outright. A rename to
@@ -611,9 +616,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnPageTool, err)), nil
+		return pageReadFailure(CommentOnPageTool, err), nil
 	}
 
 	// AN EDIT IS THE SAME GESTURE, which is why it is this tool rather than
@@ -624,7 +629,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
 		if err != nil {
-			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+			return pageWriteFailure(CommentOnPageTool, err), nil
 		}
 		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
@@ -643,7 +648,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
-		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+		return pageWriteFailure(CommentOnPageTool, err), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -653,25 +658,48 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can
-// act on.
-func pageWriteFailure(name string, err error) string {
+// act on, classed for a reader that is not a model.
+//
+// THE UNMARKED REMAINDER IS [tools.RefusalUnavailable] here, where the
+// tracker's is invalid, and the difference is the writers': the pages writer
+// wraps every refusal it decides on content in one of its own sentinels —
+// [pages.ErrInvalid] included — so what reaches the end of this switch is a
+// read or an encode that failed, or a log that refused the append.
+func pageWriteFailure(name string, err error) tools.Result {
 	switch {
 	case errors.Is(err, pages.ErrInvalid):
-		return fmt.Sprintf("%s refused that: %v", name, err)
+		return refused(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %v", name, err))
+	case errors.Is(err, pages.ErrReserved):
+		return refused(tools.RefusalForbidden, fmt.Sprintf("%s refused that: %v", name, err))
 	case errors.Is(err, pages.ErrTitleTaken):
-		return fmt.Sprintf("%v\n\nThat page already exists — read it with "+
-			"get_page and edit it with save_page rather than writing a second "+
-			"page on the same subject.", err)
+		return refused(tools.RefusalExists, fmt.Sprintf("%v\n\nThat page already "+
+			"exists — read it with get_page and edit it with save_page rather "+
+			"than writing a second page on the same subject.", err))
 	case errors.Is(err, pages.ErrStaleVersion):
-		return fmt.Sprintf("%v\n\nRead the page again with get_page, re-apply "+
-			"your change on top of what it says now, and save with the version "+
-			"you just read.", err)
+		return refused(tools.RefusalStaleVersion, fmt.Sprintf("%v\n\nRead the "+
+			"page again with get_page, re-apply your change on top of what it "+
+			"says now, and save with the version you just read.", err))
 	case errors.Is(err, pages.ErrConflict):
-		return fmt.Sprintf("%s could not land: %v. Somebody else is editing "+
-			"this page. Read it again before retrying.", name, err)
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
+			"%v. Somebody else is editing this page. Read it again before "+
+			"retrying.", name, err))
 	case errors.Is(err, pages.ErrNotFound):
-		return fmt.Sprintf("%s: %v", name, err)
+		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
 	}
-	return fmt.Sprintf("%s did not land (%v). The change was NOT made — do not "+
-		"report it as done.", name, err)
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%v). "+
+		"The change was NOT made — do not report it as done.", name, err))
+}
+
+// pageReadFailure explains a knowledge-base read that could not be served.
+//
+// ITS OWN SENTENCE rather than [readFailure]'s, which told a model reading a
+// PAGE that it "could not read the tracker" — a different store, and advice
+// ("do not conclude the item or the list does not exist") about objects the
+// call never asked for. The rule is the tracker read's, though: never "nothing
+// found", and [tools.RefusalUnavailable] rather than not-found.
+func pageReadFailure(name string, err error) tools.Result {
+	return refused(tools.RefusalUnavailable, fmt.Sprintf("%s could not read "+
+		"the knowledge base right now (%v). This is NOT an empty result — do "+
+		"not conclude the page does not exist. Try again, or say you could "+
+		"not check.", name, err))
 }

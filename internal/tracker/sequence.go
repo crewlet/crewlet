@@ -182,9 +182,9 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 
 	switch {
 	case task.ID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a create names no task id")
+		return WriteResult{}, invalid("tracker: a create names no task id")
 	case task.Project == "":
-		return WriteResult{}, fmt.Errorf("tracker: task %s names no project "+
+		return WriteResult{}, invalid("tracker: task %s names no project "+
 			"— a task's scope path sits under its project's, so one without a "+
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
@@ -353,7 +353,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
 	if k < 1 {
-		return 0, statelog.Result{}, fmt.Errorf("tracker: a key mint takes %d "+
+		return 0, statelog.Result{}, invalid("tracker: a key mint takes %d "+
 			"numbers, and a mint of none moves the counter for nothing", k)
 	}
 	subject := CounterSubject(project)
@@ -458,7 +458,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, fmt.Errorf("tracker: project %s is not on this "+
 			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return settledCreate{}, fmt.Errorf("tracker: project %s is archived, so "+
+		return settledCreate{}, invalid("tracker: project %s is archived, so "+
 			"it takes no new work; unarchive it first", task.Project)
 	}
 	if err = declaredType(ctx, tx, task); err != nil {
@@ -498,7 +498,7 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 	for _, t := range EffectiveTypes(catalogue.Types) {
 		if t.Archived {
 			if t.Slug == task.Type {
-				return fmt.Errorf("tracker: task type %q is archived, so no new "+
+				return invalid("tracker: task type %q is archived, so no new "+
 					"work is filed under it — the tasks already under it keep "+
 					"it", task.Type)
 			}
@@ -510,7 +510,7 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 		live = append(live, t.Slug)
 	}
 	sort.Strings(live)
-	return fmt.Errorf("tracker: %q is not a task type this company declares — "+
+	return invalid("tracker: %q is not a task type this company declares — "+
 		"the types are %v, and a new one is declared in the workspace "+
 		"catalogue rather than invented at the create", task.Type, live)
 }
@@ -561,7 +561,7 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		return nil
 	}
 	sort.Strings(missing)
-	return fmt.Errorf("tracker: a %s in project %s requires %v, which this task "+
+	return invalid("tracker: a %s in project %s requires %v, which this task "+
 		"does not set", task.Type, project.Key, missing)
 }
 
@@ -612,11 +612,11 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 
 	switch {
 	case parentID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion names no parent")
+		return WriteResult{}, invalid("tracker: a promotion names no parent")
 	case itemID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion names no item")
+		return WriteResult{}, invalid("tracker: a promotion names no item")
 	case subtask.ID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion mints no subtask "+
+		return WriteResult{}, invalid("tracker: a promotion mints no subtask "+
 			"id — it is a uuid5 over item %s, which is what makes a retry "+
 			"re-derive the same subtask rather than a second one", itemID)
 	}
@@ -641,13 +641,13 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 				return fmt.Errorf("tracker: parent task %s is not on this "+
 					"node: %w", parentID, statelog.ErrUnavailable)
 			case current.Removed != nil:
-				return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
+				return invalid("tracker: task %s was removed by %s at %s; "+
 					"restore it before promoting anything out of it",
 					parentID, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
 			}
 			if _, _, found := findItem(current, itemID); !found {
-				return fmt.Errorf("tracker: task %s has no checklist item %s",
+				return invalid("tracker: task %s has no checklist item %s",
 					parentID, itemID)
 			}
 			parent = current
@@ -846,9 +846,9 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	switch {
 	case taskID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no task")
+		return WriteResult{}, invalid("tracker: a cross-project move names no task")
 	case target == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no project")
+		return WriteResult{}, invalid("tracker: a cross-project move names no project")
 	}
 	claim, err := w.hold(ctx, moveClaim(taskID))
 	if err != nil {
@@ -875,11 +875,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				taskID, statelog.ErrUnavailable)
 		case current.Parent != nil && *current.Parent != "":
-			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
+			return invalid("tracker: task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Project == target:
-			return fmt.Errorf("tracker: task %s is already in %s", taskID, target)
+			return invalid("tracker: task %s is already in %s", taskID, target)
 		}
 		root = current
 		project, held, err := readProject(ctx, tx, target)
@@ -890,7 +890,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: project %s is not on this node: %w",
 				target, statelog.ErrUnavailable)
 		case project.Archived:
-			return fmt.Errorf("tracker: project %s is archived, so nothing "+
+			return invalid("tracker: project %s is archived, so nothing "+
 				"moves into it", target)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -903,7 +903,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 	if len(subtree) > MaxDescendants {
-		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
+		return WriteResult{}, invalid("tracker: task %s has %d descendants "+
 			"and a move carries at most %d", taskID, len(subtree), MaxDescendants)
 	}
 
@@ -1070,11 +1070,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 
 	switch {
 	case duplicate == "":
-		return WriteResult{}, fmt.Errorf("tracker: a merge names no duplicate")
+		return WriteResult{}, invalid("tracker: a merge names no duplicate")
 	case into == "":
-		return WriteResult{}, fmt.Errorf("tracker: a merge names no canonical task")
+		return WriteResult{}, invalid("tracker: a merge names no canonical task")
 	case duplicate == into:
-		return WriteResult{}, fmt.Errorf("tracker: task %s cannot be a "+
+		return WriteResult{}, invalid("tracker: task %s cannot be a "+
 			"duplicate of itself", duplicate)
 	}
 	claim, err := w.hold(ctx, mergeClaim(duplicate))
@@ -1098,7 +1098,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				duplicate, statelog.ErrUnavailable)
 		case current.Removed != nil:
-			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
+			return invalid("tracker: task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
 				current.Removed.By, current.Removed.At.Format(time.RFC3339))
 		}
@@ -1235,13 +1235,13 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 
 	switch {
 	case len(ids) == 0:
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names no task")
+		return WriteResult{}, invalid("tracker: a bulk edit names no task")
 	case len(ids) > MaxBulkTasks:
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names %d tasks "+
+		return WriteResult{}, invalid("tracker: a bulk edit names %d tasks "+
 			"and one call carries at most %d — split it, and the second call "+
 			"waits for the first to apply", len(ids), MaxBulkTasks)
 	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a bulk edit names no project")
+		return WriteResult{}, invalid("tracker: a bulk edit names no project")
 	}
 
 	// DISTINCT SUBJECTS, in the caller's own order. One id named twice is
@@ -1265,7 +1265,7 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 		return WriteResult{}, fmt.Errorf("tracker: encode the bulk patch: %w", err)
 	}
 	if total := len(body) * len(subjects); total > MaxBulkBytes {
-		return WriteResult{}, fmt.Errorf("tracker: this patch over %d tasks "+
+		return WriteResult{}, invalid("tracker: this patch over %d tasks "+
 			"writes %d bytes of commits and a bulk edit carries at most %d — "+
 			"the ceiling is on what the batch APPLIES, so a large patch takes "+
 			"fewer tasks per call", len(subjects), total, MaxBulkBytes)

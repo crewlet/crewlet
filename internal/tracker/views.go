@@ -155,7 +155,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
 						"is protected and belongs to %s — ask them to change "+
 						"it, or save your own copy: %w",
-						view.ID, current.Owner, statelog.ErrConflict)
+						view.ID, current.Owner, ErrForbidden)
 				}
 				// THE CREATION FACTS ARE THE STORED ROW'S, never the
 				// caller's. A save that carried them would let a
@@ -210,19 +210,19 @@ func checkView(view *View) error {
 	view.Name = strings.TrimSpace(view.Name)
 	switch {
 	case view.ID == "":
-		return fmt.Errorf("tracker: a view write names no view id")
+		return invalid("tracker: a view write names no view id")
 	case view.Name == "":
-		return fmt.Errorf("tracker: view %s has no name, and a tab with no "+
+		return invalid("tracker: view %s has no name, and a tab with no "+
 			"label is one nobody can pick", view.ID)
 	case len(view.Name) > MaxViewName:
-		return fmt.Errorf("tracker: view %s's name is %d bytes and the "+
+		return invalid("tracker: view %s's name is %d bytes and the "+
 			"maximum is %d — shorten the name rather than having it cut",
 			view.ID, len(view.Name), MaxViewName)
 	case !view.Type.Valid():
-		return fmt.Errorf("tracker: %q is not a view shape — the shapes are "+
+		return invalid("tracker: %q is not a view shape — the shapes are "+
 			"%s", view.Type, strings.Join(ViewTypeNames(), ", "))
 	case !ValidContainerKind(view.Container.Kind):
-		return fmt.Errorf("tracker: %q is not a container a view can belong "+
+		return invalid("tracker: %q is not a container a view can belong "+
 			"to — the four are %s, %s, %s and %s", view.Container.Kind,
 			ContainerWorkspace, ContainerProject, ContainerUnit, ContainerPerson)
 	case view.Container.Kind == ContainerWorkspace && view.Container.ID != "":
@@ -230,25 +230,25 @@ func checkView(view *View) error {
 		// has none in the scope grammar. An id here would make two
 		// spellings of the top of the company, and a strip read with
 		// the other spelling would come back empty.
-		return fmt.Errorf("tracker: view %s names workspace container %q — the "+
+		return invalid("tracker: view %s names workspace container %q — the "+
 			"workspace is the top of the company and carries no id",
 			view.ID, view.Container.ID)
 	case view.Container.Kind != ContainerWorkspace && view.Container.ID == "":
-		return fmt.Errorf("tracker: view %s names a %s container with no id — "+
+		return invalid("tracker: view %s names a %s container with no id — "+
 			"a view belongs to one project, unit or person, and one belonging "+
 			"to nothing appears in no strip", view.ID, view.Container.Kind)
 	case len(view.Params) > MaxViewParamKeys:
 		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
 		// filter is [ParseQuery] below, which rejects an unknown
 		// parameter rather than ignoring it.
-		return fmt.Errorf("tracker: view %s carries %d query parameters and "+
+		return invalid("tracker: view %s carries %d query parameters and "+
 			"the maximum is %d", view.ID, len(view.Params), MaxViewParamKeys)
 	case paramsBytes(view.Params) > MaxViewParamsBytes:
 		// AND ONE ON ITS WEIGHT, because thirty-two keys say nothing
 		// about the size of a `q` or an `any` branch: one record with a
 		// megabyte of saved query is a record every node stores, ships
 		// in every snapshot and re-reads on every replay.
-		return fmt.Errorf("tracker: view %s's query is %d bytes and the "+
+		return invalid("tracker: view %s's query is %d bytes and the "+
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
 	}
@@ -258,7 +258,7 @@ func checkView(view *View) error {
 	// seat's own read — see [expansionRefused].
 	for _, key := range expansionRefused {
 		if _, held := view.Params[key]; held {
-			return fmt.Errorf("tracker: view %s carries %q, which a saved view "+
+			return invalid("tracker: view %s carries %q, which a saved view "+
 				"cannot: it is about the CALLER's own read — where it resumes, "+
 				"how fresh it must be, or which view it came from — rather "+
 				"than about the rows", view.ID, key)
@@ -272,7 +272,7 @@ func checkView(view *View) error {
 		params[key] = value
 	}
 	if _, err := ParseQuery(params, time.Now().UTC(), time.UTC); err != nil {
-		return fmt.Errorf("tracker: view %s's query does not parse, so saving "+
+		return invalid("tracker: view %s's query does not parse, so saving "+
 			"it would store a view nobody can open: %w", view.ID, err)
 	}
 	return nil

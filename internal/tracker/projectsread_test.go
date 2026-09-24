@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -653,10 +654,19 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 		t.Fatalf("for_type=bug carries %v, want both the bug field and the "+
 			"one that applies to every type", seen)
 	}
-	if _, err := r.reader.Project(t.Context(), tracker.ProjectDetailQuery{
+	_, err := r.reader.Project(t.Context(), tracker.ProjectDetailQuery{
 		Project: "ENG", ForType: "nonesuch", Level: statelog.ReadStale,
-	}); err == nil {
+	})
+	switch {
+	case err == nil:
 		t.Fatal("an unknown for_type answered — the refusal lists the types")
+	case errors.Is(err, tracker.ErrNoProject):
+		// THE PROJECT EXISTS. Classed as a missing project, every
+		// reader told its caller ENG was gone — a 404 on the query
+		// surface — when the argument to fix was the type.
+		t.Fatalf("an unknown for_type was refused as a missing project: %v", err)
+	case !errors.Is(err, tracker.ErrNoType):
+		t.Fatalf("an unknown for_type refused with %v, want tracker.ErrNoType", err)
 	}
 }
 

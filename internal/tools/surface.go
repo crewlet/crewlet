@@ -146,6 +146,12 @@ type Call struct {
 	Args   map[string]any
 	Output string
 	Failed bool
+
+	// Refusal is the failure's class, as the returned
+	// [toolloop.ToolResult] carries it: the tool's own for a first-party
+	// tool, the surface's for a call it refused before any tool ran, and
+	// empty for a success or a third-party MCP server's failure.
+	Refusal Refusal
 }
 
 // NewSurface builds a phase surface over a snapshot.
@@ -316,15 +322,21 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		// difference: a name that exists but was not offered is something
 		// to activate, a name that does not exist is something to stop
 		// trying.
-		msg := fmt.Sprintf("Unknown tool: %s", call.Name)
+		//
+		// THE CLASS FOLLOWS THE SAME SPLIT: a name nothing registered is
+		// not_found, and one that exists but was not offered to THIS
+		// surface is forbidden — the call is refused for where it was
+		// made rather than for what it named.
+		msg, class := fmt.Sprintf("Unknown tool: %s", call.Name), RefusalNotFound
 		if known {
 			msg = fmt.Sprintf("Tool %s is not active on this surface — activate it first.", call.Name)
+			class = RefusalForbidden
 		}
-		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true})
+		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true, Refusal: class})
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", outcomeFor(known)))
-		return toolloop.ToolResult{Output: msg, Failed: true}, nil
+		return toolloop.ToolResult{Output: msg, Failed: true, Refusal: class}, nil
 	}
 
 	if s.guard != nil {
@@ -334,11 +346,16 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 			// reason and can act on it, and the ledger shows an operator
 			// that the turn spent a round here rather than that the tool
 			// silently did nothing.
-			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true})
+			// FORBIDDEN, because the guard refuses the call as made
+			// here and now (a skill not yet loaded), never its
+			// arguments.
+			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true,
+				Refusal: RefusalForbidden})
 			span.SetAttributes(
 				attribute.Bool("crewlet.tool_failed", true),
 				attribute.String("crewlet.tool_outcome", "refused_by_guard"))
-			return toolloop.ToolResult{Output: reason, Failed: true}, nil
+			return toolloop.ToolResult{Output: reason, Failed: true,
+				Refusal: RefusalForbidden}, nil
 		}
 	}
 
@@ -357,7 +374,8 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
+	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
+		Refusal: res.Refusal})
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
@@ -368,7 +386,7 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		attribute.Bool("crewlet.tool_failed", res.Failed),
 		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
 	return toolloop.ToolResult{
-		Output: res.Output, Failed: res.Failed,
+		Output: res.Output, Failed: res.Failed, Refusal: res.Refusal,
 		Suspend: res.Suspend, SuspendPayload: res.Payload,
 	}, nil
 }

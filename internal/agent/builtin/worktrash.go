@@ -101,9 +101,9 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RemoveWorkItemTool, err)), nil
+		return readFailure(tracker.RemoveWorkItemTool, err), nil
 	}
 
 	after := before.Task
@@ -120,7 +120,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RemoveWorkItemTool, err)), nil
+		return writeFailure(tracker.RemoveWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{
@@ -184,13 +184,15 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
+		return readFailure(tracker.RestoreWorkItemTool, err), nil
 	}
 	if before.Task.Removed == nil {
-		return failed(fmt.Sprintf("%s is not in the trash, so there is "+
-			"nothing to restore.", before.Task.Key)), nil
+		// CONFLICT: the item's state, not the argument, is what refuses
+		// this — somebody restored it between the caller's read and now.
+		return refused(tools.RefusalConflict, fmt.Sprintf("%s is not in the "+
+			"trash, so there is nothing to restore.", before.Task.Key)), nil
 	}
 
 	after := before.Task
@@ -202,7 +204,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RestoreWorkItemTool, err)), nil
+		return writeFailure(tracker.RestoreWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{

@@ -660,7 +660,7 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 				"it suspends the caller's own loop."), nil
 		}
 
-		s.appendCall(ctx, name, args, res.Output, res.Failed)
+		s.appendCall(ctx, name, args, res.Output, res.Failed, res.Refusal)
 		// THE CALL MAY HAVE BEEN AN ACTIVATION. See [Session.sync].
 		s.sync()
 		return &mcp.CallToolResult{
@@ -678,11 +678,12 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 // the whole delivery machinery exists to prevent. A lost ledger row costs the
 // reviewer one line of evidence after a restart; a duplicated side effect
 // costs somebody two identical messages.
-func (s *Session) appendCall(ctx context.Context, name string, args map[string]any, out string, failed bool) {
+func (s *Session) appendCall(ctx context.Context, name string, args map[string]any,
+	out string, failed bool, refusal tools.Refusal) {
 	if s.Ledger == nil {
 		return
 	}
-	call := tools.Call{Name: name, Args: args, Output: out, Failed: failed}
+	call := tools.Call{Name: name, Args: args, Output: out, Failed: failed, Refusal: refusal}
 	if err := s.Ledger.Append(ctx, s.RunID, call); err != nil {
 		log.WarnContext(ctx, "mcp_bridge_ledger_append_failed",
 			"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)

@@ -48,9 +48,10 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 			if err == nil {
 				t.Fatalf("bob wrote ana's %s", name)
 			}
-			if !errors.Is(err, statelog.ErrConflict) {
-				t.Fatalf("the refusal is %v, want an ErrConflict a caller can "+
-					"branch on", err)
+			if !errors.Is(err, tracker.ErrForbidden) {
+				t.Fatalf("the refusal is %v, want an ErrForbidden a caller can "+
+					"branch on — not a conflict, which invites a retry that "+
+					"cannot land", err)
 			}
 		})
 	}
@@ -84,8 +85,8 @@ func TestALeadsPriorityWriteSaysWhoSetIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("a colleague set somebody else's priorities")
 	}
-	if !errors.Is(err, statelog.ErrConflict) {
-		t.Fatalf("the refusal is %v, want an ErrConflict", err)
+	if !errors.Is(err, tracker.ErrForbidden) {
+		t.Fatalf("the refusal is %v, want an ErrForbidden", err)
 	}
 
 	if _, err := bob.WritePriorities(t.Context(), "op-lead", "ana",

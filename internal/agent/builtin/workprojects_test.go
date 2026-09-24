@@ -2,11 +2,13 @@ package builtin_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -266,5 +268,42 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	if !got.Failed || !strings.Contains(got.Output, "RFC3339") {
 		t.Errorf("an unparseable `since` gave %q, want a refusal naming the "+
 			"two shapes", got.Output)
+	}
+}
+
+// A MISTYPED PROJECT KEY IS NOT A READ FAILURE. It used to be reported as one
+// — "could not read the tracker … do not conclude the item does not exist" —
+// which told a model that typed ENGG for ENG to keep believing in ENGG, and
+// dropped the reader's own sentence naming the nearest keys. And a `for_type`
+// the company does not file is the ARGUMENT's fault, about a project that is
+// right there.
+func TestDescribingAProjectThatIsNotThereSaysSo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want tools.Refusal
+		says string
+	}{
+		{"no project", fmt.Errorf("tracker: no project \"ENGG\" — did you mean ENG: %w",
+			tracker.ErrNoProject), tools.RefusalNotFound, "did you mean ENG"},
+		{"no type", fmt.Errorf("tracker: no type \"epic\" — this company files bug, task: %w",
+			tracker.ErrNoType), tools.RefusalInvalid, "this company files bug, task"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			trk := newFakeTracker()
+			trk.readErr = c.err
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+			got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
+				"project": "ENGG",
+			})
+			if !got.Failed || got.Refusal != c.want {
+				t.Fatalf("answered failed %v class %q, want %q", got.Failed,
+					got.Refusal, c.want)
+			}
+			if !strings.Contains(got.Output, c.says) || strings.Contains(got.Output, "could not read") {
+				t.Errorf("the refusal %q is not the reader's own sentence", got.Output)
+			}
+		})
 	}
 }

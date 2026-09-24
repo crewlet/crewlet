@@ -91,10 +91,10 @@ func (t *refineSkill) Call(ctx context.Context, args map[string]any) (tools.Resu
 func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	handle := turn.Handle()
 	if handle == "" {
-		return failed("refine_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "refine_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return failed("Skill synthesis is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
 	}
 
 	name := strings.TrimSpace(argString(args, "skill_name"))
@@ -134,10 +134,10 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	// agent rewrite another's learned procedure with nothing in the way.
 	sk, found, err := t.skills.Get(ctx, handle, name)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
 	}
 	if !found {
-		return failed(fmt.Sprintf(
+		return refused(tools.RefusalNotFound, fmt.Sprintf(
 			"You have no synthesized skill called %q, so there is nothing to "+
 				"refine. Skills are distilled from your own completed turns.",
 			clip(name))), nil
@@ -158,7 +158,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		At:           time.Now().UTC(),
 	})
 	if err != nil {
-		return failed(fmt.Sprintf("Could not refine %q: %v", clip(name), err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not refine %q: %v", clip(name), err)), nil
 	}
 	// The VERSION is what makes successive refinements distinguishable, and
 	// the kind tells a success annotation from a counter-example. Published

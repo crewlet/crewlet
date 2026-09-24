@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -206,6 +207,11 @@ func TestTheCoercionTable(t *testing.T) {
 			if len(c.refused) > 0 {
 				if err == nil {
 					t.Fatalf("%s was accepted as %s", c.in, got.Value)
+				}
+				// MARKED, so a surface classes it as the caller's to
+				// fix — unmarked, it reads as the node's failure.
+				if !errors.Is(err, ErrInvalid) {
+					t.Errorf("the refusal %q is not marked ErrInvalid", err)
 				}
 				for _, want := range c.refused {
 					if !strings.Contains(err.Error(), want) {

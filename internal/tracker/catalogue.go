@@ -3,7 +3,6 @@ package tracker
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"time"
 
@@ -173,7 +172,7 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 // checkTypes refuses a catalogue a create could not be validated against.
 func checkTypes(types []TaskType) ([]TaskType, error) {
 	if len(types) > MaxTypes {
-		return nil, fmt.Errorf("tracker: the type catalogue carries %d types "+
+		return nil, invalid("tracker: the type catalogue carries %d types "+
 			"and the maximum is %d", len(types), MaxTypes)
 	}
 	out := make([]TaskType, 0, len(types))
@@ -183,24 +182,24 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 		t.Name = strings.TrimSpace(t.Name)
 		switch {
 		case t.Slug == "":
-			return nil, fmt.Errorf("tracker: a task type has no slug — the slug " +
+			return nil, invalid("tracker: a task type has no slug — the slug " +
 				"is what a task's `type` field holds and what a model types")
 		case !ValidSlug(t.Slug):
-			return nil, fmt.Errorf("tracker: %q is not a slug — a type's slug is "+
+			return nil, invalid("tracker: %q is not a slug — a type's slug is "+
 				"what a query and a task row both carry", t.Slug)
 		case seen[t.Slug]:
 			// TWO TYPES UNDER ONE SLUG collide on the table's own
 			// primary key, so the apply would write one and drop the
 			// other with nothing to say so.
-			return nil, fmt.Errorf("tracker: the type catalogue names %q twice",
+			return nil, invalid("tracker: the type catalogue names %q twice",
 				t.Slug)
 		case t.Name == "":
-			return nil, fmt.Errorf("tracker: type %s has no name", t.Slug)
+			return nil, invalid("tracker: type %s has no name", t.Slug)
 		case len(t.Name) > MaxTypeName:
-			return nil, fmt.Errorf("tracker: type %s's name is %d bytes and the "+
+			return nil, invalid("tracker: type %s's name is %d bytes and the "+
 				"maximum is %d", t.Slug, len(t.Name), MaxTypeName)
 		case len(t.Description) > MaxTypeDescription:
-			return nil, fmt.Errorf("tracker: type %s's description is %d bytes "+
+			return nil, invalid("tracker: type %s's description is %d bytes "+
 				"and the maximum is %d", t.Slug, len(t.Description),
 				MaxTypeDescription)
 		}
@@ -271,7 +270,7 @@ func stampFields(current, post []FieldDef, actor string, at time.Time) []FieldDe
 // checkFields refuses a declaration a value could not be validated against.
 func checkFields(fields []FieldDef) error {
 	if len(fields) > MaxFieldsPerDocument {
-		return fmt.Errorf("tracker: the field catalogue declares %d fields and "+
+		return invalid("tracker: the field catalogue declares %d fields and "+
 			"one document's maximum is %d — a task's effective set is the "+
 			"workspace's plus its project's, so this bound is half of it",
 			len(fields), MaxFieldsPerDocument)
@@ -289,14 +288,14 @@ func checkFields(fields []FieldDef) error {
 			// field MOVE between the workspace and a project keeping
 			// every stored value. A declaration with none would orphan
 			// them all.
-			return fmt.Errorf("tracker: field %q has no id — values are keyed "+
+			return invalid("tracker: field %q has no id — values are keyed "+
 				"by id so a field can move between the workspace and a "+
 				"project keeping them", f.Slug)
 		case ids[f.ID]:
-			return fmt.Errorf("tracker: the field catalogue names id %s twice",
+			return invalid("tracker: the field catalogue names id %s twice",
 				f.ID)
 		case f.Slug == "" || !ValidSlug(f.Slug):
-			return fmt.Errorf("tracker: %q is not a field slug — the slug is "+
+			return invalid("tracker: %q is not a field slug — the slug is "+
 				"what `f.<slug>` resolves and what a model types", f.Slug)
 		case !f.Archived && slugs[f.Slug]:
 			// A COLLIDING SLUG makes `f.<slug>` ambiguous, and the
@@ -310,16 +309,16 @@ func checkFields(fields []FieldDef) error {
 			// slug, because the slug is the word the company uses.
 			// Nothing resolves against an archived field: its values
 			// left the value table when it was archived.
-			return fmt.Errorf("tracker: the field catalogue declares %q twice, "+
+			return invalid("tracker: the field catalogue declares %q twice, "+
 				"so f.%s would resolve to whichever row was read first "+
 				"(an archived declaration does not count — its slug is free)",
 				f.Slug, f.Slug)
 		case f.Name == "":
-			return fmt.Errorf("tracker: field %s has no name", f.Slug)
+			return invalid("tracker: field %s has no name", f.Slug)
 		case !f.Type.Valid():
-			return fmt.Errorf("tracker: %q is not a field type", f.Type)
+			return invalid("tracker: %q is not a field type", f.Type)
 		case len(f.Config.Options) > MaxOptions:
-			return fmt.Errorf("tracker: field %s declares %d options and the "+
+			return invalid("tracker: field %s declares %d options and the "+
 				"maximum is %d", f.Slug, len(f.Config.Options), MaxOptions)
 		}
 		if err := checkOptions(f); err != nil {
@@ -335,7 +334,7 @@ func checkFields(fields []FieldDef) error {
 		options += len(f.Config.Options)
 	}
 	if options > MaxOptionsPerDocument {
-		return fmt.Errorf("tracker: the field catalogue declares %d options "+
+		return invalid("tracker: the field catalogue declares %d options "+
 			"across every field and the maximum is %d", options,
 			MaxOptionsPerDocument)
 	}
@@ -361,27 +360,27 @@ func checkOptions(f *FieldDef) error {
 		o.Name = strings.TrimSpace(o.Name)
 		switch {
 		case o.ID == "":
-			return fmt.Errorf("tracker: an option of field %s has no id — a "+
+			return invalid("tracker: an option of field %s has no id — a "+
 				"stored value holds the id, so a renamed option keeps every "+
 				"task that chose it", f.Slug)
 		case ids[o.ID]:
-			return fmt.Errorf("tracker: field %s names option id %s twice",
+			return invalid("tracker: field %s names option id %s twice",
 				f.Slug, o.ID)
 		case o.Slug == "" || !ValidSlug(o.Slug):
-			return fmt.Errorf("tracker: %q is not an option slug on field %s",
+			return invalid("tracker: %q is not an option slug on field %s",
 				o.Slug, f.Slug)
 		case !o.Archived && slugs[o.Slug]:
 			// AN ARCHIVED OPTION'S SLUG IS FREE, on the field's own
 			// rule above and for the same reason: nothing resolves
 			// `f.<slug>=<option>` against a retired choice.
-			return fmt.Errorf("tracker: field %s declares option %q twice "+
+			return invalid("tracker: field %s declares option %q twice "+
 				"(an archived one does not count — its slug is free)",
 				f.Slug, o.Slug)
 		case o.Name == "":
-			return fmt.Errorf("tracker: option %s of field %s has no name",
+			return invalid("tracker: option %s of field %s has no name",
 				o.Slug, f.Slug)
 		case len(o.Name) > MaxOptionName:
-			return fmt.Errorf("tracker: option %s of field %s has a %d-byte "+
+			return invalid("tracker: option %s of field %s has a %d-byte "+
 				"name and the maximum is %d", o.Slug, f.Slug, len(o.Name),
 				MaxOptionName)
 		}
@@ -411,7 +410,7 @@ func checkOptions(f *FieldDef) error {
 		switch f.Type {
 		case FieldDropdown, FieldLabels, FieldRelationship:
 		default:
-			return fmt.Errorf("tracker: field %s is a %s and declares %d "+
+			return invalid("tracker: field %s is a %s and declares %d "+
 				"options — only %s, %s and %s have them", f.Slug, f.Type,
 				len(f.Config.Options), FieldDropdown, FieldLabels,
 				FieldRelationship)
@@ -436,7 +435,7 @@ func archiveIsOneWay(current, post []FieldDef) error {
 	}
 	for _, f := range post {
 		if slug, was := archived[f.ID]; was && !f.Archived {
-			return fmt.Errorf("tracker: field %s (%s) is archived, and an "+
+			return invalid("tracker: field %s (%s) is archived, and an "+
 				"archive is one-way: its values left the value table, so "+
 				"bringing the id back would re-admit them against a "+
 				"definition nobody has seen since. Declare a new field with a "+

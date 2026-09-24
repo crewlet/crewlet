@@ -86,7 +86,7 @@ func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// that mistyped a key and got back "" would read it as a skill
 		// with nothing in it and proceed, which is exactly the state the
 		// required-skill guard exists to prevent.
-		return failed(fmt.Sprintf("No tool skill %q. Use a key exactly as "+
+		return refused(tools.RefusalNotFound, fmt.Sprintf("No tool skill %q. Use a key exactly as "+
 			"your catalogue lists it.", key)), nil
 	}
 	// The REGISTRY kind, which is the whole reason SkillSourceKind has two

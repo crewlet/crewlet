@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -180,7 +179,7 @@ func checkTextCaps(id string, title, body, comment *string) error {
 		if c.value == nil || len(*c.value) <= c.limit {
 			continue
 		}
-		return fmt.Errorf("tracker: the %s on task %s is %d bytes and the "+
+		return invalid("tracker: the %s on task %s is %d bytes and the "+
 			"maximum is %d — it is refused rather than cut, because a value "+
 			"silently truncated is one somebody will look for later; shorten "+
 			"it, or put the long form where it belongs (a page, or an "+

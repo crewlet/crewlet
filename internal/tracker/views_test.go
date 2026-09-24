@@ -232,8 +232,8 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	if err == nil {
 		t.Fatal("bob edited a view protected for ana")
 	}
-	if !errors.Is(err, statelog.ErrConflict) {
-		t.Fatalf("the refusal is %v, want an ErrConflict a caller can branch on", err)
+	if !errors.Is(err, tracker.ErrForbidden) {
+		t.Fatalf("the refusal is %v, want an ErrForbidden a caller can branch on", err)
 	}
 	if !strings.Contains(err.Error(), "ana") {
 		t.Fatalf("the refusal %q does not name whom to ask", err)

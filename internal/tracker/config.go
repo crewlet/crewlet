@@ -1,7 +1,6 @@
 package tracker
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 )
@@ -96,13 +95,13 @@ func checkConfig(f *FieldDef) error {
 	case c.Unit != "" && !numeric:
 		return unusable(f, "a unit", "number, progress and rollup")
 	case len(c.Unit) > MaxUnit:
-		return fmt.Errorf("tracker: field %s's unit is %d bytes and the maximum "+
+		return invalid("tracker: field %s's unit is %d bytes and the maximum "+
 			"is %d — a unit is rendered beside every value on every row, and "+
 			"anything longer is a label", f.Slug, len(c.Unit), MaxUnit)
 	case c.Precision != 0 && !numeric:
 		return unusable(f, "a precision", "number, progress and rollup")
 	case c.Precision < 0 || c.Precision > MaxPrecision:
-		return fmt.Errorf("tracker: field %s declares %d decimal places and the "+
+		return invalid("tracker: field %s declares %d decimal places and the "+
 			"range is 0 to %d", f.Slug, c.Precision, MaxPrecision)
 	case (c.Min != nil || c.Max != nil) && !numeric:
 		return unusable(f, "a minimum or maximum", "number, progress and rollup")
@@ -110,7 +109,7 @@ func checkConfig(f *FieldDef) error {
 		// A RANGE NO VALUE SATISFIES is a field nothing can ever be
 		// written to, refused at the declaration rather than at every
 		// write that fails against it.
-		return fmt.Errorf("tracker: field %s has a minimum of %v above its "+
+		return invalid("tracker: field %s has a minimum of %v above its "+
 			"maximum of %v, so no value could satisfy it", f.Slug, *c.Min, *c.Max)
 	case c.Time && f.Type != FieldDate:
 		return unusable(f, "a time flag", "date")
@@ -145,18 +144,18 @@ func checkProgress(f *FieldDef) error {
 		return unusable(f, "a progress mode or tracking list", "progress")
 	}
 	if c.Progress != "" && !slices.Contains(ProgressModes, c.Progress) {
-		return fmt.Errorf("tracker: field %s is filled %q and the modes are: %s",
+		return invalid("tracker: field %s is filled %q and the modes are: %s",
 			f.Slug, clip(c.Progress), strings.Join(ProgressModes, ", "))
 	}
 	seen := map[string]bool{}
 	for _, source := range c.Tracking {
 		switch {
 		case !slices.Contains(TrackingSources, source):
-			return fmt.Errorf("tracker: field %s tracks %q and the sources "+
+			return invalid("tracker: field %s tracks %q and the sources "+
 				"are: %s", f.Slug, clip(source),
 				strings.Join(TrackingSources, ", "))
 		case seen[source]:
-			return fmt.Errorf("tracker: field %s tracks %q twice", f.Slug, source)
+			return invalid("tracker: field %s tracks %q twice", f.Slug, source)
 		}
 		seen[source] = true
 	}
@@ -173,7 +172,7 @@ func checkProgress(f *FieldDef) error {
 		// subtasks, checklists, asked comments — are rows a READ would
 		// have to aggregate per task, which is a decision about a
 		// board's cost rather than a line of missing code.
-		return fmt.Errorf("tracker: field %s is filled automatically and this "+
+		return invalid("tracker: field %s is filled automatically and this "+
 			"build computes no automatic progress — the value would be "+
 			"whatever somebody last typed into it. Set `progress: manual` "+
 			"and write the number, or leave the field out", f.Slug)
@@ -196,7 +195,7 @@ func checkProgress(f *FieldDef) error {
 		// AFTER the automatic refusal, so a field that declares both is
 		// told about the mode — the setting it would have to change
 		// first — rather than about the list under it.
-		return fmt.Errorf("tracker: field %s tracks %s and nothing counts "+
+		return invalid("tracker: field %s tracks %s and nothing counts "+
 			"them — a tracking list is what an AUTOMATIC progress field "+
 			"counts, and this build computes no automatic progress. Drop "+
 			"`tracking` and write the number", f.Slug,
@@ -228,15 +227,15 @@ func checkRollup(f *FieldDef) error {
 	// validate.
 	switch {
 	case r.Source == "":
-		return fmt.Errorf("tracker: field %s is a rollup and names nothing to "+
+		return invalid("tracker: field %s is a rollup and names nothing to "+
 			"gather across — the sources are %s, or a relationship field's id",
 			f.Slug, strings.Join(RollupSources, ", "))
 	case r.Field == "":
-		return fmt.Errorf("tracker: field %s is a rollup and names no field to "+
+		return invalid("tracker: field %s is a rollup and names no field to "+
 			"gather — the built-in ones are %s, or a field's id",
 			f.Slug, strings.Join(RollupFields, ", "))
 	case !slices.Contains(RollupOps, r.Op):
-		return fmt.Errorf("tracker: field %s rolls up with %q and the "+
+		return invalid("tracker: field %s rolls up with %q and the "+
 			"aggregations are: %s", f.Slug, clip(r.Op),
 			strings.Join(RollupOps, ", "))
 	}
@@ -245,12 +244,12 @@ func checkRollup(f *FieldDef) error {
 	// dates, is a number of microseconds nobody meant.
 	dateField := r.Field == "due" || r.Field == "start"
 	if slices.Contains(DateRollupOps, r.Op) && !dateField {
-		return fmt.Errorf("tracker: field %s takes the %s of %q, and %s applies "+
+		return invalid("tracker: field %s takes the %s of %q, and %s applies "+
 			"to dates — `due` and `start`. Over anything else it is `min` or "+
 			"`max`", f.Slug, r.Op, r.Field, r.Op)
 	}
 	if dateField && !slices.Contains(DateRollupOps, r.Op) && r.Op != "count" {
-		return fmt.Errorf("tracker: field %s takes the %s of %q, which is a "+
+		return invalid("tracker: field %s takes the %s of %q, which is a "+
 			"date — a sum or an average of dates is a number of microseconds "+
 			"nobody meant. Use %s, or `count`",
 			f.Slug, r.Op, r.Field, strings.Join(DateRollupOps, " or "))
@@ -258,11 +257,11 @@ func checkRollup(f *FieldDef) error {
 	// A STATUS GROUP IS A WORD, so the only thing to do with a set of them
 	// is count them.
 	if r.Field == "status_group" && r.Op != "count" {
-		return fmt.Errorf("tracker: field %s takes the %s of the status group, "+
+		return invalid("tracker: field %s takes the %s of the status group, "+
 			"which is a word — the only aggregation over words is `count`",
 			f.Slug, r.Op)
 	}
-	return fmt.Errorf("tracker: field %s declares a rollup and this build "+
+	return invalid("tracker: field %s declares a rollup and this build "+
 		"gathers nothing — the value would be whatever somebody last typed "+
 		"into it, under a name that says it was gathered. Drop the `rollup` "+
 		"block and write the number, or leave the field out", f.Slug)
@@ -270,7 +269,7 @@ func checkRollup(f *FieldDef) error {
 
 // unusable is the shared refusal for a knob on a type that has none.
 func unusable(f *FieldDef, what, types string) error {
-	return fmt.Errorf("tracker: field %s is a %s and carries %s, which only a "+
+	return invalid("tracker: field %s is a %s and carries %s, which only a "+
 		"%s field uses — a setting its type cannot read is one stored, "+
 		"replicated and applied by nothing", f.Slug, f.Type, what, types)
 }
@@ -296,7 +295,7 @@ func checkNames(kind string, names []namedDeclaration) error {
 			continue
 		}
 		if first, clash := seen[norm]; clash {
-			return fmt.Errorf("tracker: %s %s and %s are both named %q, and a "+
+			return invalid("tracker: %s %s and %s are both named %q, and a "+
 				"name is how one is resolved — two that differ only in case or "+
 				"spacing resolve to whichever row was read first",
 				kind, first, one.ident, one.name)

@@ -662,6 +662,10 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		// classification: the refusal names the nearest keys, which is
 		// what a caller who typed one wrong needs.
 		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case errors.Is(err, tracker.ErrNoType):
+		// A BAD PARAMETER, not a missing record: the project is there
+		// and `for_type` is what to change. The refusal lists the types.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, err
 	}
