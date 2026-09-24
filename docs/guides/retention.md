@@ -612,7 +612,12 @@ or the reason it was not written and what to do.
   serving the report has applied every record the gesture wrote and the report
   still disagrees — somebody readmitted the node from the command line straight
   after, say — because that is a later change rather than a report behind; the
-  row then offers the gesture the node's current state calls for.
+  row then offers the gesture the node's current state calls for. Not while
+  that node could not read its evictions, though: a log whose evictions it
+  could not read shows every node as not evicted whatever happened (the report
+  marks that log's row `evictions_unreadable`, and the screen says so above the
+  node block), so the gesture stays on the row until a report whose evictions
+  were read.
 - A **Finish** that is refused — it re-runs the judgement, so a lease listing
   this node cannot read or a node still catching up can refuse it — wrote
   nothing, and the answer the gesture already had stays on screen beside the

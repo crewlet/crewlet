@@ -1256,6 +1256,14 @@ export interface RetentionDomain {
   /** The snapshot loop's OWN skip reason — a different problem from a blocked
    *  trim, with a different remedy, which is why it is its own field. */
   snapshot_blocked_by?: string;
+  /**
+   * The answering node could not read this log's evictions when it assembled
+   * the report — a failed store read, or the replicated estate closed for an
+   * adoption's rename or a shutdown. An unread log contributes no tombstone,
+   * so every node reads as NOT evicted there: a guess, not a fact, and never
+   * proof that a node was readmitted. ABSENT when they were read.
+   */
+  evictions_unreadable?: boolean;
 }
 
 /**

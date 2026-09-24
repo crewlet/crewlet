@@ -9,7 +9,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
-import type { RetentionGateResult, RetentionNode, RetentionReport } from "~/protocol/index.ts";
+import type {
+  RetentionDomain,
+  RetentionGateResult,
+  RetentionNode,
+  RetentionReport,
+} from "~/protocol/index.ts";
 import { Router } from "~/app/router.tsx";
 import { heldGestures, RetentionPanels } from "./Retention.tsx";
 
@@ -34,18 +39,47 @@ const node = (over: Partial<RetentionNode> = {}): RetentionNode => ({
 
 const evicted = { by: "ops", at: "", effective_at: "", effective: true };
 
-function report(nodes: RetentionNode[]): RetentionReport {
+/** One identity-claiming log's row, its evictions read unless it says not. */
+const logRow = (domain: string, over: Partial<RetentionDomain> = {}): RetentionDomain => ({
+  domain,
+  stream: `CREWLET_${domain.toUpperCase()}_LOG`,
+  generation: 1,
+  replay: "strict",
+  first_seq: 1,
+  last_seq: 1,
+  bytes: 0,
+  trim_floor: 0,
+  trim_to: 0,
+  trim_floor_state: "none_at_generation",
+  terms: [],
+  ...over,
+});
+
+/** The two logs every gate gesture writes, both read. */
+const bothLogs = (): RetentionDomain[] => [logRow("tracker"), logRow("pages")];
+
+function report(nodes: RetentionNode[], domains: RetentionDomain[] = bothLogs()): RetentionReport {
   return {
     v: 1,
     node_id: "node-1",
     at: "2026-09-24T00:00:00Z",
-    domains: [],
+    domains,
     nodes,
     register_readable: true,
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
     alarms: [],
   };
+}
+
+/** What the screen holds against a report served by `servedBy`. */
+function held(
+  gestures: Parameters<typeof heldGestures>[0],
+  nodes: RetentionNode[],
+  servedBy?: string,
+  domains: RetentionDomain[] = bothLogs(),
+) {
+  return heldGestures(gestures, { nodes, domains, node_id: servedBy ?? "" });
 }
 
 beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
@@ -120,16 +154,16 @@ test("a held gesture is let go of exactly when the report shows it", () => {
   const gestures = { "node-4:evict": complete, "node-5:evict": partial };
   const nodes = [node({ evicted }), node({ node_id: "node-5", evicted })];
   // node-4's eviction is shown and let go of; node-5's is unfinished and kept.
-  expect(Object.keys(heldGestures(gestures, nodes))).toEqual(["node-5:evict"]);
+  expect(Object.keys(held(gestures, nodes))).toEqual(["node-5:evict"]);
   // A REPORT THAT DOES NOT SHOW IT YET keeps the complete one.
-  expect(Object.keys(heldGestures(gestures, [node(), node({ node_id: "node-5" })]))).toEqual([
+  expect(Object.keys(held(gestures, [node(), node({ node_id: "node-5" })]))).toEqual([
     "node-4:evict",
     "node-5:evict",
   ]);
   // A READMISSION IS SHOWN when the node is no longer evicted.
   const readmitted = { "node-4:readmit": complete };
-  expect(heldGestures(readmitted, [node()])).toEqual({});
-  expect(Object.keys(heldGestures(readmitted, [node({ evicted })]))).toEqual(["node-4:readmit"]);
+  expect(held(readmitted, [node()])).toEqual({});
+  expect(Object.keys(held(readmitted, [node({ evicted })]))).toEqual(["node-4:readmit"]);
 });
 
 /** The serving node's own row, applied through `seq` on both logs. */
@@ -161,7 +195,7 @@ test("a complete eviction somebody else undid is let go of once the report inclu
   const gestures = { "node-4:evict": complete };
   // THE GOLDEN'S RECORDS: the tracker's at 918280002, the pages log's at 4410.
   const past = servingNode({ tracker: 918280010, pages: 4420 });
-  expect(heldGestures(gestures, [node(), past], "node-1")).toEqual({});
+  expect(held(gestures, [node(), past], "node-1")).toEqual({});
   // NOT WHILE THE SERVING NODE IS BEHIND EITHER RECORD — a `pending` record
   // it has not applied is exactly why a report disagrees — nor on another
   // generation's number space, nor when it cannot say where it is.
@@ -175,16 +209,53 @@ test("a complete eviction somebody else undid is let go of once the report inclu
     ["no row of its own", [node()], "node-1"],
     ["no serving node named", [node(), past], undefined],
   ] as const) {
-    expect(Object.keys(heldGestures(gestures, [...nodes], servedBy)), why).toEqual([
-      "node-4:evict",
-    ]);
+    expect(Object.keys(held(gestures, [...nodes], servedBy)), why).toEqual(["node-4:evict"]);
   }
   // AND AN UNFINISHED GESTURE IS NEVER LET GO OF THIS WAY: a request can
   // still finish it.
   const partial = {
     "node-4:evict": { opId: "op", force: false, answer: golden.answers["unknown"] },
   };
-  expect(Object.keys(heldGestures(partial, [node(), past], "node-1"))).toEqual(["node-4:evict"]);
+  expect(Object.keys(held(partial, [node(), past], "node-1"))).toEqual(["node-4:evict"]);
+});
+
+// A NODE THAT COULD NOT READ ITS EVICTIONS PROVES NOTHING BY SHOWING NONE. An
+// unread log contributes no tombstone, so node-4 reads as not evicted there
+// whatever happened — during an adoption's rename, say — and that absence let
+// go of an eviction the operator had just made, offering "Evict…" again: a
+// second record on every log, re-dating the first.
+test("a complete eviction is held while the serving node could not read the evictions", () => {
+  const gestures = {
+    "node-4:evict": { opId: "op", force: false, answer: golden.answers["applied"] },
+  };
+  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  expect(held(gestures, [node(), past], "node-1")).toEqual({});
+  for (const [why, domains] of [
+    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
+    [
+      "the tracker log unread",
+      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
+    ],
+    ["no row for a log the gesture wrote", [logRow("tracker")]],
+  ] as const) {
+    expect(Object.keys(held(gestures, [node(), past], "node-1", [...domains])), why).toEqual([
+      "node-4:evict",
+    ]);
+  }
+});
+
+test("a log whose evictions could not be read says so above the node block", () => {
+  query.data = report(
+    [node()],
+    [logRow("tracker"), logRow("pages", { evictions_unreadable: true })],
+  );
+  render(
+    <Router>
+      <RetentionPanels />
+    </Router>,
+  );
+  expect(screen.getByText(/an eviction may be hidden rather than absent/)).toBeTruthy();
+  expect(screen.getAllByText(/could not read/).length).toBe(1);
 });
 
 test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {

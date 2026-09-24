@@ -66,6 +66,7 @@ import type {
   RetentionMaintenance,
   RetentionNode,
   RetentionNodeDomain,
+  RetentionReport,
   RetentionSnapshot,
   RetentionTerm,
 } from "~/protocol/index.ts";
@@ -118,14 +119,19 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // WHAT THE REPORT NOW SHOWS IS LET GO OF, so a later gesture on the same
   // node and sign is a new one rather than this one reopened.
   const nodesSeen = data?.nodes;
+  const domainsSeen = data?.domains;
   const servedBy = data?.node_id;
   useEffect(() => {
     if (!nodesSeen) return;
     setGestures((all) => {
-      const kept = heldGestures(all, nodesSeen, servedBy);
+      const kept = heldGestures(all, {
+        nodes: nodesSeen,
+        domains: domainsSeen ?? [],
+        node_id: servedBy ?? "",
+      });
       return Object.keys(kept).length === Object.keys(all).length ? all : kept;
     });
-  }, [nodesSeen, servedBy]);
+  }, [nodesSeen, domainsSeen, servedBy]);
 
   if (!operator) return null;
 
@@ -173,6 +179,16 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           fleet rather than the fleet. An empty list here is not an empty company.
         </Callout>
       )}
+
+      {domains
+        .filter((d) => d.evictions_unreadable)
+        .map((d) => (
+          <Callout key={`evictions:${d.domain}`} variant="warning">
+            This node could not read <InlineCode>{d.domain}</InlineCode>'s evictions, so no node
+            below shows as evicted there — an eviction may be hidden rather than absent. The next
+            report reads them again.
+          </Callout>
+        ))}
 
       <ServedLevelBanner level={data?.read_level} />
 
@@ -558,19 +574,33 @@ function reflected(g: GateGesture, key: string, nodes: RetentionNode[]): boolean
  * generation that differs all keep the gesture held. A report that has not
  * caught up with a `pending` record disagrees for exactly that reason, and
  * letting go of it then offered the fresh gesture the hold exists to prevent.
+ *
+ * AND ONLY WHERE THE SERVING NODE READ ITS EVICTIONS on every log the gesture
+ * wrote. One it could not read contributes no tombstone, so the node reads as
+ * not evicted there whatever happened — during an adoption's rename, say — and
+ * that absence released an eviction the operator had just made, offering it
+ * again: a second record on every log, re-dating the first.
  */
-function overtaken(g: GateGesture, nodes: RetentionNode[], servedBy?: string): boolean {
+function overtaken(
+  g: GateGesture,
+  nodes: RetentionNode[],
+  domains: RetentionDomain[],
+  servedBy?: string,
+): boolean {
   const answer = g.answer;
   if (!answer?.complete || !servedBy) return false;
   const here = nodes.find((n) => n.node_id === servedBy)?.domains;
   if (!here) return false;
   return answer.domains.every((d) => {
     const at = here[d.domain];
+    const row = domains.find((r) => r.domain === d.domain);
     return (
       d.position !== undefined &&
       at !== undefined &&
       at.generation === d.position.generation &&
-      at.applied_through >= d.position.seq
+      at.applied_through >= d.position.seq &&
+      row !== undefined &&
+      !row.evictions_unreadable
     );
   });
 }
@@ -583,12 +613,13 @@ function overtaken(g: GateGesture, nodes: RetentionNode[], servedBy?: string): b
  */
 export function heldGestures(
   gestures: Record<string, GateGesture>,
-  nodes: RetentionNode[],
-  servedBy?: string,
+  report: Pick<RetentionReport, "nodes" | "domains" | "node_id">,
 ): Record<string, GateGesture> {
   return Object.fromEntries(
     Object.entries(gestures).filter(
-      ([key, g]) => !reflected(g, key, nodes) && !overtaken(g, nodes, servedBy),
+      ([key, g]) =>
+        !reflected(g, key, report.nodes) &&
+        !overtaken(g, report.nodes, report.domains, report.node_id),
     ),
   );
 }
