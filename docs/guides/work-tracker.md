@@ -415,7 +415,23 @@ refusal, and both are deliberate rather than automatic:
   declares what that write is about to use, in one append before the task's
   own. The answer lists what it created under `labels_created`, so a caller
   that set the flag out of habit still sees a typo now rather than on a board
-  three weeks later.
+  three weeks later. A declaration refused, or one whose outcome is unknown,
+  stops the write before the task's own append, and the answer says so under
+  the tool that was called: the item was not filed, or the change not made, by
+  that call. The same call made again — a seat's with the same arguments, your
+  assistant's with the `op_id` the answer carried — answers the declaration
+  and then makes the write, once. Where the node's ledger cannot vouch for the
+  declaration, that repeat stops at the same step until the declaration
+  reaches the node, so the answer says to declare the tags with `write_project`
+  first, which is harmless if they already landed. The repeat after it skips
+  the declaration — but the write itself dates from the same instant, so the
+  node cannot vouch for that either: it answers with the item an earlier
+  attempt filed, or with the change where the node still holds its record, and
+  otherwise answers `unknown` again. That second `unknown` means the write may
+  exist where this node cannot see it: look for the item (`list_work_items`),
+  or read it (`get_work_item`), rather than making it any other way — or, from
+  your assistant, make the same call with its `op_id` through another node,
+  whose ledger may reach back that far.
 
 A slug within a **typo** of an existing one is accepted with a warning naming
 the nearest three — advisory, never a refusal, because a lead can merge two

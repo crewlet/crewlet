@@ -96,6 +96,10 @@ type fakeTracker struct {
 	tagWarnings    []string
 	ensured        [][]string
 	ensuredIn      []string
+	// ensureErr is what the INLINE declaration alone answers, so a case can
+	// stop a create or an update at its labels while every write after it
+	// would succeed — and so catch a tool that carried on to one.
+	ensureErr error
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
@@ -479,6 +483,10 @@ func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
 
 	if f.writeErr != nil {
 		return nil, nil, f.writeErr
+	}
+	if f.ensureErr != nil {
+		f.opIDs = append(f.opIDs, opID)
+		return nil, nil, f.ensureErr
 	}
 	f.ensured = append(f.ensured, tags)
 	f.ensuredIn = append(f.ensuredIn, project)

@@ -91,6 +91,22 @@ The two writes that state a whole value rather than change one —
 `write_project` and `write_work_catalogue` — say instead that repeating them is
 harmless: each call is a new operation stating the same thing.
 
+A create or an update that declares its labels first (`labels_create_missing`)
+and cannot tell whether that declaration landed stops there too, and is
+answered under its own name as the write it did *not* make — the item not
+filed, the change not made — because the declaration comes before the item's
+own write. The same call made again answers the declaration and then makes the
+write, once; where this node's ledger cannot vouch for the declaration, the
+answer says to declare the tags with `write_project` first, which is harmless
+if they already landed, and then to make the same call — and says what that
+call will do. Its own write dates from the same instant as the declaration, so
+this node cannot vouch for it either: it answers with the item an earlier
+attempt filed, or the change this node still holds a record of, and otherwise
+answers `unknown` again, which then means looking for the write
+(`list_work_items`, `get_work_item`) rather than making it another way — or,
+from the operator's surface, making the same call with its `op_id` through
+another node whose ledger reaches back that far.
+
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat, and ten more

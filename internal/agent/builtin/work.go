@@ -1496,8 +1496,18 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// project has not declared and the declare is a separate record on a
 	// separate subject: doing it after would file the task that already
 	// failed.
-	declared, labelRefusal := t.deps.declareLabels(ctx, actor, t.Name(), args,
-		task.Project, task.Tags)
+	declared, labelRefusal := t.deps.declareLabels(ctx, actor, labelWrite{
+		tool:    t.Name(),
+		before:  "filing the work item",
+		notMade: "The work item was NOT filed by this call.",
+		then:    "files it",
+		twice:   "files a second item",
+		unvouched: "it answers with the item where an earlier attempt " +
+			"filed it",
+		look: "the item may exist on a node this one has not caught up " +
+			"with: look for it with list_work_items rather than filing it " +
+			"any other way",
+	}, args, task.Project, task.Tags)
 	if refusal := labelRefusal; refusal != "" {
 		return failed(refusal), nil
 	}
@@ -2117,8 +2127,20 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if patch.Tags != nil {
 		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
 		// the write is checked against — never the caller's default.
-		if declared, refusal = t.deps.declareLabels(ctx, actor, t.Name(), args,
-			before.Task.Project, *patch.Tags); refusal != "" {
+		if declared, refusal = t.deps.declareLabels(ctx, actor, labelWrite{
+			tool:   t.Name(),
+			before: "changing " + before.Task.Key,
+			notMade: fmt.Sprintf("Nothing it asked of %s was written by this "+
+				"call.", before.Task.Key),
+			then: "makes the change",
+			twice: "applies the change a second time, and is refused as " +
+				"stale if it names `if_match`",
+			unvouched: "it answers with the change where this node still " +
+				"holds its record",
+			look: fmt.Sprintf("the change may have landed where this node "+
+				"cannot see it: read %s with get_work_item to see whether it "+
+				"is there rather than making it any other way", before.Task.Key),
+		}, args, before.Task.Project, *patch.Tags); refusal != "" {
 			return failed(refusal), nil
 		}
 	}
@@ -2321,8 +2343,10 @@ func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
 // ITS WRITE IS ONE OF THE CALL'S OWN, derived through [opIDFor] like the rest:
 // minted fresh, a call repeated — a re-run's, or an operator's brought back
 // under its `op_id` — declared again under an operation nothing could answer.
-func (d WorkDeps) declareLabels(ctx context.Context, actor Actor, tool string,
-	args map[string]any, project string, labels []string) ([]string, string) {
+// And so is its refusal, which [labelFailure] answers under the CALLING tool.
+func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
+	write labelWrite, args map[string]any, project string,
+	labels []string) ([]string, string) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
 		return nil, ""
@@ -2335,10 +2359,11 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor, tool string,
 		return nil, "This build cannot declare labels at a write. Ask the " +
 			"project lead to declare it, or file without the label."
 	}
-	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
-		opIDFor(actor, tool, "tags", project, args), project, labels)
+	opID := opIDFor(actor, write.tool, "tags", project, args)
+	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx, opID,
+		project, labels)
 	if err != nil {
-		return nil, writeFailure(actor, tracker.WriteProjectTool, err)
+		return nil, labelFailure(actor, write, opID, project, labels, err)
 	}
 	if len(warnings) > 0 {
 		// THE WARNINGS RIDE THE CREATED LIST, because they are about
@@ -2346,6 +2371,157 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor, tool string,
 		created = append(created, warnings...)
 	}
 	return created, ""
+}
+
+// labelWrite is the write a call was about to make when it declared its labels
+// first ([WorkDeps.declareLabels]), in the words an answer about that
+// declaration needs.
+type labelWrite struct {
+	// tool is the CALLING tool, which every answer names: the declaration is
+	// a step of its call, never a call of its own to write_project.
+	tool string
+	// before is what the call stopped before doing, as a gerund phrase:
+	// "filing the work item", "changing ENG-4".
+	before string
+	// notMade says, as a sentence, that this call did not make that write.
+	notMade string
+	// then is what the same call made again does once the declaration is
+	// answered: "files it", "makes the change".
+	then string
+	// twice is what a DIFFERENT call does where an earlier attempt at this
+	// one already made the write: "files a second item".
+	twice string
+	// unvouched is what the same call made again does with its OWN write
+	// where this node cannot vouch for the declaration: every step of one
+	// call carries the call's mint instant, so it cannot vouch for that
+	// write either. A clause: "it answers with the item where …".
+	unvouched string
+	// look is the read that says whether that write is there, as a clause:
+	// "look for it with list_work_items".
+	look string
+}
+
+// labelFailure explains a create or an update refused, or stopped, at the
+// inline declaration of its labels — under the calling tool, and in terms of
+// the write that call did NOT make.
+//
+// # Why it is not [writeFailure] under write_project
+//
+// Because that is a tool the caller never called, with arguments it never
+// gave. A declaration whose outcome is unknown was answered as write_project
+// stopped part of the way through, "call write_project again with exactly the
+// same arguments": that call answered "changes nothing", or — given the
+// labels — declared them and answered without error, which the text had named
+// as the point the work could be reported done. The item had never been filed,
+// because the declaration comes BEFORE the task's own append (the create
+// refuses a label its project has not declared). An operator was handed the
+// create's `op_id` for a tool that takes none, and a clash opened "write_project
+// was refused" about a create.
+//
+// # Why the same call is what finishes it
+//
+// Because both writes are steps of it: the declaration's operation and the
+// task's derive from the same call ([opIDFor]), so the call made again — a
+// seat's with the same arguments, an operator's with its `op_id` ([sameCall])
+// — answers the declaration from what landed and then makes the write, once.
+//
+// AN UNVOUCHED DECLARATION is the exception that call cannot finish here: this
+// node publishes nothing its ledger cannot vouch for, so the repeat stops at
+// the same step until the declaration reaches this node, and never where it
+// did not land. Declaring a tag again is harmless — write_project mints a new
+// operation that states the same tags and changes nothing where they exist —
+// so that is the step that moves it, and the repeat then finds the tags and
+// skips the declaration.
+//
+// AND THEN MEETS THE SAME QUESTION ABOUT ITS OWN WRITE. Every step of one call
+// is derived from the same instant — [Actor.OperationSince] for a seat, the
+// `op_id`'s own for an operator — so where this node cannot vouch for the
+// declaration it cannot vouch for the create or the update either. The repeat
+// answers that write from what this node still holds of it — the item an
+// earlier attempt filed, the change this node still has a record of — and
+// otherwise `unknown` again. So the answer says what the repeat will do rather
+// than presenting write_project as what unblocks the call: it does only where
+// the write already happened.
+func labelFailure(actor Actor, write labelWrite, opID, project string,
+	labels []string, err error) string {
+
+	var clash *tracker.TagClash
+	var full *tracker.TagsFull
+	switch {
+	case errors.As(err, &clash):
+		return fmt.Sprintf("%s was refused, and nothing was written: to use "+
+			"the label %s it has to declare it in %s, where the tag %s is "+
+			"already labelled %q — two tags nobody could tell apart. If they "+
+			"mean the same thing, give `labels` %s instead of %s; if not, "+
+			"declare %s in %s yourself under a label of its own (write_project "+
+			"on %s with tags_add: [{\"slug\": %q, \"label\": \"<a label %s "+
+			"does not use>\"}]). Then make this call again.", write.tool,
+			clash.Slug, clash.Project, clash.Other.Slug, clash.Other.Label,
+			clash.Other.Slug, clash.Slug, clash.Slug, clash.Project,
+			clash.Project, clash.Slug, clash.Project)
+	case errors.As(err, &full):
+		return fmt.Sprintf("%s was refused, and nothing was written: to use "+
+			"the label %s it has to declare it in %s, which already keeps %d "+
+			"tags, the most a project may. Use a tag %s already has "+
+			"(describe_project lists them) or leave %s out of `labels`; or have "+
+			"%s's lead archive tags it no longer files under (write_project's "+
+			"tags_archive), then make this call again.", write.tool, full.Slug,
+			full.Project, tracker.MaxTagsPerProject, full.Project, full.Slug,
+			full.Project)
+	case errors.Is(err, tracker.ErrStepUnresolved):
+		unvouched := errors.Is(err, tracker.ErrStepUnvouched)
+		why := "the write's acknowledgement was lost"
+		if unvouched {
+			why = "this node's operation ledger may have lost the record of " +
+				"this operation, so this node cannot tell"
+		}
+		if actor.Operation != "" {
+			opID = actor.Operation
+		}
+		stopped := fmt.Sprintf("%s stopped before %s: it first declares "+
+			"whichever of its labels (%s) %s does not have yet, and whether "+
+			"that declaration landed is unknown (%s; operation %s). %s",
+			write.tool, write.before, strings.Join(labels, ", "), project, why,
+			opID, write.notMade)
+		again := sameCall(actor, write.tool)
+		switch {
+		case again == "":
+			return stopped + " Making the call again is a new operation: it " +
+				"declares the labels again — harmless, since that states the " +
+				"same tags — then " + write.then + "."
+		case unvouched:
+			adds := make([]string, len(labels))
+			for i, label := range labels {
+				adds[i] = fmt.Sprintf("{\"slug\": %q}", label)
+			}
+			elsewhere := ""
+			if actor.Operation != "" {
+				elsewhere = ", or make the same call with that `op_id` through " +
+					"another node's operator MCP, whose ledger may reach back " +
+					"that far"
+			}
+			return fmt.Sprintf("%s The same call made here stops at this step "+
+				"until the declaration reaches this node, and never if it did "+
+				"not land. Declaring a tag again is harmless, so declare them "+
+				"first: write_project on %s with tags_add: [%s] states the same "+
+				"tags as a new operation, and changes nothing if the first "+
+				"declaration landed. Then %s. That repeat skips the declaration, "+
+				"but its own write dates from the same instant, so this node "+
+				"cannot vouch for it either: %s, and otherwise answers `unknown` "+
+				"again — which then means %s%s. Do not reword it: if an earlier "+
+				"attempt at this call got past this step, a different call %s.",
+				stopped, project, strings.Join(adds, ", "), again,
+				write.unvouched, write.look, elsewhere, write.twice)
+		}
+		return fmt.Sprintf("%s %s: that is the same operation — it answers the "+
+			"declaration with what landed, then %s, once. Do not reword it: if "+
+			"an earlier attempt at this call got past this step, a different call %s. "+
+			"Do not report it as done until a call answers without this error.",
+			stopped, capitalize(again), write.then, write.twice)
+	}
+	return fmt.Sprintf("%s was refused before %s: declaring its labels in %s "+
+		"did not land (%v). Nothing was written — do not report it as done.",
+		write.tool, write.before, project, err)
 }
 
 // patchFromArgs builds the patch and the change kind, or the refusal to show
