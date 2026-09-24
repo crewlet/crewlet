@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -681,4 +683,89 @@ func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	return verifier
+}
+
+// A REANCHOR'S RESET MOVES EVERY POSITION AND NO BODY REVISION.
+//
+// It could not run at all: the list of tables it resets named three with no
+// `version` column, so it failed on a real schema at its first bounded
+// transaction. And the body revisions it also named carry the BODY's version,
+// half of their primary key, which a reset to the generation's floor would
+// collapse. Run over the real schema, it moves a task's composed version to
+// the new generation's floor and leaves every revision number where it was.
+// Mutation: put a column-less table or the revisions back in the list and this
+// case fails.
+func TestAReanchorsResetMovesEveryPositionAndNoBodyRevision(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	task := newTask("t-1")
+	task.Body = "third"
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	// TWO PAST BODIES, written as the applier writes one — at their own
+	// body versions, which is exactly the number a reset must not touch.
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for version, body := range []string{"first", "second"} {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO tracker_body_revisions
+					(task_id, version, author, author_kind, at, size, document)
+				VALUES ('t-1', ?, 'ana', 'human', 0, ?, ?)`,
+				version+1, len(body), fmt.Sprintf(`{"body":%q}`, body)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the revisions: %v", err)
+	}
+	revisions := func() []int64 {
+		t.Helper()
+		var out []int64
+		if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(), `
+				SELECT version FROM tracker_body_revisions WHERE task_id = 't-1'
+				ORDER BY version`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var v int64
+				if err := rows.Scan(&v); err != nil {
+					return err
+				}
+				out = append(out, v)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read the revisions: %v", err)
+		}
+		return out
+	}
+	before := revisions()
+	if len(before) < 2 {
+		t.Fatalf("precondition: the task holds %d revision(s), want at least two", len(before))
+	}
+
+	const gen = 1
+	if err := tracker.ResetVersions(t.Context(), r.db.Replicated(), gen); err != nil {
+		t.Fatalf("the reset failed on the real schema: %v", err)
+	}
+	var version int64
+	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT version FROM tracker_tasks WHERE id = 't-1'`).Scan(&version)
+	}); err != nil {
+		t.Fatalf("read the task: %v", err)
+	}
+	if want := int64(gen * statelog.GenerationStride); version != want {
+		t.Errorf("the task's version is %d after the reset, want the new "+
+			"generation's floor %d", version, want)
+	}
+	if after := revisions(); !slices.Equal(after, before) {
+		t.Errorf("the reset renumbered the body revisions %v into %v", before, after)
+	}
 }

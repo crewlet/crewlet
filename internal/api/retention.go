@@ -331,7 +331,7 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	}
 	by := iam.ActorFor(caller)
 	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
-		Stream: stream, Confirm: confirm, By: by.Name,
+		Stream: stream, Confirm: confirm, By: by,
 		Force: r.URL.Query().Get("force") == "true",
 	})
 	if err != nil {

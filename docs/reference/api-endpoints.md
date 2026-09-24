@@ -3565,7 +3565,7 @@ would drift.
 | Route | What it does |
 |---|---|
 | `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
-| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition on the work tracker's log, answering with the new generation. Any other log is refused `409 reanchor_refused` before anything moves. |
 
 `confirm` is the value the `GET` returns, supplied by the caller: the
 confirmation means *I looked at the thing I am re-anchoring*, so the two are

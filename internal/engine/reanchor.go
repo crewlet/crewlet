@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -43,8 +44,16 @@ type ReanchorRequest struct {
 	// hydrated peer's snapshot is strictly better than re-anchoring.
 	Force bool
 
-	// By names the operator, for the audit row.
-	By string
+	// By is who ran it: the author and the credential they acted through.
+	//
+	// THE GENERATION RECORD IS PUBLISHED AS THEM, so every node's audit
+	// row names the operator — it was published through this node's own
+	// writer, so every peer recorded the NODE as having re-anchored the
+	// log while this node's own row named the person. The record is a
+	// gate, pinned at its first version, so what it can say is the author
+	// it already had a field for ([tracker.Generation.ReanchoredBy]) and
+	// the operator id every tracker record carries.
+	By iam.Actor
 }
 
 // Reanchor runs the generation transition.
@@ -59,26 +68,53 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 		return 0, errors.New("engine: this node runs no state log, so it has " +
 			"nothing to re-anchor")
 	}
+	if req.By.Name == "" {
+		return 0, errors.New("engine: a reanchor names who ran it — it is the " +
+			"one gesture that declares a log's history unreachable, and every " +
+			"node's audit row records who did")
+	}
 	s := e.native.log
 	name := s.domainOf(req.Stream)
 	running := s.domains[name]
 	if running == nil {
 		return 0, fmt.Errorf("engine: %q is not a domain log this build runs — "+
 			"the streams a reanchor applies to are %v", req.Stream,
-			maintenanceStreams())
+			reanchorStreams())
+	}
+	if name != (tracker.Domain{}).Name() {
+		// THE TRACKER'S STEPS ARE THE ONLY ONES THERE ARE. A reanchor is
+		// three things only the log's own domain can do — reset its rows'
+		// composed versions, publish its generation record, write its
+		// audit row — and no other domain has them. Run for another log,
+		// the tracker's reset the TRACKER's rows and published a TRACKER
+		// generation for a log that was not the tracker's, while the
+		// recreated log's own rows kept versions from a number space its
+		// stream no longer has.
+		return 0, fmt.Errorf("engine: the %s log cannot be re-anchored by "+
+			"this build — its domain (%s) has no reset, generation record or "+
+			"audit row of its own; recover it by adopting the snapshot of a "+
+			"peer hydrated on the live stream, or by restoring from a backup. "+
+			"The logs a reanchor applies to are %v", req.Stream, name,
+			reanchorStreams())
 	}
 
 	in := e.reanchorInputs(ctx, running)
+	operator := e.native.writer.As(req.By.Name, tracker.AuthorKind(req.By.Kind),
+		tracker.Provenance{OperatorID: req.By.OperatorID})
 	gen, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
-		Domains: s.registered(),
-		DB:      e.backends.Store.Replicated(),
+		// THIS LOG'S DOMAIN AND NO OTHER: every input above is this
+		// stream's own, and a second domain's cursor moved to a position
+		// computed from it would point into a number space its own stream
+		// never had.
+		Target: s.registered()[name],
+		DB:     e.backends.Store,
 		ResetVersions: func(ctx context.Context, gen uint32) error {
 			return tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)
 		},
-		PublishGeneration: e.native.writer.PublishGeneration,
+		PublishGeneration: operator.PublishGeneration,
 		RecordGeneration: func(ctx context.Context, tx *sql.Tx, gen uint32,
 			in statelog.ReanchorInputs) error {
-			return tracker.RecordGeneration(ctx, tx, gen, in, req.By)
+			return tracker.RecordGeneration(ctx, tx, gen, in, req.By.Name)
 		},
 		Now: time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
@@ -91,7 +127,8 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 		return 0, err
 	}
 	log.WarnContext(ctx, "statelog_reanchored", "stream", req.Stream,
-		"generation", gen, "by", req.By, "prev_last_seq_seen", in.Highest,
+		"generation", gen, "by", req.By.Name, "operator", req.By.OperatorID,
+		"prev_last_seq_seen", in.Highest,
 		"detail", "every position below this generation is now comparable and "+
 			"safely stale; records that were on the old stream and were never "+
 			"applied here are not recovered")
@@ -179,4 +216,11 @@ func hydratedPeers(rows []coord.NodePositions, domain string, generation uint32,
 		}
 	}
 	return hydrated
+}
+
+// reanchorStreams is every log a reanchor applies to: the tracker's, whose
+// domain is the one with a reset, a generation record and an audit row of its
+// own.
+func reanchorStreams() []string {
+	return []string{tracker.Domain{}.Stream().Name}
 }

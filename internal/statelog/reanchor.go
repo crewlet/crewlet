@@ -111,10 +111,22 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 
 // ReanchorDeps is everything the transition needs that it does not own.
 type ReanchorDeps struct {
-	// Domains are every domain whose cursor moves, by stream name.
-	Domains map[string]Registered
+	// Target is the one domain whose log was recreated, and the only
+	// cursor that moves.
+	//
+	// ONE, because a log belongs to one domain and every input the
+	// transition decides from — the stream's creation instant, its first
+	// surviving sequence, the generation — is that log's own. It was every
+	// registered domain: re-anchoring one log moved every other domain's
+	// cursor to a position computed from THAT log's sequence space, which is
+	// a cursor into a number space its own stream never had.
+	Target Registered
 
-	// DB is the replicated estate, which holds every cursor.
+	// DB is the node's store, whose REPLICATED estate holds the cursor and
+	// the audit row — the store itself and never its replicated handle,
+	// which answers "not open" to a second Replicated(): handed that, the
+	// transition ran its reset and published its record and then failed to
+	// move the cursor, every time.
 	DB *store.DB
 
 	// ResetVersions rewrites every object's arbitration anchor into the
@@ -158,7 +170,7 @@ type ReanchorDeps struct {
 //     re-run derives the SAME generation, races itself, loses, and reads the
 //     winner's record on replay — first-writer-wins used for the one thing it
 //     is perfectly suited to.
-//  6. and 7. ONE transaction: every domain's cursor into the new generation,
+//  6. and 7. ONE transaction: the domain's cursor into the new generation,
 //     and the audit row. A crash rolls both back whole.
 //
 // The bounded step 4 and the single transaction at 6+7 are two different
@@ -167,8 +179,8 @@ type ReanchorDeps struct {
 // harmless. The two are stated together for that reason.
 func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 	switch {
-	case len(d.Domains) == 0:
-		return 0, fmt.Errorf("statelog: a reanchor with no registered domain " +
+	case d.Target.Domain == nil:
+		return 0, fmt.Errorf("statelog: a reanchor names no domain, so it " +
 			"moves no cursor")
 	case d.DB == nil:
 		return 0, fmt.Errorf("statelog: a reanchor has no store")
@@ -205,7 +217,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 		return 0, fmt.Errorf("statelog: publish generation %d: %w", gen, err)
 	}
 
-	// 6+7. ONE transaction, both cursors and the audit row.
+	// 6+7. ONE transaction, the cursor and the audit row.
 	//
 	// The new cursor is ONE BELOW the live stream's first surviving
 	// sequence — zero on a fresh stream — because that is the position
@@ -215,27 +227,25 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 		cursor = in.FirstSeq - 1
 	}
 	if err := d.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
-		for _, reg := range d.Domains {
-			// newTables rather than a literal: a hand-built one leaves
-			// whatever field the writer did not think of at its zero
-			// value, and every one of them is a key some other side of
-			// the framework spells in full.
-			t, err := newTables(reg.Domain)
-			if err != nil {
-				return err
-			}
-			at := Position{Stream: t.stream, Generation: gen, Seq: cursor}
-			if err := t.setCursor(ctx, tx, at, in.StreamCreatedAt, now()); err != nil {
-				return err
-			}
+		// newTables rather than a literal: a hand-built one leaves
+		// whatever field the writer did not think of at its zero value,
+		// and every one of them is a key some other side of the
+		// framework spells in full.
+		t, err := newTables(d.Target.Domain)
+		if err != nil {
+			return err
+		}
+		at := Position{Stream: t.stream, Generation: gen, Seq: cursor}
+		if err := t.setCursor(ctx, tx, at, in.StreamCreatedAt, now()); err != nil {
+			return err
 		}
 		return d.RecordGeneration(ctx, tx, gen, in)
 	}); err != nil {
-		return 0, fmt.Errorf("statelog: move the cursors into generation %d: %w",
+		return 0, fmt.Errorf("statelog: move the cursor into generation %d: %w",
 			gen, err)
 	}
 
 	logger.WarnContext(ctx, "statelog_reanchored",
-		"generation", gen, "cursor", cursor, "domains", len(d.Domains))
+		"domain", d.Target.Domain.Name(), "generation", gen, "cursor", cursor)
 	return gen, nil
 }

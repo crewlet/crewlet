@@ -1137,7 +1137,10 @@ adopting that peer's snapshot recovers history a reanchor discards. `-force` is
 for the case where the peer cannot be reached.
 
 It does not recover records that were on the old stream and were never applied
-here, and the refusal says so. See
+here, and the refusal says so. It applies to the work tracker's log
+(`CREWLET_TRACKER_LOG`) and no other: any other log is refused before anything
+moves. The generation record it publishes names you — your login and the
+credential you ran it through — on every node. See
 [Re-anchoring a recreated stream](../guides/retention.md#re-anchoring-a-recreated-stream).
 
 ### `crewlet retention verify --restore`

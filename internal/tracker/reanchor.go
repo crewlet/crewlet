@@ -25,16 +25,23 @@ import (
 
 // versionedTables are the object tables whose `version` a reanchor resets.
 //
-// EVERY TABLE WITH A COMPOSED VERSION, and the list is derived from the
-// identity claim rather than written again: an object table this misses keeps
+// EVERY TABLE WHOSE `version` IS A COMPOSED LOG POSITION — the value a writer
+// forms its expectation from — and no other: an object table this misses keeps
 // versions in a dead number space, and the next write against it forms an
 // expectation from a generation that no longer exists.
+//
+// A LIST, HELD AGAINST THE SCHEMA by a test in both directions, because it was
+// typed once beside a comment claiming it was derived and named three tables
+// with no `version` column at all — `tracker_comments`, `tracker_task_keys`
+// and `tracker_tags` — so every reanchor failed at its fourth step with "no
+// such column" before it moved anything. And `tracker_body_revisions` is NOT
+// here although it has a `version`: that is the BODY's own version and half of
+// the primary key, so a reset to the generation's floor would collapse every
+// task's revisions into one row.
 var versionedTables = []string{
-	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
-	"tracker_task_keys", "tracker_projects",
+	"tracker_tasks", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
-	"tracker_tags", "tracker_views",
-	"tracker_persons", "tracker_rank_orders",
+	"tracker_views", "tracker_persons", "tracker_rank_orders",
 }
 
 // ResetVersions puts every object row's version at the new generation's floor.

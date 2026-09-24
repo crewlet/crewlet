@@ -530,6 +530,29 @@ adopting that peer's snapshot recovers the history a reanchor discards, so it
 is strictly the better recovery. `-force` is for the case where the peer cannot
 be reached.
 
+**It moves that log and nothing else.** The new cursor, the generation and the
+reset are all computed from the one recreated stream, so the reanchor moves
+that domain's cursor alone; it used to move every domain's, to a position in
+the tracker's sequence space that none of their own logs has. And it records
+who ran it: the generation record every node applies into its audit row names
+the operator and the credential they used, where it named the node that served
+the request.
+
+**Today that log is the work tracker's**, `CREWLET_TRACKER_LOG`. A reanchor is
+three steps only the log's own domain can take — reset its rows' versions,
+publish its generation record, write its audit row — and the knowledge base,
+the org chart, the identity estate and the vectors have none of their own
+yet, so naming one of their logs is refused before anything moves. It used to
+run the tracker's steps for them, resetting the tracker's rows for a log that
+was not the tracker's. Recover one of those logs by adopting the snapshot of a
+peer hydrated on the live stream, or from a backup.
+
+> **The verb could not have completed before this build.** Its reset named
+> three tracker tables with no `version` column and failed on the first, and
+> past that it handed the framework a store handle that answered "not open"
+> when the cursor was moved. Nothing moved in either case, so no estate was
+> left half re-anchored.
+
 ## Proving a restore
 
 ```

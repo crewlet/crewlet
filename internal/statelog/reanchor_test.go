@@ -133,8 +133,8 @@ func TestAReanchorMovesEveryCursorAndItsAuditRowTogether(t *testing.T) {
 	var reset, published, recorded atomic.Int64
 
 	gen, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-		DB:      db,
+		Target: statelog.Registered{Domain: probeDomain{}},
+		DB:     db,
 		ResetVersions: func(context.Context, uint32) error {
 			reset.Add(1)
 			return nil
@@ -184,7 +184,7 @@ func TestAReanchorWhoseAuditRowFailsMovesNoCursor(t *testing.T) {
 	db := reanchorStore(t)
 
 	_, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains:       map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+		Target:        statelog.Registered{Domain: probeDomain{}},
 		DB:            db,
 		ResetVersions: func(context.Context, uint32) error { return nil },
 		PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error {
@@ -224,8 +224,8 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	var order []string
 
 	if _, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-		DB:      db,
+		Target: statelog.Registered{Domain: probeDomain{}},
+		DB:     db,
 		ResetVersions: func(context.Context, uint32) error {
 			order = append(order, "reset")
 			return nil
@@ -358,8 +358,8 @@ func TestAReanchorIsResumable(t *testing.T) {
 		crash := errors.New("the process died between two bounded transactions")
 		var attempts, published, recorded atomic.Int64
 		deps := statelog.ReanchorDeps{
-			Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
-			DB:      db,
+			Target: statelog.Registered{Domain: probeDomain{}},
+			DB:     db,
 			ResetVersions: func(ctx context.Context, gen uint32) error {
 				if attempts.Add(1) == 1 {
 					// One bounded transaction committed, then the

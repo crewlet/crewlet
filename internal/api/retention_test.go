@@ -48,6 +48,7 @@ type fakeStateLog struct {
 	capacity  engine.CapacityRequest
 	abandoned iam.Actor
 	excluded  iam.Actor
+	reanchor  engine.ReanchorRequest
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -62,7 +63,8 @@ func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 	return time.Unix(1700000000, 0).UTC(), generation, nil
 }
 
-func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32, error) {
+func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (uint32, error) {
+	f.reanchor = req
 	return 0, errors.New("not exercised here")
 }
 
@@ -166,6 +168,12 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 	if log.capacity.By != want.Name || log.capacity.OperatorID != want.OperatorID {
 		t.Errorf("the resize names %q through %q, want %q through %q",
 			log.capacity.By, log.capacity.OperatorID, want.Name, want.OperatorID)
+	}
+
+	postAck(t, a, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=2031-04-02T03:00:00Z")
+	if log.reanchor.By != want {
+		t.Errorf("the reanchor was handed %+v, want %+v", log.reanchor.By, want)
 	}
 
 	postAck(t, a, "/work/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
