@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +263,64 @@ func TestACodePastedWithItsNewlineIsTheCode(t *testing.T) {
 	if rec := postBootstrap(t, mux, " "+theCode+"\n", "founder.one"); rec.Code != http.StatusOK {
 		t.Errorf("a code pasted with surrounding whitespace answered %d: %s",
 			rec.Code, rec.Body.String())
+	}
+}
+
+// A SWEPT CODE IS STALE ON EVERY NODE.
+//
+// A code's row is swept off the log a week after it stops working, and a swept
+// code was answered as a wrong one on every node but the one still holding its
+// file — `401 sign_in_refused`, a typo hunt for a code that was right, from
+// whichever node the load balancer picked. The code carries its own expiry
+// now, so a code with no row whose own time has passed is `410
+// bootstrap_code_stale` wherever it is presented, counted like every failed
+// attempt. One whose time is still to come, or one not in the shape this build
+// mints, is decided by the log alone and stays the uniform refusal — which is
+// what keeps the arm from being an oracle.
+//
+// Mutation: drop the expiry arm and the swept code is the uniform refusal;
+// read the expiry off a malformed code and the last two rows answer stale.
+func TestASweptCodeIsStaleOnEveryNode(t *testing.T) {
+	t.Parallel()
+	secret := strings.Repeat("ab", 32)
+	swept := strconv.FormatInt(clock.Add(-8*24*time.Hour).Unix(), 10)
+	for _, tc := range []struct {
+		name  string
+		code  string
+		want  int
+		error string
+	}{
+		{"its own time has passed", "cwl_boot_" + swept + "_" + secret,
+			http.StatusGone, "bootstrap_code_stale"},
+		{"its own time is to come", "cwl_boot_" +
+			strconv.FormatInt(clock.Add(time.Hour).Unix(), 10) + "_" + secret,
+			http.StatusUnauthorized, "sign_in_refused"},
+		{"a secret that is not the minted one's shape", "cwl_boot_" + swept +
+			"_" + strings.Repeat("zz", 32), http.StatusUnauthorized, "sign_in_refused"},
+		{"an expiry spelled two ways", "cwl_boot_0" + swept + "_" + secret,
+			http.StatusUnauthorized, "sign_in_refused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			writer := &recordingWriter{}
+			audit := &recordingAudit{}
+			// NO ROW AND NO FILE: a node the load balancer picked, a week
+			// after the sweep.
+			mux := bootstrapSurfaceWith(t, nil, writer, false,
+				func(o *authapi.Options) { o.Audit = audit })
+			rec := postBootstrap(t, mux, tc.code, "founder.one")
+			if rec.Code != tc.want || !strings.Contains(rec.Body.String(),
+				`"error":"`+tc.error+`"`) {
+				t.Errorf("answered %d %s, want %d %s", rec.Code,
+					rec.Body.String(), tc.want, tc.error)
+			}
+			if len(writer.enrolled) != 0 {
+				t.Errorf("a code with no row enrolled %+v", writer.enrolled)
+			}
+			if _, failures := audit.snapshot(); len(failures) != 1 {
+				t.Errorf("the refusal reached the failure tally %d times, "+
+					"want once", len(failures))
+			}
+		})
 	}
 }

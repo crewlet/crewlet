@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -72,6 +74,13 @@ func (e *codeEstate) take(id string) iamdomain.BootstrapCode {
 	code.SpentAt, code.Person = e.now(), code.FounderID()
 	e.codes[id] = code
 	return code
+}
+
+// row is the log's row for the code with this id.
+func (e *codeEstate) row(id string) iamdomain.BootstrapCode {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.codes[id]
 }
 
 // state is what the log says the code with this id is at now.
@@ -576,5 +585,41 @@ func TestAReissueEndsAFoundingInProgressAndItsFounderWalksIn(t *testing.T) {
 	if rec := postBootstrap(t, nodeA.mux, nodeB.code(t), "jane.founder"); rec.Code != http.StatusOK {
 		t.Fatalf("the founder was refused on the re-issued code: %d %s",
 			rec.Code, rec.Body.String())
+	}
+}
+
+// A MINTED CODE SAYS ITS OWN EXPIRY, AND THE LOG SAYS THE SAME ONE.
+//
+// Every node answers a code whose row was swept by the expiry the code
+// carries, so the string and the row have to name one instant: a code whose
+// spelled expiry ran past its row's would be answered stale by the row while
+// it was still live by the string, and one that ran short would be called
+// stale by every node while the log still honoured it.
+//
+// Mutation: spell the mint's clock rather than its expiry into the code and the
+// two disagree by a day.
+func TestAMintedCodeSaysTheExpiryItsRowHolds(t *testing.T) {
+	t.Parallel()
+	at := func() time.Time { return clock.Add(1500 * time.Millisecond) }
+	estate := newCodeEstate(at)
+	node := newFounderNode(t, estate, at, nil)
+	node.boot(t, "node-a")
+
+	code := node.code(t)
+	shape := regexp.MustCompile(`^cwl_boot_([1-9][0-9]*)_[0-9a-f]{64}$`)
+	m := shape.FindStringSubmatch(code)
+	if m == nil {
+		t.Fatalf("the minted code %q is not in the shape a founder is told "+
+			"to expect", code)
+	}
+	spelled, _ := strconv.ParseInt(m[1], 10, 64)
+	row := estate.row(digestOf(code))
+	if !row.ExpiresAt.Equal(time.Unix(spelled, 0)) {
+		t.Errorf("the code spells %s and its row holds %s", time.Unix(spelled, 0).UTC(),
+			row.ExpiresAt)
+	}
+	if want := at().Add(24 * time.Hour).Truncate(time.Second); !row.ExpiresAt.Equal(want) {
+		t.Errorf("the code expires at %s, want a day after its mint, %s",
+			row.ExpiresAt, want)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,7 +65,9 @@ import (
 // closed answer, which is permanent and would send a founder away from a
 // company still waiting for them. It is specific without being an oracle: the
 // arm is reachable only by presenting a code whose digest is on the log or in
-// this node's own file, which a stranger cannot do.
+// this node's own file, which a stranger cannot do — or one whose OWN expiry
+// has passed, which says nothing a stranger could not read off the string they
+// sent (see [bootstrapCodePrefix]).
 //
 // # One founding at a time, and the one that stopped is finished or ended
 //
@@ -95,6 +97,64 @@ const BootstrapCodeFile = "bootstrap-code"
 // for as long as nobody uses it. It is also what makes the code's digest a
 // safe thing to look up by: nobody finds a preimage of a row on the log.
 const bootstrapCodeBytes = 32
+
+// bootstrapCodePrefix opens every founder code this build mints:
+// `cwl_boot_<expiry, unix seconds>_<64 hex>`.
+//
+// # The code carries its own expiry, and its digest covers it
+//
+// A code's row is swept off the log a week after it stops working, and a
+// swept code was answered as a WRONG one — the uniform refusal — on every node
+// but the one still holding its file: a founder coming back after a week was
+// sent hunting for a typo in a code that was right, by whichever node the load
+// balancer picked. A code whose own expiry has passed is stale whether or not
+// its row survives, so every node answers it `410 bootstrap_code_stale` and
+// names the command that replaces it.
+//
+// NOT AN ORACLE, which is the property the stale arm has to keep: the expiry
+// is read off the string the caller sent, so a past one is answered the same
+// whether or not such a code was ever minted, and says nothing a stranger
+// could not compute from their own request. A code whose expiry is still to
+// come is decided by the log alone, as before. And the digest the log holds is
+// over the WHOLE value, so a real code's expiry cannot be moved without its
+// row no longer matching.
+//
+// THE SHAPE of the engine's other presented credential, a machine token's
+// `cwl_pat_…`, and HEX rather than base64url for the secret, because base64url
+// spells `_` and a code whose separator can appear inside its secret is one no
+// parser can split.
+const bootstrapCodePrefix = "cwl_boot_"
+
+// formatBootstrapCode is the value a founder types: the prefix, the expiry in
+// unix seconds, and the secret.
+func formatBootstrapCode(expires time.Time, secret []byte) string {
+	return bootstrapCodePrefix + strconv.FormatInt(expires.Unix(), 10) + "_" +
+		hex.EncodeToString(secret)
+}
+
+// bootstrapCodeExpiry is the expiry a presented code carries, and false for a
+// value that is not in the shape this build mints — which is then decided by
+// the log alone, never by what it appears to say.
+func bootstrapCodeExpiry(code string) (time.Time, bool) {
+	rest, ok := strings.CutPrefix(code, bootstrapCodePrefix)
+	if !ok {
+		return time.Time{}, false
+	}
+	unix, secret, ok := strings.Cut(rest, "_")
+	if !ok || len(secret) != 2*bootstrapCodeBytes {
+		return time.Time{}, false
+	}
+	if _, err := hex.DecodeString(secret); err != nil {
+		return time.Time{}, false
+	}
+	seconds, err := strconv.ParseInt(unix, 10, 64)
+	// THE CANONICAL SPELLING ONLY — no sign, no leading zero — so one
+	// expiry has one string, as the minted one does.
+	if err != nil || seconds <= 0 || strconv.FormatInt(seconds, 10) != unix {
+		return time.Time{}, false
+	}
+	return time.Unix(seconds, 0).UTC(), true
+}
 
 // bootstrapLifetime is how long a minted code stays redeemable.
 //
@@ -160,9 +220,10 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SURROUNDING WHITESPACE IS NOT PART OF A CODE — the alphabet is
-	// base64url — and the file's own read trims it, so a code pasted with
-	// the newline it was copied with is the code in the file.
+	// SURROUNDING WHITESPACE IS NOT PART OF A CODE — its alphabet is
+	// lowercase letters, digits and underscores — and the file's own read
+	// trims it, so a code pasted with the newline it was copied with is
+	// the code in the file.
 	presented := strings.TrimSpace(in.Code)
 	code, live := s.liveCode(w, r, arrived, source, presented)
 	if !live {
@@ -268,10 +329,12 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 //   - REDEEMED is a company that has started on a node that has not applied
 //     its first person yet: the closed answer, which is permanent.
 //   - AGED OUT and WITHDRAWN are a real code that no longer works, and so is
-//     a code this node's OWN FILE holds whose mint never reached the log:
-//     `410 bootstrap_code_stale`, whose remedy is one command.
-//   - NOTHING — no row, and not this node's file — is a wrong code, and is
-//     refused exactly as every failed sign-in is.
+//     one with NO ROW whose own expiry has passed — its row was swept a week
+//     after it stopped working — and a code this node's OWN FILE holds whose
+//     mint never reached the log: `410 bootstrap_code_stale`, whose remedy is
+//     one command.
+//   - NOTHING — no row, an expiry still to come, and not this node's file —
+//     is a wrong code, and is refused exactly as every failed sign-in is.
 func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 	arrived time.Time, source, presented string) (iamdomain.BootstrapCode, bool) {
 
@@ -289,6 +352,18 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 	case iamdomain.CodeAgedOut, iamdomain.CodeWithdrawn:
 		s.refuseStaleCode(w, r, arrived, source, presented, string(state))
 	default:
+		// A CODE THAT SAYS ITS OWN TIME HAS PASSED is stale whether or
+		// not its row is still on the log: the sweep collects a row a
+		// week after its code stopped working, and every node — not only
+		// the one holding the file — owes its holder the remedy rather
+		// than a typo hunt. See [bootstrapCodePrefix] for why answering
+		// it discloses nothing.
+		if expires, ok := bootstrapCodeExpiry(presented); ok &&
+			!s.now().Before(expires) {
+			s.refuseStaleCode(w, r, arrived, source, presented,
+				string(iamdomain.CodeAgedOut))
+			return iamdomain.BootstrapCode{}, false
+		}
 		// THE FILE IS READ ONLY HERE, and only to tell two absences
 		// apart: a code this node wrote whose mint never landed is one
 		// its holder replaces, and anything else is a code they typed
@@ -327,7 +402,8 @@ func (s *Service) liveCode(w http.ResponseWriter, r *http.Request,
 // Counted against the SOURCE, reaching the failure tally and padded to the
 // deadline, as an invitation's 410 is — a refusal is a refusal whichever arm
 // produced it, and the specificity is safe because presenting a code whose
-// digest is on the log, or in this node's own file, is proof of holding one.
+// digest is on the log, or in this node's own file, is proof of holding one,
+// and a code whose own expiry has passed is answered alike whoever minted it.
 func (s *Service) refuseStaleCode(w http.ResponseWriter, r *http.Request,
 	arrived time.Time, source, presented, state string) {
 
@@ -583,7 +659,10 @@ func (s *Service) mintCodeFile(ctx context.Context, nodeID string,
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("authapi: mint a bootstrap code: %w", err)
 	}
-	code := base64.RawURLEncoding.EncodeToString(raw)
+	// WHOLE SECONDS, the resolution the code spells its expiry in, so the
+	// row and the string say one instant.
+	expires := time.Unix(s.now().Add(bootstrapLifetime).Unix(), 0).UTC()
+	code := formatBootstrapCode(expires, raw)
 	if err := replaceFile(path, []byte(code+"\n")); err != nil {
 		return "", fmt.Errorf("authapi: write the bootstrap code to %s: %w",
 			path, err)
@@ -591,7 +670,7 @@ func (s *Service) mintCodeFile(ctx context.Context, nodeID string,
 	id := bootstrapCodeID(code)
 	minted, err := publish(ctx, iamdomain.BootstrapMint{
 		ID: id, Verifier: id, MintedBy: nodeID,
-		ExpiresAt: s.now().Add(bootstrapLifetime),
+		ExpiresAt: expires,
 		OpID:      "bootstrap-mint:" + id, Reason: "a fresh estate",
 	})
 	if err != nil {

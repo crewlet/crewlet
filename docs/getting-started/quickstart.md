@@ -461,7 +461,8 @@ uses this. On `local` or `oidc` the first operator is created once, from a
 2026-06-14 12:00:00.000 WARN  cli  iam_bootstrap_code_ready path=/var/lib/crewlet/bootstrap-code node=node-a
 ```
 
-Read that file on the host and redeem it at `POST /auth/bootstrap` with a login
+Read that file on the host — it holds one line beginning `cwl_boot_` — and
+redeem it at `POST /auth/bootstrap` with a login
 (dotted, like `jane.doe` — every person has one, and it is the name your changes
 are recorded under until you bind a seat), your address and a password.
 Nothing ever serves the code — the log line carries its **path**, so reading it

@@ -428,8 +428,11 @@ const (
 	// are opposite: that one is permanent and says ask somebody who has an
 	// account, this one is one command away. And specific without being an
 	// oracle, because it is reachable only by presenting a code whose
-	// digest is on the log or in the serving node's own file — a stranger
-	// guessing gets [CodeSignInRefused] like every other failed attempt.
+	// digest is on the log or in the serving node's own file, or one whose
+	// OWN spelled expiry has passed — answered alike whoever minted it, so
+	// it says nothing a stranger could not read off their own request. A
+	// stranger guessing gets [CodeSignInRefused] like every other failed
+	// attempt.
 	CodeBootstrapCodeStale Code = "bootstrap_code_stale"
 
 	// CodeBootstrapInProgress is a live founder code presented while

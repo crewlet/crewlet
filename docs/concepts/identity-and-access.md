@@ -378,8 +378,10 @@ credential rather than a person — so without a way in, a company's only durabl
 credential is a token in a config file, which is the one you least want it to
 be.
 
-So a node that finds an empty estate mints a **one-time code**, writes it beside
-its store at `0600`, and publishes its SHA-256 on the identity log. Nothing ever
+So a node that finds an empty estate mints a **one-time code** —
+`cwl_boot_<expiry, unix seconds>_<64 hex>`, thirty-two random bytes behind the
+instant it stops working — writes it beside its store at `0600`, and publishes
+the SHA-256 of the whole value on the identity log. Nothing ever
 serves the code: the log line carries its **path**, and so does the answer to a
 re-issue. Reading it means having access to the host, which is the only
 credential a company genuinely has before it has any.
@@ -445,10 +447,16 @@ written by a node whose mint never reached the log is answered `410
 bootstrap_code_stale`, naming the remedy — never `409 bootstrap_closed`, which
 is permanent and would send a founder away from a company still waiting for
 them, and never the uniform sign-in refusal, which would send them looking for a
-typo in a code that was right. It is specific without being an oracle: that
+typo in a code that was right. A code's record is swept off the log a week
+after it stops working, and the code **spells its own expiry** for that reason:
+one whose own time has passed is stale on every node whether or not its record
+survives — before, a swept code was the uniform refusal everywhere but on the
+node still holding its file. It is specific without being an oracle: that
 answer is reachable only by presenting a code whose digest is on the log or in
-the serving node's own file, which a stranger guessing cannot do, and it is
-counted against the source like every failed attempt. The remedy is either of:
+the serving node's own file, which a stranger guessing cannot do, or one whose
+spelled expiry has passed, which is answered alike whether or not such a code
+was ever minted — and the digest covers the expiry, so a real code's cannot be
+moved. It is counted against the source like every failed attempt. The remedy is either of:
 
 - **A restart of the node that holds the file.** At boot a node checks its file
   against the log. A code the log still honours is kept — live, because
