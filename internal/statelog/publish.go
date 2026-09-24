@@ -1447,7 +1447,10 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// NO POSITION, which is the whole content of unknown (see
 		// [Result.Position]): the record at `at` is merely the newest on
 		// the subject, and naming it would tell the caller "your write
-		// landed here" — the one thing nobody here can say.
+		// landed here" — the one thing nobody here can say. A caller
+		// handed it would act on another writer's record as its own: a
+		// session barrier placed on it, or a turn charged to an item on
+		// the strength of a write nobody heard back from.
 		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Unvouched: true}, nil
 	}
 

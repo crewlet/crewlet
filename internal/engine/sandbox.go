@@ -692,7 +692,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -829,7 +829,14 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // resumes. The error is for deciding, not for logging: every failure path here
 // has already said what it did and why (see [Engine.failSuspension]), and no
 // caller fails a turn over it — the run is settled either way.
-func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) (bool, error) {
+//
+// WHAT THE TURN HAS WRITTEN SO FAR rides the suspension too (see
+// execstate.State.Written): the segment that finishes the turn may be charged
+// by a sole write, and it can only judge "exactly one" over the whole turn if
+// the half before the park travels with the conversation.
+func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
+	written *turnctx.Written,
+) (bool, error) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		// No store and no coordinator: nothing recorded the run, nothing
@@ -842,6 +849,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the turn suspended but recorded no conversation", nil)
 		return false, nil
 	}
+	suspension.State.Written, suspension.State.WrittenMany = written.Items()
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -1054,6 +1062,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// anybody is waiting: it sees neither its trigger nor this frame,
 		// and the row is the only place this can reach it from.
 		Reply: t.Reply,
+		// AND THE ITEM, for the same reason: the resumed turn is charged
+		// to what this one was on, and has no trigger to resolve it from.
+		WorkItem: t.WorkItem,
 	}
 }
 

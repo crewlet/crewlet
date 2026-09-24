@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -116,6 +117,24 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 // it survives only as long as this delegation does.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
+}
+
+// WorkItem is the task a wake is about, which is the item the turn it wakes
+// is charged to.
+//
+// THE TASK ID IS THE IDENTITY, read off [MetaTaskID] — the snapshot's task,
+// which the parser writes only when the wake is genuinely about one. A wake
+// about a person's own list names no task and so names no item: charging that
+// turn to the object id would charge it to a handle.
+func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
+	id := metadata[MetaTaskID]
+	if id == "" {
+		return types.WorkItem{}, false
+	}
+	return types.WorkItem{
+		Backend: types.WorkNative, ID: id,
+		Key: metadata[MetaTaskKey], Project: metadata[MetaProject],
+	}, true
 }
 
 // WakesActor implements [notify.Prompt].

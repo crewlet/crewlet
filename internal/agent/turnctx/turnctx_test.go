@@ -175,3 +175,24 @@ func TestANilWriteSetRecordsNothing(t *testing.T) {
 		t.Error("a nil set names a sole item")
 	}
 }
+
+// A RESUMED TURN'S SET CONTINUES THE PARKED ONE'S — the items in their order,
+// and the "wrote more than it lists" mark — so the segment that finishes the
+// turn judges a sole write over the whole turn rather than over its last half.
+func TestAWriteSetRebuiltFromAParkContinuesIt(t *testing.T) {
+	t.Parallel()
+	w := turnctx.WrittenFrom([]types.WorkItem{item("1")}, false)
+	if got, ok := w.Sole(); !ok || got != item("1") {
+		t.Fatalf("Sole = %+v, %v, want the item written before the park", got, ok)
+	}
+	w.Add(item("2"))
+	if _, ok := w.Sole(); ok {
+		t.Error("a second item after the park still reads as a sole write")
+	}
+	if _, ok := turnctx.WrittenFrom([]types.WorkItem{item("1")}, true).Sole(); ok {
+		t.Error("a set that had passed its cap before the park reads as one item")
+	}
+	if items, many := turnctx.WrittenFrom(nil, false).Items(); len(items) != 0 || many {
+		t.Errorf("an empty carry rebuilt %v, %v", items, many)
+	}
+}

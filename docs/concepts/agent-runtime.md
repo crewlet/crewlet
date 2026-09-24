@@ -63,7 +63,9 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
 
 ```
 1. Collect context (task, knowledge, trigger event, delegation chain),
-   and derive from the trigger WHO IS WAITING for this turn
+   and derive from the trigger WHO IS WAITING for this turn and WHICH
+   WORK ITEM it is on (the trigger's, a colleague's ask's, or a parked
+   run's) — announced on agent_turn_started before the prefetch
 
 2. Executor phase
    ├── Tool surface = every first-party tool except mark_onboarded,
@@ -86,8 +88,12 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    └── done | self_iterate (loop back, carrying the prior-work ledger
          so the next round does only the gap) | failed
 
-5. Publish agent_turn_completed and turn_completed; reflection consumes the latter
+5. Publish agent_turn_completed and turn_completed; reflection consumes the latter.
+   A turn nothing named an item for is charged here to the one task its
+   writes committed to, if there was exactly one
 ```
+
+Every turn is charged to **one work item or to none** — see [Which work a turn is on](turn-engine.md#which-work-a-turn-is-on).
 
 The executor and the reviewer can run on different LLM models — see the [Turn Engine](turn-engine.md#per-phase-llm-models) doc.
 

@@ -681,10 +681,17 @@ func (unwritableRuns) MarkSuspended(context.Context, string, map[string]any) (bo
 // a suspension, which is what these cases are about.
 func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 	t.Helper()
+	equipForCodeWith(t, e, pending, suspendingTool{})
+}
+
+// equipForCodeWith is [equipForCode] with the detaching tool supplied, for a
+// case about what the turn did before it detached.
+func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, detaching tools.Callable) {
+	t.Helper()
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
 	seat.Sandbox = &org.RoleSandbox{Enabled: true}
-	if err := company.Tools.Register(suspendingTool{}, tools.OriginBuiltin); err != nil {
+	if err := company.Tools.Register(detaching, tools.OriginBuiltin); err != nil {
 		t.Fatalf("registering the detaching tool: %v", err)
 	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{

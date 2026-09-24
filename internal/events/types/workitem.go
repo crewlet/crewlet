@@ -57,9 +57,16 @@ type WorkItem struct {
 	Backend WorkBackend `json:"backend"`
 	// ID is the item's identity inside that tracker: the value it never
 	// hands to another item and does not change when the item is renamed
-	// or moved — a native task id, a Jira issue id, a code host's global
-	// id. Never a number that is only unique inside one repository, which
-	// would make two different items one [WorkItem.Ref].
+	// or moved — a native task id, a Jira issue id, and on a code host the
+	// repository's or project's numeric id joined to the item's number:
+	// `<repository id>#<number>` on GitHub, `<project id>!<iid>` for a
+	// GitLab merge request and `<project id>#<iid>` for an issue. NOT the
+	// code host's own global id, because GitHub gives a pull request two
+	// of those — an issue comment carries the issue face's and a review the
+	// pull request's — so one pull request would be two items depending on
+	// which event woke the turn. Never a bare number either, which is only
+	// unique inside one repository and would make two different items one
+	// [WorkItem.Ref].
 	ID string `json:"id"`
 	// Key is the human label the tracker shows — "ENG-412", "acme/api#88" —
 	// as it read when the turn named the item.
