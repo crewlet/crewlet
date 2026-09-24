@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -498,7 +499,7 @@ func (s *stateLog) haltAppliers() {
 // because the order is load-bearing for the operator surfaces and an
 // init-order registration is exactly the thing nobody can read off the source.
 func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
+	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}}
 }
 
 // provisionAll provisions every registered domain's stream, in the register's
@@ -590,8 +591,8 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		return nil, err
 	}
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
-	// like the stream above it, and the three domains share one ceiling so
-	// a wedged metadata group cannot spend a full per-create budget three
+	// like the stream above it, and the four domains share one ceiling so
+	// a wedged metadata group cannot spend a full per-create budget four
 	// times over. Everything else here takes the ordinary boot context.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
@@ -701,6 +702,15 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
+	case usage.Domain{}.Name():
+		rows, err := usage.NewRows(s.db)
+		if err != nil {
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+		}
+		// NO EVICTION READER, for the vectors' reason and one of its own: an
+		// evicted node's usage is still what its seats did, and a fence
+		// here would erase that from every peer.
+		deps.Rows, deps.Fence, deps.Gates = rows, usage.NewFence(), usage.NewGates()
 	default:
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
@@ -1096,6 +1106,8 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		// take before the native runtime exists: it is a non-blocking
 		// send that returns when there is nothing to send to.
 		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
+	case usage.Domain{}.Name():
+		return usage.NewApplier(), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",
@@ -2423,7 +2435,12 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
 	}
 	out := make(map[string]maintenance.OpsLedger, len(s.domains))
 	for name, running := range s.domains {
-		if running != nil && running.runner != nil {
+		// A DOMAIN THAT KEEPS NO LEDGER HAS NOTHING TO SWEEP. The compacted
+		// domains declare none, and handing their runners over anyway put a
+		// `vectors_ops` job on every node's sweep — named after a table that
+		// does not exist, purging nothing every tick, and listed beside the
+		// real sweeps as though it were one.
+		if running != nil && running.runner != nil && running.domain.OpsTable() != "" {
 			out[name] = running.runner
 		}
 	}

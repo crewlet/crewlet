@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE STATE LOGS' STREAM CEILINGS: what each log's stream is created with, and
@@ -115,6 +116,12 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 	case pages.Domain{}.Name():
 		bytes, derived := stream.PagesMaxBytes(free)
 		return domainCeiling{Bytes: bytes, Field: "stream.pages_log_max_bytes", Explicit: !derived}, nil
+	case usage.Domain{}.Name():
+		// A CENSUS, NOT A SHARE OF THE DISK: one message per node-day
+		// object for the domain's history, so the default is fixed — and it
+		// is already the floor a scaled ceiling is held at.
+		bytes, explicit := stream.UsageMaxBytes()
+		return domainCeiling{Bytes: bytes, Field: "stream.usage_log_max_bytes", Explicit: explicit}, nil
 	}
 	return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
 		"declares no ceiling for its stream, so it would reserve its own default "+
@@ -137,8 +144,8 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 		log.WarnContext(ctx, "statelog_free_space_unmeasured",
 			"path", volume, "error", err.Error(),
 			"detail", "every derived state-log ceiling falls back to its floor; "+
-				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes "+
-				"and stream.pages_log_max_bytes to choose them")
+				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes, "+
+				"stream.pages_log_max_bytes and stream.usage_log_max_bytes to choose them")
 	}
 	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }

@@ -350,9 +350,11 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		accept bool
 		says   string
 	}{
-		"unset":                {func(*config.Bootstrap) {}, true, ""},
-		"below four gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4*gib - 1 }, false, "store_max_bytes"},
-		"at four gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 4 * gib }, true, ""},
+		"unset": {func(*config.Bootstrap) {}, true, ""},
+		// FIVE: four state logs at their one-gibibyte floor, and one for
+		// every stream that reserves nothing. Four was the floor with three.
+		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
+		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
 		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
 		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
@@ -375,6 +377,13 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 		}, false, "store_max_bytes"},
+		// THE USAGE LOG IS IN THE SUM: three ceilings that fit exactly, and a
+		// fourth that tips them past the limit.
+		"tipped past it by the usage log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.UsageLogMaxBytes = 1 * gib
+		}, false, "usage_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()

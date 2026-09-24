@@ -91,6 +91,13 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	if _, held := byName["pages"]; !held {
 		t.Errorf("no row for the wiki's projection; rows = %+v", rows)
 	}
+	// AND THE USAGE DOMAIN'S, whose gap is a coverage number too — a node
+	// whose spend history stopped replicating is one the fleet view has to
+	// be able to name.
+	if _, held := byName["usage"]; !held {
+		t.Errorf("no row for the usage domain, so an operator cannot see a "+
+			"node's spend history fall behind; rows = %+v", rows)
+	}
 	for _, row := range rows {
 		switch {
 		case row.Kind != "projection" && row.Kind != "domain":

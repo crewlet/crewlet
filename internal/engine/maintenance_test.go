@@ -133,7 +133,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_ops",
 		"tracker_respread",
 		"tracker_unblocked",
-		"vectors_ops",
+		// NOT `vectors_ops` OR `usage_ops`: the compacted domains keep no
+		// operation ledger, so there is no table to sweep — and a job named
+		// after one that does not exist is a sweep that reports itself
+		// working while purging nothing.
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)

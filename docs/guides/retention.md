@@ -279,6 +279,15 @@ A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read
 API are unaffected. See [Read consistency](consistency.md).
 
+The **usage log** refuses the same way, and what it costs is different: no read
+appends to it, so nothing a seat does is refused — what stops is the
+replication of each node's days. Every node keeps re-deriving its day and
+retrying on every tick, nothing is lost from any node's own event log, and the
+`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+size is a count of node-days rather than a rate — one message per (node, day,
+seat or schedule) for 181 days — so a log that fills has outgrown its census:
+raise `stream.usage_log_max_bytes` as below.
+
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
 that gate is closed. A number here would be a promise the mechanism does not
@@ -287,7 +296,8 @@ make.
 ## Changing a log's ceiling
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
-`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`) is not a live
+`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+`stream.usage_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -539,6 +549,14 @@ trimmed; the tables are not.
 That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
+
+The **usage history** is the one replicated table set with a horizon of its
+own: each node's company days — spend, turns, page reads, schedule fires — are
+kept **181 days**, which is a ninety-day window, the ninety days it is compared
+with, and the day a moved clock can touch. Nothing sweeps them: every record for
+a day deletes the rows older than that day minus 181 in the same transaction
+that writes it, on every node, and the stream's own age bound forgets the same
+days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each node applies the log into its own copy, so a fleet

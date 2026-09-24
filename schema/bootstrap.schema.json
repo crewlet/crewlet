@@ -316,7 +316,7 @@
         "store_max_bytes": {
           "description": "How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem.",
           "maximum": 70368744177664,
-          "minimum": 4294967296,
+          "minimum": 5368709120,
           "type": "integer"
         },
         "sync": {
@@ -356,6 +356,12 @@
         "url": {
           "description": "External NATS URL. Required for nats, refused for embedded.",
           "type": "string"
+        },
+        "usage_log_max_bytes": {
+          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules.",
+          "maximum": 68719476736,
+          "minimum": 1073741824,
+          "type": "integer"
         }
       },
       "type": "object"

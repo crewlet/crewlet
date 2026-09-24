@@ -395,6 +395,13 @@ type Engine struct {
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
 
+	// usage is this node's usage publisher: the loop that republishes the
+	// days this node's own event log holds. On the ENGINE for the embedding
+	// duty's reason — a second loop after an apply would be two writers on
+	// this node's own subjects — and it reads the current epoch's clock and
+	// chart per tick instead.
+	usage *usageLoop
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -911,6 +918,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// corpus — which reports as a healthy domain rather than as a
 		// missing one.
 		e.startEmbedding(ctx, e.native.log)
+		// AND THE USAGE DOMAIN'S WRITER, which every node runs for its own
+		// days. Without it the domain replicates an empty stream and every
+		// spend answer is as partial as it was before the domain existed.
+		e.startUsage(ctx, e.native.log)
 	}
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1251,6 +1262,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
 	e.stopEmbedding()
+	e.stopUsage()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator

@@ -74,7 +74,7 @@
 // times beside it. Every write transaction this process begins therefore takes
 // its place in one FIFO line per file, handed from each holder to the writer
 // that asked next. A writer's wait is then bounded by the work in front of it
-// rather than by how its polls line up, which is what lets three domains'
+// rather than by how its polls line up, which is what lets four domains'
 // appliers share the replicated estate and each still drain.
 //
 // # One driver

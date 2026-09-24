@@ -493,8 +493,11 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   4 GiB..64 TiB, and it must not be smaller
-                                    #   than the ceilings declared inside it.
+                                    #   5 GiB..64 TiB — the four state logs'
+                                    #   1 GiB floors and one for every stream
+                                    #   that reserves nothing — and it must not
+                                    #   be smaller than the ceilings declared
+                                    #   inside it.
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back
@@ -639,6 +642,19 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
+  # usage_log_max_bytes: 1073741824
+                                    #   the usage log's ceiling (default 1 GiB,
+                                    #   1..64 GiB): the compacted stream every
+                                    #   node publishes its own company days to —
+                                    #   spend, turns, page reads, schedule fires
+                                    #   — so history is answered fleet-wide and
+                                    #   outlives the node that spent it. SIZED BY
+                                    #   A CENSUS, not a rate: one message per
+                                    #   (node, day, seat or schedule) for 181
+                                    #   days, about 217 MB for three nodes of
+                                    #   forty seats and twenty schedules.
+                                    #   Crossing it refuses the append and the
+                                    #   log_headroom alarm names `usage`
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

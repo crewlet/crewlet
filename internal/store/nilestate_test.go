@@ -88,6 +88,14 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 			_, err := d.EncodeVector([]float32{1, 2, 3})
 			wantErrNoEstate(t, err)
 		},
+		"UsageMark": func(t *testing.T) {
+			_, err := d.UsageMark(ctx, store.UsageWindow{})
+			wantErrNoEstate(t, err)
+		},
+		"UsageForDay": func(t *testing.T) {
+			_, err := d.UsageForDay(ctx, store.UsageWindow{})
+			wantErrNoEstate(t, err)
+		},
 		"Backup": func(t *testing.T) {
 			_, err := d.Backup(ctx, t.TempDir()+"/copy.db")
 			if err == nil {

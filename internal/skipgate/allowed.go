@@ -238,7 +238,7 @@ var allowed = []Allowance{
 		Test:    "TestTheStateLogsFitTheBrokerTheyBootOn",
 		When:    Environment,
 		Why: "Needs a volume whose broker can reserve 5.7 GiB plus a gibibyte to spend " +
-			"around it. It is the only case that proves the three logs fit one budget " +
+			"around it. It is the only case that proves the four logs fit one budget " +
 			"against a real broker; fitCeilings' table covers the arithmetic with no " +
 			"broker in it, and would agree with a ceiling reserved outside the budget.",
 	},

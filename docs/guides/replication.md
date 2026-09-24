@@ -1,6 +1,8 @@
 # Replication
 
-Crewlet's own tracker and knowledge base are **replicated state machines**. One
+Crewlet's own tracker and knowledge base are **replicated state machines**
+(the embeddings and each node's usage history ride the same framework as
+[compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day)). One
 ordered stream per domain is the write-ahead log; every node applies it into
 its own SQL database; the checkpoint commits in the same transaction as the
 rows it covers. That last clause is the whole design: a node's position and its
@@ -197,7 +199,9 @@ writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
-knob. With three domains applying and a bulk update in flight, the default
+knob. With three domains applying and a bulk update in flight (the usage
+domain's transactions are a node-day's handful of rows, and weigh nothing
+here outside a replay), the default
 five seconds is close to the three transactions a fourth writer can
 legitimately wait behind — so that log line on a node doing bulk work is the
 signal to raise it rather than a fault. Raise the knob before you widen
@@ -257,6 +261,37 @@ that was never published is not retired and still faults, which is what keeps
 this from hiding a writer publishing a kind it never declared. Sprints, removed
 from the work tracker, are the first retired kind.
 
+## Two compacted domains: the embeddings and each node's day
+
+Two domains do not keep a history at all. Their streams keep **one message per
+subject** — a keyed table rather than a log — so a node that joins replays the
+current value of each object and nothing before it, a gap is a coverage number
+rather than a fault, and neither gates a node's seats or claims that two nodes
+hold identical rows.
+
+| Domain | Stream | One subject per | Written by | Kept for |
+|---|---|---|---|---|
+| **vectors** | `CREWLET_TRACKER_VECTORS` | embedded source | the fleet's one embedding duty | 90 days per message; the rows until the source is forgotten |
+| **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat or schedule) | **every node, for its own days only** | 181 days |
+
+**`usage` is what makes history fleet-wide.** Each node derives its own day —
+the spend by phase, worker, model and provider slot, the turns that ended and
+how (failed, reviewed, first pass, sent back, a duration histogram), the pages
+its seats read, the schedules it fired — from its own event log, every 15
+seconds while the day moves, and publishes each object's whole cumulative value.
+Every node applies every node's days, so any node answers for the fleet and a
+node that leaves takes nothing with it: its days stay in every peer's rows, and
+a node that joins later replays them from the stream. Because the node is part
+of the subject, no two nodes ever write one object and nothing is arbitrated;
+an apply replaces the object's rows.
+
+A day is cut on the company's clock (`timezone`). A node re-derives today and
+yesterday on every tick, so the turn that ended a second before midnight
+reaches the fleet, and on every start, so a day a node was down across still
+arrives. History older than 181 days leaves in the same transaction that
+applies the day that makes it old, on every node alike — there is no sweep.
+The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).
+
 ## The six capacity ceilings
 
 1. **The broker's storage limit** — `stream.store_max_bytes`. Every ceiling
@@ -266,7 +301,8 @@ from the work tracker, are the first retired kind.
    measured once. **Divide it when more than one engine shares a filesystem**:
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
-   `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
+   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` and
+   `stream.usage_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
    [Retention](retention.md).
@@ -282,14 +318,14 @@ from the work tracker, are the first retired kind.
 
 A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
-stream whose ceiling it could not honour. So the three logs compete for one
+stream whose ceiling it could not honour. So the four logs compete for one
 number, and a node sizes them together, once, when it creates their streams:
 
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), the vector changelog for 16 GiB capped by the same quarter, and the usage log for a fixed 1 GiB — a count of node-days, which more disk does not grow. |
 | **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
@@ -322,8 +358,8 @@ keep the ceilings they were created with, and no Tier A setting changes them: �
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 4 GiB free there, three quarters
-of which is the three 1 GiB floors), which the broker measures again when the
+on that volume (a first boot needs at least 5⅓ GiB free there, three quarters
+of which is the four 1 GiB floors), which the broker measures again when the
 node next starts. Or, when the refused log's ceiling is
 above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
 so when that applies.
