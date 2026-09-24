@@ -429,11 +429,14 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	return true, nil
 }
 
-// startNativeDuties arms the native runtime's two fleet-singleton duties: the
+// startNativeDuties arms the native runtime's two fleet-singleton duties — the
 // log's trim, without which a domain's log only grows to its ceiling, and the
-// vector domain's one writer. ONE CALL FOR BOTH CALLERS — [New] and
+// vector domain's one writer — and the usage publisher every node runs for its
+// own days ([Engine.startUsage]). ONE CALL FOR BOTH CALLERS — [New] and
 // [Engine.startNativeFor] — so a runtime met at an apply cannot be missing a
-// duty a boot would have armed.
+// writer a boot would have armed: a node that booted unconfigured and was
+// handed its first company by an apply would otherwise never publish a day of
+// its usage, and every spend answer would silently leave its seats out.
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	n := e.native.Load()
 	if n == nil {
@@ -444,6 +447,10 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// semantic search is present and correct over an empty corpus — which
 	// reports as a healthy domain rather than as a missing one.
 	e.startEmbedding(ctx, n.log)
+	// AND THE USAGE DOMAIN'S WRITER, which every node runs for its own
+	// days. Without it the domain replicates an empty stream and every
+	// spend answer is as partial as it was before the domain existed.
+	e.startUsage(ctx, n.log)
 }
 
 // stopNative ends this node's native backends. Nil-safe, which is the node

@@ -442,6 +442,13 @@ type Engine struct {
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
 
+	// usage is this node's usage publisher: the loop that republishes the
+	// days this node's own event log holds. On the ENGINE for the embedding
+	// duty's reason — a second loop after an apply would be two writers on
+	// this node's own subjects — and it reads the current epoch's clock and
+	// chart per tick instead.
+	usage *usageLoop
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -1339,6 +1346,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
 	e.stopEmbedding()
+	e.stopUsage()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator

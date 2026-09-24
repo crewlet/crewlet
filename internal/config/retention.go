@@ -86,6 +86,17 @@ const (
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
+	// DefaultUsageLogMaxBytes is the usage log's ceiling: four times the
+	// modelled 181-day census of a three-node, sixty-object fleet (about
+	// 217 MB), and the floor every state log shares.
+	DefaultUsageLogMaxBytes int64 = 1 << 30
+
+	// UsageLogMaxBytesFloor and UsageLogMaxBytesCeiling bound it. The floor
+	// is every log's; the ceiling is sixty-four times the default, which is
+	// a fleet two orders of magnitude past the census before any typo.
+	UsageLogMaxBytesFloor   int64 = 1 << 30
+	UsageLogMaxBytesCeiling int64 = 64 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's derived ceiling.
 	//
@@ -111,18 +122,20 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS FOUR GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside: three state-log domains, none of which may be
-	// sized below TrackerLogMaxBytesFloor, plus the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
+	// THE FLOOR IS FIVE GIBIBYTES, which is the smallest limit the engine's
+	// own logs fit inside: four state-log domains, none of which may be
+	// sized below TrackerLogMaxBytesFloor, plus a gibibyte for the
+	// mailboxes, the event stream and every coordination bucket, which
+	// reserve nothing and grow against the same number. Below it a node
+	// provisions its way to a refusal on whichever stream happens to be
+	// last. It was four while there were three domains; beside the usage
+	// log's gibibyte, four would leave the unreserved streams nothing.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
 	// orders of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 256 GiB of vectors), so anything
 	// past it is a unit mistake rather than a deployment.
-	StoreMaxBytesFloor   int64 = 4 << 30
+	StoreMaxBytesFloor   int64 = 5 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
@@ -316,6 +329,19 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 	}
 	capped := min(DefaultTrackerVectorsMaxBytes, DerivedLogMaxBytes(free))
 	return max(capped, TrackerVectorsMaxBytesFloor), capped != DefaultTrackerVectorsMaxBytes
+}
+
+// UsageMaxBytes is the usage log's ceiling, and whether the operator set it.
+//
+// NOT DERIVED FROM THE DISK, unlike the mutation log's: the default is already
+// the floor every state log shares, so a disk-derived value could only ever
+// equal it — and the stream's size is a census of objects rather than a rate
+// a larger disk should buy more of.
+func (s Stream) UsageMaxBytes() (int64, bool) {
+	if s.UsageLogMaxBytes > 0 {
+		return s.UsageLogMaxBytes, true
+	}
+	return DefaultUsageLogMaxBytes, false
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default
