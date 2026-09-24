@@ -677,7 +677,7 @@ func (s *refusingStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return s.inner.ReleaseBox(ctx, turnID)
 }
 
-func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state Suspension) (bool, error) {
 	if s.called("MarkSuspended") {
 		return false, errRefusedCall
 	}

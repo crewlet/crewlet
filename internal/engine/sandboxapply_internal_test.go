@@ -409,10 +409,10 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	suspended, err := store.MarkSuspended(ctx, turnID, map[string]any{
+	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: map[string]any{
 		"version": float64(1), "pending_tool_call_id": "call-1",
 		"pending_tool_name": builtin.RunSandboxTool,
-	})
+	}})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

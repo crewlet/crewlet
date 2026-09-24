@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -409,26 +410,87 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	}
 }
 
-func TestTheTranscriptIsTailCapped(t *testing.T) {
+// THE BOUND IS BYTES, AND THE CUT IS ON A BOUNDARY. The transcript rides an
+// event, and an event's ceiling is bytes: a transcript of three-byte runes
+// under the old 100 000-RUNE cap was 300 KB on the wire, past the 256 KiB this
+// bound promises. And the kept half opens on a whole character, because a
+// byte offset from the end lands mid-rune two times in three here, which the
+// event store's JSON encoding turns into U+FFFD.
+func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("x", codingagent.MaxTranscript*2)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), strings.Repeat("日", codingagent.MaxTranscriptBytes)+"\nTHE CONCLUSION")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if len(res.Transcript) > codingagent.MaxTranscript+64 {
-		t.Fatalf("transcript is %d characters", len(res.Transcript))
+	kept, marked := strings.CutPrefix(res.Transcript, "…")
+	if !marked {
+		t.Fatal("the cap was silent")
+	}
+	if len(kept) > codingagent.MaxTranscriptBytes {
+		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), codingagent.MaxTranscriptBytes)
+	}
+	if !utf8.ValidString(kept) || strings.HasPrefix(kept, string(utf8.RuneError)) {
+		t.Fatal("the transcript was cut through a rune")
 	}
 	// The TAIL is kept: the conclusion is what a reader wants.
-	if !strings.Contains(res.Transcript, "THE CONCLUSION") {
+	if !strings.HasSuffix(kept, "THE CONCLUSION") {
 		t.Fatal("the tail cap dropped the end of the transcript instead of the start")
 	}
-	if !strings.Contains(res.Transcript, "truncated") {
-		t.Fatal("the cap was silent")
+}
+
+// A crash explains itself at the bottom, so the failure text a run that
+// produced nothing reports is its stderr's END, bounded like the transcript
+// and marked where it was cut.
+func TestACrashDetailKeepsItsEndAndSaysItCut(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Err(), strings.Repeat("noise\n", codingagent.MaxTranscriptBytes)+"FATAL: migrations/0007.sql is missing")
+	b.Put(p.ExitCode(), "1")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
+		t.Error("the line naming the failure was cut away")
+	}
+	if !strings.HasPrefix(res.Error, "…") {
+		t.Error("the cut is silent")
+	}
+	if len(res.Error) > codingagent.MaxTranscriptBytes+len("…") {
+		t.Errorf("the failure text is %d bytes, past its bound", len(res.Error))
+	}
+}
+
+// THE REPORT IS BOUNDED TOO, and keeps its HEAD. It is the response on the
+// run's own phase record, the agent writes it and nothing else limits it —
+// and a record over the queue's ceiling is refused whole. Unlike a log, a
+// report is read from the top, where its summary is.
+func TestTheReportIsBoundedAndKeepsItsHead(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Findings(), "Outcome: succeeded\n"+strings.Repeat("detail\n", codingagent.MaxTranscriptBytes))
+	b.Put(p.ExitCode(), "0")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasPrefix(res.Text, "Outcome: succeeded") {
+		t.Error("the report's opening line was cut away")
+	}
+	if len(res.Text) > codingagent.MaxTranscriptBytes+len("…") || !strings.HasSuffix(res.Text, "…") {
+		t.Errorf("the report is %d bytes and unmarked, not bounded", len(res.Text))
+	}
+	if !res.Success {
+		t.Error("a bounded report stopped reading as a success")
 	}
 }
 

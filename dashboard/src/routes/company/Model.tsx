@@ -72,7 +72,15 @@ const phaseRecordKey = (r: PhaseRecord) => r.key;
 // Every phase the engine emits, the turn's own two first. A phase left off
 // this row is one nobody can filter to, which on this screen means its cost
 // is only ever visible inside the "all phases" total.
-const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "judge"] as const;
+const PHASES = [
+  "execute",
+  "review",
+  "onboarding",
+  "sandbox",
+  "subagent",
+  "auxiliary",
+  "judge",
+] as const;
 
 export function ModelActivity() {
   const { socket } = useClient();

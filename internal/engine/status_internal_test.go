@@ -667,7 +667,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 // whether it landed — the one answer that is neither "resumable" nor "lost".
 type unwritableRuns struct{ sandbox.PendingStore }
 
-func (unwritableRuns) MarkSuspended(context.Context, string, map[string]any) (bool, error) {
+func (unwritableRuns) MarkSuspended(context.Context, string, sandbox.Suspension) (bool, error) {
 	return false, errors.New("the coordination store did not answer")
 }
 

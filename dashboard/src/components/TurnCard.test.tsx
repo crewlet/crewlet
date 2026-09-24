@@ -64,6 +64,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     backend: "",
     codingAgent: "",
     sandboxId: "",
+    launchId: "",
+    transcript: "",
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-13T10:03:00Z",

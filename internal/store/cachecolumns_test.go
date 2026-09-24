@@ -248,3 +248,60 @@ func nodeBackfill(t *testing.T, name string) []string {
 	}
 	return out
 }
+
+// A COLLECTED CODING RUN IS COUNTED WHERE EVERY OTHER PHASE IS.
+//
+// The run's own record is the only place its tokens reach a reader: the
+// executor's resumed record states the executor's rounds, and nothing else
+// carries the run's. So the record has to fold through the stored rollup and
+// the live one alike, under its own phase and its own model — a record either
+// producer dropped would be a coding run's whole spend missing from the screen
+// that exists to show spend.
+func TestASandboxPhaseIsCountedInTheRollup(t *testing.T) {
+	t.Parallel()
+	payload, err := json.Marshal(types.AgentPhaseCompleted{
+		Agent: "a-1", RoleName: "Lead", TurnID: "run-1", WorkKey: "wk-1",
+		Phase: types.PhaseSandbox, Iteration: 2, LaunchID: "job-1",
+		Backend: types.BackendSandbox, CodingAgent: "claude-code", Model: "claude-sonnet-5",
+		InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700,
+		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42,
+		ActivityTranscript: "[tool] bash: go test ./...",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	log := open(t).Events()
+	appendPhase(t, log, "p1", at, payload, store.SpendFor("agent_phase_completed", payload))
+
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	live := livestate.New()
+	live.Apply(&livestate.Envelope{ID: "p1", Type: "agent_phase_completed",
+		Timestamp: at.Format(time.RFC3339Nano), Category: "agent", Payload: body})
+
+	for name, records := range map[string][]tokens.Record{
+		"stored": phaseTokens(t, log), "live": live.SpendRecords(),
+	} {
+		roll := tokens.Aggregate(records, tokens.Options{})
+		var sandbox *tokens.PhaseRow
+		for i := range roll.ByPhase {
+			if roll.ByPhase[i].Phase == string(types.PhaseSandbox) {
+				sandbox = &roll.ByPhase[i]
+			}
+		}
+		if sandbox == nil {
+			t.Errorf("%s: the rollup has no sandbox phase: %+v", name, roll.ByPhase)
+			continue
+		}
+		if sandbox.TotalTokens != 9700 || sandbox.CacheReadTokens != 6000 || sandbox.CostUSD != 0.42 {
+			t.Errorf("%s: the sandbox phase holds %+v, want the run's 9700 tokens, 6000 cached, $0.42",
+				name, sandbox.Bucket)
+		}
+		if len(roll.ByModel) != 1 || roll.ByModel[0].Model != "claude-sonnet-5" {
+			t.Errorf("%s: models = %+v, want the run's own", name, roll.ByModel)
+		}
+	}
+}

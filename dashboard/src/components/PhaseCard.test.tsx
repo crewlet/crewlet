@@ -56,6 +56,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     backend: "",
     codingAgent: "",
     sandboxId: "",
+    launchId: "",
+    transcript: "",
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
@@ -447,5 +449,32 @@ describe("a tool call's arguments", () => {
 
   test("show arguments that are not a JSON document at all, untouched", () => {
     expect(openedArgs("not json")).toContain("not json");
+  });
+});
+
+// A CODING RUN IS NOT A MODEL CALL, and its card says what it is. It has no
+// rounds because the engine drove none, so the fallback that labels a joined
+// response "recorded before rounds were kept apart" would misname the report
+// the run wrote back — and the run's activity log, the whole account of what
+// an agent with no telemetry did, has to be reachable from the card.
+describe("a coding run's card", () => {
+  const RUN = phase({
+    key: "turn-1|sandbox|1|job-1",
+    phase: "sandbox",
+    backend: "sandbox",
+    codingAgent: "claude-code",
+    launchId: "job-1",
+    response: "Fixed the flake and opened the pull request.",
+    transcript: "[tool] bash: git clone\n[tool] bash: go test ./...",
+  });
+
+  test("shows the report and the activity, never the legacy transcript", () => {
+    render(<PhaseCard record={RUN} defaultOpen />);
+    expect(screen.getByText("Report")).toBeDefined();
+    expect(screen.getByText(/Fixed the flake/)).toBeDefined();
+    expect(screen.queryByText(/recorded before rounds were kept apart/)).toBeNull();
+    const activity = screen.getByRole("button", { name: /^Activity/ });
+    fireEvent.click(activity);
+    expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
   });
 });

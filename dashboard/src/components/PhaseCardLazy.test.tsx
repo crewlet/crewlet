@@ -79,6 +79,8 @@ function record() {
     backend: "",
     codingAgent: "",
     sandboxId: "",
+    launchId: "",
+    transcript: "",
     deliveredRefs: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",

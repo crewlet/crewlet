@@ -1149,7 +1149,6 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.Backend = types.BackendSandbox
 		ev.CodingAgent = rec.Run.CodingAgent
 		ev.SandboxID = rec.Run.SandboxID
-		ev.CostUSD = rec.Run.CostUSD
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.LaunchID = rec.Run.LaunchID
 	}
