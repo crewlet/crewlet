@@ -33,6 +33,13 @@ import (
 // reasons: the lead of the project the item is in, asked about the person
 // behind the credential ([Actor.Record]), or a person acting through their own
 // credential ([tracker.AuthorKind.Person]).
+//
+// A MOVE INTO THE PROJECT THE ITEM IS ALREADY IN takes neither: it moves
+// nothing, and it is how the retry an unknown or a stopped move prescribes
+// arrives once its first attempt landed. The tracker answers it from the
+// move's own ledger — this operation's move, finished — or refuses it as
+// somebody else's, so the authority that matters was checked when the item
+// left its project.
 
 // ---- move_work_item ----------------------------------------------------- //
 
@@ -110,12 +117,26 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return failed(readFailure(tracker.MoveWorkItemTool, err)), nil
 	}
-	lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
-	if !lead && !actor.Kind.Person() {
-		return failed(fmt.Sprintf("Moving %s out of %s is the lead of %s's "+
-			"decision, not yours. Ask them, or say in a comment where it "+
-			"belongs.", before.Task.Key, before.Task.Project,
-			before.Task.Project)), nil
+	// THE GATE IS ON THE OPERATION, NOT ON THE STATE IT PRODUCED. An item
+	// already in the target is either this operation's own move answered
+	// again — the retry an `unknown` or a stopped walk prescribes, whose
+	// first attempt landed — or somebody else's, and which of the two only
+	// the move's ledger can say ([tracker.Writer.MoveTaskToProject] answers
+	// the first and refuses the second without writing). Gating it on the
+	// lead of the project the item is in NOW asked the lead of the TARGET:
+	// a seat leading ENG and not OPS was told to ask OPS's lead for a move
+	// that had already happened, and never learned it had.
+	from := before.Task.Key
+	if before.Task.Project == target {
+		from = replacedKey(before.Task)
+	} else {
+		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
+		if !lead && !actor.Kind.Person() {
+			return failed(fmt.Sprintf("Moving %s out of %s is the lead of %s's "+
+				"decision, not yours. Ask them, or say in a comment where it "+
+				"belongs.", before.Task.Key, before.Task.Project,
+				before.Task.Project)), nil
+		}
 	}
 
 	// THE WAKE DESCRIBES WHERE THE ITEM IS GOING. Its new key is minted by
@@ -137,7 +158,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
 		// is held here.
 		return failed(unknownWrite(actor, tracker.MoveWorkItemTool,
-			fmt.Sprintf("%s moved to %s", before.Task.Key, target), opID,
+			fmt.Sprintf("%s moved to %s", from, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.MoveWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — its key and project "+
@@ -146,8 +167,25 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{
-		"key": got.Key, "moved_from": before.Task.Key, "project": target,
+		"key": got.Key, "moved_from": from, "project": target,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
 	}, actor))
+}
+
+// replacedKey is the key a move into the project an item is already in
+// replaced: the newest of its former keys, since every move appends the key it
+// replaces ([tracker.Writer.MoveTaskToProject]). The item's CURRENT key is the
+// one the move minted, so an answer reporting it as `moved_from` names the
+// same key twice.
+//
+// Newest, not this operation's own: the ledger that answers the retry keeps no
+// key, so an item somebody moved out of the target and back since reports the
+// key that later move replaced. An item with no former key was never moved,
+// and the move refuses it rather than answering; its own key is what is left.
+func replacedKey(task tracker.Task) string {
+	if n := len(task.FormerKeys); n > 0 {
+		return task.FormerKeys[n-1]
+	}
+	return task.Key
 }

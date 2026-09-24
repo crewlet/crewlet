@@ -102,6 +102,15 @@ is not drawn under that root on either board. A merge never leaves one: a fold
 that would re-parent a duplicate's subtasks onto an item in another project is
 refused before it starts, naming the move that makes it possible.
 
+The same call made again — what a move answered `unknown`, or stopped part-way,
+tells you to do — is answered by the move itself even once its first attempt has
+carried the item into the new project: it reports the move that landed, under the
+key the item left (`moved_from`), and finishes whatever of the subtree has not
+followed. The lead check is on the move *out* of a project, so the lead of the
+old project finishing their own move is not sent to the new project's lead about
+a move that already happened; and a move into the project an item is already in
+that no earlier attempt of that same call made is refused, as somebody else's.
+
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
 here" is the answer, and a made-up date would make an untouched project look

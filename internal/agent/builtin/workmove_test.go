@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -158,5 +159,128 @@ func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// landingMover is a mover whose first move LANDS and whose answer is lost —
+// unknown, or a walk stopped after the root moved — and which then answers
+// the way the tracker's ledger does: this operation's own move, applied, and
+// any other operation's refused as somebody else's.
+type landingMover struct {
+	trk   *fakeTracker
+	first func(opID string) (tracker.WriteResult, error)
+	ops   []string
+}
+
+func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+
+	m.ops = append(m.ops, opID)
+	if len(m.ops) == 1 {
+		// THE ROOT MOVES: re-keyed in the target, its old key still
+		// resolving to it (the fake's map is keyed on the key it was
+		// filed under).
+		moved := m.trk.tasks["ENG-1"]
+		moved.Task.FormerKeys = []string{moved.Task.Key}
+		moved.Task.Key, moved.Task.Project = target+"-3", target
+		m.trk.tasks["ENG-1"] = moved
+		return m.first(opID)
+	}
+	if opID != m.ops[0] {
+		return tracker.WriteResult{}, fmt.Errorf("tracker: task i1 is already in "+
+			"%s, and this node's operation ledger holds no record of this move "+
+			"putting it there", target)
+	}
+	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: opID, Collapsed: true,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+		Version:  71,
+	}}, nil
+}
+
+// THE RETRY A MOVE PRESCRIBES IS ANSWERED BY THE MOVE, not refused by the gate
+// the first attempt already passed.
+//
+// The gate asked about the lead of the project the item is in NOW, and after
+// a first attempt that landed that is the TARGET: a seat leading ENG and not
+// OPS, told to call again with the same arguments, was told instead that
+// moving OPS-3 out of OPS was OPS's lead's decision — about a move that had
+// happened, which it never learned.
+func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
+	t.Parallel()
+	for name, first := range map[string]func(string) (tracker.WriteResult, error){
+		"an unknown": func(opID string) (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{
+				Outcome: statelog.OutcomeUnknown, OpID: opID,
+			}}, nil
+		},
+		"a walk stopped after the root moved": func(string) (tracker.WriteResult, error) {
+			return tracker.WriteResult{}, fmt.Errorf("tracker: whether task "+
+				"id-9's move into OPS landed is unknown: %w", tracker.ErrStepUnresolved)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			mover := &landingMover{trk: trk, first: first}
+			reg := tools.NewRegistry()
+			if _, err := builtin.Register(reg, builtin.Deps{
+				Work: builtin.WorkDeps{Reader: trk, Writer: trk.as,
+					Moves: func(builtin.Actor) builtin.WorkMover { return mover }},
+				// THE SEAT LEADS THE SOURCE AND NOT THE TARGET.
+				LeadsProject: func(_ context.Context, _, project string) bool {
+					return project == "ENG"
+				},
+			}); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			args := map[string]any{"item": "ENG-1", "project": "OPS"}
+
+			got := callWork(t, reg, tracker.MoveWorkItemTool, args)
+			if !got.Failed || !strings.Contains(got.Output, "exactly the same arguments") {
+				t.Fatalf("the first attempt answered %q, want the retry it prescribes",
+					got.Output)
+			}
+			retry := callWork(t, reg, tracker.MoveWorkItemTool, args)
+			if retry.Failed {
+				t.Fatalf("the prescribed retry was refused: %s", retry.Output)
+			}
+			if len(mover.ops) != 2 || mover.ops[0] != mover.ops[1] {
+				t.Fatalf("the mover was asked under %q, want the same operation "+
+					"twice", mover.ops)
+			}
+			answer := answerOf(t, retry)
+			// MOVED FROM THE KEY THE MOVE REPLACED, not the one it minted.
+			if answer["key"] != "OPS-3" || answer["moved_from"] != "ENG-1" ||
+				answer["project"] != "OPS" {
+				t.Errorf("the retry answered %v, want OPS-3 moved from ENG-1 into OPS",
+					answer)
+			}
+		})
+	}
+}
+
+// A MOVE INTO THE PROJECT AN ITEM IS ALREADY IN THAT NO EARLIER ATTEMPT MADE is
+// the tracker's to refuse, and it does — so passing the gate there hands a seat
+// nothing: the answer is the refusal, and says the change was not made.
+func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	mover := &landingMover{trk: trk}
+	mover.ops = []string{"somebody else's move"}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{
+		Work: builtin.WorkDeps{Reader: trk, Writer: trk.as,
+			Moves: func(builtin.Actor) builtin.WorkMover { return mover }},
+		LeadsProject: func(context.Context, string, string) bool { return false },
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	got := callWork(t, reg, tracker.MoveWorkItemTool,
+		map[string]any{"item": "ENG-1", "project": "ENG"})
+	if !got.Failed || !strings.Contains(got.Output, "no record of this move") ||
+		!strings.Contains(got.Output, "NOT made") {
+		t.Errorf("a move into the item's own project answered %q, want the "+
+			"tracker's refusal", got.Output)
 	}
 }
