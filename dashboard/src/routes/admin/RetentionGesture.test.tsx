@@ -131,3 +131,115 @@ test("a held gesture is let go of exactly when the report shows it", () => {
   expect(heldGestures(readmitted, [node()])).toEqual({});
   expect(Object.keys(heldGestures(readmitted, [node({ evicted })]))).toEqual(["node-4:readmit"]);
 });
+
+/** The serving node's own row, applied through `seq` on both logs. */
+const servingNode = (seq: { tracker: number; pages: number }, generation = 1): RetentionNode =>
+  node({
+    node_id: "node-1",
+    live: true,
+    domains: Object.fromEntries(
+      (["tracker", "pages"] as const).map((domain) => [
+        domain,
+        {
+          generation,
+          seq: seq[domain],
+          applied_through: seq[domain],
+          generation_state: "current",
+        },
+      ]),
+    ) as RetentionNode["domains"],
+  });
+
+// A COMPLETE GESTURE A LATER CHANGE OVERTOOK IS LET GO OF. The operator evicts
+// node-4 here and, before the refetch lands, somebody readmits it from the
+// command line: the report shows node-4 counted and the row read "Eviction
+// sent…" for the rest of the page's life, reopening an answer with nothing to
+// press. Once the node serving the report has applied every record the
+// gesture wrote, its disagreement is a later change, not a lag.
+test("a complete eviction somebody else undid is let go of once the report includes it", () => {
+  const complete = { opId: "op", force: false, answer: golden.answers["applied"] };
+  const gestures = { "node-4:evict": complete };
+  // THE GOLDEN'S RECORDS: the tracker's at 918280002, the pages log's at 4410.
+  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  expect(heldGestures(gestures, [node(), past], "node-1")).toEqual({});
+  // NOT WHILE THE SERVING NODE IS BEHIND EITHER RECORD — a `pending` record
+  // it has not applied is exactly why a report disagrees — nor on another
+  // generation's number space, nor when it cannot say where it is.
+  for (const [why, nodes, servedBy] of [
+    [
+      "behind the pages record",
+      [node(), servingNode({ tracker: 918280010, pages: 4409 })],
+      "node-1",
+    ],
+    ["another generation", [node(), servingNode({ tracker: 918280010, pages: 4420 }, 2)], "node-1"],
+    ["no row of its own", [node()], "node-1"],
+    ["no serving node named", [node(), past], undefined],
+  ] as const) {
+    expect(Object.keys(heldGestures(gestures, [...nodes], servedBy)), why).toEqual([
+      "node-4:evict",
+    ]);
+  }
+  // AND AN UNFINISHED GESTURE IS NEVER LET GO OF THIS WAY: a request can
+  // still finish it.
+  const partial = {
+    "node-4:evict": { opId: "op", force: false, answer: golden.answers["unknown"] },
+  };
+  expect(Object.keys(heldGestures(partial, [node(), past], "node-1"))).toEqual(["node-4:evict"]);
+});
+
+test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {
+  query.refetch = vi.fn();
+  query.data = report([node(), servingNode({ tracker: 1, pages: 1 })]);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify(golden.answers["applied"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
+  );
+  const { rerender } = render(
+    <Router>
+      <RetentionPanels />
+    </Router>,
+  );
+  fireEvent.click(rowButton("node-4", "Evict…"));
+  fireEvent.change(screen.getByLabelText("Type node-4 to confirm"), {
+    target: { value: "node-4" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
+  await waitFor(() => expect(screen.getByText(/evicted on every log/)).toBeTruthy());
+  fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+  expect(screen.getByRole("button", { name: "Eviction sent…" })).toBeTruthy();
+
+  // READMITTED FROM THE COMMAND LINE, and the serving node has applied past
+  // both of this gesture's records: node-4 reads counted, and the row is
+  // the node's own state again.
+  query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420 })]);
+  rerender(
+    <Router>
+      <RetentionPanels />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Eviction sent…" })).toBeNull());
+  expect(rowButton("node-4", "Evict…")).toBeTruthy();
+});
+
+/**
+ * The gate button on one node's row: the one whose nearest ancestor naming a
+ * node names this one — the row, whose first cell is the node id.
+ */
+function rowButton(nodeId: string, name: string): HTMLElement {
+  const rowOf = (b: HTMLElement): string => {
+    for (let at = b.parentElement; at; at = at.parentElement) {
+      const text = at.textContent ?? "";
+      if (/node-\d/.test(text)) return text;
+    }
+    return "";
+  };
+  const button = screen.getAllByRole("button", { name }).find((b) => rowOf(b).includes(nodeId));
+  if (!button) throw new Error(`no ${name} button on ${nodeId}'s row`);
+  return button;
+}

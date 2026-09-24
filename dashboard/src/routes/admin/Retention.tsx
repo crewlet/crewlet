@@ -102,7 +102,9 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // just evicted — reopened, that minted a fresh id and wrote a second record
   // on every log, re-dating the eviction straight after the dialog said not
   // to retry. So an answer asks the report again at once, and the gesture
-  // stays on the row until the report agrees with it ([heldGestures]).
+  // stays on the row until the report agrees with it — or until a report
+  // that already includes it disagrees, because something later moved the
+  // node ([heldGestures]).
   const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
   const holdGesture = (node: string, evict: boolean, g: GateGesture | null) => {
     setGestures((all) => {
@@ -116,13 +118,14 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // WHAT THE REPORT NOW SHOWS IS LET GO OF, so a later gesture on the same
   // node and sign is a new one rather than this one reopened.
   const nodesSeen = data?.nodes;
+  const servedBy = data?.node_id;
   useEffect(() => {
     if (!nodesSeen) return;
     setGestures((all) => {
-      const kept = heldGestures(all, nodesSeen);
+      const kept = heldGestures(all, nodesSeen, servedBy);
       return Object.keys(kept).length === Object.keys(all).length ? all : kept;
     });
-  }, [nodesSeen]);
+  }, [nodesSeen, servedBy]);
 
   if (!operator) return null;
 
@@ -542,15 +545,51 @@ function reflected(g: GateGesture, key: string, nodes: RetentionNode[]): boolean
 }
 
 /**
+ * Whether the node that served this report has applied every record a complete
+ * gesture wrote, so whatever the report says about the gesture's node already
+ * includes it — and a report that still disagrees means something LATER moved
+ * the node: a readmission from the command line straight after an eviction
+ * here, say. The gesture is spent then. Held, it left the row reading
+ * "Eviction sent…" for the rest of the page's life, reopening an answer with
+ * nothing to press, so the node could not be evicted again from this screen.
+ *
+ * STRICT, never a guess: a log whose position the answer lacks, a serving node
+ * the report does not list or whose own row carries no position there, and a
+ * generation that differs all keep the gesture held. A report that has not
+ * caught up with a `pending` record disagrees for exactly that reason, and
+ * letting go of it then offered the fresh gesture the hold exists to prevent.
+ */
+function overtaken(g: GateGesture, nodes: RetentionNode[], servedBy?: string): boolean {
+  const answer = g.answer;
+  if (!answer?.complete || !servedBy) return false;
+  const here = nodes.find((n) => n.node_id === servedBy)?.domains;
+  if (!here) return false;
+  return answer.domains.every((d) => {
+    const at = here[d.domain];
+    return (
+      d.position !== undefined &&
+      at !== undefined &&
+      at.generation === d.position.generation &&
+      at.applied_through >= d.position.seq
+    );
+  });
+}
+
+/**
  * The gestures still worth holding against this report: every one a request
- * can still finish, and every complete one the report does not show yet.
+ * can still finish, and every complete one the report does not show yet —
+ * unless the node that served it has applied every record the gesture wrote
+ * ([overtaken]), when its disagreement is a later change rather than a lag.
  */
 export function heldGestures(
   gestures: Record<string, GateGesture>,
   nodes: RetentionNode[],
+  servedBy?: string,
 ): Record<string, GateGesture> {
   return Object.fromEntries(
-    Object.entries(gestures).filter(([key, g]) => !reflected(g, key, nodes)),
+    Object.entries(gestures).filter(
+      ([key, g]) => !reflected(g, key, nodes) && !overtaken(g, nodes, servedBy),
+    ),
   );
 }
 

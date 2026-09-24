@@ -45,9 +45,10 @@
  * a refusal it dropped the id of a gesture the node went on to finish. The
  * gesture is lifted into the screen ([GateGesture]), so closing the dialog and
  * opening it again offers Finish rather than a fresh gesture — and so does a
- * COMPLETE one, until the report behind the dialog shows it: reopened as a
- * fresh gesture, an eviction that landed a moment ago is minted a new id and
- * re-dated on every log.
+ * COMPLETE one, until the report behind the dialog shows it (or, from a node
+ * that has applied every record the gesture wrote, shows the node moved on
+ * since): reopened as a fresh gesture, an eviction that landed a moment ago is
+ * minted a new id and re-dated on every log.
  *
  * # Force is a second, separate decision
  *
