@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 )
 
@@ -39,7 +40,7 @@ type mcpTransport struct {
 }
 
 // newMCPTransport registers every catalogue tool on an MCP server.
-func newMCPTransport(c catalogue, company string) mcpTransport {
+func newMCPTransport(s *Server, company string) mcpTransport {
 	title := "Crewlet"
 	if name := strings.TrimSpace(company); name != "" {
 		title = name + " (Crewlet)"
@@ -47,7 +48,7 @@ func newMCPTransport(c catalogue, company string) mcpTransport {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name: serverName, Title: title, Version: "1",
 	}, nil)
-	for _, tool := range c.tools {
+	for _, tool := range s.catalogue.tools {
 		srv.AddTool(&mcp.Tool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
@@ -63,23 +64,25 @@ func newMCPTransport(c catalogue, company string) mcpTransport {
 			// had nothing to ask on.
 			Annotations: crewletmcp.SDKAnnotations(
 				builtin.AnnotationsFor(tool.Name())),
-		}, handlerFor(c, tool.Name()))
+		}, handlerFor(s, tool.Name()))
 	}
 	return mcpTransport{srv: srv}
 }
 
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
 //
-// BY NAME, THROUGH THE CATALOGUE, rather than closing over the tool value, so
-// the MCP transport reaches a tool by exactly the path every other transport
-// does and there is no second handle on it to fall out of step.
+// BY NAME, THROUGH THE SERVER'S DISPATCH, rather than closing over the tool
+// value, so the MCP transport reaches a tool by exactly the path every other
+// transport does — and is audited by it — and there is no second handle on it
+// to fall out of step. An MCP call names no request, so its audit record
+// carries none.
 //
 // THE OPERATOR ID COMES FROM THE REQUEST'S CREDENTIAL, carried on the
 // context by the auth middleware and read by the deps' own Actor function —
 // never from an argument. A caller that could name its own actor could file
 // work as anybody, which is the same rule a seat's tools follow and the same
 // reason.
-func handlerFor(c catalogue, name string) mcp.ToolHandler {
+func handlerFor(s *Server, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
@@ -87,7 +90,7 @@ func handlerFor(c catalogue, name string) mcp.ToolHandler {
 				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
 			}
 		}
-		result, served, err := c.call(ctx, name, args)
+		result, served, err := s.dispatch(ctx, types.TransportMCP, "", name, args)
 		if !served {
 			// UNREACHABLE: the SDK dispatches only the names registered
 			// above, which are the catalogue's. Refused by name rather
@@ -129,7 +132,9 @@ func (s *Server) MCPHandler() http.Handler {
 			// UNREACHABLE if the guard is mounted, and refused rather
 			// than trusted if it somehow is not: this surface writes to
 			// the company, and a write with no writer is the one thing
-			// it must never record.
+			// it must never record. Refused as JSON with the guard's own
+			// code, like every refusal this engine writes: a client reads
+			// an answer with no code as something in front of the node.
 			log.WarnContext(r.Context(), "operator_mcp_unguarded",
 				"detail", "a request reached the operator MCP surface with no "+
 					"operator on its context; the auth guard is not in front of it")

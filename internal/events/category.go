@@ -28,13 +28,18 @@ import (
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
 var categories = map[string]string{
 	// Lifecycle: the org coming and going, plus the config changes an
-	// operator is most likely to go looking for after the fact. A seat
+	// operator is most likely to go looking for after the fact — and the
+	// runtime audit, which is the same question asked of everything else
+	// a person did to the company through a running node: every operator
+	// tool call that is not a proven read, and every backup. A seat
 	// coming and going is not here: agent_spawned and agent_terminated are
 	// live-only, and [excluded] says why.
 	"org_started":               "lifecycle",
 	"org_stopped":               "lifecycle",
 	"config_revision_activated": "lifecycle",
 	"config_revision_applied":   "lifecycle",
+	"operator_acted":            "lifecycle",
+	"backup_requested":          "lifecycle",
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.

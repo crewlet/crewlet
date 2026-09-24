@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -296,7 +297,11 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 
 	logged := []any{"tool", name, "operator_id", operatorID, "seat", seat,
 		"request_id", requestID}
-	result, _, err := s.catalogue.call(WithOperation(ctx, op), name, args)
+	// THROUGH THE DISPATCH, which publishes the call's runtime audit
+	// record whatever becomes of it — an interrupted call included, since
+	// that is the one whose write nobody can vouch for.
+	result, _, err := s.dispatch(WithOperation(ctx, op), types.TransportAct,
+		requestID, name, args)
 	if err != nil {
 		interrupted(w, r, name, err, logged)
 		return

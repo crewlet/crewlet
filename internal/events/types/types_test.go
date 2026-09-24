@@ -59,6 +59,8 @@ func catalogue() []events.Payload {
 		ToolSkillPageChanged{},
 		// webhook.go
 		RawWebhook{},
+		// operator.go
+		OperatorActed{}, BackupRequested{},
 	}
 }
 
@@ -77,6 +79,7 @@ var wireTypes = []string{
 	"agent_terminated",
 	"agent_turn_completed",
 	"agent_turn_progress",
+	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
 	"compaction_completed",
@@ -89,6 +92,7 @@ var wireTypes = []string{
 	"llm_unavailable",
 	"notification_skipped",
 	"notifications_coalesced",
+	"operator_acted",
 	"org_started",
 	"org_stopped",
 	"persist_decider_completed",
@@ -266,11 +270,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 //
 // Sorted per type, because the comparison is against sorted marshalled keys.
 var wireTags = map[string][]string{
-	"org_started":                     {"org_name"},
-	"org_stopped":                     {"org_name"},
-	"agent_spawned":                   {"agent_id", "role"},
-	"agent_terminated":                {"agent_id", "reason", "role"},
-	"config_revision_activated":       {"created_by", "revision_id", "revision_summary"},
+	"org_started":               {"org_name"},
+	"org_stopped":               {"org_name"},
+	"agent_spawned":             {"agent_id", "role"},
+	"agent_terminated":          {"agent_id", "reason", "role"},
+	"config_revision_activated": {"created_by", "revision_id", "revision_summary"},
+	"operator_acted": {"actor_seat", "failed", "operator_id", "outcome", "position",
+		"refusal", "request_id", "tool", "transport"},
+	"backup_requested": {"actor_seat", "dir", "failed", "node", "operator_id",
+		"outcome", "streams"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},

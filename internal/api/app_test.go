@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
@@ -155,7 +156,24 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
+	if opts.Audit == nil {
+		opts.Audit = queuememory.New()
+	}
 	return opts
+}
+
+// operatorSurface builds an operator surface over what a case names, auditing
+// onto a queue nobody reads, and fails the test on a refusal.
+func operatorSurface(t *testing.T, opts operator.Options) *operator.Server {
+	t.Helper()
+	if opts.Audit == nil {
+		opts.Audit = queuememory.New()
+	}
+	s, err := operator.New(opts)
+	if err != nil {
+		t.Fatalf("operator.New: %v", err)
+	}
+	return s
 }
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
@@ -174,7 +192,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup",
+		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

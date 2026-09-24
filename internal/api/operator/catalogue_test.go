@@ -39,7 +39,7 @@ import (
 // what this package believes it registered.
 func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	t.Parallel()
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
@@ -126,7 +126,7 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 	t.Parallel()
 	kb := &recordingPages{}
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
 	})
 	if s == nil {

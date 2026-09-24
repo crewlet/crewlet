@@ -207,11 +207,20 @@ authoritative list, checked against the engine's own map by a test, is
 this is the shape of it, with the notes that need a sentence.
 
 ```text
-# lifecycle: the org coming and going, plus the config changes an operator
-#            goes looking for after the fact
+# lifecycle: the org coming and going, plus the config changes and the
+#            runtime writes an operator goes looking for after the fact
 org_started, org_stopped
 config_revision_activated  # a new revision is the one to serve
 config_revision_applied    # one node's outcome, and how far it got
+# the runtime audit: source "operator", actor the token's own name, and
+# actor_seat the person it is bound to. One per call, whatever became of it;
+# never the arguments. Written by the node the call reached
+operator_acted             # an operator tool call that is not a proven read,
+                           # from the dashboard (/operator/act) or a person's
+                           # assistant (/operator/mcp): tool, transport,
+                           # request id, outcome, position or refusal
+backup_requested           # a POST /backup that began copying: node, dir,
+                           # whether it finished, and how many streams
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection

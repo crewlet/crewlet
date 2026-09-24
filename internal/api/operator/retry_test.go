@@ -28,7 +28,7 @@ import (
 func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Merges: stubWorkMerger,
 			Writer: work.writer, Actor: operator.WorkActor(nil),

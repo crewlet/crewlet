@@ -125,7 +125,7 @@ func (r *recordingWork) filed() []string {
 // knowledge base, bound by [boundChart].
 func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 	t.Helper()
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: work.writer,
 			Actor: operator.WorkActor(boundChart),
@@ -389,7 +389,7 @@ func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 	t.Parallel()
 	kb := &recordingPages{}
 	project := &recordingProject{}
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: (&recordingWork{}).writer,
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
@@ -486,7 +486,7 @@ func cofounderSurface(t *testing.T, work *recordingWork) *operator.Server {
 		o.Normalize()
 		return o
 	}
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: work.writer, Actor: operator.WorkActor(chart),
 		},
@@ -719,7 +719,7 @@ func TestTheActAnswerLiftsTheToolsOwnOutcome(t *testing.T) {
 func TestAPageWriteStatesItsOutcomeAndPosition(t *testing.T) {
 	t.Parallel()
 	kb := &positionedPages{}
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
 		Org:   boundChart,
 	})
