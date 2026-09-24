@@ -643,9 +643,16 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	}
 	// AUTHORITY IS THE ADD's, which every seat holds. An inline declare
 	// renames and archives nothing, so it can never reach the lead gate.
+	//
+	// AN UNKNOWN DECLARATION IS A STEP THAT DID NOT RESOLVE ([resolved]),
+	// never a declaration that created nothing. The write this one comes
+	// before is refused over a tag that is not declared, so reading
+	// `unknown` as "nothing new" sent the caller a refusal telling it to
+	// pass the flag it had passed — about a tag that may have landed.
 	result, err := w.WriteTags(ctx, opID, project, TagEdit{Add: add},
 		TagAuthority{})
-	if err != nil {
+	if err = resolved(fmt.Sprintf("the declaration of %v in %s", created,
+		project), result, err); err != nil {
 		return nil, nil, fmt.Errorf("tracker: declare %v in %s: %w",
 			created, project, err)
 	}

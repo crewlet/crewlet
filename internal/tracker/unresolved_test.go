@@ -227,3 +227,37 @@ func TestTheDutyDoesNotCountAnUnknownClose(t *testing.T) {
 			"vouch for, want 0", got)
 	}
 }
+
+// A TAG DECLARATION WHOSE OUTCOME IS UNKNOWN IS AN UNRESOLVED STEP, never a
+// declaration that created nothing.
+//
+// The inline declare runs before the write that uses the tag, and that write
+// is refused over a tag its project does not declare. Answered `unknown` with
+// a nil error, the declare reported no new tags, and the create behind it was
+// refused telling the caller to pass `labels_create_missing` — the flag it had
+// passed — about a tag that may well have landed.
+func TestAnUnknownTagDeclarationIsAnUnresolvedStep(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	lossy, lost := r.lossyWriter(t)
+	op := statelog.NewOpID(time.Now(), "tags")
+
+	lost.dropFor(".tags.ENG")
+	created, _, err := lossy.EnsureTags(t.Context(), op, "ENG", []string{"regression"})
+	if !errors.Is(err, tracker.ErrStepUnresolved) || !strings.Contains(err.Error(), op) {
+		t.Fatalf("an unknown declaration = (%v, %v), want an error wrapping "+
+			"ErrStepUnresolved that names operation %s", created, err, op)
+	}
+
+	// AND THE SAME OPERATION AGAIN answers it from what landed.
+	r.drain()
+	if _, _, err := lossy.EnsureTags(t.Context(), op, "ENG",
+		[]string{"regression"}); err != nil {
+		t.Fatalf("the re-run of the declaration: %v", err)
+	}
+	r.drain()
+	if got := r.tagSlugs("ENG"); !slices.Contains(got, "regression") {
+		t.Errorf("the project declares %v after the re-run, want regression", got)
+	}
+}
