@@ -97,10 +97,17 @@ type teardown interface {
 }
 
 func (d vendorDisconnect) Disconnect(
-	ctx context.Context, removeSeats bool,
+	ctx context.Context, req integration.TeardownRequest,
 ) (provision.Removed, error) {
+	// WHOEVER ASKED, which every write below is recorded under: the loop
+	// only carries the disconnect out. A row that names nobody — asked for
+	// by a build that did not record it — is the loop's own, as it was.
+	by := req.By
+	if by.Name == "" {
+		by = loopActor()
+	}
 	var removed provision.Removed
-	err := d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
+	err := d.engine.dropBlock(ctx, d.kind, by, func(ctx context.Context) error {
 		if d.pass == nil {
 			// NOTHING TO REMOVE ANYWHERE, which no surface in this
 			// build is: every kind has a step, seven at a vendor and
@@ -117,13 +124,15 @@ func (d vendorDisconnect) Disconnect(
 			return nil
 		}
 		var err error
-		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{
+			RemoveSeats: req.RemoveSeats, By: by,
+		})
 		if err != nil {
 			return err
 		}
 		// THE CREDENTIALS THOSE ACCOUNTS HELD, deleted here and in no
 		// vendor package. See [Engine.forgetRemoved].
-		return d.engine.forgetRemoved(ctx, d.kind, removed)
+		return d.engine.forgetRemoved(ctx, d.kind, removed, by)
 	})
 	return removed, err
 }
@@ -158,12 +167,13 @@ func (d vendorDisconnect) Disconnect(
 // values, rather than reporting a completeness it did not achieve.
 func (e *Engine) forgetRemoved(
 	ctx context.Context, kind integration.Kind, removed provision.Removed,
+	by iam.Actor,
 ) error {
 	names := removed.Secrets()
 	if len(names) == 0 {
 		return nil
 	}
-	sink, err := e.SetupSink(loopActor())
+	sink, err := e.SetupSink(by)
 	if err != nil {
 		log.WarnContext(ctx, "removed_credentials_not_deleted",
 			"integration", kind.String(), "error", err, "secrets", names,
@@ -179,9 +189,11 @@ func (e *Engine) forgetRemoved(
 	return nil
 }
 
-// dropBlock runs the third-party app step and then removes the block, in that order.
+// dropBlock runs the third-party app step and then removes the block, in that
+// order, recording the removal as by's.
 func (e *Engine) dropBlock(
-	ctx context.Context, kind integration.Kind, vendor func(context.Context) error,
+	ctx context.Context, kind integration.Kind, by iam.Actor,
+	vendor func(context.Context) error,
 ) error {
 	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is a thing
 	// THIS NODE lacks rather than anything wrong with the surface, so each
@@ -238,7 +250,7 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
-	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), loopActor()); err != nil {
+	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), by); err != nil {
 		// The third-party app work IS done and is durable, so a retry re-runs a
 		// teardown with nothing left to remove and then tries the block
 		// again. That is why every teardown is safe to repeat.

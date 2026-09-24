@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -50,7 +51,7 @@ import (
 // same cost [Engine.editGitHubSeat] already pays per seat on the GitHub pass,
 // and a disconnect is a thing an operator does rarely and deliberately.
 func (e *Engine) tearDownSlack(
-	ctx context.Context, removeSeats bool,
+	ctx context.Context, removeSeats bool, by iam.Actor,
 ) (provision.Removed, error) {
 	var out provision.Removed
 	// KEPT, NOT REMOVED, when the operator did not ask for the accounts.
@@ -103,7 +104,7 @@ func (e *Engine) tearDownSlack(
 			}
 		}
 		out.Add(removal)
-		if err := e.clearSlackSeat(ctx, handle); err != nil {
+		if err := e.clearSlackSeat(ctx, handle, by); err != nil {
 			// WHAT IS ALREADY DONE IS STILL REPORTED. The loop holds the
 			// surface in PhaseDisconnecting and tries again, and every step
 			// here is "remove this if it is there" — but the seats cleared
@@ -123,7 +124,10 @@ func (e *Engine) tearDownSlack(
 // stripped of its credentials is a document that will not load at all, and an
 // empty `slack: {}` left behind would make a disconnected seat read as one
 // whose app is merely unconfigured.
-func (e *Engine) clearSlackSeat(ctx context.Context, handle string) error {
+//
+// RECORDED AS BY'S, whoever asked for the disconnect — see
+// [integration.State.RequestedBy].
+func (e *Engine) clearSlackSeat(ctx context.Context, handle string, by iam.Actor) error {
 	writer := e.configWriterOrNil()
 	if writer == nil {
 		// THE SENTINEL, WRAPPED WITH WHAT IT IS REFUSING, for the reason
@@ -157,7 +161,7 @@ func (e *Engine) clearSlackSeat(ctx context.Context, handle string) error {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
 	}
 	return writer.SetSeat(ctx, handle, updated,
-		"disconnect slack: remove "+handle+"'s app credentials", loopActor())
+		"disconnect slack: remove "+handle+"'s app credentials", by)
 }
 
 // slackTeardown is Slack's disconnect step, in the shape every other
@@ -175,5 +179,5 @@ type slackTeardown struct{ engine *Engine }
 func (s slackTeardown) Teardown(
 	ctx context.Context, in setup.TeardownInput,
 ) (provision.Removed, error) {
-	return s.engine.tearDownSlack(ctx, in.RemoveSeats)
+	return s.engine.tearDownSlack(ctx, in.RemoveSeats, in.By)
 }

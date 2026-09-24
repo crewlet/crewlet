@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -113,6 +114,47 @@ type State struct {
 	// an account may be a person's colleague in that third-party app, so deleting
 	// one is never inferred.
 	RemoveSeats bool `json:"remove_seats,omitempty"`
+
+	// RequestedBy is who asked for the integration to be taken away,
+	// which every write the teardown makes on their behalf is recorded
+	// under: the revision that drops the block, a seat's cleared
+	// credentials, the sealed values it deletes.
+	//
+	// ON THE ROW, for Disconnecting's reason: the loop carries the
+	// teardown out on whichever node holds its duty, after a pass at the
+	// third-party app, long after the request that asked has answered. The
+	// revision that dropped the block — kept for ever — was recorded as
+	// the loop's own, while a FORCED disconnect, which drops the block
+	// inside the request, recorded the person: one gesture, two authors,
+	// depending on a checkbox.
+	//
+	// ZERO on a row an older build asked for, or rewrote without knowing
+	// the field, and the teardown is then recorded as the loop's — which
+	// is what it was before there was anybody to name.
+	RequestedBy Requester `json:"requested_by,omitzero"`
+}
+
+// Requester is a party as a row records it: [iam.Actor], which carries no wire
+// names of its own, in the three fields every trail records a write under.
+type Requester struct {
+	// Name is the author, Kind which of the four actor kinds it is, and
+	// OperatorID the credential it acted through.
+	Name       string        `json:"name,omitempty"`
+	Kind       iam.ActorKind `json:"kind,omitempty"`
+	OperatorID string        `json:"operator_id,omitempty"`
+}
+
+// RequesterOf is a party as a row records it.
+func RequesterOf(by iam.Actor) Requester {
+	return Requester{Name: by.Name, Kind: by.Kind, OperatorID: by.OperatorID}
+}
+
+// Actor is the party this row names, and false for a row that names nobody.
+func (r Requester) Actor() (iam.Actor, bool) {
+	if r.Name == "" {
+		return iam.Actor{}, false
+	}
+	return iam.Actor{Name: r.Name, Kind: r.Kind, OperatorID: r.OperatorID}, true
 }
 
 // Reported is the report a reader should be shown.
@@ -381,10 +423,15 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 // DUE NOW. The zero NextAttemptAt is already in the past, but a row that has
 // been reconciled carries a future one, and inheriting it would leave the
 // disconnect waiting out a backoff nobody asked it to serve.
-func AskTeardown(state State, kind Kind, removeSeats bool) State {
+//
+// BY IS WHO ASKED, recorded on the row for [State.RequestedBy]'s reason — and
+// replaced by a later ask, because whoever pressed Disconnect last is who the
+// teardown is finishing for.
+func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 	state.Kind = kind
 	state.Disconnecting = true
 	state.RemoveSeats = removeSeats
+	state.RequestedBy = RequesterOf(by)
 	state.NextAttemptAt = time.Time{}
 	state.Attempts = 0
 

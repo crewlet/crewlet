@@ -1703,6 +1703,16 @@ answers `200`, and is the way out of a teardown that can never succeed: a
 revoked credential, an instance that is gone. It is the operator saying they
 will remove what the third-party app holds themselves.
 
+**Either way the removal is recorded as yours.** The intent carries who asked
+— the author, their kind and the credential they asked through — and the loop
+carries the teardown out for them: the revision that drops the block, each
+Slack seat's cleared app credentials and the sealed values the teardown
+deletes are recorded under that party, exactly as the `force` path, which drops
+the block inside the request, records it. They used to be the loop's own
+(`reconcile loop`, of kind `system`), so the one revision that says an
+integration went away named no person on the ordinary path. An intent recorded
+by a build that did not carry who asked is still finished as the loop's.
+
 Either way the sealed credentials are **named, not deleted**, in
 `orphaned_secrets`: one an operator may be sharing with another deployment is
 not something a disconnect decides about on its own. `crewlet secrets unset`
@@ -3127,7 +3137,9 @@ token's row, the one thing that said whose it was, is swept a week after it
 lapses while a revision is kept for ever. A Tier A token is recorded as
 `token:<id>` in both, since its login is its credential; the engine's own
 writes (the reconcile loop, a boot import, a key the engine minted) record
-their own name, of kind `system`, and no credential. The identity estate's own audit events
+their own name, of kind `system`, and no credential — except the writes a
+[disconnect](#disconnecting) makes, which the loop carries out for whoever
+asked and records as theirs. The identity estate's own audit events
 (`iam_credential_revoked`, `iam_session_ended`,
 `iam_session_generation_bumped`, …) carry it as `operator_id` beside `by`, and
 the trail `GET /iam/audit` reads carries it beside `actor` — except on a

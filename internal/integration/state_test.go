@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A REFUSED CREDENTIAL IS NOT A WAIT.
@@ -166,7 +168,9 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 		},
 	}
 
-	got := AskTeardown(settled, KindDatadog, true)
+	asker := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator,
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	got := AskTeardown(settled, KindDatadog, true, asker)
 
 	if len(got.Findings) != 0 {
 		t.Errorf("findings = %+v, which describe a world being taken apart", got.Findings)
@@ -186,6 +190,11 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 	if !got.Disconnecting || !got.RemoveSeats {
 		t.Errorf("the intent was not recorded: disconnecting=%v remove_seats=%v",
 			got.Disconnecting, got.RemoveSeats)
+	}
+	// AND WHO ASKED, whole — the author, their kind and the credential —
+	// which is what the teardown's writes are recorded under.
+	if by, named := got.RequestedBy.Actor(); !named || by != asker {
+		t.Errorf("the ask names %+v (%v), want %+v", by, named, asker)
 	}
 	// DUE NOW, rather than inheriting a backoff nobody asked it to serve.
 	if got.Attempts != 0 || !got.NextAttemptAt.IsZero() {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A status survives the round trip through the real coordination twin with
@@ -31,6 +32,11 @@ func TestCoordStoreRoundTrip(t *testing.T) {
 		LastAttemptAt: now,
 		SettledAt:     now.Add(-time.Hour),
 		NextAttemptAt: now.Add(time.Minute),
+		// WHO ASKED FOR A DISCONNECT, which the teardown's writes are
+		// recorded under on whichever node carries it out — so it has to
+		// survive the store the two nodes share.
+		RequestedBy: Requester{Name: "ana.admin", Kind: iam.ActorOperator,
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
 	}
 	if err := store.SaveIntegration(ctx, want); err != nil {
 		t.Fatalf("SaveIntegration: %v", err)
@@ -63,6 +69,8 @@ func TestCoordStoreRoundTrip(t *testing.T) {
 		t.Errorf("settled at is %s, want %s", got.SettledAt, want.SettledAt)
 	case !got.NextAttemptAt.Equal(want.NextAttemptAt):
 		t.Errorf("next attempt is %s, want %s", got.NextAttemptAt, want.NextAttemptAt)
+	case got.RequestedBy != want.RequestedBy:
+		t.Errorf("requested by %+v, want %+v", got.RequestedBy, want.RequestedBy)
 	}
 }
 

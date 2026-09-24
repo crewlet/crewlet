@@ -2186,7 +2186,8 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// the delete (a revoked token, an instance that is gone) would
 	// otherwise hold the integration in Disconnecting for ever.
 	if !req.Force {
-		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats); err != nil {
+		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats,
+			attributionOf(r)); err != nil {
 			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
 			// request can be repeated and may then work — but only this
 			// one is a race the caller should sit out and retry, and a
@@ -2385,7 +2386,7 @@ const disconnectRetryEvery = 500 * time.Millisecond
 // yet still has to carry the intent, or a disconnect asked for before the
 // first pass would be lost.
 func (s *Service) markDisconnecting(
-	ctx context.Context, kind integration.Kind, removeSeats bool,
+	ctx context.Context, kind integration.Kind, removeSeats bool, by iam.Actor,
 ) error {
 	// UNDER THE SURFACE'S OWN LEASE. This is the write that most needs it:
 	// the intent it records is what the loop acts on, and a tick that read
@@ -2435,7 +2436,10 @@ func (s *Service) markDisconnecting(
 	// written here, which is how they came to be three fields short of what
 	// the transition means: a card went on showing the last pass's findings
 	// under the word Disconnecting. See [integration.AskTeardown].
-	return s.status.SaveIntegration(ctx, integration.AskTeardown(state, kind, removeSeats))
+	// AND WHO ASKED, which the teardown's writes are recorded under when the
+	// loop carries it out — see [integration.State.RequestedBy].
+	return s.status.SaveIntegration(ctx,
+		integration.AskTeardown(state, kind, removeSeats, by))
 }
 
 // forgetUnderGuard removes a surface's status row with every other writer at

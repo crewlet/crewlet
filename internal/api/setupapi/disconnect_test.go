@@ -8,9 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -451,5 +455,40 @@ func TestADisconnectRefusedForAnyOtherReasonIsNotABusySurface(t *testing.T) {
 	}
 	if got := out.Header().Get("Retry-After"); got != strconv.Itoa(authz.RetryUndecidedSeconds) {
 		t.Errorf("Retry-After = %q, want the undecidable scale", got)
+	}
+}
+
+// A DISCONNECT RECORDS WHO ASKED FOR IT, ON THE ROW THE LOOP ACTS ON.
+//
+// The ordinary path only records an intent: the loop carries the teardown out
+// minutes later on whichever node holds its duty, and drops the block then —
+// so the row is the one place that can say whose gesture that revision
+// finishes. The forced path drops it inside this request and records the
+// caller directly; this one used to leave the revision to be recorded as the
+// loop's. Mutation: record the intent without the caller and the row names
+// nobody.
+func TestADisconnectRecordsWhoAskedOnTheRow(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, identityDoc)
+	s.withPass(t, &recordingPass{kind: integration.KindJira})
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: via,
+		ReauthAt:          time.Now().Add(time.Hour),
+		SensitiveReauthAt: time.Now().Add(time.Hour),
+	}
+
+	out := s.do(t, http.MethodDelete, "/setup/integrations/jira", `{}`, nil)
+	if out.Code != http.StatusAccepted {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	s.status.mu.Lock()
+	row := s.status.states[integration.KindJira]
+	s.status.mu.Unlock()
+	want := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator, OperatorID: via}
+	if by, named := row.RequestedBy.Actor(); !named || by != want {
+		t.Errorf("the row names %+v (%v) as having asked, want %+v", by, named, want)
 	}
 }

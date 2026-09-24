@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -289,7 +290,18 @@ type Disconnector interface {
 	//
 	// An error leaves everything in place and the surface disconnecting,
 	// so it is retried. Every step must be safe to repeat.
-	Disconnect(ctx context.Context, removeSeats bool) (provision.Removed, error)
+	Disconnect(ctx context.Context, req TeardownRequest) (provision.Removed, error)
+}
+
+// TeardownRequest is what a disconnect was asked to do, as its row records it.
+type TeardownRequest struct {
+	// RemoveSeats is [State.RemoveSeats]: whether the accounts go too.
+	RemoveSeats bool
+
+	// By is who asked ([State.RequestedBy]), and every write the teardown
+	// makes is recorded under them. Zero where the row names nobody, and
+	// the implementation records its own name then.
+	By iam.Actor
 }
 
 // Registration is one reconciler and what is specific to its cadence.
@@ -1065,7 +1077,10 @@ func (w *Worker) tearDown(
 	// that protects it, and the write that records the pass runs in the margin
 	// the lease deliberately keeps behind it. Recording on the bounded one
 	// would lose the record of every teardown that used its whole budget.
-	removed, err := reg.Disconnector.Disconnect(bounded, state.RemoveSeats)
+	by, _ := state.RequestedBy.Actor()
+	removed, err := reg.Disconnector.Disconnect(bounded, TeardownRequest{
+		RemoveSeats: state.RemoveSeats, By: by,
+	})
 	if errors.Is(err, ErrDisconnectUnavailable) {
 		// NOT YET, which is not the same as failed. Nothing is written,
 		// for the reason the nil-disconnector case above states: an
@@ -1090,6 +1105,7 @@ func (w *Worker) tearDown(
 		// rows this disconnect deleted.
 		log.InfoContext(ctx, "integration_disconnected",
 			"integration", kind.String(), "removed_seats", state.RemoveSeats,
+			"by", by.Name, "operator", by.OperatorID,
 			"accounts", removed.Handles(), "secrets", removed.Secrets())
 		return
 	}

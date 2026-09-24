@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -144,6 +145,12 @@ type TeardownInput struct {
 	// integration whose [Pass.Needs] asks for one. Removing an account
 	// usually needs the same authority creating it did.
 	Operator string
+
+	// By is who asked for the teardown, which a step that writes the
+	// company's own document or store records the write under — Slack's,
+	// which clears each seat's sealed app credentials. A step that only
+	// removes things at the third-party app has nothing here to record.
+	By iam.Actor
 }
 
 // PassInput is what a pass is given.

@@ -151,9 +151,26 @@ func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
 	// loop reaches the step" — are separate facts, and only the second one
 	// ends the defect: Slack's whole disconnect was a nil pass and a `return
 	// nil`, so a step nothing registers is the shape this had all along.
-	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(), true)
+	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(),
+		integration.TeardownRequest{RemoveSeats: true, By: testParty})
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
+	}
+
+	// EVERY WRITE IS RECORDED AS WHOEVER ASKED, the seats' cleared
+	// credentials and the dropped block alike: the loop only carries the
+	// disconnect out. Mutation: record the seat writes as the loop and the
+	// first list goes red.
+	seats, documents := writer.recorded()
+	if len(seats) != 2 || len(documents) != 1 {
+		t.Fatalf("recorded %d seat write(s) and %d document write(s), want 2 "+
+			"and 1", len(seats), len(documents))
+	}
+	for _, by := range append(seats, documents...) {
+		if by != testParty {
+			t.Errorf("a disconnect write was recorded as %+v, want the party "+
+				"who asked, %+v", by, testParty)
+		}
 	}
 
 	// EVERY SEAT THAT HELD AN APP, AND NO OTHER. The seat with no Slack
@@ -203,7 +220,8 @@ func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
 func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
 	e, writer := slackEngine(t)
 
-	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(), false)
+	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(),
+		integration.TeardownRequest{By: testParty})
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
@@ -230,7 +248,7 @@ func TestAPartialSlackTeardownReportsWhatItCleared(t *testing.T) {
 	e, writer := slackEngine(t)
 	writer.fail = errors.New("the config surface is busy")
 
-	removed, err := e.tearDownSlack(t.Context(), true)
+	removed, err := e.tearDownSlack(t.Context(), true, testParty)
 	if err == nil {
 		t.Fatal("tearDownSlack: want the write failure surfaced so the loop retries")
 	}
@@ -250,7 +268,7 @@ func TestASlackTeardownWithNoConfigSurfaceDefers(t *testing.T) {
 	e, _ := slackEngine(t)
 	e.configWriter.Store(nil)
 
-	_, err := e.tearDownSlack(t.Context(), true)
+	_, err := e.tearDownSlack(t.Context(), true, testParty)
 	if !errors.Is(err, integration.ErrDisconnectUnavailable) {
 		t.Fatalf("error = %v, want %v", err, integration.ErrDisconnectUnavailable)
 	}
