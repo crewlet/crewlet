@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -40,12 +41,51 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// publishes every kind it arbitrates — an anchor row for a
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
-			Kinds:      suiteKinds(),
+			Kinds: suiteKinds(),
+			// THE PRODUCTION TABLE, and a record carrying each of its
+			// fields built through the writer's own encoder — which is
+			// what proves each row's path is where that field is
+			// actually written.
+			Fields:     tracker.VersionedFields(),
+			Carrying:   carryingSuiteField,
 			Rows:       tracker.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
 		}
 	})
+}
+
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
+// rather than passing unexamined: the suite reads the version this returns,
+// and a record that did not carry the field would be stamped at 1 and reported
+// as the path being wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	switch field.Name {
+	case "TaskPatch.Moving":
+		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
+		// the mark its walk is still running under.
+		moving := true
+		body, err := json.Marshal(tracker.TaskPatch{Moving: &moving})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeMoved, Mutation: body,
+			Actor: "lead", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	default:
+		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
+			"beside the field's row", field.Name)
+	}
 }
 
 // encodeSuiteGate is the eviction record a peer's writer publishes onto this
@@ -138,9 +178,14 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		Actor:     "suite",
 		ActorKind: tracker.AuthorSystem,
 	}
-	// ENCODED DIRECTLY rather than through the writer's own Encode, which
-	// refuses a version it does not write — the suite needs exactly that
-	// record.
+	// VERSION ZERO IS THE WRITER'S PATH: the domain's own Encode stamps it,
+	// which is what the suite's stamping case reads back. Any other version
+	// is ENCODED DIRECTLY, because the suite needs exactly the record a peer
+	// at that version would publish — including one above this build's —
+	// and not the version this build would have chosen for it.
+	if version == 0 {
+		return record.Encode()
+	}
 	return json.Marshal(record)
 }
 

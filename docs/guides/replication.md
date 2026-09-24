@@ -445,19 +445,14 @@ what to do, which is finish the upgrade.
 
 **A record is written at the lowest version that can apply it whole**, never at
 the newest the build knows, so what an older node holds back is exactly the
-objects whose shape changed. Two records are written above version 1 today: a
-change to a knowledge container's settings, which carries the activation that
-wrote them, and a task write carrying a cross-project move's mid-move mark (both
-at version 2). So during an upgrade from a build before them, an older node
-holds back a container a newer node renamed or re-described, with the page
-writes in it, and the root of a subtree being moved, until it is upgraded — and
-nothing else. A container record that only re-stamps unchanged settings with a
-later activation stays at version 1, because an older node applies it whole;
-written at 2, the first upgraded node's stamping of every chart-named space
-would have stalled every page write in all of them on every older node. Every barrier and
-every generation record stays at version 1 for good: an older node retaining
-those would hold a deferral for every linearizable read, or never make the
-transition a reanchor announced.
+objects whose shape changed — [the next section](#which-records-an-upgrade-holds-back)
+lists them. Every barrier and every generation record stays at version 1 for
+good: an older node retaining those would hold a deferral for every
+linearizable read, or never make the transition a reanchor announced. So does
+every record that installs a gate, and for a harder reason: a node that
+deferred an eviction would go on applying everything the evicted node appends,
+so a gate record no build can decode stops that build's applier instead, and
+its shape may only ever grow by addition.
 
 **The upgraded node applies what it retained at its next boot**, before its
 applier consumes anything new: every retained record it can now read, in log
@@ -466,6 +461,45 @@ met a retained one is applied after it, which is what makes the objects' rows
 a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
+
+### Which records an upgrade holds back
+
+Only the ones that need the newer build. A record is stamped with the
+**lowest** version that can read it: 1 when it carries nothing a later build
+added, and the version of the newest field it carries otherwise. So during a
+rolling upgrade an old node applies everything the new nodes write except the
+records that use something new, and it retains those whole rather than apply
+them with the new part dropped — which is what would leave its copy of that
+object different from its peers' for good. An upgrade that adds no record field
+holds nothing back at all.
+
+In the tracker today, one version past the base carries something a later
+build added. Version 2 is a task change carrying a cross-project move's mark:
+only the root of the subtree being moved carries it, and only until the move's
+walk is done. An old node holds those records back, with the task they are
+about, and applies every other write as it arrives.
+
+In the knowledge base, one kind of record does: a container's settings, at
+version 2, because they carry the activation that wrote them — a later
+activation that only **re-stamps** unchanged settings included. A re-stamp is
+not exempt, because applied without its stamp it would leave that node's row
+the one unstamped copy in the fleet after its upgrade, open to the next stale
+activation it applied. So while an older node is still running, it holds back
+every container a newer node stamped — every space the org chart names, at the
+first activation a newer node applies — together with the page writes in it,
+until it is upgraded. That is one more reason to finish a rolling upgrade
+inside the deferral grace.
+
+### Values the engine computes are recomputed once
+
+Some columns are not copied out of any record but computed from the history a
+node already holds — how often a task was reopened, for example. When a build
+adds such a column or changes how one is computed, its first boot recomputes it
+from the rows it holds, in the same transaction that records which rules the
+rows now follow, before it applies anything new. It happens once per change,
+on every node, including a node that just adopted a snapshot from a peer on a
+different build; the `statelog_rederived` log line names the domain, the rule
+versions it moved between and how many rows it wrote.
 
 ### The other direction: a kind that was removed
 

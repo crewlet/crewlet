@@ -677,10 +677,11 @@ type TaskPatch struct {
 	// move without the mark, and either is a state no reader can tell
 	// from the other.
 	//
-	// A NEW FIELD ON A SHARED RECORD, so a record carrying it is written at
-	// [moveMarkVersion] — see [recordVersionOf]. Merging is a version-1
-	// field every build reads; this one the build before it would drop,
-	// and that node would then hold a row the rest of the fleet does not.
+	// A NEW FIELD ON A SHARED RECORD, so it has its row in
+	// [versionedFields] and a record carrying it is stamped at that
+	// version. Merging is a base-format field every build reads; this one
+	// the build before it would drop, and that node would then hold a row
+	// the rest of the fleet does not.
 	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,

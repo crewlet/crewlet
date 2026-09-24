@@ -568,6 +568,13 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 // no honest default, and a caller holding no activation has no configuration
 // to apply.
 //
+// A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
+// because a row left at the older stamp is open to any activation between the
+// two. It carries the stamp, so it goes out at record version 2 like every
+// container record ([versionedFields] says why a re-stamp is not exempt), and
+// during a rolling upgrade a node still on a build reading 1 holds it back,
+// with the page writes in that space, until it is upgraded.
+//
 // A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
 // gives for its own: this is a reconcile decided from the row, so a second
 // call — on another node, at the next boot, after a lost acknowledgement —
@@ -589,8 +596,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
 	var (
-		changed, restamp bool
-		out              Container
+		changed bool
+		out     Container
 	)
 
 	result, err := s.publish(ctx, statelog.Request{
@@ -603,7 +610,7 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 			// lost the broker's arbitration is followed by one that
 			// finds the winner's value already there, and only the last
 			// round says what this call did.
-			changed, restamp = false, false
+			changed = false
 			out = Container{V: DocumentVersion, Key: key, Name: name,
 				Purpose: purpose, ChartEpoch: epoch, CreatedAt: at}
 			var document []byte
@@ -639,25 +646,19 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
-				restamp = held.Name == name && held.Purpose == purpose
 			}
 			changed = true
-			payload := ContainerPayload{
-				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-				ChartEpoch: epoch,
-			}
-			// A LATER ACTIVATION OVER THE SAME SETTINGS IS A RE-STAMP, and
-			// it goes out at the version an older build applies whole —
-			// see [recordVersionOf]. The stamp still lands on every node
-			// that can read it, so the guard above holds against the
-			// older activation that would otherwise follow.
-			var record any = payload
-			if restamp {
-				record = restampPayload{payload}
-			}
+			// A LATER ACTIVATION OVER THE SAME SETTINGS IS STILL WRITTEN,
+			// stamp and all — a re-stamp — and it goes out at the version
+			// that carries the stamp like every other container record
+			// ([versionedFields]): a build that dropped the stamp would
+			// keep a row this guard cannot defend after its upgrade.
 			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				record, nil, at)
+				ContainerPayload{
+					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+					ChartEpoch: epoch,
+				}, nil, at)
 		},
 	})
 	if err != nil {

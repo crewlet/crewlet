@@ -332,17 +332,18 @@ Two properties differ from the vendor path and both are visible:
   restarting on a revision the fleet has since replaced leaves the newer names
   alone, exactly as the chart's projects do (see
   [the work tracker](../guides/work-tracker.md#projects-and-keys)). A
-  **change** to a container's settings is the one record this domain writes
-  at record version 2: during a rolling upgrade a node still on the previous
-  build holds such a record back rather than applying it without its stamp,
-  and with it the page writes in that container, until it is upgraded. A
-  record that only **re-stamps** settings the row already holds with a later
-  activation is written at version 1 — an older node applies it whole, since
-  the stamp is the one field it drops and what it stores is unchanged — so an
-  upgrade holds back only the spaces whose settings actually changed, never
-  every space the first upgraded node stamps (a row an older build wrote
-  carries no stamp, and every later activation moves one). Every other record
-  is written at version 1 too.
+  container's settings are the one record this domain writes at record
+  version 2, a later activation that only **re-stamps** unchanged settings
+  included — and every activation re-stamps every container the chart names,
+  since each carries the instant its configuration was activated. So during a
+  rolling upgrade from a build that predates the stamp, a node still on that
+  build holds back every chart-named container, whether or not its settings
+  changed, rather than applying it without its stamp, and with it the page
+  writes in that container, until it is upgraded — and then applies it stamp
+  and all. A re-stamp is not exempt: applied without its stamp it would leave
+  that node's row the one unstamped copy in the fleet after its upgrade, open
+  to the next stale activation it applied, which would walk the container's
+  settings back on every node. Every other record is written at version 1.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
