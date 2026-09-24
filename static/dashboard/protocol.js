@@ -762,6 +762,24 @@ var RestError = class extends Error {
 	get unauthorized() {
 		return this.status === 401 || this.status === 403;
 	}
+	/**
+	* Whether this is NOT the engine's own answer: nothing came back (status
+	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
+	* page, a 200 cut off part way through), or a status with no engine error
+	* code in it. Every refusal the engine writes is JSON with an `error` code,
+	* its auth guard's included, so an answer without one was written by
+	* something in front of it.
+	*
+	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
+	* the engine wrote means nothing was done; this means nobody here knows. A
+	* reverse proxy's default read timeout is a minute, which is exactly what
+	* the engine allows a node gate past its judgement, so a slow eviction
+	* reached the browser as a 504 — and read as a refusal, its operation id
+	* was dropped with it.
+	*/
+	get unanswered() {
+		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+	}
 };
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
@@ -893,7 +911,7 @@ async function request(method, path, options = {}) {
 	} catch {
 		throw new RestError(response.ok ? 502 : response.status, {
 			error: "unreadable_body",
-			detail: "the engine answered something that is not JSON"
+			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`
 		});
 	}
 	if (!response.ok && response.status !== 304) {

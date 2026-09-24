@@ -314,3 +314,56 @@ describe("a body that never arrives whole", () => {
     expect((err as RestError).detail).toContain("did not answer");
   });
 });
+
+// ONLY AN ANSWER WITH AN ENGINE ERROR CODE IS THE ENGINE'S REFUSAL. Every
+// refusal it writes is JSON with an `error` code, so a gateway's page, a JSON
+// body of a proxy's own, or a 200 cut off part way through is something else —
+// and a write's caller reading one as a refusal dropped the operation id of a
+// gesture the engine went on to finish.
+describe("whether an answer is the engine's own", () => {
+  const cases: [string, () => Response, boolean][] = [
+    ["an engine refusal", () => json({ error: "eviction_refused", detail: "live" }, 409), false],
+    ["the guard's own 401", () => json({ error: "invalid_token" }, 401), false],
+    [
+      "a gateway timeout's page",
+      () =>
+        new Response("<html><h1>504 Gateway Time-out</h1></html>", {
+          status: 504,
+          headers: { "Content-Type": "text/html" },
+        }),
+      true,
+    ],
+    ["a proxy's own JSON", () => json({ message: "upstream closed" }, 502), true],
+    [
+      "a 200 cut off part way through",
+      () =>
+        new Response('{"node":"node-4","op_id":"01a0', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      true,
+    ],
+  ];
+  for (const [name, respond, unanswered] of cases) {
+    test(`${name} is ${unanswered ? "not " : ""}the engine's answer`, async () => {
+      stub(respond);
+      const err = await rest
+        .request("POST", "/work/retention/evict/node-4")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RestError);
+      expect((err as RestError).unanswered).toBe(unanswered);
+    });
+  }
+
+  test("a request nothing answered is not the engine's answer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    const err = await rest.request("POST", "/work/retention/evict/node-4").catch((e: unknown) => e);
+    expect((err as RestError).status).toBe(0);
+    expect((err as RestError).unanswered).toBe(true);
+  });
+});

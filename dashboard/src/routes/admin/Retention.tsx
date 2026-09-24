@@ -35,7 +35,7 @@
  *     first is silent until a node tries to join.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -87,7 +87,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // without one would refuse on every poll and paint the screen red for a
   // reader who simply is not an operator.
   const operator = apiToken() !== "";
-  const { data, loading, error } = useQuery("retention", undefined, {
+  const { data, loading, error, refetch } = useQuery("retention", undefined, {
     pollMs: POLL_MS,
     enabled: operator,
   });
@@ -96,14 +96,33 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   // rather than in the dialog: the dialog is unmounted when it closes, and a
   // partial eviction reopened as a fresh one is a second gesture — every log
   // the first one reached is written again and its eviction re-dated.
+  //
+  // A COMPLETE ONE IS HELD TOO, until the report shows it. The report is
+  // polled, and until its next answer the row still read "Evict…" for a node
+  // just evicted — reopened, that minted a fresh id and wrote a second record
+  // on every log, re-dating the eviction straight after the dialog said not
+  // to retry. So an answer asks the report again at once, and the gesture
+  // stays on the row until the report agrees with it ([heldGestures]).
   const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
-  const holdGesture = (node: string, evict: boolean, g: GateGesture | null) =>
+  const holdGesture = (node: string, evict: boolean, g: GateGesture | null) => {
     setGestures((all) => {
       const next = { ...all };
       if (g) next[gestureKey(node, evict)] = g;
       else delete next[gestureKey(node, evict)];
       return next;
     });
+    if (g?.answer) refetch();
+  };
+  // WHAT THE REPORT NOW SHOWS IS LET GO OF, so a later gesture on the same
+  // node and sign is a new one rather than this one reopened.
+  const nodesSeen = data?.nodes;
+  useEffect(() => {
+    if (!nodesSeen) return;
+    setGestures((all) => {
+      const kept = heldGestures(all, nodesSeen);
+      return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+    });
+  }, [nodesSeen]);
 
   if (!operator) return null;
 
@@ -510,6 +529,32 @@ function gestureKey(node: string, evict: boolean): string {
 }
 
 /**
+ * Whether the report already shows what a complete gesture did: an eviction
+ * once the node reads evicted, a readmission once it no longer does. A node
+ * the report no longer lists has no row to mislabel, so its gesture is shown
+ * too.
+ */
+function reflected(g: GateGesture, key: string, nodes: RetentionNode[]): boolean {
+  if (!g.answer?.complete) return false;
+  const [node, sign] = key.split(":") as [string, string];
+  const row = nodes.find((n) => n.node_id === node);
+  return !row || Boolean(row.evicted) === (sign === "evict");
+}
+
+/**
+ * The gestures still worth holding against this report: every one a request
+ * can still finish, and every complete one the report does not show yet.
+ */
+export function heldGestures(
+  gestures: Record<string, GateGesture>,
+  nodes: RetentionNode[],
+): Record<string, GateGesture> {
+  return Object.fromEntries(
+    Object.entries(gestures).filter(([key, g]) => !reflected(g, key, nodes)),
+  );
+}
+
+/**
  * What a node row's gate button does.
  *
  * A GESTURE STILL TO BE FINISHED COMES FIRST. The report marks a node evicted
@@ -526,6 +571,11 @@ export function gateAction(
   if (readmit && finishable(readmit)) return { evict: false, label: "Finish readmission…" };
   const evict = gestures[gestureKey(n.node_id, true)];
   if (evict && finishable(evict)) return { evict: true, label: "Finish eviction…" };
+  // A COMPLETE GESTURE THE REPORT DOES NOT SHOW YET reopens as itself — its
+  // answer, and nothing to press — rather than as a fresh gesture with a new
+  // id over the logs it already holds.
+  if (evict?.answer?.complete && !n.evicted) return { evict: true, label: "Eviction sent…" };
+  if (readmit?.answer?.complete && n.evicted) return { evict: false, label: "Readmission sent…" };
   return n.evicted ? { evict: false, label: "Readmit…" } : { evict: true, label: "Evict…" };
 }
 

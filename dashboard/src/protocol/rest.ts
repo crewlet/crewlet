@@ -56,6 +56,25 @@ export class RestError extends Error {
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
   }
+
+  /**
+   * Whether this is NOT the engine's own answer: nothing came back (status
+   * 0), a body that could not be read (`unreadable_body` — a gateway's HTML
+   * page, a 200 cut off part way through), or a status with no engine error
+   * code in it. Every refusal the engine writes is JSON with an `error` code,
+   * its auth guard's included, so an answer without one was written by
+   * something in front of it.
+   *
+   * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
+   * the engine wrote means nothing was done; this means nobody here knows. A
+   * reverse proxy's default read timeout is a minute, which is exactly what
+   * the engine allows a node gate past its judgement, so a slow eviction
+   * reached the browser as a 504 — and read as a refusal, its operation id
+   * was dropped with it.
+   */
+  get unanswered(): boolean {
+    return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+  }
 }
 
 /**
@@ -296,12 +315,16 @@ async function request(
     try {
       parsed = JSON.parse(text);
     } catch {
-      // A proxy's HTML error page, or a body the engine cut short. On a
-      // refusal that is all the detail there is; on a success it is a broken
-      // answer either way, so both become an error rather than a silent null.
+      // A proxy's HTML error page, or a body cut short. On a refusal that is
+      // all the detail there is; on a success it is a broken answer either
+      // way, so both become an error rather than a silent null — and one
+      // that says it is not the engine's answer ([RestError.unanswered]),
+      // since nothing in it says what the engine did.
       throw new RestError(response.ok ? 502 : response.status, {
         error: "unreadable_body",
-        detail: "the engine answered something that is not JSON",
+        detail: response.ok
+          ? "the answer was cut short, or is not the engine's JSON"
+          : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`,
       });
     }
   }

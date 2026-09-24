@@ -574,7 +574,10 @@ or the reason it was not written and what to do.
   for the whole gesture. So a request that timed out or dropped — the dialog
   waits seventy-five seconds, past the minute the node allows a gesture — still
   holds the id, and the dialog offers **Finish this gesture**, which sends the
-  same request under the same id and reads every log's answer.
+  same request under the same id and reads every log's answer. So does an
+  answer the node did not write: a reverse proxy's 504 page, any status with no
+  engine error code in it, or a 200 cut off part way through. Only a refusal
+  carrying the engine's own code is read as one.
 - Where a log answers that the same gesture can finish it (`unknown`, a lost
   race, a node catching up), **Finish** sends it again under the same id, with
   force carried over if the gesture used it.
@@ -591,7 +594,16 @@ or the reason it was not written and what to do.
 - Closing the dialog does not lose the gesture: reopening it for the same node
   and the same sign offers **Finish** rather than starting afresh, and a node
   whose last eviction did not reach every log reads **Finish eviction…** on its
-  row.
+  row. A gesture that **did** reach every log is kept too, until the report
+  behind the dialog shows it — the screen asks the report again as soon as the
+  answer arrives, and meanwhile the row reads **Eviction sent…** (or
+  **Readmission sent…**) and reopens that answer, never a fresh gesture that
+  would write a second record on every log.
+- A **Finish** that is refused — it re-runs the judgement, so a lease listing
+  this node cannot read or a node still catching up can refuse it — wrote
+  nothing, and the answer the gesture already had stays on screen beside the
+  refusal, with its operation id and **Finish**, and **Force eviction** where
+  the refusal offers it.
 - A node still holding a live presence lease is marked **live** beside its
   **Evict…**, and its eviction is refused. The refusal — and the one for a
   lease listing this node cannot read — offers **Force eviction**, behind a

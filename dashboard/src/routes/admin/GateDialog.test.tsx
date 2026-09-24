@@ -169,9 +169,24 @@ test("finishing a partial gesture re-sends the same op id", async () => {
   await waitFor(() => expect(sent.length).toBe(2));
   expect(sent[1]!.query.get("op_id")).toBe(sent[0]!.query.get("op_id"));
   await waitFor(() => expect(screen.getByText(/evicted on every log/)).toBeTruthy());
-  // AND ONCE EVERY LOG HOLDS IT THERE IS NOTHING LEFT TO HOLD.
-  expect(held.at(-1)).toBeNull();
+  // AND ONCE EVERY LOG HOLDS IT THERE IS NOTHING LEFT TO FINISH — but it is
+  // still HELD, complete, until the screen's report shows it: let go of now,
+  // the row offered "Evict…" again and a reopen minted a second gesture.
+  expect(held.at(-1)?.answer?.complete).toBe(true);
+  expect(held.at(-1)?.opId).toBe(sent[0]!.query.get("op_id"));
+  expect(finishable(held.at(-1)!)).toBe(false);
   expect(screen.queryByRole("button", { name: "Finish this gesture" })).toBeNull();
+});
+
+// AN OPERATION NO REQUEST CAN FINISH IS LET GO OF, so the next gesture on that
+// node is rightly a new one.
+test("an operation no request can finish is not held", async () => {
+  const held: (GateGesture | null)[] = [];
+  engine({ status: 200, body: answer("superseded") });
+  render(<GateDialog node="node-4" evict onHeld={(g) => held.push(g)} onClose={() => {}} />);
+  confirmAndPress("node-4", "Evict");
+  await waitFor(() => expect(held.length).toBe(1));
+  expect(held[0]).toBeNull();
 });
 
 // A LIVE NODE'S REFUSAL OFFERS FORCE — as a control, since this screen has no
@@ -275,6 +290,102 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
   expect(sent.length).toBe(2);
   expect(sent[1]!.query.get("op_id")).toBe(opId);
+});
+
+// AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
+// timeout is a minute by default — the node's own budget for a gesture past its
+// judgement — so a slow eviction reached the browser as a gateway's 504 with an
+// HTML page, and a 200 can be cut off part way through. Read as a refusal, the
+// dialog never held the gesture, offered no Finish, and closing it lost the id
+// of a gesture the node went on to finish.
+test("a gateway's answer or a cut-off one keeps the op id and offers to finish it", async () => {
+  for (const reply of [
+    () =>
+      new Response("<html><body><h1>504 Gateway Time-out</h1></body></html>", {
+        status: 504,
+        headers: { "Content-Type": "text/html" },
+      }),
+    () => new Response(JSON.stringify({ message: "upstream closed" }), { status: 502 }),
+    () =>
+      new Response('{"node":"node-4","op_id":"01a0c4', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  ]) {
+    const sent: Sent[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "http://engine.test");
+        sent.push({ path: url.pathname, query: url.searchParams });
+        return sent.length === 1
+          ? reply()
+          : new Response(JSON.stringify(answer("applied")), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+      }),
+    );
+    const held: (GateGesture | null)[] = [];
+    render(<GateDialog node="node-4" evict onHeld={(g) => held.push(g)} onClose={() => {}} />);
+    confirmAndPress("node-4", "Evict");
+    await waitFor(() => expect(screen.getByText(/No answer/)).toBeTruthy());
+    const opId = sent[0]!.query.get("op_id")!;
+    expect(held.at(-1)?.opId).toBe(opId);
+    expect(held.at(-1)?.unanswered).toBeTruthy();
+    // NEVER THE REFUSAL'S FORM: nothing to type again, and no fresh id.
+    expect(screen.queryByLabelText("Type node-4 to confirm")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
+    await waitFor(() => expect(sent.length).toBe(2));
+    expect(sent[1]!.query.get("op_id")).toBe(opId);
+    await waitFor(() => expect(screen.getByText(/evicted on every log/)).toBeTruthy());
+    cleanup();
+    vi.unstubAllGlobals();
+  }
+});
+
+// A REFUSED FINISH KEEPS WHAT THE GESTURE ALREADY HEARD. Finish re-runs the
+// judgement, so it can come back `503 eviction_unjudged` — and a refusal wrote
+// nothing THIS TIME, which says nothing about the logs the first request
+// reached. The dialog dropped the per-log answer and the operation id and fell
+// back to "Type node-4 to confirm", as though no gesture had been made.
+test("a refused finish renders beside the answer it already had", async () => {
+  const result = answer("unknown");
+  const sent = engine(golden.refusals["eviction_unjudged"]!, {
+    status: 200,
+    body: answer("applied"),
+  });
+  const held: (GateGesture | null)[] = [];
+  render(
+    <GateDialog
+      node="node-4"
+      evict
+      held={{ opId: result.op_id, force: false, answer: result }}
+      onHeld={(g) => held.push(g)}
+      onClose={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
+  await waitFor(() => expect(screen.getByText(/cannot be judged/)).toBeTruthy());
+  expect(screen.getByText(/Finishing it was refused, and wrote nothing/)).toBeTruthy();
+  // THE ANSWER IS STILL THERE: its operation, and Finish under it.
+  expect(screen.getByText(result.op_id)).toBeTruthy();
+  expect(screen.queryByLabelText("Type node-4 to confirm")).toBeNull();
+  expect(screen.getByRole("button", { name: "Finish this gesture" })).toBeTruthy();
+  // AND THE SCREEN STILL HOLDS IT: a refusal is not a new state of the gesture.
+  expect(held).toEqual([]);
+
+  // THE REFUSAL'S OWN REMEDY IS OFFERED BESIDE IT, force carried under the
+  // gesture's own id.
+  fireEvent.click(screen.getByRole("checkbox", { name: "Force the eviction" }));
+  fireEvent.change(screen.getByLabelText("Type node-4 again to force it"), {
+    target: { value: "node-4" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Force eviction" }));
+  await waitFor(() => expect(sent.length).toBe(2));
+  expect(sent[1]!.query.get("op_id")).toBe(result.op_id);
+  expect(sent[1]!.query.get("force")).toBe("true");
 });
 
 // A DIALOG REOPENED ON A HELD GESTURE OFFERS TO FINISH IT, with nothing to type

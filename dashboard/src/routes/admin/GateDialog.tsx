@@ -35,9 +35,16 @@
  * ([newGateOpID]) before it asks, waits past the node's own bound
  * ([GATE_REQUEST_TIMEOUT_MS]), and offers **Finish this gesture** — the same
  * request, the same id, force carried — for a request nobody answered and for
- * a log whose remedy keeps the id ([keepsOperation]). The gesture is lifted
- * into the screen ([GateGesture]), so closing the dialog and opening it again
- * offers Finish rather than a fresh gesture.
+ * a log whose remedy keeps the id ([keepsOperation]). "Nobody answered"
+ * includes an answer the ENGINE did not write ([RestError.unanswered]): a
+ * reverse proxy's read timeout is a minute by default, which is the node's own
+ * budget, so a slow gesture reaches this page as a gateway's 504 — and read as
+ * a refusal it dropped the id of a gesture the node went on to finish. The
+ * gesture is lifted into the screen ([GateGesture]), so closing the dialog and
+ * opening it again offers Finish rather than a fresh gesture — and so does a
+ * COMPLETE one, until the report behind the dialog shows it: reopened as a
+ * fresh gesture, an eviction that landed a moment ago is minted a new id and
+ * re-dated on every log.
  *
  * # Force is a second, separate decision
  *
@@ -99,6 +106,17 @@ export function finishable(g: GateGesture): boolean {
   return g.answer.domains.some((d) => (d.actions ?? []).some(keepsOperation));
 }
 
+/**
+ * Why a request is held as unanswered, as the clause the dialog's "No answer"
+ * sentence carries: the transport's own words where nothing came back or the
+ * body could not be read, and the status where something in front of the node
+ * answered with a body of its own.
+ */
+function unansweredWhy(err: RestError): string {
+  if (err.status === 0 || err.code === "unreadable_body") return err.message;
+  return `a ${err.status} came back with no engine error code in it — something in front of the node answered`;
+}
+
 /** A refusal the engine answered before anything was written. */
 interface Refusal {
   detail: string;
@@ -119,9 +137,11 @@ export function GateDialog({
   /** The gesture the screen is holding for this node and sign, if any. */
   held?: GateGesture;
   /**
-   * Called with the gesture after every answer, and with null once nothing
-   * about it is left to finish — complete, or an operation no request can
-   * finish.
+   * Called with the gesture after every answer that leaves it worth holding —
+   * one a request can still finish, and a complete one the screen's report may
+   * not show yet — and with null for an operation no request can finish,
+   * where the next gesture is rightly a new one. A refusal leaves what the
+   * screen holds as it was: it wrote nothing this time.
    */
   onHeld: (gesture: GateGesture | null) => void;
   onClose: () => void;
@@ -168,19 +188,39 @@ export function GateDialog({
       ).body as RetentionGateResult;
       const next: GateGesture = { opId, force, answer };
       setGesture(next);
-      onHeld(finishable(next) ? next : null);
+      // THE FORCE DECISION IS SPENT, and the gesture carries it into every
+      // Finish: left ticked, the footer kept offering "Force eviction" over
+      // an answer that needs Finish instead.
+      setForcing(false);
+      setTypedForce("");
+      // A COMPLETE GESTURE IS HELD TOO, until the report shows it: the row
+      // behind this dialog reads the report, which a poll refreshes, and in
+      // between it still offered the gesture just made — reopened, a new id
+      // and a second record on every log.
+      onHeld(answer.complete || finishable(next) ? next : null);
     } catch (err) {
-      if (err instanceof RestError && err.status === 0) {
-        // NO ANSWER IS NOT A REFUSAL: the node finishes a gesture whatever
-        // happens to the connection, so it may have reached every log. The id
-        // is kept, and Finish asks again under it.
-        const next: GateGesture = { opId, force, unanswered: err.message };
+      if (err instanceof RestError && err.unanswered) {
+        // NO ANSWER IS NOT A REFUSAL, and neither is one the engine did not
+        // write — a gateway's 504, a 200 cut off part way through: the node
+        // finishes a gesture whatever happens to the connection, so it may
+        // have reached every log. The id is kept, and Finish asks again
+        // under it.
+        const next: GateGesture = { opId, force, unanswered: unansweredWhy(err) };
         setGesture(next);
+        setForcing(false);
+        setTypedForce("");
         onHeld(next);
       } else {
-        // A REFUSAL WROTE NOTHING, so the id it was sent under names no
-        // record anywhere and the next attempt may reuse it.
-        setGesture({ opId, force });
+        // A REFUSAL WROTE NOTHING THIS TIME — which is all it says. On a
+        // gesture's first request that means its id names no record
+        // anywhere and the next attempt may reuse it; on a FINISH the logs
+        // the gesture already reached still hold its record, and the
+        // judgement a Finish re-runs (`503 eviction_unjudged`, `409
+        // readmission_refused`) says nothing about them. So what the gesture
+        // already heard is KEPT and the refusal renders beside it: dropped,
+        // the dialog fell back to "Type node-4 to confirm" with the per-log
+        // answer and the operation id gone from the screen.
+        setGesture((prev) => (prev?.opId === opId ? { ...prev, force } : { opId, force }));
         setRefusal(
           err instanceof RestError
             ? {
@@ -244,42 +284,37 @@ export function GateDialog({
       size="md"
       stackBody
       footer={
-        answered ? (
-          <>
-            <Button variant="tertiary" onClick={onClose} disabled={busy}>
-              Close
+        <>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
+            {answered ? "Close" : "Cancel"}
+          </Button>
+          {forcing ? (
+            <Button variant="danger" onClick={submit} disabled={busy || !forceConfirmed}>
+              {busy ? "Forcing" : "Force eviction"}
             </Button>
-            {endsOperation && !canFinish && (
-              <Button variant="secondary" onClick={startAfresh} disabled={busy}>
-                Start a new gesture
-              </Button>
-            )}
-            {canFinish && (
-              <Button variant="primary" onClick={finish} disabled={busy}>
-                {busy ? "Finishing" : "Finish this gesture"}
-              </Button>
-            )}
-          </>
-        ) : (
-          <>
-            <Button variant="tertiary" onClick={onClose} disabled={busy}>
-              Cancel
+          ) : answered ? (
+            <>
+              {endsOperation && !canFinish && (
+                <Button variant="secondary" onClick={startAfresh} disabled={busy}>
+                  Start a new gesture
+                </Button>
+              )}
+              {canFinish && (
+                <Button variant="primary" onClick={finish} disabled={busy}>
+                  {busy ? "Finishing" : "Finish this gesture"}
+                </Button>
+              )}
+            </>
+          ) : (
+            <Button
+              variant={evict ? "danger" : "primary"}
+              onClick={submit}
+              disabled={busy || !confirmed}
+            >
+              {busy ? `${verb}ing` : verb}
             </Button>
-            {forcing ? (
-              <Button variant="danger" onClick={submit} disabled={busy || !forceConfirmed}>
-                {busy ? "Forcing" : "Force eviction"}
-              </Button>
-            ) : (
-              <Button
-                variant={evict ? "danger" : "primary"}
-                onClick={submit}
-                disabled={busy || !confirmed}
-              >
-                {busy ? `${verb}ing` : verb}
-              </Button>
-            )}
-          </>
-        )
+          )}
+        </>
       }
     >
       {!answered && (
@@ -353,60 +388,6 @@ export function GateDialog({
               </label>
             </details>
           )}
-
-          {refusal && (
-            <Callout variant="danger" role="alert">
-              <span className="col" style={{ gap: 6 }}>
-                <span>{refusal.detail}</span>
-                {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
-                {refusal.actions
-                  .filter((a) => a !== "force")
-                  .map((a) => (
-                    <span key={a} className="t-caption">
-                      {actionWords(a, { evict, stream: "", refused: true })}
-                    </span>
-                  ))}
-              </span>
-            </Callout>
-          )}
-
-          {/* FORCE, OFFERED ONLY WHERE THE REFUSAL SAYS IT IS THE WAY PAST IT,
-              and behind its own tick and its own typed confirmation: it is the
-              one gesture here nobody's evidence cleared. */}
-          {offersForce && (
-            <>
-              <Checkbox
-                framed
-                tone="danger"
-                checked={forcing}
-                disabled={busy}
-                onCheckedChange={setForcing}
-                label="Force the eviction"
-                description={
-                  <>
-                    Evict <InlineCode>{node}</InlineCode> past the presence-lease judgement — for a
-                    node wedged in a way that still renews its lease, or one this node cannot see
-                    because coordination is unreachable. Only when you know it is gone: its records
-                    stop applying everywhere and its seats move.
-                  </>
-                }
-              />
-              {forcing && (
-                <label className="col" style={{ gap: 6 }}>
-                  <span className="t-caption">
-                    Type <InlineCode>{node}</InlineCode> again to force it
-                  </span>
-                  <Input
-                    value={typedForce}
-                    onChange={(e) => setTypedForce(e.target.value)}
-                    spellCheck={false}
-                    disabled={busy}
-                    aria-label={`Type ${node} again to force it`}
-                  />
-                </label>
-              )}
-            </>
-          )}
         </>
       )}
 
@@ -432,13 +413,61 @@ export function GateDialog({
         <GateOutcome result={gesture.answer} evict={evict} />
       )}
 
-      {refusal && answered && (
+      {/* A REFUSAL RENDERS WHEREVER IT ARRIVED — beside the answer a gesture
+          already had when it was a Finish that was refused, since that answer
+          is still true, and with its own remedies either way. */}
+      {refusal && (
         <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 6 }}>
+            {answered && <strong>Finishing it was refused, and wrote nothing.</strong>}
             <span>{refusal.detail}</span>
             {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
+            {refusal.actions
+              .filter((a) => a !== "force")
+              .map((a) => (
+                <span key={a} className="t-caption">
+                  {actionWords(a, { evict, stream: "", refused: true })}
+                </span>
+              ))}
           </span>
         </Callout>
+      )}
+      {/* FORCE, OFFERED ONLY WHERE THE REFUSAL SAYS IT IS THE WAY PAST IT,
+          and behind its own tick and its own typed confirmation: it is the
+          one gesture here nobody's evidence cleared. */}
+      {offersForce && (
+        <>
+          <Checkbox
+            framed
+            tone="danger"
+            checked={forcing}
+            disabled={busy}
+            onCheckedChange={setForcing}
+            label="Force the eviction"
+            description={
+              <>
+                Evict <InlineCode>{node}</InlineCode> past the presence-lease judgement — for a node
+                wedged in a way that still renews its lease, or one this node cannot see because
+                coordination is unreachable. Only when you know it is gone: its records stop
+                applying everywhere and its seats move.
+              </>
+            }
+          />
+          {forcing && (
+            <label className="col" style={{ gap: 6 }}>
+              <span className="t-caption">
+                Type <InlineCode>{node}</InlineCode> again to force it
+              </span>
+              <Input
+                value={typedForce}
+                onChange={(e) => setTypedForce(e.target.value)}
+                spellCheck={false}
+                disabled={busy}
+                aria-label={`Type ${node} again to force it`}
+              />
+            </label>
+          )}
+        </>
       )}
     </Modal>
   );
