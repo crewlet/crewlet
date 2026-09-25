@@ -342,6 +342,14 @@ The consequences worth stating plainly:
   upgrade, and the retention sweep deletes the old bucket once no old node
   is live. See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
+- **A gesture a newer build carries out for a person is refused
+  `peer_upgrading` until the node that would carry it out has that
+  build.** Each node advertises what its build can do on its heartbeat,
+  and a gesture another node carries out asks first — so mid-rollout it is
+  refused by name rather than accepted by an older node that never acts on
+  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
+  `unavailable` instead, which a retry clears. See
+  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node
@@ -367,6 +375,10 @@ The consequences worth stating plainly:
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
+- **Each node's heartbeat** also carries what its build can carry out and
+  how each of its MCP servers started — one row per server, counting the
+  instances that started and failed, with one failure's reason. See
+  [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 
 A node whose applied config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See

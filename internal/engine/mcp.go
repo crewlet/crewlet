@@ -1,13 +1,16 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -74,6 +77,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	}
 	env := e.resolver()
 	specs := make([]mcp.Spec, 0, len(c.Config.MCPServers))
+	var outcomes []mcpOutcome
 	for _, server := range c.Config.MCPServers {
 		if !server.IsShared() {
 			continue
@@ -82,6 +86,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		if err != nil {
 			log.ErrorContext(ctx, "mcp_server_unconfigured", "server", server.Name, "error", err,
 				"detail", "this server contributes no tools; the rest of the company still starts")
+			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
 		specs = append(specs, spec)
@@ -124,7 +129,13 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	// brand-new registry that has to be told about them again. Add refuses
 	// a name it already runs, which cost the applied epoch every shared
 	// server's tools; see Bridge.Reconcile.
-	startAll(ctx, c.Tools, specs, e.mcp.Reconcile)
+	outcomes = append(outcomes, startAll(ctx, c.Tools, specs, e.mcp, e.mcp.Reconcile)...)
+	// REPLACED WHOLE, per apply: the outcomes describe the servers THIS
+	// revision declares, and a server a revision dropped must leave the
+	// heartbeat with it rather than be reported as still started.
+	e.mcpMu.Lock()
+	e.mcpShared = outcomes
+	e.mcpMu.Unlock()
 }
 
 // stopSharedServers tears down what startSharedServers brought up.
@@ -146,23 +157,27 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 	}
 }
 
-// startSeatServers spawns a claimed seat's own children and returns the
-// surface its turns run against.
+// startSeatServers spawns a claimed seat's own children and files the surface
+// its turns run against, which [Engine.ToolsFor] then answers.
 //
-// The returned registry is never nil. A seat whose company declares no
-// per-role server gets the epoch's shared surface unchanged, which is the
-// correct answer rather than a special case.
-func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string) *tools.Registry {
+// It returns nothing: the registry is installed beside the bridge by
+// [Engine.setSeatBridge], under one lock, so the two cannot disagree about
+// which children the seat has — and a returned copy was a second handle on it
+// that no caller read. A seat whose company declares no per-role server keeps
+// the epoch's shared surface, which is the correct answer rather than a
+// special case.
+func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string) {
 	if c == nil {
-		return nil
+		return
 	}
 	seat := c.Org.AgentSeatByHandle(handle)
 	if seat == nil {
-		return c.Tools
+		return
 	}
-	specs := seatSpecs(c, seat, e.resolver())
+	specs, unconfigured := seatSpecs(c, seat, e.resolver())
 	if len(specs) == 0 {
-		return c.Tools
+		e.setSeatOutcomes(handle, unconfigured)
+		return
 	}
 	// A BRIDGE OF ITS OWN, because the bridge's catalogue is keyed by tool
 	// name across every server it runs: two seats' children of one template
@@ -173,9 +188,77 @@ func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string
 	// CLONED, not shared: the seat's own tools must not reach a peer seat,
 	// and the epoch's registry is read by every other seat on this node.
 	reg := c.Tools.Clone()
-	startAll(ctx, reg, specs, bridge.Add)
+	outcomes := slices.Concat(unconfigured, startAll(ctx, reg, specs, bridge, bridge.Add))
 	e.setSeatBridge(ctx, handle, bridge, reg)
-	return reg
+	e.setSeatOutcomes(handle, outcomes)
+}
+
+// mcpOutcome is what one start of one MCP instance concluded, kept for the
+// heartbeat's [coord.NodeStatus.MCP].
+//
+// Recorded at the start rather than asked of the bridge on each beat, because
+// a FAILED start leaves nothing in the bridge to ask: a server whose discovery
+// failed is stopped and indexed nowhere (see [mcp.Bridge.Add]), so a report
+// read off the bridge would show a server that would not start as one that
+// was never configured — the one row an operator opening the settings screen
+// is looking for.
+type mcpOutcome struct {
+	server string // the config's own name, never an instance name
+	seat   string // the seat handle, empty for a shared server
+	tools  int
+	err    error
+}
+
+// setSeatOutcomes records a seat's per-role outcomes, replacing its previous
+// claim's; nil forgets the seat.
+func (e *Engine) setSeatOutcomes(handle string, outcomes []mcpOutcome) {
+	for i := range outcomes {
+		outcomes[i].seat = handle
+	}
+	e.mcpMu.Lock()
+	defer e.mcpMu.Unlock()
+	if len(outcomes) == 0 {
+		delete(e.mcpSeats, handle)
+		return
+	}
+	if e.mcpSeats == nil {
+		e.mcpSeats = make(map[string][]mcpOutcome)
+	}
+	e.mcpSeats[handle] = outcomes
+}
+
+// mcpStatus is this node's MCP servers as the heartbeat publishes them: one
+// row per configured server, its instances counted.
+//
+// Sorted by server, and a server's reported error is its first failure by
+// seat handle, so a beat that re-sends the same facts sends the same bytes.
+func (e *Engine) mcpStatus() []coord.MCPServerStatus {
+	e.mcpMu.Lock()
+	all := slices.Clone(e.mcpShared)
+	for _, outcomes := range e.mcpSeats {
+		all = append(all, outcomes...)
+	}
+	e.mcpMu.Unlock()
+	slices.SortFunc(all, func(a, b mcpOutcome) int {
+		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat, b.seat))
+	})
+	var out []coord.MCPServerStatus
+	for _, o := range all {
+		if n := len(out); n == 0 || out[n-1].Server != o.server {
+			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == ""})
+		}
+		row := &out[len(out)-1]
+		if o.err != nil {
+			row.Failed++
+			if row.Error == "" {
+				row.Error, row.ErrorSeat = o.err.Error(), o.seat
+			}
+			continue
+		}
+		row.Started++
+		row.Tools = max(row.Tools, o.tools)
+	}
+	return out
 }
 
 // SharedServers names the company-wide MCP children this node is running.
@@ -275,9 +358,14 @@ func (e *Engine) refileSeatTools(ctx context.Context, c *Company) {
 // Filing in completion order would hand a seat a different surface depending
 // on which vendor happened to answer first (a company whose behaviour changes
 // between restarts for no reason anybody can see).
-func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
+//
+// What each start concluded is returned, in spec order, for the heartbeat.
+// The tool count is the BRIDGE's for that instance rather than the change's:
+// a change also names tools of other servers that a start un-shadowed, and
+// the question the count answers is what this server serves.
+func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge *mcp.Bridge,
 	start func(context.Context, mcp.Spec) (mcp.Change, error),
-) {
+) []mcpOutcome {
 	type outcome struct {
 		change mcp.Change
 		err    error
@@ -290,9 +378,15 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
 		})
 	}
 	wg.Wait()
+	outcomes := make([]mcpOutcome, len(specs))
 	for i, spec := range specs {
 		file(ctx, reg, spec.Name, out[i].change, out[i].err)
+		outcomes[i] = mcpOutcome{server: mcp.ServerName(spec.Name), err: out[i].err}
+		if out[i].err == nil {
+			outcomes[i].tools = len(bridge.ServerTools(spec.Name))
+		}
 	}
+	return outcomes
 }
 
 // setSeatBridge installs a seat's bridge and the registry filed from it,
@@ -351,6 +445,7 @@ func (e *Engine) takeAllSeatBridges() []*mcp.Bridge {
 	}
 	clear(e.seatMCP)
 	clear(e.seatTools)
+	clear(e.mcpSeats)
 	return out
 }
 
@@ -360,6 +455,10 @@ func (e *Engine) takeAllSeatBridges() []*mcp.Bridge {
 // leave a child of a seat this node no longer holds — and running for a seat
 // that never got one, which a failed acquire does, is a no-op.
 func (e *Engine) stopSeatServers(ctx context.Context, handle string) {
+	// FORGOTTEN FIRST, and even for a seat that had no bridge: a seat whose
+	// every template failed to resolve has outcomes and no children, and a
+	// released seat's failures are no longer this node's to report.
+	e.setSeatOutcomes(handle, nil)
 	bridge := e.takeSeatBridge(handle)
 	if bridge == nil {
 		return
@@ -410,8 +509,13 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // Keyed off the seat's own mcp_env: a `shared: false` server the seat declares
 // no credentials for gets no child, because a template with nobody's identity
 // in it is a server nobody can act through.
-func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) []mcp.Spec {
+//
+// A template whose ${VAR} references do not resolve into a launchable spec
+// comes back as an outcome instead, so the heartbeat reports it failed rather
+// than leaving it out as though the seat never declared it.
+func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) ([]mcp.Spec, []mcpOutcome) {
 	var out []mcp.Spec
+	var unconfigured []mcpOutcome
 	for _, server := range c.Config.MCPServers {
 		if server.IsShared() {
 			continue
@@ -424,11 +528,12 @@ func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) []mcp.Spec {
 		if err != nil {
 			log.Error("mcp_server_unconfigured", "server", server.Name, "seat", seat.Handle(),
 				"error", err, "detail", "this seat gets no child for it")
+			unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
 		out = append(out, spec)
 	}
-	return out
+	return out, unconfigured
 }
 
 // serverSpec turns one config entry into a launchable spec.
