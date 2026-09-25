@@ -42,10 +42,10 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 // not read node X" has to be louder than "there is no node X".
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
 	var out []coord.NodePositions
-	// THE BUCKET HOLDS SEVEN KEY CLASSES — a node's positions, a trim hold,
+	// THE BUCKET HOLDS EIGHT KEY CLASSES — a node's positions, a trim hold,
 	// a backup point, a domain's published floor, a capacity operation, a
-	// node's admission and its maintenance acknowledgement — so the walk
-	// filters, and that filter is the load-bearing half of sharing a bucket:
+	// node's admission, its maintenance acknowledgement and a seat pause —
+	// so the walk filters, and that filter is the load-bearing half of sharing a bucket:
 	// a hold decoded as a positions row yields an EMPTY node id and a
 	// domains map of zero values, which the trim reads as a node that has
 	// applied nothing, so the pin becomes a permanent floor at zero from a
@@ -493,12 +493,12 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	// coord.DocumentKey(class, id) — two segments joined by the separator,
 	// which is a dot because a key IS a subject token path — and the class
 	// segment escapes to itself, so `<class>.>` is a filter the broker can
-	// match. SEVEN classes share this register; reading all of them and
-	// discarding six was the shape this replaced, and the state-log write
+	// match. EIGHT classes share this register; reading all of them and
+	// discarding seven was the shape this replaced, and the state-log write
 	// fence takes this read on every first write to a subject.
 	//
 	// `what` reaches the walk now rather than going nowhere: a store failure
-	// here used to say "read crewlet_positions" for all seven listings, which
+	// here used to say "read crewlet_positions" for all eight listings, which
 	// names the bucket an operator would inspect but never the duty that
 	// stalled.
 	//

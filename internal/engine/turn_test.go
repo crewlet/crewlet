@@ -143,6 +143,7 @@ type recorder struct {
 	panicWith any
 	parked    [][]*events.Event
 	paused    []string
+	holds     []inbox.Hold
 	deferred  []string
 }
 
@@ -164,8 +165,9 @@ func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 			r.parked = append(r.parked, evs)
 			return nil
 		},
-		Pause: func(_ context.Context, handle, _ string) error {
+		Pause: func(_ context.Context, handle string, hold inbox.Hold, _ string) error {
 			r.paused = append(r.paused, handle)
+			r.holds = append(r.holds, hold)
 			return nil
 		},
 		NoteDeferred: func(handle string) { r.deferred = append(r.deferred, handle) },
@@ -273,7 +275,7 @@ func TestAFailedPauseDoesNotPark(t *testing.T) {
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
-	d.Pause = func(context.Context, string, string) error { return errors.New("no") }
+	d.Pause = func(context.Context, string, inbox.Hold, string) error { return errors.New("no") }
 	got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")})
 	if got.Outcome != queue.OutcomeNak {
 		t.Errorf("outcome = %v, want a NAK", got.Outcome)
@@ -2803,6 +2805,15 @@ func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
 		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
 		"a node that does not hold the seat": {
 			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
+		// AN ANSWER WAITS BEHIND A PAUSE, like the seat's other mail:
+		// resuming a run is work, and a paused seat does none. The park
+		// the screening makes holds it for the resume.
+		"a seat a person paused": {
+			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Paused: true},
+			sandbox.AnswerConsumed, false, queue.OutcomeAck, false},
+		"a node that has not read the pauses": {
+			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, PauseUnknown: true},
+			sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2829,6 +2840,11 @@ func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
 			}
 			if tc.routed && len(r.parked) != 0 {
 				t.Errorf("an answer routed to its run was also parked: %v", r.parked)
+			}
+			if tc.conds.Paused && (len(r.parked) != 1 ||
+				!slices.Equal(r.holds, []inbox.Hold{inbox.HoldSeatPaused})) {
+				t.Errorf("a paused seat's answer parked %v under holds %v, want one park "+
+					"under the pause's own hold", r.parked, r.holds)
 			}
 		})
 	}

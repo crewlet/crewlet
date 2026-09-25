@@ -451,6 +451,19 @@ func annotationsFor(name string) tools.Annotations {
 		// has resumed it, and the annotation describes the tool rather
 		// than the engine's protection.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case PauseSeatTool:
+		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight and the
+		// turn is not run again — what it had not yet done is lost. Otherwise
+		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
+		// nothing. Closed-world: it changes whether one of the company's own
+		// seats works, and reaches nothing outside the engine.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No}
+	case ResumeSeatTool:
+		// Not destructive: the held mail is delivered, nothing is lost.
+		// Idempotent: resuming a seat that is not paused changes nothing.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
 		// reversible — which is exactly what Destructive asks about. The

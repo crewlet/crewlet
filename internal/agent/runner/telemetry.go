@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -1166,6 +1167,11 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
 
+// StoppedKind is the error kind a phase and a turn a person stopped carry: not
+// a failure class, but the one word that says why the record has an error and
+// no failure.
+const StoppedKind = "stopped"
+
 // classifyError names a failure's CLASS, for the one-word reason a dashboard
 // prints beside a failed phase.
 //
@@ -1183,6 +1189,10 @@ func classifyError(err error) string {
 		return provider.Kind.String()
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
+	case turn.Stopped(err):
+		// Not a failure at all, and named so: a person paused the seat
+		// and asked for its running turn to stop.
+		return StoppedKind
 	case errors.Is(err, context.DeadlineExceeded):
 		return llm.KindTimeout.String()
 	case errors.Is(err, context.Canceled):

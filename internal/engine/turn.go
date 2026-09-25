@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -59,9 +60,11 @@ type Dispatcher struct {
 	// drops the work entirely.
 	Park func(ctx context.Context, handle string, evs []*events.Event) error
 
-	// Pause stops delivery on a seat's inbox before a park, so the requeued
-	// copies buffer on the queue rather than looping straight back.
-	Pause func(ctx context.Context, handle, reason string) error
+	// Pause takes the named hold on a seat's inbox before a park, so the
+	// requeued copies buffer on the queue rather than looping straight
+	// back. The screening names the hold ([inbox.Screening.Hold]), because
+	// two subsystems hold inboxes this way and each lifts only its own.
+	Pause func(ctx context.Context, handle string, hold inbox.Hold, reason string) error
 
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, and reports the deferral reason naming the window — see
@@ -381,7 +384,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return screening.Result()
 	case inbox.ActionPauseAndPark:
 		if d.Pause != nil {
-			if err := d.Pause(ctx, handle, screening.Reason); err != nil {
+			if err := d.Pause(ctx, handle, screening.Hold, screening.Reason); err != nil {
 				// The pause is what stops the requeued copies looping
 				// back at whatever rate the broker will serve. Without it
 				// the park is worse than doing nothing, so NAK and let
@@ -625,6 +628,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
+		// A PERSON ENDED IT, which is neither a broken phase nor a retry:
+		// see [Dispatcher.stopped]. First, because the stop is the account
+		// of the turn's end that is TRUE — a turn stopped after it wrote
+		// outside the engine was ended by somebody, not broken, and one
+		// stopped on a moved seat would be handed to a successor that would
+		// run exactly what the person stopped.
+		if turn.Stopped(err) {
+			return d.stopped(ctx, handle, req, err)
+		}
 		// A broken phase, not a failed turn. WHICH broken phase decides
 		// what to do with the delivery, and `err != nil` does not say:
 		// [turn.Abandon] is the one rule, shared with the sandbox resume.
@@ -773,6 +785,71 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 	}
 	d.noteAbandoned(ctx, handle, req.Events, cause, reason)
 	return queue.Ack()
+}
+
+// stopped settles a delivery whose turn a person stopped.
+//
+// SPENT, NOT RETRIED. The trigger is recorded in the completion ledger and the
+// delivery acked, exactly as a finished turn's is, because a NAK would run the
+// turn again — on this node the moment the pause is lifted, or on a peer
+// sooner — and the person stopped it precisely so that it would not go on.
+// What they asked for next is a new ask, and the seat's other mail waits on
+// its held inbox for the resume.
+//
+// ON THE RECORD, three ways, each saying what only it can: the turn's own
+// completion reads `stopped` rather than `failed` (see
+// [Engine.publishTurnCompleted]), this frame publishes
+// [types.AgentTurnStopped] naming who stopped it, and the log line joins the
+// run to the work key. No [types.TurnTriggerSkipped]: the trigger WAS worked,
+// as far as anybody asked it to be.
+func (d *Dispatcher) stopped(ctx context.Context, handle string, req Request, cause error) queue.Result {
+	pause, _ := stopOf(cause)
+	log.InfoContext(ctx, "turn_stopped", "seat", handle, "run_id", req.RunID,
+		"work_key", req.WorkKey, "by", pause.By, "person", pause.Seat,
+		"detail", "a person paused this seat and asked for its running turn to stop; "+
+			"the trigger is recorded as worked rather than redelivered")
+	if d.Completions != nil {
+		now := d.now()
+		for _, ev := range req.Events {
+			if ev == nil || !d.ledgered(ev.Type) {
+				continue
+			}
+			key := workkey.Derive([]string{ev.ID.String()})
+			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
+				log.WarnContext(ctx, "stopped_trigger_not_recorded", "seat", handle,
+					"error", err, "detail", "the trigger may be redelivered and run the "+
+						"turn a person stopped once the seat is resumed")
+			}
+		}
+	}
+	if d.Observe != nil {
+		var role, agentID string
+		if d.Identify != nil {
+			role, agentID = d.Identify(handle)
+		}
+		d.Observe(ctx, turnStoppedEvent(handle, role, agentID, req.RunID, req.WorkKey,
+			pause, triggerTrace(req.Events)))
+	}
+	return queue.Ack()
+}
+
+// turnStoppedEvent is the record of a turn a person stopped, built once for
+// both paths a turn runs on — a dispatched turn and a resumed one.
+func turnStoppedEvent(handle, role, agentID, turnID, workKey string,
+	pause coord.SeatPause, trace events.TraceContext,
+) *events.Event {
+	rec := events.New(types.AgentTurnStopped{
+		Agent: agentID, AgentHandle: handle, RoleName: role,
+		TurnID: turnID, WorkKey: workKey,
+		StoppedBy: pause.By, StoppedBySeat: pause.Seat, Reason: pause.Reason,
+	}, trace)
+	// The seat's role, as every turn-scoped event's source is, so the feed
+	// attributes the row to the seat rather than to "system".
+	rec.Source = role
+	if rec.Source == "" {
+		rec.Source = "engine.dispatch"
+	}
+	return rec
 }
 
 // recoverPanic settles a delivery whose handling panicked outside the turn
@@ -1085,7 +1162,7 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 	if len(answers) == 0 {
 		return evs, queue.Result{}, false
 	}
-	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers {
+	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers || c.Paused || c.PauseUnknown {
 		return evs, queue.Result{}, false
 	}
 	if result, parked := d.parkOnBudget(ctx, handle); parked {

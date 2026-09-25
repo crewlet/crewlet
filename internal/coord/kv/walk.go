@@ -71,8 +71,8 @@ func eachEntry(ctx context.Context, kv jetstream.KeyValue,
 // THE BROKER DOES THE FILTERING, which is the whole point. A key is a subject
 // token path under its bucket (coord/keys.go), so a class of keys written by
 // [coord.DocumentKey] is a subject wildcard the broker can match — and the
-// shared positions register holds SEVEN classes, so a walk that read the whole
-// bucket moved all seven to use one. That read is not an edge case: the
+// shared positions register holds EIGHT classes, so a walk that read the whole
+// bucket moved all eight to use one. That read is not an edge case: the
 // state-log write fence takes it on every first write to a subject.
 //
 // The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
@@ -80,11 +80,11 @@ func eachEntry(ctx context.Context, kv jetstream.KeyValue,
 // what the watcher takes. Each walk composes its own, and there is
 // deliberately no default: an empty filter read as "everything" would turn a
 // caller that lost its class value into one that walks the whole register and
-// decodes seven classes as one.
+// decodes eight classes as one.
 //
 // `what` names the listing a failure could not complete — the bare name, which
 // every message composes into "read <what>" — and a filtered walk names its
-// LISTING rather than its bucket. Seven classes share the positions register,
+// LISTING rather than its bucket. Eight classes share the positions register,
 // so "read crewlet_positions" is the same sentence for all of them: it names
 // the file an operator would inspect and never the duty that stalled.
 func eachEntryUnder(ctx context.Context, kv jetstream.KeyValue,

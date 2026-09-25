@@ -53,6 +53,15 @@ const (
 	// no such route: the wake would reach its screening as an ordinary
 	// delivery and be run as a turn about nothing, while the run waited on.
 	FeatureAnswerRunByTurn Feature = "answer_run_by_turn"
+
+	// FeatureSeatPause — the node honours a [SeatPause]: it holds a paused
+	// seat's mailbox, takes that hold again before attaching a paused seat
+	// it acquires, skips a paused seat's scheduled fires and ends a running
+	// turn a pause asked to stop. An older build would do none of it, so a
+	// seat it held or later acquired would go on working while the
+	// dashboard said it was paused. Every live node has to advertise it,
+	// because any of them may be the next to hold the seat.
+	FeatureSeatPause Feature = "seat_pause"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -62,7 +71,7 @@ const (
 // is a claim a peer acts on — a gesture it gates is accepted the moment every
 // node carries the name — so a name listed ahead of its implementation is a
 // fleet told it can do something it cannot.
-var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn}
+var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause}
 
 // Valid reports whether this build knows the feature.
 func (f Feature) Valid() bool { return slices.Contains(Features, f) }

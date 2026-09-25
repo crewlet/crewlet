@@ -109,7 +109,15 @@ func TestTheGuardsFireInTheDocumentedOrder(t *testing.T) {
 		c    inbox.Conditions
 		want inbox.Action
 	}{
-		{"ownership outranks everything", inbox.Conditions{}, inbox.ActionDefer},
+		{"ownership outranks everything", inbox.Conditions{
+			PauseUnknown: true, Paused: true,
+		}, inbox.ActionDefer},
+		{"an unread pause outranks a pause, the engine, sandbox and posture", inbox.Conditions{
+			Owned: true, PauseUnknown: true, Paused: true, SeatHeldBySandbox: true,
+		}, inbox.ActionDefer},
+		{"a pause outranks the engine, sandbox and posture", inbox.Conditions{
+			Owned: true, Paused: true, SeatHeldBySandbox: true,
+		}, inbox.ActionPauseAndPark},
 		{"no engine outranks sandbox and posture", inbox.Conditions{
 			Owned: true, SeatHeldBySandbox: true,
 		}, inbox.ActionPauseAndPark},
@@ -127,6 +135,64 @@ func TestTheGuardsFireInTheDocumentedOrder(t *testing.T) {
 		if got.Action != tc.want {
 			t.Errorf("%s: action = %s (%s), want %s", tc.name, got.Action, got.Reason, tc.want)
 		}
+	}
+}
+
+// A PAUSED SEAT PARKS AND HOLDS ITS INBOX, UNDER THE PAUSE'S OWN HOLD.
+//
+// The hold is named because two subsystems gate one inbox and each lifts only
+// its own: a pause-and-park that took the no-model hold would be lifted by the
+// next apply that brought a model, and the seat a person stopped would start
+// again with nobody having resumed it. A seat that is paused AND has no model
+// is held under the pause, which is the one of the two only a person lifts.
+func TestAPausedSeatParksAndHoldsItsInbox(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]inbox.Conditions{
+		"paused":                {Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Paused: true},
+		"paused with no engine": {Owned: true, AdmitsTriggers: true, Paused: true},
+		"paused and shedding":   {Owned: true, TurnEngineReady: true, Paused: true},
+		"paused mid-sandbox": {
+			Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
+			Paused: true, SeatHeldBySandbox: true, SandboxAwaitsAnswer: true,
+		},
+	} {
+		evs := []*events.Event{ev(t, "notification"), ev(t, "notification")}
+		got := inbox.Screen(c, evs)
+		if got.Action != inbox.ActionPauseAndPark {
+			t.Fatalf("%s: action = %s (%s), want pause-and-park", name, got.Action, got.Reason)
+		}
+		if got.Hold != inbox.HoldSeatPaused {
+			t.Errorf("%s: hold = %q, want %q — the pause's own hold, which only a "+
+				"resume lifts", name, got.Hold, inbox.HoldSeatPaused)
+		}
+		if len(got.Events) != len(evs) {
+			t.Errorf("%s: parked %d of %d events — a park that drops one loses mail",
+				name, len(got.Events), len(evs))
+		}
+		// NOTHING IS OFFERED to a parked run either: an answer waits behind
+		// a pause like any other mail, because resuming a run is work.
+		if got.OfferAsSandboxAnswer {
+			t.Errorf("%s: a paused seat offered its mail to a parked coding run", name)
+		}
+	}
+	// And the no-model park keeps its own.
+	if got := inbox.Screen(inbox.Conditions{Owned: true, AdmitsTriggers: true},
+		[]*events.Event{ev(t, "notification")}); got.Hold != inbox.HoldNoTurnEngine {
+		t.Errorf("no-model park hold = %q, want %q", got.Hold, inbox.HoldNoTurnEngine)
+	}
+}
+
+// A NODE THAT HAS NOT READ THE PAUSES YET DEFERS, it neither runs nor parks.
+//
+// Run, it may start a turn on a seat somebody stopped; parked, it would take a
+// pause hold that no resume will ever lift, because nobody paused the seat.
+func TestAnUnreadPauseDefersTheDelivery(t *testing.T) {
+	t.Parallel()
+	c := healthy()
+	c.PauseUnknown = true
+	got := inbox.Screen(c, []*events.Event{ev(t, "notification")})
+	if got.Action != inbox.ActionDefer || !got.NoteDeferred || got.Hold != "" {
+		t.Errorf("screening = %+v, want a noted defer that takes no hold", got)
 	}
 }
 

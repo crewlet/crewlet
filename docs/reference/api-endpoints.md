@@ -1402,6 +1402,12 @@ already moved is left as the stream left it. A read that fails is logged as
 `live_projection_not_seeded` and costs that history, never the start-up. The
 reads run side by side, so a slow read does not use up the time budget of the others.
 
+**The paused seats are seeded from the coordination record**, beside the
+reads above and before the bind: a pause taken before this process started is
+in no event it will hear, and a paused seat drawn as working is the one state a
+person pausing it must not be shown. A failed read is logged as
+`seat_pauses_not_seeded`; the pause itself is in force either way.
+
 **The running coding runs are reconciled against the durable run record**. The record is read once before the listener binds and then every 30 seconds. The stream is lossy and in memory, so it cannot say which runs exist, and the record can. See [the running-runs panel](../concepts/code-sandbox.md)
 for which of the two wins when they disagree. A reconcile that changed the set pushes it as `sandboxes`, and a reconcile that changed nothing pushes nothing.
 
@@ -1424,7 +1430,8 @@ upgrade to a WebSocket (corporate proxies, etc.).
                       last_error (the phase failure that stopped this
                       seat, or null) + turn (the turn the seat is on,
                       or null) + last_turn (the newest turn it ended,
-                      or null) */ }, ... ],
+                      or null) + paused ({by, at, reason, stop_running}
+                      while a person has the seat paused, or null) */ }, ... ],
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* in-flight detached coding run: turn_id, role,
@@ -1784,7 +1791,7 @@ way. The fields are these:
 - `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
 - `node` is the node running the call.
 
-Beside `live_call`, each seat carries `turn` and `last_turn`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, and the newest turn it ended. See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
+Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
 phase is over and nothing is still arriving.
@@ -2286,11 +2293,12 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **thirteen no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
-`remove_work_item`, `restore_work_item` and
-[`answer_run`](#answering-a-parked-coding-run). A view is furniture — a name, a shape
+`remove_work_item`, `restore_work_item`,
+[`answer_run`](#answering-a-parked-coding-run), and
+[`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -2304,7 +2312,10 @@ company, and a seat that could hide work it did not want to do would be marking
 its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the
 one that is not. And a coding run's question is a person's to answer: a seat
-that could answer its own run would be guessing on its own behalf.
+that could answer its own run would be guessing on its own behalf. Whether a
+seat works at all is a person's decision about it too: a seat that could pause
+a colleague, or resume itself, would be overruling the people who run the
+company.
 
 ### Answering a parked coding run
 
@@ -2334,6 +2345,39 @@ holding the seat runs a build that cannot route an answer by turn — that build
 would read the answer as an ordinary wake and run a turn about nothing. It is
 served on every company, native backends or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.
+
+### Pausing and resuming a seat
+
+`pause_seat` stops an agent seat taking work until somebody resumes it:
+it starts no new turn, its incoming mail waits on its inbox in order, and its
+scheduled runs are recorded `skipped_paused` rather than sent. The turn it is on
+finishes first, unless the pause asks to stop it. `resume_seat` lifts the
+pause, and what waited is delivered first. See
+[Agent Runtime § Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat).
+
+| Tool | Arguments |
+|---|---|
+| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round. A stopped turn is not run again. |
+| `resume_seat` | `handle` |
+
+Both answer `{"handle", "outcome", "paused", "changed", …}` — a pause adds
+`paused_by`, `paused_by_seat`, `paused_at`, `reason` and `stop_running`.
+`applied` means the pause is the fleet's record; the node holding the seat
+carries it out from its own copy, typically within a second. `changed` is false
+for a pause of a paused seat and a resume of a free one: the seat is already in
+the state asked for, and nothing is announced. The one exception is a pause
+that adds `stop_running` to a pause without it — the record is amended, names
+whoever asked for the stop, and is announced again. Each real change is
+announced once, as `seat_paused` or `seat_resumed`, by the caller whose
+compare-and-set won. `unknown` is a write the store may or may not have taken,
+and a retry is safe.
+
+They refuse `not_found` for a handle that names no agent seat (a person's seat
+takes no work a pause could hold), `invalid` for a reason past its bound,
+`conflict` after losing four compare-and-sets in a row to other changes to the
+same pause, and `peer_upgrading` while **any** live node runs a build that
+cannot carry a pause — any of them may be the next to hold the seat, and an
+older build would run its mail as if nothing had happened.
 
 ### One catalogue, and a call is a fresh write
 
@@ -3301,6 +3345,9 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 }
 ```
 
+A run's `outcome` is `fired`, `skipped_catchup` (a missed tick outside the
+catchup window) or `skipped_paused` (the runner seat was
+[paused](../concepts/agent-runtime.md#pausing-a-seat) when the fire came due).
 `recent_runs` is empty when the dispatch ledger cannot be read (the
 configured list and `next_run` still render). Disabled schedules return an
 empty `next_run`.

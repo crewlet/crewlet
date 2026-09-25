@@ -27,6 +27,14 @@ const (
 	// dropped so an operator asking "why did the 09:00 standup not run
 	// after the restart" gets an answer instead of a silence.
 	OutcomeSkippedCatchup Outcome = "skipped_catchup"
+
+	// OutcomeSkippedPaused is a fire that came due while a person had its
+	// runner seat paused, and was deliberately not dispatched. CLAIMED, like
+	// a fire, so the resume does not replay it: a seat paused for a week
+	// comes back to this morning's standup, not seven of them. Recorded
+	// rather than dropped for the same reason as a catchup skip — "why did
+	// the standup not run on Tuesday" has an answer.
+	OutcomeSkippedPaused Outcome = "skipped_paused"
 )
 
 // FireKey is the identity of one dispatch, and the whole of the at-most-once
@@ -75,7 +83,8 @@ type Run struct {
 	// is for tests that need a deterministic ordering to assert against.
 	FiredAt time.Time
 
-	// Outcome is [OutcomeFired] or [OutcomeSkippedCatchup]. The zero value
+	// Outcome is [OutcomeFired], [OutcomeSkippedCatchup] or
+	// [OutcomeSkippedPaused]. The zero value
 	// is empty rather than "fired": a caller that forgot to say what it
 	// recorded should read back as unset, not as a dispatch.
 	Outcome Outcome

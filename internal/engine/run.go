@@ -133,6 +133,10 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// pauses is this node's watched copy of every seat a person paused,
+	// and the inbox holds it took because of them. See seatpause.go.
+	pauses seatPauses
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -842,7 +846,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
-		LeaseTTL: e.leaseTTL,
+		// A SEAT A PERSON PAUSED is attached already held, so placement
+		// moving it here does not deliver the mail it is holding: the
+		// release on the node it left dropped that node's hold with the
+		// attachment. See seatpause.go.
+		AttachHolds: e.attachHolds,
+		LeaseTTL:    e.leaseTTL,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
 		// N times this. Passed through unresolved: zero is the shape of an
 		// absent key and node.New is what turns it into the default, so
@@ -917,6 +926,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return e, nil
 	}
 
+	// WHICH SEATS A PERSON PAUSED, read before the seat host claims
+	// anything — [Engine.Start] runs it — so the first mail this node is
+	// handed meets a node that already knows. Bounded: past its budget the
+	// watch keeps trying and the screening defers until it answers.
+	e.startSeatPauses(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
@@ -1030,7 +1044,7 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d.Park = e.park
 	}
 	if d.Pause == nil {
-		d.Pause = e.pause
+		d.Pause = e.holdInbox
 	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
@@ -1288,6 +1302,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
+	// And the pause watch, for the same reason: a resume landing on a
+	// client that is closing would lift a hold on nothing.
+	e.stopSeatPauses()
 	e.stopEmbedding()
 	e.stopUsage()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
@@ -1403,6 +1420,7 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 		if sandboxRuns != nil {
 			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
 		}
+		_, paused, known := e.pauseOf(handle)
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
@@ -1422,12 +1440,18 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 			// hardcoded true, which made a seat's own inbox the one
 			// path a shed could never reach.
 			AdmitsTriggers: e.admits(),
+			// A PERSON'S PAUSE, off this node's watched copy — and
+			// whether that copy has been read at all, which is a
+			// different answer from "not paused". See seatpause.go.
+			Paused:       paused,
+			PauseUnknown: !known,
 		}
 	}
 }
 
-// seatFence is the per-round ownership check a turn on this seat runs under,
-// or nil when this process holds no grant to check against.
+// seatFence is the per-round check a turn on this seat runs under: that this
+// process still holds the grant the turn was admitted under, where it holds
+// one at all, and that nobody has asked the turn to stop.
 //
 // THE MISSING HALF OF THE ADMISSION. [Engine.conditionsFor] above asks
 // [seat.Host.MayStart] once, when the delivery arrives, and a turn then runs
@@ -1439,11 +1463,26 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 // described something that did not run. See [seat.Host.Fence] for why the
 // check is on the EPOCH rather than on membership, and for the two states —
 // a store blip and an unproven teardown — that deliberately do not close it.
+//
+// AND A PERSON'S STOP. A pause that asked for the running turn to stop closes
+// the same fence, at the same round boundary, with [turn.ErrStoppedByPerson]
+// — ownership first, because a turn on a seat this node no longer holds is
+// the successor's to be stopped or not, and handing the delivery on is what
+// it is owed. The stop is read off this node's copy of the pauses on every
+// round, so it reaches a turn that started before the pause did.
 func (e *Engine) seatFence(handle string) func() error {
-	if e.node == nil {
-		return nil
+	var owned func() error
+	if e.node != nil {
+		owned = e.node.Host().Fence(handle)
 	}
-	return e.node.Host().Fence(handle)
+	return func() error {
+		if owned != nil {
+			if err := owned(); err != nil {
+				return err
+			}
+		}
+		return e.stopFor(handle)
+	}
 }
 
 // park requeues a partition onto the seat's own inbox.

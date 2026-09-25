@@ -142,7 +142,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 
 // THE BROKER FILTERS THE CLASS, AND THE WALK ONLY SEES ITS OWN.
 //
-// Seven classes share the positions register, and a walk that read all of them
+// Eight classes share the positions register, and a walk that read all of them
 // to use one was what this replaced — on a read the state-log write fence
 // takes on every first write to a subject. A key here is
 // coord.DocumentKey(class, id), whose separator is a dot because a key IS a
@@ -160,7 +160,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 	ctx := context.Background()
 
-	// One key per class, all in the one register. All SEVEN of them, and
+	// One key per class, all in the one register. All EIGHT of them, and
 	// `maintenance` beside `maintenance-ack` is the adversarial pair: one
 	// class name is a STRING PREFIX of the other, so a filter built by
 	// concatenation rather than by the grammar would hand every
@@ -168,7 +168,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	// TOKEN, so it does not — and that is the property this pair pins.
 	classes := []string{
 		"node", "floor", "hold", "backup",
-		"maintenance", "admitted", "maintenance-ack",
+		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
 	}
 	for _, class := range classes {
 		key := coord.DocumentKey(class, "n-1")

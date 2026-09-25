@@ -1201,3 +1201,57 @@ func requireTopics(t *testing.T, got []string, want ...string) {
 		seen[w]--
 	}
 }
+
+// A FIRE FOR A PAUSED SEAT IS SKIPPED, RECORDED AND CLAIMED.
+//
+// Skipped rather than dispatched into the held inbox, because a fire parked
+// behind a pause runs whenever somebody resumes the seat — a standup days late,
+// one per day it was paused. Claimed under the fire's own identity, so a later
+// tick of the same minute (a peer's, or this one's after a resume) does not
+// send it after all, and recorded so "why did the standup not run" has an
+// answer.
+func TestAFireForAPausedSeatIsSkippedPaused(t *testing.T) {
+	t.Parallel()
+	paused := true
+	h := build(t, roleOrg(), func(o *Options) {
+		o.Paused = func(handle string) (bool, error) { return paused && handle == "qa", nil }
+	})
+	h.seed(tickAt(8, 59, 30))
+	if got := h.tick(tickAt(9, 0, 30)); got != 0 {
+		t.Fatalf("Tick = %d, want 0 — a paused seat's fire was dispatched", got)
+	}
+	if got := len(h.q.inboxTasks()); got != 0 {
+		t.Fatalf("published %d tasks into a paused seat's inbox, want 0", got)
+	}
+	rows := h.ledger.rows(t)
+	if len(rows) != 1 || rows[0].Outcome != OutcomeSkippedPaused || rows[0].TargetHandle != "qa" {
+		t.Fatalf("ledger rows = %v, want one skipped_paused row naming qa", rows)
+	}
+
+	// Resumed, the SAME minute evaluated again does not fire: the skip
+	// spent its claim.
+	paused = false
+	h.seed(tickAt(8, 59, 30))
+	if got := h.tick(tickAt(9, 0, 30)); got != 0 {
+		t.Fatalf("Tick after the resume = %d, want 0 — the skipped fire was replayed", got)
+	}
+}
+
+// AN UNREADABLE PAUSE FIRES: the paused seat's inbox is held by the node that
+// runs it, so the fire waits there if the seat turns out to be paused, while a
+// fire skipped on a read that failed is a standup lost for a seat nobody
+// paused.
+func TestAFireOnAnUnreadablePauseIsDispatched(t *testing.T) {
+	t.Parallel()
+	h := build(t, roleOrg(), func(o *Options) {
+		o.Paused = func(string) (bool, error) { return false, errors.New("not read yet") }
+	})
+	h.seed(tickAt(8, 59, 30))
+	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
+		t.Fatalf("Tick = %d, want 1", got)
+	}
+	rows := h.ledger.rows(t)
+	if len(rows) != 1 || rows[0].Outcome != OutcomeFired {
+		t.Fatalf("ledger rows = %v, want one fired row", rows)
+	}
+}

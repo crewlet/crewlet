@@ -239,6 +239,18 @@ export interface LiveTurn {
   node?: string;
 }
 
+/** Who paused a seat, when and why (`livestate.Paused`). An INPUT to the
+ *  seat's state, not the state: the engine says whether a paused seat reads as
+ *  stopped. */
+export interface Paused {
+  /** The person — the seat their token is bound to — or the token itself. */
+  by: string;
+  at: string;
+  reason?: string;
+  /** Whether the pause also ended the turn the seat was on. */
+  stop_running: boolean;
+}
+
 /** The newest turn a seat ended (`livestate.LastTurn`). */
 export interface LastTurn {
   turn_id: string;
@@ -373,6 +385,9 @@ export interface Overlay {
   turn?: LiveTurn | null;
   /** The newest turn the seat ended, or null while none is known. */
   last_turn?: LastTurn | null;
+  /** Who paused the seat, or null while nobody has. Always present, for
+   *  `afk_reason`'s reason: an omitted key would leave a resumed seat paused. */
+  paused?: Paused | null;
 }
 
 /** A seat row: static config identity, plus whatever overlay has been merged. */
@@ -1156,9 +1171,10 @@ export interface ScheduleRow {
 
 /** One fire, from the at-most-once dispatch ledger.
  *
- *  `outcome` has exactly two values — `fired` and `skipped_catchup` — because
- *  this is a DISPATCH ledger and not a turn-outcome one. Nothing here can say
- *  a turn failed; the turn says that. */
+ *  `outcome` has exactly three values — `fired`, `skipped_catchup` and
+ *  `skipped_paused` (the runner seat was paused when the fire came due) —
+ *  because this is a DISPATCH ledger and not a turn-outcome one. Nothing here
+ *  can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
   scope_id: string;
@@ -1168,7 +1184,7 @@ export interface ScheduleRunRow {
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "";
+  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "";
   trace_id: string;
 }
 

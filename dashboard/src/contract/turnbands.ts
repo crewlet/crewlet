@@ -70,7 +70,11 @@ export const ABSORBED: Readonly<Record<string, string>> = {
 
 /**
  * The engine talking about something going wrong — a turn the engine stopped,
- * a chain that fell through, a guard that fired, a refusal.
+ * a chain that fell through, a guard that fired, a refusal — and a turn a
+ * PERSON stopped, which is the same question asked of the turn from outside:
+ * why did it not finish? `agent_turn_stopped` names who paused the seat with
+ * the stop. It is deliberately not in TURN_STOP below: its turn's completion
+ * carries `stopped`, never `failed`, so there is no failure for it to double.
  *
  * These are the rows the old panel's subtitle promised ("fallbacks, guard
  * breaches") and — until the events behind them were given a producer and a
@@ -93,6 +97,7 @@ export const WENT_WRONG: ReadonlySet<string> = new Set([
   "phase.tool_skill_blocked",
   "sandbox_run_failed",
   "skill_telemetry_write_failed",
+  "agent_turn_stopped",
 ]);
 
 /**

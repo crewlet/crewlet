@@ -68,6 +68,10 @@ type OperatorDeps struct {
 	// Runs answers a parked coding run by its turn — see answerrun.go.
 	// A nil desk omits the tool.
 	Runs RunDeps
+
+	// Pauses pauses and resumes a seat — see seatpause.go. A nil record
+	// omits both tools.
+	Pauses SeatPauseDeps
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -125,6 +129,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// person's to answer, and a seat that could answer its own run's
 		// question would be one guessing on its own behalf.
 		{&answerRun{deps: deps.Runs, fleet: deps.Fleet}, deps.Runs.Desk != nil},
+		// NOR THESE: whether a seat works is a person's decision about it,
+		// and a seat that could pause a colleague — or resume itself —
+		// would be one overruling the people who run the company.
+		{&pauseSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
+		{&resumeSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {

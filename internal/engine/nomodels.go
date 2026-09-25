@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -18,7 +19,7 @@ import (
 // carries no model registry ([Company.Models] is nil), its seats are placed,
 // and their mailboxes attach and keep what arrives. What no seat can do is
 // think, so the inbox screening parks every delivery ([inbox.Screen], stage
-// 3): the seat's inbox is paused first, then the partition is requeued and
+// 4): the seat's inbox is paused first, then the partition is requeued and
 // acked, and the work waits on the broker.
 //
 // PARKED RATHER THAN FAILED. A turn that could not build its runner proves
@@ -53,7 +54,7 @@ import (
 // because the dispatcher requeues its deliveries instead. Deriving it from the
 // human-readable reason would make an edit to a log message silently strand
 // every seat that was parked under the old wording.
-const pauseReasonNoTurnEngine = "no_turn_engine"
+const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)
 
 // modelHolds records the seat inboxes this client paused for want of a model.
 //
@@ -73,6 +74,21 @@ func (h *modelHolds) record(handle string) {
 		h.seats = map[string]struct{}{}
 	}
 	h.seats[handle] = struct{}{}
+}
+
+// holdInbox takes the hold a screening's pause-and-park names, before the park
+// requeues the delivery, so the copies buffer on the queue rather than looping
+// straight back. Each hold is recorded by the subsystem that lifts it.
+func (e *Engine) holdInbox(ctx context.Context, handle string, hold inbox.Hold, reason string) error {
+	switch hold {
+	case inbox.HoldNoTurnEngine:
+		return e.pause(ctx, handle, reason)
+	case inbox.HoldSeatPaused:
+		return e.holdPausedInbox(ctx, handle)
+	}
+	// A hold nothing here would ever lift. Refusing it NAKs the delivery,
+	// which is loud and recoverable; taking it would strand the seat.
+	return fmt.Errorf("engine: no subsystem lifts a %q hold on seat %q", hold, handle)
 }
 
 // pause stops delivery on a seat's inbox before the no-model park, so the

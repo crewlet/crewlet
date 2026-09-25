@@ -105,7 +105,7 @@ var log = logging.Get("api.operator")
 type Options struct {
 	// Work and Pages are the native backends. Both nil serves none of
 	// their tools — the honest shape for a company on Jira and Confluence.
-	// A surface left with no tool at all (no Runs either) is ABSENT, with
+	// A surface left with no tool at all (no Runs or Pauses either) is ABSENT, with
 	// nothing on it to manage.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
@@ -147,6 +147,11 @@ type Options struct {
 	// Runs is the parked coding runs a person may answer by turn
 	// (`answer_run`), and who is answering. A zero value serves no such tool.
 	Runs builtin.RunDeps
+
+	// Pauses is the fleet's record of which seats a person paused
+	// (`pause_seat`, `resume_seat`), and who is pausing. A zero value serves
+	// neither tool.
+	Pauses builtin.SeatPauseDeps
 
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
@@ -232,7 +237,7 @@ func New(opts Options) (*Server, error) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
-		Fleet: opts.Fleet, Runs: opts.Runs,
+		Fleet: opts.Fleet, Runs: opts.Runs, Pauses: opts.Pauses,
 	})
 	if len(callables) == 0 {
 		return nil, nil

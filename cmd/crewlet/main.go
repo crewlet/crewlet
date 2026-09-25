@@ -184,6 +184,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRetention(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
+	case "seats":
+		return runSeats(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -214,6 +216,8 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
+                              or resume it, as the person your token is bound to
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -1379,6 +1383,33 @@ func agentRoles(company *config.Company) []string {
 	return out
 }
 
+// seedPauses puts every paused seat on the live projection, named by the role
+// the projection keys seats by. A pause whose seat the company no longer has
+// is skipped: the apply that removed the seat clears it.
+func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState) error {
+	pauses, err := e.Backends().Fleet.ListSeatPauses(ctx)
+	if err != nil {
+		return err
+	}
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	seeds := make([]livestate.SeedPause, 0, len(pauses))
+	for _, p := range pauses {
+		seat := company.Org.AgentSeatByHandle(p.Handle)
+		if seat == nil {
+			continue
+		}
+		seeds = append(seeds, livestate.SeedPause{Role: seat.Name, Paused: livestate.Paused{
+			By: firstNonEmpty(p.Seat, p.By), At: p.At.UTC().Format(time.RFC3339),
+			Reason: p.Reason, StopRunning: p.StopRunning,
+		}})
+	}
+	live.SeedPauses(seeds)
+	return nil
+}
+
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1816,6 +1847,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "the activity feed, the spend rollup and each seat's last "+
 				"turn start at this process's boot; older history is still "+
 				"answered by the events, turns and tokens queries")
+	}
+	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the
+	// same reason: a pause taken last week is in no event this process
+	// will hear, and a seat drawn as working while it is paused is the
+	// one state a person pausing it must not be shown.
+	if err = seedPauses(seedCtx, e, app.Stream().State()); err != nil {
+		log.WarnContext(ctx, "seat_pauses_not_seeded", "error", err,
+			"hint", "a seat paused before this process started shows as paused "+
+				"from its next pause or resume; the pause itself is in force")
 	}
 	// AND THE RUNNING CODING RUNS, from the durable record every node
 	// opens, before the bind for the seed's reason: a run parked on a
@@ -2580,6 +2620,16 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 			Queue:   e.Backends().Queue,
 		},
 		Actor: operator.WorkActor(opts.Org),
+	}
+	// AND A SEAT IS PAUSED OR RESUMED from here, on every node: the pause
+	// is the fleet's record, and each node holding or later acquiring the
+	// seat carries it out from its own watched copy. The change is
+	// announced onto this node's queue by whichever caller's write won.
+	opts.Pauses = builtin.SeatPauseDeps{
+		Pauses:   e.Backends().Fleet,
+		Announce: e.Backends().Queue,
+		Org:      opts.Org,
+		Actor:    operator.WorkActor(opts.Org),
 	}
 	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
 		opts.Work = builtin.WorkDeps{

@@ -24,6 +24,8 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
+| `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -664,6 +666,39 @@ second record.
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
 duration to state, and `crewlet retention status` names which nodes those are.
+
+## `crewlet seats`
+
+```
+crewlet seats pause <handle> [-stop] [-reason TEXT]
+    [-request-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet seats resume <handle>
+    [-request-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+Pause an agent seat, or resume it — the same `pause_seat` and `resume_seat`
+the dashboard's buttons call, over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)), so a pause from a
+terminal and one from a profile screen are one gesture with one record. It acts
+as the **person** your token is bound to (`contact.crewlet_operator_id` on
+their seat); a token nobody bound is refused `unbound`, and the refusal names
+the seat to bind it on.
+
+A paused seat starts no new turn, its incoming mail waits on its inbox in
+order, and its scheduled runs are recorded `skipped_paused` rather than sent.
+The turn it is on finishes first unless `-stop` is given, which ends that turn
+at its next round; a stopped turn is not run again. `-reason` is one line
+(at most 500 characters), shown on the seat and in the feed. Pausing a paused
+seat changes nothing — except that `-stop` adds the stop — and resuming a seat
+that is not paused changes nothing. See
+[Agent Runtime § Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat).
+
+The outcome is `applied` — the pause is the fleet's record, and the node
+holding the seat carries it out from its own copy within about a second — or
+`unknown`, when the node could not confirm the write. `unknown` prints the
+request id to send again with `-request-id`, so the retry is the same request.
+A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
+build that can carry a pause.
 
 ## `crewlet retention`
 

@@ -166,6 +166,14 @@ type fleet struct {
 	// hosts' sweeps afterwards, so it needs no lock of its own.
 	pinned map[string]placement.SeatPlacement
 
+	// attachHolds is every node's [node.Config.AttachHolds], for the cases
+	// about a seat a person paused. Set before any node starts.
+	attachHolds func(handle string) []string
+
+	// queues is each started node's own broker client, by node id: a pause
+	// hold lives on the client that took it.
+	queues map[string]queue.EventQueue
+
 	mu    sync.Mutex
 	turns []turnRecord
 }
@@ -204,6 +212,12 @@ func (f *fleet) pin(handle, node string) {
 func (f *fleet) start(id string) *node.Node {
 	f.t.Helper()
 	q := f.mkQueue(f.t)
+	f.mu.Lock()
+	if f.queues == nil {
+		f.queues = map[string]queue.EventQueue{}
+	}
+	f.queues[id] = q
+	f.mu.Unlock()
 
 	n, err := node.New(node.Config{
 		Queue:             q,
@@ -214,6 +228,7 @@ func (f *fleet) start(id string) *node.Node {
 		LeaseTTL:          fleetTTL,
 		HeartbeatInterval: fleetTTL / 4,
 		SweepInterval:     fleetTTL / 8,
+		AttachHolds:       f.attachHolds,
 		Turn: func(_ context.Context, handle string, evs []*events.Event) queue.Result {
 			work := make([]string, len(evs))
 			for i, e := range evs {

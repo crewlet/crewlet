@@ -305,8 +305,9 @@ type RunnerInput struct {
 	Judge extension.Judge
 
 	// Fence stops the turn's tool loop the moment this node stops holding
-	// the seat's grant. Built by [Engine.seatFence]; nil is an open fence,
-	// which is the single-node case and every test with no seat host.
+	// the seat's grant, or a person's pause asks the running turn to stop.
+	// Built by [Engine.seatFence]; nil is an open fence, which is every
+	// test that drives a runner directly.
 	Fence func() error
 
 	// Remaining reads the seat's token headroom for a sub-agent spawn.

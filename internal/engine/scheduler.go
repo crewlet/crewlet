@@ -127,6 +127,10 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// shedding tick skips whole rather than firing something stale.
 		Admits: e.admits,
 		Duty:   e.workerDuty(schedule.DutyName, schedule.DutyTTL(tick)),
+		// A PERSON'S PAUSE, off this node's watched copy: a paused seat's
+		// fire is recorded skipped rather than sent into its held inbox.
+		// The duty moves between nodes, and every node keeps the copy.
+		Paused: e.seatPaused,
 		// THE COMPANY'S CLOCK, read per tick for the reason the org is:
 		// the loop outlives the apply that armed it, and a zone captured
 		// here fired every zone-less schedule on the clock the loop was

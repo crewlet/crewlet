@@ -260,6 +260,13 @@ type Overlay struct {
 	// ended none this projection knows of. Seeded at boot from the fleet's
 	// turn list, so "idle · last turn 24m ago" survives a restart.
 	LastTurn *LastTurn `json:"last_turn"`
+
+	// Paused is who paused the seat, when and why, and null while nobody
+	// has. ALWAYS PRESENT for the reason Turn is: a merged overlay with the
+	// key omitted would leave a resumed seat wearing its old pause. Seeded
+	// at boot from the coordination record, so a pause taken before this
+	// process started is still on the seat.
+	Paused *Paused `json:"paused"`
 }
 
 // Stage is where in a turn a seat is.

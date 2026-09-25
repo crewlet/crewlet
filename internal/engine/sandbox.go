@@ -641,6 +641,21 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	e.publishTurnCompleted(ctx, tel, spend, res, err)
 	e.recordTurnSpend(ctx, charge)
 	if err != nil {
+		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
+		// stop while the run was out, and the turn ended at its first
+		// round back. It is settled rather than reverted, for the reason
+		// the dispatcher spends a stopped trigger: a revert brings the
+		// completion straight back, and the resume would be stopped again
+		// on every delivery until the broker dead-lettered it. The run's
+		// box is reclaimed with it; stopping the turn is what was asked.
+		if turn.Stopped(err) {
+			pause, _ := stopOf(err)
+			role, agentID := seatIdentity(company, in.Turn.Handle())
+			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
+				in.Run.TurnID, in.Run.UnitOfWork(), pause, tracing.TraceOf(ctx)))
+			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
+				sandbox.ErrResumeAbandoned, err)
+		}
 		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
 			// (see (*Dispatcher).abandon), from the same rule, taken here

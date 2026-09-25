@@ -47,7 +47,31 @@ const (
 
 	// ActionPauseAndPark — pause the topic FIRST so the requeued copies
 	// buffer on the queue rather than looping straight back, then park.
+	// The hold it takes is named by [Screening.Hold].
 	ActionPauseAndPark
+)
+
+// Hold names a pause hold on a seat's inbox — the reason
+// queue.EventQueue.PauseTopic is given, and the one ResumeTopic must be given
+// to lift it.
+//
+// STABLE KEYS rather than the screening's prose, because holds are keyed by
+// reason so that two subsystems gating one inbox cannot release each other's:
+// the pause and the release must spell a hold identically, and a key derived
+// from a log sentence would strand every seat held under the old wording.
+// Named HERE, where the screening decides which one a pause-and-park takes,
+// so the stage that asks for a hold and the subsystem that lifts it cannot
+// disagree about its name.
+type Hold string
+
+const (
+	// HoldNoTurnEngine is taken while the company configures no model, and
+	// lifted by the apply that brings one.
+	HoldNoTurnEngine Hold = "no_turn_engine"
+
+	// HoldSeatPaused is taken while a person has the seat paused, and lifted
+	// when they resume it.
+	HoldSeatPaused Hold = "seat_paused"
 )
 
 func (a Action) String() string {
@@ -107,12 +131,31 @@ type Conditions struct {
 	// apply an epoch its peers have, so it must not start NEW work under a
 	// stale company.
 	AdmitsTriggers bool
+
+	// Paused is whether a person has paused the seat. Its mail waits on the
+	// inbox until they resume it.
+	Paused bool
+
+	// PauseUnknown is whether this node has not yet read the fleet's
+	// pauses at all — the first answer of its watch has not arrived — so
+	// it cannot say whether the seat is paused.
+	//
+	// NOT FOLDED INTO Paused, in either direction. Read as "not paused" it
+	// would run a turn on a seat somebody stopped, in the seconds after a
+	// node boots, which is exactly when a seat that was doing damage is
+	// placed somewhere new. Read as "paused" it would pause-and-park every
+	// seat's mail on a boot, taking a hold nothing would lift.
+	PauseUnknown bool
 }
 
 // Screening is the outcome of the pre-ledger stages.
 type Screening struct {
 	Action Action
 	Reason string
+
+	// Hold is the pause hold an [ActionPauseAndPark] takes, and empty for
+	// every other action.
+	Hold Hold
 
 	// Events are what survived. Meaningful for ActionProceed (the list to
 	// read the ledger about) and for the park actions (the list to
@@ -188,14 +231,26 @@ func (s Screening) Result() queue.Result {
 //  2. OWNERSHIP. This node consumes the seat only while it holds the lease.
 //     Defers rather than requeues, for the reason on ActionDefer.
 //
-//  3. NO TURN ENGINE. Pause the topic first so the requeued copies buffer,
+//  3. A PERSON'S PAUSE — first whether it can be known at all, then whether
+//     it holds. A node that has not yet read the fleet's pauses DEFERS: it
+//     cannot say whether somebody stopped this seat, and a turn it runs cannot
+//     be taken back. A paused seat is held and parked, like stage 4, under its
+//     own hold, which the resume lifts. Before the turn engine, because a
+//     person's decision is the one of the two a later apply cannot undo: a
+//     seat paused and held for want of a model must still be held when the
+//     model arrives. Normally the hold is already on the inbox before anything
+//     reaches here — the node's pause watch takes it the moment the pause
+//     lands — so this stage is the race between a delivery in flight and that
+//     watch, closed from the delivery's side.
+//
+//  4. NO TURN ENGINE. Pause the topic first so the requeued copies buffer,
 //     then park. Consuming and dropping them would lose the work outright;
 //     requeuing without the pause loops them at whatever rate the broker will
 //     serve. The pause is the caller's to release, when a model arrives.
 //
-//  4. SEAT HELD BY A SANDBOX RUN. Park. The job outlasts any ack window.
+//  5. SEAT HELD BY A SANDBOX RUN. Park. The job outlasts any ack window.
 //
-//  5. CONFIG POSTURE. Defer. This sits AFTER the sandbox branch deliberately:
+//  6. CONFIG POSTURE. Defer. This sits AFTER the sandbox branch deliberately:
 //     a seat mid-sandbox is already parked there, so a clarification answer
 //     reaching a shedding node behaves exactly as it does on a healthy one.
 //     Requeue would be wrong twice over — a shed releases this node's seats and
@@ -232,9 +287,19 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 	switch {
 	case !c.Owned:
 		return Screening{Action: ActionDefer, Reason: "seat is not owned here", NoteDeferred: true}
+	case c.PauseUnknown:
+		return Screening{
+			Action: ActionDefer, NoteDeferred: true,
+			Reason: "this node has not yet read whether the seat is paused",
+		}
+	case c.Paused:
+		return Screening{
+			Action: ActionPauseAndPark, Hold: HoldSeatPaused, Events: evs,
+			Reason: "a person paused this seat",
+		}
 	case !c.TurnEngineReady:
 		return Screening{
-			Action: ActionPauseAndPark, Events: evs,
+			Action: ActionPauseAndPark, Hold: HoldNoTurnEngine, Events: evs,
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
 	case c.SeatHeldBySandbox:

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -137,10 +138,31 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // make the CLI buffer a website.
 const maxNodeResponseBytes = 4 << 20
 
+// postJSON posts a JSON body — the act transport's shape, which refuses any
+// other Content-Type.
+func (c *nodeClient) postJSON(ctx context.Context, path string, body, into any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode the request: %w", err)
+	}
+	return c.send(ctx, http.MethodPost, path, raw, into)
+}
+
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+	return c.send(ctx, method, path, nil, into)
+}
+
+func (c *nodeClient) send(ctx context.Context, method, path string, payload []byte, into any) error {
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return fmt.Errorf("build the request: %w", err)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -193,15 +215,22 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		Hint   string `json:"hint"`
 	}
 	_ = json.Unmarshal(body, &payload)
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	switch {
+	case status == http.StatusForbidden && payload.Error == "unbound":
+		// THE ACT TRANSPORT'S ONE RULE, and not a bad token: the token is
+		// valid and names nobody. The node's detail and hint say which
+		// seat to bind it on, which the generic sentence below would
+		// throw away.
+		return errors.New(withRefusalDetail("the node accepted the token but it is "+
+			"bound to no person, and this gesture is made by one", payload.Detail, payload.Hint))
+	case status == http.StatusUnauthorized || status == http.StatusForbidden && payload.Error == "":
 		if !sentToken {
 			return errors.New("the node refused the request and no token was sent: " +
 				"export " + apiTokenEnv + ", or pass -token")
 		}
 		return errors.New("the node refused the token: check it against the " +
 			"api.auth.tokens entry you meant to use")
-	case http.StatusServiceUnavailable:
+	case status == http.StatusServiceUnavailable:
 		// TWO DIFFERENT FACTS on this surface, and the guess below is
 		// only one of them: a node built without the backend a route
 		// needs, and a node DRAINING for a shutdown. The body says

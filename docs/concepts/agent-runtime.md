@@ -56,7 +56,9 @@ Beside the state, the projection holds **the turn the seat is on** and **the las
 - `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
 - `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
 
-Both keys are always present, and each is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn on the card. After a restart, both are seeded from the fleet's turn list. Each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
+A third key says whether a person has **paused** the seat: `paused` is `{by, at, reason, stop_running}` — who paused it (the person their token is bound to, or the token itself), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state rather than the state itself; see [Pausing a seat](#pausing-a-seat).
+
+All three keys are always present, and each is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn on the card. After a restart, both are seeded from the fleet's turn list. Each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
 The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
 
@@ -332,6 +334,62 @@ client and an alarm in its memory, derived from the fleet's shared counters on
 every delivery. A restart, or the seat moving to a peer, simply asks the
 counters again on the first delivery. It is not an [alarm](../reference/alarms.md):
 nothing is wrong with the node when a ceiling does its job.
+
+### Pausing a seat
+
+A person can **pause** a seat — from its profile, from their own assistant
+through the operator catalogue, or with `crewlet seats pause` — and resume it
+later. While it is paused the seat starts no new turn, its incoming mail waits
+on its inbox in order, and its scheduled runs are skipped. The turn it is on
+finishes first, unless the pause also asked to **stop** it (`stop_running`), in
+which case that turn ends at its next round.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Taking: seat not paused
+    Taking --> Paused: pause_seat
+    Taking --> Stopping: pause_seat with stop_running, a turn running
+    Stopping --> Paused: the turn reaches its next round and ends
+    Paused --> Stopping: pause_seat adds stop_running, a turn running
+    Paused --> Taking: resume_seat — what waited is delivered first, in order
+```
+
+- **The pause is one record for the whole company.** It lives in the
+  coordination store (`seat_pause`), with no age: it ends when somebody
+  resumes the seat, or when the seat leaves the company (the apply that removes
+  a seat clears its pause, so a seat added later under the same handle is not
+  born paused). It is written by compare-and-set, so two people pausing one seat
+  at once make one change: the second is told it was already paused. The writer
+  whose change won publishes `seat_paused` or `seat_resumed`.
+- **Every node carries it out from its own copy.** Each node watches the
+  records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
+  the seat's inbox; the resume lifts it and the mail that waited is delivered.
+  A node that acquires a paused seat — placement moved it, or its holder
+  restarted — takes the hold **before** attaching the seat's mailbox, so the
+  mail it has been holding is never the first thing the new holder runs. A
+  delivery that races the hold is held and parked by the inbox screening. A
+  node that has not yet read the pauses at all (the seconds after a boot) defers
+  its deliveries rather than guessing. A store that cannot be reached is not a
+  resume: a node keeps the pauses it last read, and a paused seat stays paused.
+- **Stop now.** The per-round fence every turn runs under — the same one that
+  stops a turn whose seat moved to another node — also closes on a pause that
+  asked to stop, so the turn ends at a round boundary, never between a tool call
+  and its result. What it had not yet done is lost. The trigger is recorded as
+  worked and acked, not retried: a person who stopped a turn did not ask for it
+  to run again the moment they resume the seat. The turn's completion reads
+  `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
+  A detached [coding run](code-sandbox.md) is not fenced — it outlives its turn
+  by design — but the turn that resumes it is, and ends there with the run.
+- **Answers wait too.** An answer to a parked coding run, by chat or by turn,
+  is held behind the pause like the seat's other mail: resuming a run is work.
+- **Scheduled runs are skipped, not queued.** A fire that comes due on a paused
+  seat is recorded `skipped_paused` in the dispatch ledger and not sent — a
+  standup held behind a week's pause would otherwise run once for every day of
+  it. See [Scheduling](scheduling.md).
+
+A pause is refused `peer_upgrading` while any live node runs a build that
+cannot carry it: any of them may be the next to hold the seat. See
+[Coordination](coordination.md#what-a-node-says-about-itself).
 
 ### Graceful shutdown
 
