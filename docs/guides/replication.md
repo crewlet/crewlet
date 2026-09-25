@@ -473,7 +473,7 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, five kinds of record carry a later version. Version 2 is a
+In the tracker today, six kinds of record carry a later version. Version 2 is a
 turn's charge to its task when it counts delegated workers or reviews that sent
 the work back. Version 3 is a person's own record when their read position is in
 a generation after a reanchor — a build reading 2 stored that position as the
@@ -483,11 +483,13 @@ operator token bound to a seat: the record has always named that seat, and a
 build reading 5 stores it on the history row as the person to draw — a build
 reading 4 would apply the change and leave that column empty on its copy. So the
 seat is stored only from records at version 5; a change an older build wrote
-names no seat on any node, whichever build applies it. Version 6 is a task
-change carrying a cross-project move's mark: only the root of the subtree being
-moved carries it, and only until the move's walk is done. An old node holds
-those records back, with the task or the person they are about, and applies
-every other write as it arrives.
+names no seat on any node, whichever build applies it. Version 6 is a task filed
+as a question — the create carries the ask, which a build reading 5 would file
+as a bare task with no question on it. Version 7 is a task change carrying a
+cross-project move's mark: only the root of the subtree being moved carries it,
+and only until the move's walk is done. An old node holds those records back,
+with the task or the person they are about, and applies every other write as it
+arrives.
 
 In the knowledge base, one kind of record does: a container's settings, at
 version 2, because they carry the activation that wrote them — a later

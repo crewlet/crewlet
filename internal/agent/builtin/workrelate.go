@@ -403,9 +403,13 @@ func answerRefusal(err error) (tools.Result, bool) {
 		return refused(class, fmt.Sprintf("%s was refused: %v. Nothing was "+
 			"posted.", CommentOnWorkTool, err)), true
 	}
+	// THE ARGUMENT THE SENTENCE NAMES, not always `answers`: a choice
+	// that is not one of the ask's options is refused through this same
+	// read, and telling that caller to change `answers` sent it to edit
+	// the one argument that was right.
 	return refused(class, fmt.Sprintf("%s was refused: %v. Nothing was "+
-		"posted — change `answers` (or leave it out) and comment again.",
-		CommentOnWorkTool, err)), true
+		"posted — change the argument this names (`answers`, or `choice`) "+
+		"and comment again.", CommentOnWorkTool, err)), true
 }
 
 // inferOnly is the top-level case: no thread to read, but an open ask

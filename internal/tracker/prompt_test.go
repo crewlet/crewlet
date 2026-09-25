@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -190,6 +191,126 @@ func TestAChangeWakeKeepsTheExcerptBesideTheDeltas(t *testing.T) {
 	if !strings.Contains(body, "the payment webhook drops retries") {
 		t.Errorf("the deltas displaced the excerpt:\n%s", body)
 	}
+}
+
+// AN ASKED WAKE RENDERS THE OPTIONS AND THE ANSWERING CALL, WHOLE.
+//
+// Every part of the call is something the seat would otherwise go and find:
+// the ask's comment id is in a thread it would read for no other reason, and
+// an option's id is typed back exactly or refused. So the options are listed
+// by id, the recommendation is marked, and the call is written out with the
+// item, the ask's id and a choice — the seat edits one value and sends it.
+func TestAnAskedWakeRendersTheOptionsAndTheAnsweringCall(t *testing.T) {
+	t.Parallel()
+	ask := tracker.Comment{
+		ID: "c-ask", Task: "t-1", Author: "ana", AuthorKind: tracker.AuthorAgent,
+		Body: "The audit starts Monday.", Ask: "cy", Decision: decisionFixture(),
+	}
+	record := askRecord(t, tracker.TaskPatch{Comment: &ask}, tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		After:   tracker.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
+		Comment: &ask, Thread: tracker.ThreadParties{Asked: "cy"},
+	})
+	prompt := promptFor(t, record)
+	for _, want := range []string{
+		"You were asked a question",
+		"## The decision you are asked for",
+		"**Question:** Ship on Friday or hold for the audit?",
+		"approver — your answer IS the decision",
+		"- `ship` — Ship Friday *(recommended)*",
+		"- `hold` — Hold for the audit: about a week",
+		"The audit reviews last quarter's code.",
+		`{"item":"ENG-1","answers":"c-ask","choice":"ship","body":`,
+		"one of: ship, hold",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the asked wake does not say %q:\n%s", want, prompt)
+		}
+	}
+
+	// A TASK FILED AS THE QUESTION renders the same block: the ask rides
+	// the create's own payload.
+	filed := tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Title: "Ship on Friday?", Assignee: "cy"}
+	created, err := json.Marshal(tracker.TaskCreate{Task: filed, Comment: &ask})
+	if err != nil {
+		t.Fatalf("marshal the create: %v", err)
+	}
+	record = parseRecord(tracker.Wake{
+		Kind: tracker.ChangeCreated, After: filed, Comment: &ask,
+	}.Notify(nil))
+	record.Op, record.Mutation = tracker.OpCreate, created
+	if got := promptFor(t, record); !strings.Contains(got, "You were asked a question") ||
+		!strings.Contains(got, `"answers":"c-ask","choice":"ship"`) {
+		t.Errorf("a task filed as a question does not ask it:\n%s", got)
+	}
+
+	// A WATCHER SEES THE REMARK, NOT THE BALLOT: the options are for the
+	// person who owes the answer.
+	watcher := promptNotification(tracker.ReasonWatcher, tracker.ChangeComment)
+	watcher.Metadata[tracker.MetaDecision] = `{"question":"q","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"role":"approver"}`
+	if got := (tracker.Prompt{}).Build(watcher, nil); strings.Contains(got, "The decision you are asked for") {
+		t.Errorf("a watcher was handed the answering call:\n%s", got)
+	}
+}
+
+// AN ANSWERED WAKE RENDERS THE CHOICE BY ITS LABEL, and the channel the asker
+// promised to report it in — the asker is the one that stopped on this branch,
+// and this wake is what it was waiting for.
+func TestAnAnsweredWakeRendersTheChoice(t *testing.T) {
+	t.Parallel()
+	answers := "c-ask"
+	decision := decisionFixture()
+	decision.Inform = &tracker.Inform{Surface: tracker.InformSlack, Channel: "releases"}
+	answer := tracker.Comment{
+		ID: "c-ans", Task: "t-1", Author: "ana", AuthorKind: tracker.AuthorHuman,
+		Body: "the audit first", Answers: &answers, Choice: "hold",
+	}
+	record := askRecord(t, tracker.TaskPatch{Comment: &answer}, tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		After:   tracker.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
+		Comment: &answer, AnswersDecision: decision,
+		Thread: tracker.ThreadParties{AnsweredAuthor: "cy"},
+	})
+	prompt := promptFor(t, record)
+	for _, want := range []string{
+		"A question you asked on a task was answered.",
+		"Chose “Hold for the audit”: the audit first",
+		"**You asked:** Ship on Friday or hold for the audit?",
+		"**They chose:** Hold for the audit (`hold`)",
+		"releases on slack",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the answered wake does not say %q:\n%s", want, prompt)
+		}
+	}
+	// AN ANSWER IN PROSE is still an answer, and the wake says it is one
+	// rather than rendering an empty choice.
+	prose := answer
+	prose.Choice, prose.Body = "", "neither — split the release"
+	record = askRecord(t, tracker.TaskPatch{Comment: &prose}, tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		After:   tracker.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
+		Comment: &prose, AnswersDecision: decisionFixture(),
+		Thread: tracker.ThreadParties{AnsweredAuthor: "cy"},
+	})
+	if got := promptFor(t, record); !strings.Contains(got, "answered in prose") ||
+		strings.Contains(got, "They chose") {
+		t.Errorf("an answer in prose renders as:\n%s", got)
+	}
+}
+
+// askRecord is a comment record as the writer publishes it: the patch as its
+// payload, and the notification its wake builds.
+func askRecord(t *testing.T, patch tracker.TaskPatch, wake tracker.Wake) tracker.MutationRecord {
+	t.Helper()
+	mutation, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatalf("marshal the patch: %v", err)
+	}
+	record := parseRecord(wake.Notify(nil))
+	record.Mutation = mutation
+	return record
 }
 
 // promptFor routes a record and builds the first recipient's prompt.

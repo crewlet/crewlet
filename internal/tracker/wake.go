@@ -159,7 +159,26 @@ func (w Wake) Notify(leads Leads) *Notify {
 	if w.Comment != nil {
 		notify.CommentID = w.Comment.ID
 	}
+	notify.Answered = w.answered()
 	return notify
+}
+
+// answered is what this wake's answer tells the asker about the decision it
+// closed, or nil when it answers none.
+func (w Wake) answered() *AnsweredDecision {
+	if w.Kind != ChangeComment || w.Comment == nil || w.AnswersDecision == nil ||
+		w.Comment.Answers == nil || *w.Comment.Answers == "" {
+		return nil
+	}
+	out := &AnsweredDecision{
+		Question: w.AnswersDecision.Question,
+		Choice:   w.chosen(),
+	}
+	if inform := w.AnswersDecision.Inform; inform != nil {
+		copied := *inform
+		out.Inform = &copied
+	}
+	return out
 }
 
 // snapshot copies the routing state at the moment of the change.
@@ -236,6 +255,13 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 	}
 	if lists := checklistAssignees(w.Before, after); len(lists) > 0 {
 		snapshot.ChecklistAssignees = lists
+	}
+	if w.Comment != nil && w.Kind == ChangeCreated {
+		// A TASK FILED AS A QUESTION ([Writer.CreateTaskAsking]) asks
+		// somebody in the create itself, so the person asked is woken
+		// under `asked` — which outranks `assignee`, so asking the
+		// assignee reads as a question rather than as new work.
+		snapshot.CommentAsk = w.Comment.Ask
 	}
 	if w.Comment != nil && w.Kind == ChangeComment {
 		// THE CREATION KIND ALONE. A comment becomes a question when it
@@ -849,14 +875,17 @@ func relationText(relations []Relation, kind RelationKind) string {
 // for.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
+	if text == "" && w.Kind == ChangeCreated {
+		// THE BODY BEFORE THE ASK on a create: a task filed as a
+		// question carries its question as the title — which the card
+		// already shows — and its detail as the body.
+		text = w.After.Body
+	}
 	if text == "" && w.Comment != nil {
 		text = w.Comment.Body
 		if option := w.chosen(); option != nil {
 			text = choiceExcerpt(option.Label, strings.TrimSpace(text))
 		}
-	}
-	if text == "" && w.Kind == ChangeCreated {
-		text = w.After.Body
 	}
 	return textcut.Within(strings.TrimSpace(text), MaxExcerpt)
 }

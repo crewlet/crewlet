@@ -218,6 +218,10 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 		header += executorKnowledgeNote
 	}
 	parts := []string{body, header}
+	// RIGHT AFTER THE CONTRACT, because it is part of how a turn ends:
+	// the header says finish the arc, and this says the one case where
+	// finishing means stopping on a branch until somebody answers.
+	parts = append(parts, BuildEscalationSection(in.AvailableTools)...)
 
 	if seat.ok() && seat.Role.Sandbox != nil && seat.Role.Sandbox.Enabled {
 		parts = append(parts, executorSandboxSection)

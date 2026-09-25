@@ -80,6 +80,12 @@ func (r *recordingWork) writer(actor builtin.Actor) builtin.WorkWriter {
 	return recordingWriter{w: r, actor: actor}
 }
 
+func (w recordingWriter) CreateTaskAsking(ctx context.Context, opID string,
+	task tracker.Task, _ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	return w.CreateTask(ctx, opID, task, notify)
+}
+
 func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker.Task,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 

@@ -268,6 +268,37 @@ type WriteResult struct {
 func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	notify *Notify) (WriteResult, error) {
 
+	return w.createTask(ctx, opID, task, nil, notify)
+}
+
+// CreateTaskAsking is [Writer.CreateTask] for an item filed AS A QUESTION: the
+// task and the ask on it — a [Comment] with `ask` set, and a [Decision] when
+// the question needs somebody to choose — land in ONE record.
+//
+// # Why one record and not a create followed by a comment
+//
+// Because the second append is the one that matters and it is the one a crash
+// loses. Filed as two, a question put through "Ask" or "Message" is a task
+// with nobody asked on it whenever the comment did not land: it wakes its
+// assignee as work rather than as a question, `asked_of_me` never lists it,
+// and the answer — which is what the person was waiting for — has no ask to
+// close. One record is either the whole question or nothing, and it is
+// arbitrated once, on the task's own subject, exactly like the create it is.
+//
+// THE ASK IS THE QUESTION ITSELF, so it answers nothing, replies to nothing
+// and chooses nothing: a task that does not exist yet holds no comment to
+// answer or reply to. The person asked starts following the item, as they do
+// when a comment asks them — see [followAsk].
+func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
+	ask Comment, notify *Notify) (WriteResult, error) {
+
+	return w.createTask(ctx, opID, task, &ask, notify)
+}
+
+// createTask is sequence 1, with or without the ask a create may carry.
+func (w *Writer) createTask(ctx context.Context, opID string, task Task,
+	ask *Comment, notify *Notify) (WriteResult, error) {
+
 	switch {
 	case task.ID == "":
 		return WriteResult{}, invalid("tracker: a create names no task id")
@@ -283,6 +314,14 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	// for a transaction to say so would buy nothing.
 	if err := checkTextCaps(task.ID, &task.Title, &task.Body, nil); err != nil {
 		return WriteResult{}, err
+	}
+	if ask != nil {
+		// A VALUE CHECK TOO, and before the mint for the reason the caps
+		// are: a malformed question refused after the counter moved is a
+		// numbering gap nobody asked for.
+		if err := checkCreateAsk(&task, ask); err != nil {
+			return WriteResult{}, err
+		}
 	}
 	// BEFORE THE MINT, because the catalogue check runs inside it. The
 	// other two defaults below cannot: they are applied after the key is
@@ -309,13 +348,13 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 		w.settleCreate(ctx, task, &settled))
 	switch {
 	case errors.Is(err, errMintLanded):
-		return w.resumeCreate(ctx, opID, task, notify)
+		return w.resumeCreate(ctx, opID, task, ask, notify)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, n, settled, notify)
+	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
 }
 
 // unvouchedCreate answers a create whose counter step this node's operation
@@ -374,9 +413,10 @@ func (w *Writer) settleCreate(ctx context.Context, task Task,
 	}
 }
 
-// fileTask is a create's second append, on the key number n its mint took.
-func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
-	settled settledCreate, notify *Notify) (WriteResult, error) {
+// fileTask is a create's second append, on the key number n its mint took —
+// carrying ask, the question the task is filed as, where it is one.
+func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
+	ask *Comment, n uint64, settled settledCreate, notify *Notify) (WriteResult, error) {
 
 	if settled.fields != nil {
 		task.Fields = settled.fields
@@ -400,7 +440,12 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
 		task.Priority = PriorityNone
 	}
 
-	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
+	if ask != nil {
+		// THE TASK'S OWN INSTANT, so the question is not older than the
+		// item it was filed on.
+		ask.CreatedAt = at
+	}
+	result, err := w.writeTask(ctx, stepID(opID, "task"), task, ask, notify, at)
 	if err == nil && result.Collapsed {
 		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
 		// found once a fresh mint's append met it on the task's subject
@@ -433,7 +478,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
 // task's own subject, is refused its expectation of zero, and is answered
 // from the ledger once this node catches up ([Writer.fileTask]).
 func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
-	notify *Notify) (WriteResult, error) {
+	ask *Comment, notify *Notify) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
@@ -464,7 +509,7 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	if err != nil {
 		return WriteResult{Result: minted}, err
 	}
-	return w.fileTask(ctx, opID, task, n, settled, notify)
+	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
 }
 
 // errTaskNotApplied is a resumed create's task step finding no ledger row to
@@ -549,11 +594,58 @@ func filedUnit(stated, routed, project string) (filed, routing string) {
 	return filed, routing
 }
 
+// checkCreateAsk is what the ask a create carries must be, on its own: a
+// question, put to somebody, on this task, answering and replying to nothing.
+// It also puts the person asked on the new task's watchers, which is what an
+// ask does wherever it is written — see [followAsk].
+func checkCreateAsk(task *Task, ask *Comment) error {
+	switch {
+	case ask.ID == "":
+		return invalid("tracker: the ask filed with task %s names no comment "+
+			"id — the id is the row's key on every node, so it is derived by "+
+			"the writer rather than minted at apply", task.ID)
+	case ask.Ask == "":
+		return invalid("tracker: the comment filed with task %s asks nobody — "+
+			"a create carries a comment only as the question it was filed as",
+			task.ID)
+	case ask.Answers != nil, ask.Choice != "", ask.ReplyTo != nil:
+		return invalid("tracker: the ask filed with task %s answers or replies "+
+			"to a comment, and a task that does not exist yet has none", task.ID)
+	case ask.Task != "" && ask.Task != task.ID:
+		return invalid("tracker: the ask filed with task %s names task %s",
+			task.ID, ask.Task)
+	}
+	ask.Task = task.ID
+	if err := checkTextCaps(task.ID, nil, nil, &ask.Body); err != nil {
+		return err
+	}
+	if err := checkCommentShape(task.ID, ask); err != nil {
+		return err
+	}
+	if watchers, ok := followAsk(task.Watchers, task.Muted, ask.Ask); ok {
+		task.Watchers = watchers
+	}
+	return nil
+}
+
+// TaskCreate is a create record's payload: the whole task, and the question it
+// was filed as when it was filed as one.
+//
+// THE TASK IS EMBEDDED, so a create without an ask encodes to exactly the
+// bytes it always did and every reader that decodes the payload as a [Task]
+// still reads the task. The comment is a row of its own on apply — never part
+// of the task document — which is why it rides beside the task rather than on
+// it.
+type TaskCreate struct {
+	Task
+	Comment *Comment `json:"comment,omitempty"`
+}
+
 // writeTask is sequence 1's second append and 1a's second, shared because they
 // are the same append: a whole task at expectation zero, guarded by its own
-// row.
+// row — carrying, on sequence 1, the ask the task was filed as.
 func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
-	notify *Notify, at time.Time) (WriteResult, error) {
+	ask *Comment, notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
 	scope := ScopeSet{Subject: true, Container: task.Project}
@@ -577,7 +669,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 				return statelog.Decision{}, statelog.ErrExists
 			}
 			return w.decide(stamp, subject, OpCreate, ChangeCreated, scope, opID,
-				task, notify, at)
+				TaskCreate{Task: task, Comment: ask}, notify, at)
 		},
 	})
 	return WriteResult{
@@ -990,7 +1082,7 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	var created WriteResult
 	switch {
 	case errors.Is(err, errMintLanded):
-		created, err = w.resumeCreate(ctx, opID, subtask, notify)
+		created, err = w.resumeCreate(ctx, opID, subtask, nil, notify)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		// THE SUBTASK'S OWN ROW SAYS WHETHER AN EARLIER RUN FILED IT, as
 		// it does for a create ([Writer.unvouchedCreate]); where it cannot,
@@ -999,7 +1091,7 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	default:
-		created, err = w.fileTask(ctx, opID, subtask, n, settled, notify)
+		created, err = w.fileTask(ctx, opID, subtask, nil, n, settled, notify)
 	}
 	if errors.Is(err, statelog.ErrExists) {
 		// THE SUBTASK IS ALREADY FILED, by an earlier run under another

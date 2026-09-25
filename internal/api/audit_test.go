@@ -52,6 +52,12 @@ func (r *recordedAudit) take() ([]string, []*events.Event) {
 // auditWork is a tracker writer that lands every create at one position.
 type auditWork struct{}
 
+func (a auditWork) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	return a.CreateTask(ctx, opID, task, notify)
+}
+
 func (auditWork) CreateTask(context.Context, string, tracker.Task,
 	*tracker.Notify) (tracker.WriteResult, error) {
 
