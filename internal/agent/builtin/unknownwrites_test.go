@@ -71,18 +71,17 @@ func (u *unknownWriter) WriteFields(_ context.Context, opID string,
 }
 
 func (u *unknownWriter) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) WritePins(_ context.Context, opID, _ string, _ []string,
-	_ []tracker.Favorite) (tracker.WriteResult, error) {
+func (u *unknownWriter) WritePins(_ context.Context, opID, _ string,
+	_ tracker.PinGesture) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) WriteInbox(_ context.Context, opID, _ string,
-	_, _, _ []tracker.InboxEntry, _ []tracker.Reason,
-	_ tracker.Position) (tracker.WriteResult, error) {
+func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
+	_ tracker.InboxGesture) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }
 
@@ -152,7 +151,7 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 		tracker.RestoreWorkItemTool:    {"item": "ENG-1"},
 		tracker.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
 		tracker.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
-		tracker.SetPinsTool:            {"views": []any{"v-1"}},
+		tracker.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
 		tracker.MarkInboxTool:          {"primary_reasons": []any{"mention"}},
 		tracker.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}},
 		tracker.WriteProjectTool:       {"project": "ENG", "tags_add": []any{map[string]any{"slug": "regression"}}},

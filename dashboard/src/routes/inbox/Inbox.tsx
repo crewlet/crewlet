@@ -418,7 +418,7 @@ export function Inbox() {
  *
  * `seen_through` IS THE EVIDENCE, and it is the only evidence in this answer.
  * It is the person's own read watermark, written by `mark_inbox` alone
- * (`tracker.Writer.WriteInbox`), and the Go side omits the whole object when it
+ * (`tracker.Writer.MarkInbox`), and the Go side omits the whole object when it
  * is zero — so its absence is "this person has never recorded how far they have
  * read". A zero-sequence object is the same fact and must read the same way,
  * which is why this tests the sequence and not the key. The copy therefore
@@ -724,13 +724,9 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
           This screen only reads — every write here is attributed to somebody,
           and a button in a browser would write as "the dashboard", which is
           nobody — so what it offers is the `mark_inbox` an assistant would
-          make, pre-filled with this entry's own record and POSITION. The two
-          travel together: a position from a recreated stream compares as
-          current. */}
-      <ToolCallBlock
-        subject={{ kind: "notice", id: notice.record_id, version: notice.log_seq }}
-        viewer={viewer}
-      />
+          make, pre-filled with this entry's own record. The engine reads
+          where the notice sits itself, and marks nothing else. */}
+      <ToolCallBlock subject={{ kind: "notice", id: notice.record_id }} viewer={viewer} />
       <p className="t-caption">
         Your assistant marks these read with <code className="inline">mark_inbox</code>, which is
         attributed to you. Nothing on this screen writes.

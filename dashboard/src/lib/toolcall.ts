@@ -48,10 +48,10 @@ export interface Subject {
   /** Whose object it is, where a screen has it for a label. */
   handle?: string;
   /**
-   * The version or log position a call has to state, where the object has
-   * one — a page's `base_version`, a notice's own position. Both are the same
-   * shape of fact: "the state I am acting on", which the engine compares
-   * against what it holds.
+   * The version a call has to state, where the object has one — a page's
+   * `base_version`: "the state I am acting on", which the engine compares
+   * against what it holds. A notice has none to state; the engine reads where
+   * it sits itself.
    */
   version?: number;
   /**
@@ -150,28 +150,24 @@ export function callsFor(subject: Subject): ToolCall[] {
       ];
     case "notice":
       // THE INBOX IS THE CALLER'S OWN — `mark_inbox` names no handle, because
-      // the operator's credential is whose inbox it is. And an entry is a
-      // RECORD AND ITS POSITION, not a bare id: a position from a recreated
-      // stream compares as current, so the two travel together.
+      // the operator's credential is whose inbox it is. And a mark is a
+      // GESTURE naming the notice by its record id alone: the engine reads
+      // where the notice sits from its own history row, and marks nothing
+      // else — every other mark and the read position stay as they are.
       return [
         {
           tool: "mark_inbox",
           label: "Mark it read",
-          args: { read: [{ record_id: id, position: subject.version ?? 0 }] },
+          args: { read: [id] },
         },
         {
-          // `until` IS WHAT MAKES IT A SNOOZE rather than a second spelling
-          // of unread: the entry comes back at that instant. RFC3339, and a
-          // placeholder rather than a date this screen invented — "tomorrow"
-          // is a decision the person makes, not one a copied call should
-          // have made for them.
+          // `until` IS WHAT MAKES IT A SNOOZE: the notice comes back at that
+          // instant. RFC3339, and a placeholder rather than a date this
+          // screen invented — "tomorrow" is a decision the person makes, not
+          // one a copied call should have made for them.
           tool: "mark_inbox",
           label: "Put it off until a time you name",
-          args: {
-            snoozed: [
-              { record_id: id, position: subject.version ?? 0, until: "2026-01-01T09:00:00Z" },
-            ],
-          },
+          args: { snooze: [{ record_id: id, until: "2026-01-01T09:00:00Z" }] },
         },
       ];
   }

@@ -29,10 +29,13 @@ import (
 type PersonState struct {
 	Handle string `json:"handle"`
 
-	// Unread, Read and Snoozed are the inbox. Snoozed entries whose time
-	// has come are reported as DUE rather than silently promoted: putting
-	// one back is a write, and a read that performed it would be a read
-	// that changed the fleet's state.
+	// Unread, Read and Snoozed are the inbox's EXCEPTIONS to the
+	// seen-through position: Read holds notices above it marked read out
+	// of order, Unread notices at or below it marked unread again — see
+	// [Writer.MarkInbox]. Snoozed entries whose time has come are reported
+	// as DUE rather than silently promoted: putting one back is a write,
+	// and a read that performed it would be a read that changed the
+	// fleet's state.
 	Unread  []InboxEntry `json:"unread,omitempty"`
 	Read    []InboxEntry `json:"read,omitempty"`
 	Snoozed []InboxEntry `json:"snoozed,omitempty"`

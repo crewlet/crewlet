@@ -38,9 +38,11 @@ import (
 // at that version and drop the field it was minted for.
 //
 // Version 2 is the turn record's spend split: [TurnSpend.Workers] and
-// [TurnSpend.SentBack]. Version 3 is the cross-project move's marker on a task
+// [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
+// ([Position.Generation]), which a build reading 2 decoded and then stored as
+// the bare sequence. Version 4 is the cross-project move's marker on a task
 // patch: [TaskPatch.Moving].
-const RecordVersion = 3
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -67,7 +69,10 @@ const baseRecordVersion = 1
 // good, on tables a fleet compares byte for byte, and nothing ever reports
 // it. The row is what makes the writer stamp a version that build retains
 // instead. So a new field takes the next version above [RecordVersion] (the
-// constant moves with it), a row naming its JSON path from the record's root
+// constant moves with it) — NEVER a version a build already reads, which that
+// build would apply without the field; TestAClosedRecordVersionGainsNoField
+// lists every version with the fields it closed on and fails a row that joins
+// one — a row naming its JSON path from the record's root
 // — through `mutation` for a payload field — and a record in the domain's
 // statelogtest candidate that carries it, which is what certifies the path is
 // the one the encoder actually writes.
@@ -86,7 +91,18 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "spend", "workers"}},
 	{Name: "TurnSpend.SentBack", Since: 2, Op: string(OpTurn),
 		Path: []string{"mutation", "spend", "sent_back"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 3. A build reading 2
+	// A PERSON'S SEEN-THROUGH GENERATION, at version 3. It was always in
+	// the JSON, which is why this row is about the APPLIER rather than the
+	// decoder: a build reading 2 stores `seen_through` as the bare
+	// sequence, so a person record past a reanchor applied there reads
+	// back as generation zero and that node's copy of the person differs
+	// from every peer's for good. The zero generation is omitted from the
+	// JSON, so only a record that needs the newer applier is held back.
+	// Scoped to the patch op, which is the only op a person is written
+	// under; no task patch carries `seen_through`.
+	{Name: "Person.SeenThrough.Generation", Since: 3, Op: string(OpPatch),
+		Path: []string{"mutation", "seen_through", "generation"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 4. A build reading 3
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -97,7 +113,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 3, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 4, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 

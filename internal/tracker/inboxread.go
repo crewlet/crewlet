@@ -505,10 +505,12 @@ type person struct {
 	primary map[Reason]bool
 
 	// read is the entries ABOVE the seen-through position that this
-	// person has nonetheless marked read, and snoozed is the same for
-	// sleeping ones. Both are keyed on the record id an [InboxEntry]
-	// names, which is the notification row's own `record_id`.
+	// person has nonetheless marked read, unread the entries AT OR BELOW
+	// it they marked unread again, and snoozed the sleeping ones. All
+	// three are keyed on the record id an [InboxEntry] names, which is the
+	// notification row's own `record_id`.
 	read    map[string]bool
+	unread  map[string]bool
 	snoozed map[string]*time.Time
 }
 
@@ -518,6 +520,7 @@ func (p Person) marks(primary []Reason) person {
 		seen:    p.SeenThrough,
 		primary: make(map[Reason]bool, len(primary)),
 		read:    make(map[string]bool, len(p.Read)),
+		unread:  make(map[string]bool, len(p.Unread)),
 		snoozed: make(map[string]*time.Time, len(p.Snoozed)),
 	}
 	for _, reason := range primary {
@@ -525,6 +528,9 @@ func (p Person) marks(primary []Reason) person {
 	}
 	for _, entry := range p.Read {
 		out.read[entry.RecordID] = true
+	}
+	for _, entry := range p.Unread {
+		out.unread[entry.RecordID] = true
 	}
 	for _, entry := range p.Snoozed {
 		out.snoozed[entry.RecordID] = entry.Until
@@ -535,12 +541,17 @@ func (p Person) marks(primary []Reason) person {
 // markInbox classifies and marks the page against this person's own record.
 //
 // READ IS THE SEEN-THROUGH POSITION FIRST and the entry list second, which is
-// the whole reason the position exists: the entry lists are PRUNED at every
-// write to what sits above it, so a notice below the position carries no entry
-// at all. Reading only the lists would report every pruned notice unread —
+// the whole reason the position exists: the read list is PRUNED at every
+// write to what sits above it, so a notice below the position carries no read
+// entry at all. Reading only the lists would report every pruned notice unread —
 // which is every notice older than the person's last visit, the exact set an
 // inbox must not resurface. Reading only the position would miss what they
 // marked read out of order, which is what a person working their queue does.
+//
+// AND AN UNREAD MARK OUTRANKS THE POSITION. It is the one way to bring back a
+// notice the position already covers — after a "mark all read", that is every
+// notice — and a reader that consulted only the position and the read list
+// made that gesture a mark nothing could ever see.
 //
 // A SNOOZE WHOSE TIME HAS COME IS NOT SNOOZED, for the reason [splitSnoozes]
 // gives: the entry is reported DUE rather than silently promoted, because
@@ -550,7 +561,8 @@ func markInbox(notices []InboxNotice, p person, now time.Time) []InboxNotice {
 	for i := range notices {
 		notice := &notices[i]
 		notice.Primary = p.primary[notice.Reason]
-		notice.Read = p.read[notice.RecordID] || readPast(p.seen, *notice)
+		notice.Read = !p.unread[notice.RecordID] &&
+			(p.read[notice.RecordID] || readPast(p.seen, *notice))
 		if until, asleep := p.snoozed[notice.RecordID]; asleep {
 			if until == nil || until.After(now) {
 				notice.Snoozed = true

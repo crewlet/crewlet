@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -146,9 +147,9 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 
 	// AND A DECLARED LIST REPLACES IT, so the preference has an effect
 	// rather than being storage for a rule nobody wrote.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-prefs", "bob", nil, nil,
-		nil, []tracker.Reason{tracker.ReasonMention},
-		tracker.Position{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+		PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention},
+	}); err != nil {
 
 		t.Fatalf("declare the split: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 }
 
 // TestReadIsTheSeenThroughPositionAndTheEntries protects the half of the mark
-// that is easy to leave out. The entry lists are PRUNED at every write to what
+// that is easy to leave out. The read list is PRUNED at every write to what
 // sits above the seen-through position, so reading only the lists reports
 // every pruned notice unread — which is every notice older than the person's
 // last visit, the exact set an inbox must not resurface.
@@ -200,11 +201,12 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows
 	// at all, which is the pruned state.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-seen", "bob", nil, nil,
-		nil, nil, tracker.Position{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", tracker.InboxGesture{
+		ReadThrough: &statelog.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
-		}); err != nil {
+		},
+	}); err != nil {
 
 		t.Fatalf("mark the seen-through position: %v", err)
 	}
@@ -224,12 +226,8 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
 	// their queue out of order does.
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-read", "bob",
-		[]tracker.InboxEntry{{RecordID: newest.RecordID, Position: newest.LogSeq}},
-		nil, nil, nil, tracker.Position{
-			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
-			Seq: oldest.LogSeq,
-		}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
+		tracker.InboxGesture{Read: []string{newest.RecordID}}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
 	}
@@ -258,15 +256,24 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	}
 	notice := got.Notices[0]
 
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-dead", "bob", nil, nil,
-		nil, nil, tracker.Position{
-			Stream:     "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE",
-			Generation: notice.LogGeneration, Seq: notice.LogSeq + 1_000,
-		}); err != nil {
-
-		t.Fatalf("mark a position in a dead stream: %v", err)
+	// A WRITER REFUSES such a position outright, so the row this case is
+	// about — a position left behind by a stream that was recreated — is
+	// planted: it is the state a person's record is in after the fact, and
+	// the reader is what has to survive it.
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+		PrimaryReasons: &[]tracker.Reason{},
+	}); err != nil {
+		t.Fatalf("write bob's record: %v", err)
 	}
 	r.drain()
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_persons
+			SET seen_through = ?, seen_through_stream = ? WHERE handle = 'bob'`,
+			int64(notice.LogSeq+1_000), "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE")
+		return err
+	}); err != nil {
+		t.Fatalf("plant a position in a dead stream: %v", err)
+	}
 
 	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); got.Unread != 1 {
 		t.Fatal("a position from another stream marked the live stream's " +
@@ -284,10 +291,9 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 
 	notice := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}).Notices[0]
 	asleep := wednesday.Add(48 * time.Hour)
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-snooze", "bob", nil, nil,
-		[]tracker.InboxEntry{{
-			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &asleep,
-		}}, nil, tracker.Position{}); err != nil {
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", tracker.InboxGesture{
+		Snooze: []tracker.Snooze{{RecordID: notice.RecordID, Until: asleep}},
+	}); err != nil {
 
 		t.Fatalf("snooze: %v", err)
 	}
@@ -302,17 +308,15 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 			got.Notices)
 	}
 
-	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it.
-	past := wednesday.Add(-time.Hour)
-	if _, err := asBob(r).WriteInbox(t.Context(), "op-due", "bob", nil, nil,
-		[]tracker.InboxEntry{{
-			RecordID: notice.RecordID, Position: notice.LogSeq, Until: &past,
-		}}, nil, tracker.Position{}); err != nil {
-
-		t.Fatalf("snooze into the past: %v", err)
+	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it:
+	// the same rows, read after the instant.
+	back, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
+		Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+	}, asleep.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
 	}
-	r.drain()
-	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); len(got.Notices) != 1 {
+	if len(back.Notices) != 1 {
 		t.Fatal("a snooze whose time has come did not come back, so `not " +
 			"now` is a delete that does not say so")
 	}
