@@ -27,6 +27,7 @@ import { destinationsOf } from "../nav.ts";
 import { href } from "~/app/router.tsx";
 import type { SidebarSection, SidebarRow } from "../frame/WorkspaceSidebar.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { unfinished } from "~/lib/work.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib/seats.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
@@ -60,13 +61,17 @@ export function useWorkSidebar(): SidebarSection[] {
       label: p.name || p.key,
       path: ["work", p.key],
       sub: p.lead?.handle || undefined,
-      // THE MAINTAINED COLUMN, not a count over the page: the engine keeps
-      // open/done/closed on the project row itself precisely so a sidebar
-      // does not have to aggregate per poll.
+      // THE MAINTAINED COLUMNS, not a count over the page: the engine keeps
+      // the census on the project row itself precisely so a sidebar does not
+      // have to aggregate per poll. The rail's number is everything not yet
+      // finished — waiting and started together.
       count:
-        p.task_counts?.open == null
+        p.task_counts == null
           ? undefined
-          : { value: p.task_counts.open, of: "open items — the engine's own maintained count" },
+          : {
+              value: unfinished(p.task_counts),
+              of: "unfinished items — the engine's own maintained count",
+            },
     }));
 
     // HOW MANY ARE ARCHIVED, where EVERY one of them is — the same census the

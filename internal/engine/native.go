@@ -225,6 +225,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// than to a row — so the write resolves it and the record
 			// carries the handle, and no applier ever reads an org.
 			World: liveSeats{engine: e},
+			// AND THE COMPANY'S CLOCK, read per call like the chart: a
+			// date field or a project's target date given as an instant
+			// is stored as the day it falls on on this clock (ADR-0018),
+			// and the clock is the epoch's to change.
+			Zone: e.Zone,
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that

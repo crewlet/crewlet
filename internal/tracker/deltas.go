@@ -253,8 +253,8 @@ func documentDeltas(ctx context.Context, tx *sql.Tx, s Subject,
 // THE CHART-OWNED FIELDS AND THE LEAD-OWNED ONES TOGETHER, because one record
 // may carry either: a chart apply rewrites the name, the purpose and the unit
 // under an epoch stamp, and a lead's edit rewrites the field declarations, the
-// default assignee and the archive flag. A comparison that named only one half
-// would be empty for every write of the other.
+// default assignee, the target date and the archive flag. A comparison that
+// named only one half would be empty for every write of the other.
 //
 // `chart_epoch` IS RECORDED, and it is the only thing a re-declaration at a
 // new epoch moves: [Writer.applyChartProject] publishes when the epoch differs
@@ -271,6 +271,7 @@ func projectDeltas(before, after Project) map[string]Delta {
 	moved.add("purpose", scalarText(before.Purpose), scalarText(after.Purpose))
 	moved.add("unit", scalarText(before.Unit), scalarText(after.Unit))
 	moved.add("default_assignee", before.DefaultAssignee, after.DefaultAssignee)
+	moved.add("target_date", before.TargetDate, after.TargetDate)
 	moved.add("archived", boolText(before.Archived), boolText(after.Archived))
 	moved.add("policy_version",
 		countText(before.PolicyVersion), countText(after.PolicyVersion))

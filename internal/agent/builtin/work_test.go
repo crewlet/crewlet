@@ -79,6 +79,9 @@ type fakeTracker struct {
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
+	// projectWarnings is what a policy write reports it was not refused
+	// for — a target date given as an instant, stored as its day.
+	projectWarnings []string
 
 	// declaredTypes and declaredFields are the catalogue as the WRITE
 	// tools composed it, which is the half of those verbs that lives in
@@ -400,8 +403,11 @@ func (f *fakeTracker) WriteProject(_ context.Context, opID, key string,
 	f.projectAuthority = append(f.projectAuthority, authority)
 	f.opIDs = append(f.opIDs, opID)
 	return tracker.WriteResult{
-		Outcome: statelog.OutcomeApplied, Version: 3,
-		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
+		Result: statelog.Result{
+			Outcome: statelog.OutcomeApplied, Version: 3,
+			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
+		},
+		Warnings: f.projectWarnings,
 	}, nil
 }
 

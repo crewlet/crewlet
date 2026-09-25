@@ -562,7 +562,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, err
 	}
 	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
-		task.Fields, w.World)
+		task.Fields, w.World, w.zone())
 	if err != nil {
 		return settledCreate{}, err
 	}

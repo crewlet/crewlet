@@ -97,6 +97,7 @@ import {
   shapeOf,
   shownRows,
   totalHint,
+  unfinished,
   URL_HOMES,
   viewParams,
   type Scope,
@@ -949,7 +950,7 @@ export function patchedQuery(
  * here at all.
  *
  * AND (b) CARRIES A NUMBER ONLY WHERE ONE EXISTS. A project detail carries the
- * three maintained `task_counts`, so the sentence can say how much finished
+ * maintained `task_counts`, so the sentence can say how much finished
  * work the other segment holds. The workspace has no such counts — `work_items`
  * counts what MATCHED and nothing else — so it names the switch and claims
  * nothing about what is behind it.
@@ -1045,7 +1046,7 @@ function EmptyList({
   // NOTHING AT ALL. The All segment has every scope on screen already, so an
   // empty answer under it is the container's whole tracker; a container with
   // its own counts can say the same thing sooner and exactly.
-  const total = counts ? counts.open + counts.done + counts.closed : undefined;
+  const total = counts ? unfinished(counts) + counts.done + counts.closed : undefined;
   if (scope === "all" || total === 0) {
     // THE PROJECT'S OWN EMPTY STATE IS ABOVE THIS LIST, and two panels saying
     // one thing is one too many — the same rule the page keeps at workspace
@@ -1064,7 +1065,8 @@ function EmptyList({
   // counts give one AND it is not zero: "0 items under Closed" beside "nothing
   // open" is a contradiction a reader has to work out, where the numberless
   // sentence is true in both states.
-  const elsewhere = scope === "open" ? (counts && counts.done + counts.closed) || 0 : counts?.open;
+  const elsewhere =
+    scope === "open" ? (counts && counts.done + counts.closed) || 0 : counts && unfinished(counts);
   if (scope === "open") {
     return (
       <EmptyState

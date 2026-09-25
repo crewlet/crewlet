@@ -80,6 +80,10 @@ type FieldWorld interface {
 type fieldRefs struct {
 	world FieldWorld
 	task  func(ref string) (string, bool)
+
+	// zone is the company's clock, which a date-only value truncates an
+	// instant in — see [coerceDay]. Nil is UTC.
+	zone *time.Location
 }
 
 // coerced is one field's value after the table has had it.
@@ -266,7 +270,7 @@ func coerceOne(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, er
 	case FieldCheckbox:
 		return coerceCheckbox(field, raw)
 	case FieldDate:
-		return coerceDate(field, raw)
+		return coerceDate(field, raw, refs.zone)
 	case FieldDropdown, FieldLabels:
 		return coerceOption(field, raw)
 	case FieldRelationship:
@@ -375,7 +379,10 @@ func coerceCheckbox(field FieldDef, raw json.RawMessage) (coerced, error) {
 // information lost is the part the field does not have. A `Time` field refuses
 // a bare date instead: there is nothing to truncate, and inventing midnight
 // would put a value nobody typed on the board.
-func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
+//
+// The date-only half is [coerceDay], shared with the one other value that
+// holds a day — a project's target date — so the two cannot drift apart.
+func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
 		return coerced{}, invalid("tracker: field %q is a date and this "+
@@ -383,17 +390,22 @@ func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
 			"2026-03-04T09:00:00Z", field.Slug, clipRaw(raw))
 	}
 	text = strings.TrimSpace(text)
-	if at, err := time.Parse(time.RFC3339, text); err == nil {
-		if !field.Config.Time {
-			day := at.UTC().Format(time.DateOnly)
-			encoded, err := json.Marshal(day)
-			if err != nil {
-				return coerced{}, err
-			}
-			return coerced{Value: encoded, Warnings: []string{fmt.Sprintf(
-				"field %q holds a date and not a time, so %s was stored as %s",
-				field.Slug, text, day)}}, nil
+	if !field.Config.Time {
+		day, warning, err := coerceDay(fmt.Sprintf("field %q", field.Slug), text, zone)
+		if err != nil {
+			return coerced{}, err
 		}
+		encoded, err := json.Marshal(day)
+		if err != nil {
+			return coerced{}, err
+		}
+		out := coerced{Value: encoded}
+		if warning != "" {
+			out.Warnings = []string{warning}
+		}
+		return out, nil
+	}
+	if at, err := time.Parse(time.RFC3339, text); err == nil {
 		encoded, err := json.Marshal(at.UTC().Format(time.RFC3339))
 		if err != nil {
 			return coerced{}, err
@@ -405,17 +417,42 @@ func coerceDate(field FieldDef, raw json.RawMessage) (coerced, error) {
 		return coerced{}, invalid("tracker: field %q is a date and %q is not "+
 			"one — write 2026-03-04, or 2026-03-04T09:00:00Z", field.Slug, clip(text))
 	}
-	if field.Config.Time {
-		return coerced{}, invalid("tracker: field %q holds a date AND a time "+
-			"and %q carries no time — give one, as %sT09:00:00Z, rather than "+
-			"letting the engine invent midnight",
-			field.Slug, clip(text), day.Format(time.DateOnly))
+	return coerced{}, invalid("tracker: field %q holds a date AND a time "+
+		"and %q carries no time — give one, as %sT09:00:00Z, rather than "+
+		"letting the engine invent midnight",
+		field.Slug, clip(text), day.Format(time.DateOnly))
+}
+
+// coerceDay is THE rule for a value that holds a DAY: a calendar date is kept,
+// an instant is truncated to the date it falls on and the writer is told, and
+// anything else is refused naming both spellings. `what` names the value in
+// the sentence — `field "launch"`, `the target date`.
+//
+// # The date an instant falls on is the COMPANY'S (ADR-0018)
+//
+// Truncated in UTC, `2026-03-04T20:00:00-08:00` — the evening of the fourth in
+// a company on Pacific time, which is what its writer meant — was stored as
+// the FIFTH, and a company east of UTC lost the morning of every day the same
+// way. The company has one calendar ([period]); a relative `due=` already
+// resolves in it, and a day read out of an instant is the same question.
+//
+// A nil zone is UTC, which is what a writer given no clock has always used.
+func coerceDay(what, text string, zone *time.Location) (day, warning string, err error) {
+	if zone == nil {
+		zone = time.UTC
 	}
-	encoded, err := json.Marshal(day.Format(time.DateOnly))
-	if err != nil {
-		return coerced{}, err
+	text = strings.TrimSpace(text)
+	if at, perr := time.Parse(time.RFC3339, text); perr == nil {
+		day = at.In(zone).Format(time.DateOnly)
+		return day, fmt.Sprintf("%s holds a date and not a time, so %s was "+
+			"stored as %s, the day it falls on in %s", what, text, day, zone), nil
 	}
-	return coerced{Value: encoded}, nil
+	parsed, perr := time.Parse(time.DateOnly, text)
+	if perr != nil {
+		return "", "", invalid("tracker: %s is a date and %q is not one — "+
+			"write 2026-03-04, or 2026-03-04T09:00:00Z", what, clip(text))
+	}
+	return parsed.Format(time.DateOnly), "", nil
 }
 
 // coerceOption resolves a slug, a name or an id to the option's ID.
@@ -682,7 +719,7 @@ const MaxRefusalQuote = MaxFieldValueBytes
 // It returns a COPY, because Decide runs again on a retry and a normalisation
 // folded into the captured patch would compound across attempts.
 func settleFields(ctx context.Context, tx *sql.Tx, project, taskType string,
-	values map[string]json.RawMessage, world FieldWorld) (
+	values map[string]json.RawMessage, world FieldWorld, zone *time.Location) (
 	map[string]json.RawMessage, []string, error) {
 
 	if len(values) == 0 {
@@ -698,6 +735,7 @@ func settleFields(ctx context.Context, tx *sql.Tx, project, taskType string,
 	// refused here rather than stored as an id that resolves to nothing.
 	return coerceFields(declared, values, taskType, fieldRefs{
 		world: world,
+		zone:  zone,
 		task: func(ref string) (string, bool) {
 			id, err := resolveTaskID(ctx, tx, ref)
 			return id, err == nil

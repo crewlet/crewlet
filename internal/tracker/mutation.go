@@ -43,8 +43,9 @@ import (
 // the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
 // [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
 // value — see [actorSeatVersion]. Version 6 is a create that carries the
-// question its task was filed as: [TaskCreate.Comment].
-const RecordVersion = 6
+// question its task was filed as: [TaskCreate.Comment]. Version 7 is a
+// project's lead-owned target date: [Project.TargetDate].
+const RecordVersion = 7
 
 // actorSeatVersion is the record version from which the applier copies
 // [MutationRecord.ActorSeat] onto the history row.
@@ -130,6 +131,15 @@ var versionedFields = statelog.RecordFields{
 	// format.
 	{Name: "TaskCreate.Comment", Since: 6, Op: string(OpCreate),
 		Path: []string{"mutation", "comment"}},
+	// A PROJECT'S TARGET DATE, at version 7. A build reading 6 decodes the
+	// project document around it: its `tracker_projects.target_date` stays
+	// NULL where every upgraded node holds the day, and its copy of the
+	// document drops the key — for good, on a table the fleet compares byte
+	// for byte. EVERY OP, because a project document is written whole by
+	// both a lead's edit and the chart apply that carries the date through,
+	// and no other record's payload has a `target_date` to collide with.
+	{Name: "Project.TargetDate", Since: 7,
+		Path: []string{"mutation", "target_date"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

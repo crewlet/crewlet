@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // seats is a chart seam that resolves exactly the handles it holds.
@@ -520,4 +521,67 @@ func mustJSON(t *testing.T, s string) json.RawMessage {
 		t.Fatalf("marshal %q: %v", s, err)
 	}
 	return raw
+}
+
+// AN INSTANT IS THE DAY IT FALLS ON ON THE COMPANY'S CLOCK, not in UTC.
+//
+// Cut in UTC, the evening of the fourth in a company on Pacific time — which
+// is what its writer meant — was stored as the fifth, and a company east of
+// UTC lost the morning of every day the same way. One rule, [coerceDay], for
+// both values that hold a day: a date field, and a project's target date.
+func TestAnInstantIsTheDayItFallsOnOnTheCompanysClock(t *testing.T) {
+	t.Parallel()
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("load a zone: %v", err)
+	}
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("load a zone: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		in   string
+		zone *time.Location
+		want string
+		warn bool
+	}{
+		{"a bare date is kept, whatever the clock", "2026-03-04", tokyo, "2026-03-04", false},
+		{"the evening of the fourth in LA is the fourth", "2026-03-05T04:00:00Z", pacific, "2026-03-04", true},
+		{"the morning of the fifth in Tokyo is the fifth", "2026-03-04T20:00:00Z", tokyo, "2026-03-05", true},
+		{"an offset is read, then placed on the clock", "2026-03-04T20:00:00-08:00", pacific, "2026-03-04", true},
+		{"no clock is UTC", "2026-03-04T23:30:00Z", nil, "2026-03-04", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			day, warning, err := coerceDay("the target date", c.in, c.zone)
+			if err != nil {
+				t.Fatalf("coerceDay(%q): %v", c.in, err)
+			}
+			if day != c.want {
+				t.Errorf("coerceDay(%q) in %v = %q, want %q", c.in, c.zone, day, c.want)
+			}
+			if (warning != "") != c.warn || (c.warn && !strings.Contains(warning, c.want)) {
+				t.Errorf("warning %q, want one naming %q: %v", warning, c.want, c.warn)
+			}
+
+			// THE FIELD RULE IS THE SAME RULE, on the zone its settlement
+			// is handed.
+			raw, _ := json.Marshal(c.in)
+			got, err := coerceField(FieldDef{Slug: "ship", Type: FieldDate}, raw,
+				fieldRefs{zone: c.zone})
+			if err != nil {
+				t.Fatalf("a date field refused %q: %v", c.in, err)
+			}
+			if want, _ := json.Marshal(c.want); string(got.Value) != string(want) {
+				t.Errorf("a date field stored %s, want %s", got.Value, want)
+			}
+		})
+	}
+	if _, _, err := coerceDay("the target date", "end of quarter", nil); err == nil ||
+		!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "the target date") ||
+		!strings.Contains(err.Error(), "2026-03-04") {
+		t.Errorf("a day that is not one answered %v, want an invalid refusal "+
+			"naming the value and both spellings", err)
+	}
 }

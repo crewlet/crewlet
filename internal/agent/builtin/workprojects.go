@@ -47,8 +47,9 @@ var _ tools.SeatCallable = (*listProjects)(nil)
 func (t *listProjects) Name() string { return tracker.ListProjectsTool }
 
 func (t *listProjects) Description() string {
-	return "The projects this company files work into, with how much open " +
-		"work each holds and who leads it. " +
+	return "The projects this company files work into, with how much work " +
+		"each holds — waiting (todo), started (active), done and closed — " +
+		"who leads it and when it is meant to be finished. " +
 		"create_work_item refuses a project that is not here."
 }
 
@@ -82,8 +83,9 @@ func (t *listProjects) Parameters() map[string]any {
 				// leading `-` doubles the set and a fourteen-entry
 				// enumeration teaches a model less than the sentence.
 				"description": "Orders the whole company's projects before " +
-					"the page is taken, so `-open` is the most open work " +
-					"anywhere rather than the most open of one page. One of " +
+					"the page is taken, so `-active` is the most started work " +
+					"anywhere rather than the most of one page, and `target` " +
+					"the soonest target date (projects with none last). One of " +
 					strings.Join(tracker.ProjectSortNames(), ", ") +
 					", each optionally with a leading `-` for descending. " +
 					"Default " + string(tracker.ProjectSortKey) + ".",

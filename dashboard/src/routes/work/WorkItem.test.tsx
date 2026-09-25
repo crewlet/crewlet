@@ -64,7 +64,7 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   name: "Engineering",
   unit: { resolved: true },
   lead: {},
-  task_counts: { open: 1, done: 0, closed: 0 },
+  task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
   version: 1,
   statuses: [],
   types: [],

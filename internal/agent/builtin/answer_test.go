@@ -219,7 +219,10 @@ func maximalProjects() tracker.ProjectListing {
 				Handle: strings.Repeat("l", 24), Kind: tracker.AuthorHuman,
 			},
 			DefaultAssignee: strings.Repeat("a", 24),
-			Counts:          tracker.TaskCounts{Open: 412, Done: 1204, Closed: 98},
+			TargetDate:      "2026-12-18",
+			Counts: tracker.TaskCounts{
+				Todo: 312, Active: 100, Done: 1204, Closed: 98,
+			},
 			LastChange: &tracker.LastChange{
 				At: at, Actor: strings.Repeat("l", 24),
 				ActorKind: tracker.AuthorOperator,

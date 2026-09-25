@@ -1,0 +1,48 @@
+-- A project's census tells the work nobody has started from the work somebody
+-- is doing, and a project says when its lead means it to be finished.
+--
+-- # `active_count`, and why `open_count` keeps its meaning
+--
+-- The census was three numbers — open, done, closed — and "open" folded two
+-- states a reader acts on oppositely: forty items nobody has picked up is a
+-- queue, forty items in progress is a team at full stretch. The four status
+-- groups already draw that line (`not_started`, `active`, `done`, `closed`),
+-- and the census now follows it.
+--
+-- `open_count` is left AS IT IS — every unfinished task, both groups — and
+-- `active_count` is the SUBSET of it in the `active` group, so the answer's
+-- `todo` is the difference. Redefining `open_count` as the `not_started` half
+-- would have been a rename of a maintained column's meaning under rows every
+-- node already agrees on, and it would have had to be re-derived too; adding
+-- the one column that is actually new leaves the three the fleet has been
+-- maintaining since 0002 untouched.
+--
+-- It is a DERIVED column in the sense migration 0018 names: maintained by the
+-- task apply beside the three it refines, and filled on a node upgrading onto
+-- rows its predecessor wrote without it by the applier's own `Rederive`, which
+-- the derivation version's bump schedules. So this migration adds the column,
+-- defaulted, and NOTHING ELSE — a backfill written again here in SQL would be a
+-- second statement of "what counts as active", and two statements of one rule
+-- are two answers the day either is edited.
+--
+-- # `target_date`, a calendar date rather than an instant
+--
+-- When the project's lead means it to be done: a DAY on the company's own clock
+-- (`YYYY-MM-DD`), because a target is a date somebody said in a planning
+-- meeting and an instant would have to invent the hour and the zone that date
+-- ends in. Stored as that text, which sorts in calendar order as a string.
+--
+-- Copied from the project DOCUMENT by the object apply, like
+-- `default_assignee` beside it — a record states it, nothing derives it — and
+-- NULL for a project nobody has given one, because "no target" is not the
+-- earliest target and a directory sorted by it puts the NULLs last in both
+-- directions. No project carries one yet (the field is new), so nothing needs
+-- filling.
+--
+-- # No index
+--
+-- Both are read as part of the project's own row and sorted over a company's
+-- projects, which are tens.
+
+ALTER TABLE tracker_projects ADD COLUMN active_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracker_projects ADD COLUMN target_date  TEXT;

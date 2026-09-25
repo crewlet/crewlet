@@ -910,48 +910,76 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	return written, nil
 }
 
-// maintainProjectCounts moves the three maintained counters.
+// maintainProjectCounts moves the maintained census.
 //
 // MAINTAINED, NEVER SCANNED: an aggregate over every task in every project on
 // every sixty-second poll is half a million index entries at year five, for
-// three numbers a commit already knows how to move. They are a pure function
+// four numbers a commit already knows how to move. They are a pure function
 // of the applied records, which is what lets the identity assertion recompute
 // them and compare.
+//
+// TWO MOVES, because the census is two partitions of one set rather than one
+// of four. The three BUCKETS — open, done, closed — are disjoint and cover
+// every task not removed; `active_count` is the part of the open bucket in the
+// `active` group, which is what the answer's `todo` is the remainder of. So a
+// task going todo → in progress moves active and leaves the buckets alone, and
+// one going in progress → done moves both.
 func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	current, next Task, held bool) (int, error) {
 
 	was, is := "", bucketOf(next)
+	wasActive, isActive := false, activeOf(next)
 	if held {
-		was = bucketOf(current)
+		was, wasActive = bucketOf(current), activeOf(current)
 	}
-	if was == is && current.Project == next.Project {
-		return 0, nil
-	}
+	moved := current.Project != next.Project
 	written := 0
-	if was != "" {
-		n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
-		if err != nil {
-			return 0, err
+	if was != is || moved {
+		if was != "" {
+			n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		written += n
+		if is != "" {
+			n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
 	}
-	if is != "" {
-		n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
-		if err != nil {
-			return 0, err
+	if wasActive != isActive || (moved && isActive) {
+		if wasActive {
+			n, err := moveProjectCount(ctx, tx, censusActive, current.Project, -1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		written += n
+		if isActive {
+			n, err := moveProjectCount(ctx, tx, censusActive, next.Project, +1)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
 	}
 	return written, nil
 }
 
-// moveProjectCount moves one of the three maintained counters by one.
+// censusActive is the column name `active_count` is moved under — see
+// [moveProjectCount].
+const censusActive = "active"
+
+// moveProjectCount moves one of the four maintained counters by one.
 //
 // ONE STATEMENT BUILDER FOR THE THREE CALLERS — a task entering a bucket, a
 // task leaving one, and the purge that deletes the row instead of writing one.
-// The bucket is always [bucketOf]'s own closed answer and never a value off
-// the wire, which is what makes interpolating it into the column name safe: a
-// column cannot be a parameter.
+// The counter is always [bucketOf]'s own closed answer or [censusActive] and
+// never a value off the wire, which is what makes interpolating it into the
+// column name safe: a column cannot be a parameter.
 //
 // The decrement CLAMPS AT ZERO. A negative census is a number no screen can
 // render and no repair can interpret, and the clamp costs nothing on the path
@@ -987,6 +1015,14 @@ func bucketOf(task Task) string {
 		return "closed"
 	}
 	return "open"
+}
+
+// activeOf is whether a task counts in `active_count`: not removed, and in the
+// `active` status group. THE ONE STATEMENT OF THE RULE, read by the apply and
+// by [rederiveActiveCounts] alike — which reads the `status_group` and
+// `removed_at` columns this apply writes from the same two facts.
+func activeOf(task Task) bool {
+	return task.Removed == nil && statusOf(task).Group() == GroupActive
 }
 
 // purgeTask is the one operation that removes rows, and it removes them
@@ -1053,6 +1089,17 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if bucket := bucketOf(task); held && bucket != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := moveProjectCount(ctx, tx, bucket, task.Project, -1)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	// AND ITS SHARE OF THE ACTIVE COUNT, on the same gate: a purged task
+	// that was in progress is otherwise counted as somebody's work for
+	// ever.
+	if held && activeOf(task) {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := moveProjectCount(ctx, tx, censusActive, task.Project, -1)
 		if err != nil {
 			return 0, err
 		}

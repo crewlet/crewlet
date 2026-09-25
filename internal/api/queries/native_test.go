@@ -616,7 +616,7 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 	}{
 		{"", "", tracker.ArchivedExclude, "", false},
 		{"false", "key", tracker.ArchivedExclude, tracker.ProjectSortKey, false},
-		{"only", "-open", tracker.ArchivedOnly, tracker.ProjectSortOpen, true},
+		{"only", "-active", tracker.ArchivedOnly, tracker.ProjectSortActive, true},
 		{"true", "last_change", tracker.ArchivedInclude, tracker.ProjectSortLastChange, false},
 	} {
 		w := &stubWork{}

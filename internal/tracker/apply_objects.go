@@ -147,21 +147,23 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,
-				 policy_version, archived, rank_respread_pending,
-				 rank_duplicate_pending, open_count, done_count, closed_count,
-				 last_change_at, last_change_actor, last_change_actor_kind,
-				 last_change_seq, created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,NULL,'','',0,?,?,?,?)
+				 target_date, policy_version, archived, rank_respread_pending,
+				 rank_duplicate_pending, open_count, active_count, done_count,
+				 closed_count, last_change_at, last_change_actor,
+				 last_change_actor_kind, last_change_seq, created_at,
+				 updated_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,0,0,0,0,0,0,NULL,'','',0,?,?,?,?)
 			ON CONFLICT (key) DO UPDATE SET
 				name = excluded.name, purpose = excluded.purpose,
 				unit = excluded.unit, chart_epoch = excluded.chart_epoch,
 				default_assignee = excluded.default_assignee,
+				target_date = excluded.target_date,
 				policy_version = excluded.policy_version,
 				archived = excluded.archived, updated_at = excluded.updated_at,
 				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_projects.version`,
 			key, project.Name, project.Purpose, project.Unit, project.ChartEpoch,
-			project.DefaultAssignee,
+			project.DefaultAssignee, nullableStringPtr(&project.TargetDate),
 			project.PolicyVersion, boolInt(project.Archived),
 			store.EncodeTime(project.CreatedAt), store.EncodeTime(project.UpdatedAt),
 			c.packed, []byte(c.record.Mutation))

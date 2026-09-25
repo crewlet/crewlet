@@ -59,6 +59,8 @@ import {
   monthOrNow,
   pageCount,
   pageNote,
+  targetLabel,
+  unfinished,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -1050,7 +1052,7 @@ test("the project list comes from the listing, falling back to the rows", () => 
       name: "Engineering",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 1, done: 0, closed: 0 },
+      task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
       version: 1,
     },
     {
@@ -1058,7 +1060,7 @@ test("the project list comes from the listing, falling back to the rows", () => 
       name: "Operations",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 0, done: 0, closed: 0 },
+      task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
       version: 1,
     },
   ];
@@ -1612,4 +1614,26 @@ test("the grouping picker offers each axis once, and project at workspace scope 
   // AND THE SECOND AXIS NEVER OFFERS THE FIRST, which the engine refuses.
   expect(secondAxisOptions("status", true).some((o) => o.value === "status")).toBe(false);
   expect(secondAxisOptions("status", true)[0]?.value).toBe("");
+});
+
+// THE UNFINISHED WORK IS WAITING AND STARTED TOGETHER. The engine sends the two
+// apart and no longer sends their sum, so a surface asking "how much is left"
+// reads it here — and a sum that dropped either half would under-count every
+// project whose work is in progress.
+test("unfinished work is the waiting and the started together", () => {
+  expect(unfinished({ todo: 4, active: 3, done: 9, closed: 2 })).toBe(7);
+});
+
+// A TARGET IS A DAY, and drawn as the same day wherever the reader is: parsed as
+// UTC midnight it would be the 17th anywhere west of Greenwich.
+test("a target day is drawn as that calendar day", () => {
+  expect(targetLabel("2026-12-18")).toBe(
+    new Date(2026, 11, 18).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }),
+  );
+  // A VALUE THAT IS NOT A DAY IS SHOWN AS SENT, rather than as the epoch.
+  expect(targetLabel("soon")).toBe("soon");
 });

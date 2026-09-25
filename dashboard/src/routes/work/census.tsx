@@ -13,7 +13,7 @@
  *
  * A progress meter answers "how much of this is done", so the WHOLE is what
  * has been filed and the FILL is what is done. Closed work is a muted segment
- * beside it, because it left the question rather than answering it, and open
+ * beside it, because it left the question rather than answering it, and unfinished
  * work is the TRACK — untinted, because it is precisely what has not been
  * filled. A project with nothing done now draws an empty track, which is the
  * fact, and one that is finished draws a full one.
@@ -34,14 +34,16 @@
 
 import { EmptyValue, Legend, StackedBar, DATA_COLOR_OTHER } from "@crewlethq/ui";
 import type { WorkTaskCounts } from "~/protocol/index.ts";
+import { unfinished } from "~/lib/work.ts";
 
 /** Everything ever filed in a project, which is this meter's whole. */
 export function filed(counts: WorkTaskCounts): number {
-  return counts.open + counts.done + counts.closed;
+  return unfinished(counts) + counts.done + counts.closed;
 }
 
 /**
- * The bar alone: done fills, closed is muted beside it, open is the track.
+ * The bar alone: done fills, closed is muted beside it, unfinished work is the
+ * track.
  *
  * A PROJECT WITH NOTHING FILED GETS THE ABSENT MARK rather than a track. A
  * proportion of nothing is undefined rather than zero, and an empty track
@@ -53,6 +55,7 @@ export function filed(counts: WorkTaskCounts): number {
  */
 export function ProjectProgress({ counts }: { counts: WorkTaskCounts }) {
   const whole = filed(counts);
+  const left = unfinished(counts);
   if (whole === 0) return <EmptyValue label="Nothing filed yet" />;
   return (
     <StackedBar
@@ -61,16 +64,18 @@ export function ProjectProgress({ counts }: { counts: WorkTaskCounts }) {
         { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
         // THE REMAINDER IS A SEGMENT, and it is transparent so the track shows
         // through it. It has to be here: the bar sizes every part against the
-        // sum of the parts it is GIVEN, so leaving open out would fill `done`
+        // sum of the parts it is GIVEN, so leaving it out would fill `done`
         // against done + closed — the share reading this meter exists to stop
-        // being.
-        { id: "open", label: "Open", value: counts.open, color: "transparent" },
+        // being. ONE segment for waiting and started alike: this bar answers
+        // "how much is done", and both are the part that is not.
+        { id: "unfinished", label: "Not finished", value: left, color: "transparent" },
       ]}
       // WHAT THE PICTURE SAYS, for a reader who cannot see it — and it is the
       // amount rather than three percentages, because that is the sentence the
       // bar is drawing.
       summary={() =>
-        `${counts.done} done of ${whole} filed, ${counts.closed} closed, ${counts.open} open.`
+        `${counts.done} done of ${whole} filed, ${counts.closed} closed, ` +
+        `${counts.active} in progress, ${counts.todo} not started.`
       }
     />
   );
@@ -79,9 +84,9 @@ export function ProjectProgress({ counts }: { counts: WorkTaskCounts }) {
 /**
  * What FILLS the bar, named.
  *
- * ONLY THE PARTS THAT FILL IT. Open work is the untinted track, so a swatch
- * for it would be a colour that is not on the bar — and the open count is
- * already a fact in the header's own line and a column of its own in the
+ * ONLY THE PARTS THAT FILL IT. Unfinished work is the untinted track, so a
+ * swatch for it would be a colour that is not on the bar — and its two counts
+ * are already facts in the header's own line and columns of their own in the
  * directory.
  *
  * THE COUNTS ARE THE READOUT WHERE A FRAME CAN CARRY THEM: a header is one

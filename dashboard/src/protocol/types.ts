@@ -1916,14 +1916,22 @@ export interface WorkLeadRef {
   kind?: "agent" | "human" | "operator" | "system";
 }
 
-/** A project's task census.
+/** A project's task census, one number per status group.
  *
  *  MAINTAINED by the applier on every status-group change and every arrival or
  *  departure, never aggregated per poll — which is what makes a sixty-second
- *  refresh three column reads rather than a scan of every task in the
- *  company. */
+ *  refresh four column reads rather than a scan of every task in the
+ *  company.
+ *
+ *  There is no `open`: it folded the work nobody has started into the work
+ *  somebody is doing, which are the two states a reader acts on oppositely.
+ *  Every unfinished item is `todo + active` — see `unfinished` in
+ *  `lib/work.ts`. */
 export interface WorkTaskCounts {
-  open: number;
+  /** Not started. */
+  todo: number;
+  /** Started — the `active` status group. */
+  active: number;
   done: number;
   closed: number;
 }
@@ -1953,6 +1961,10 @@ export interface WorkProjectRow {
   unit: WorkUnitRef;
   lead: WorkLeadRef;
   default_assignee?: string;
+  /** The day (`YYYY-MM-DD`, on the company's clock) the lead means the
+   *  project to be finished. ABSENT when none is set — not the earliest
+   *  date, so `sort=target` puts those rows last in both directions. */
+  target_date?: string;
   task_counts: WorkTaskCounts;
   /** ABSENT for a project no work has ever been filed into, which is a
    *  different fact from a project whose work is old — see

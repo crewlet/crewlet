@@ -296,6 +296,24 @@ func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 	}
 }
 
+// A TARGET-ONLY EDIT RECORDS WHAT MOVED.
+//
+// The target date is a lead-owned policy facet like the default assignee, and
+// a lead's edit that set nothing else would otherwise write a
+// `project_updated` history row with no delta at all — the empty row
+// [projectDeltas] exists to end.
+func TestATargetDateEditRecordsItsDelta(t *testing.T) {
+	t.Parallel()
+	before := Project{Key: "ENG", Name: "Engineering", TargetDate: "2026-12-18"}
+	after := before
+	after.TargetDate = "2027-01-29"
+	if got := projectDeltas(before, after); len(got) != 1 ||
+		got["target_date"] != (Delta{From: "2026-12-18", To: "2027-01-29"}) {
+
+		t.Errorf("a target edit recorded %+v, want exactly the target_date move", got)
+	}
+}
+
 // A PEOPLE SET IS A SET, so its delta is about membership and not about order.
 //
 // The three handle collections on a task are assembled rather than arranged:

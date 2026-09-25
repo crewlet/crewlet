@@ -15,7 +15,9 @@
  * The bar chart ranked projects by open work alone, which answers "where is
  * the pile" and nothing else: a project with four open and two hundred done is
  * a different situation from one with four open and nothing else, and the
- * chart drew them identically. Every row carries the three maintained counts
+ * chart drew them identically. Every row carries the four maintained counts —
+ * waiting and started apart, because a queue and a team at full stretch are
+ * different situations too —
  * AND how much of the whole is done, so both readings are on the same line —
  * the meter is `census.tsx`'s, which is the same one the project's own header
  * wears.
@@ -28,13 +30,13 @@
  *
  * # The sort is the reader's, it is in the URL, and the ENGINE applies it
  *
- * `DataGrid` writes `sort=`, so a directory ordered by open work can be sent
+ * `DataGrid` writes `sort=`, so a directory ordered by waiting work can be sent
  * to somebody, survives a reload and comes back from Back the way it went.
  * The key then travels to the engine rather than being applied here, because
  * the answer is a PAGE: the listing stops at the engine's own 200
  * (`MaxProjectsPerAnswer`) and a sort applied after that orders the rows that
- * survived the key order — so `-open` meant "the most open work among the
- * projects whose keys sort first", which reads exactly like the answer to the
+ * survived the key order — so `-todo` would mean "the most waiting work among
+ * the projects whose keys sort first", which reads exactly like the answer to the
  * question it is not. `serverSorted` is what tells the grid not to re-sort
  * the page it was handed.
  *
@@ -68,6 +70,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
+import { targetLabel } from "~/lib/work.ts";
 
 /** Which projects the grid lists, as the one switch this page has. */
 const SHOWN = ["active", "archived", "all"] as const;
@@ -98,7 +101,7 @@ const ASKED: Record<Shown, "false" | "only" | "true"> = {
  * the grid read `sort=` through `useParam` with this same fallback, so the two
  * cannot disagree about what an absent key means.
  */
-const DEFAULT_SORT = "-open";
+const DEFAULT_SORT = "-todo";
 
 /**
  * What an empty answer means, per segment — and there are only two here.
@@ -245,11 +248,12 @@ export function Projects() {
     () =>
       rows.reduce(
         (acc, p) => ({
-          open: acc.open + p.task_counts.open,
+          todo: acc.todo + p.task_counts.todo,
+          active: acc.active + p.task_counts.active,
           done: acc.done + p.task_counts.done,
           closed: acc.closed + p.task_counts.closed,
         }),
-        { open: 0, done: 0, closed: 0 },
+        { todo: 0, active: 0, done: 0, closed: 0 },
       ),
     [rows],
   );
@@ -288,7 +292,7 @@ export function Projects() {
   const nothingAtAll = !!census && active + archived === 0;
 
   // A HEAD IS A BUTTON WHERE IT CARRIES `sortValue`, so the columns that do
-  // are exactly the engine's seven orderings — `Projects.test.tsx` holds the
+  // are exactly the engine's nine orderings — `Projects.test.tsx` holds the
   // two lists against each other, and the Go gate holds `PROJECT_SORT_KEYS`
   // against the engine's own. Under `serverSorted` the accessors are never
   // called; they stay because they say what each column's value IS.
@@ -371,12 +375,20 @@ export function Projects() {
           ),
       },
       {
-        key: "open",
-        header: "Open",
+        key: "todo",
+        header: "To do",
         align: "right",
         shrink: true,
-        sortValue: (row) => row.task_counts.open,
-        cell: (row) => <NumberCell value={row.task_counts.open} />,
+        sortValue: (row) => row.task_counts.todo,
+        cell: (row) => <NumberCell value={row.task_counts.todo} />,
+      },
+      {
+        key: "active",
+        header: "Active",
+        align: "right",
+        shrink: true,
+        sortValue: (row) => row.task_counts.active,
+        cell: (row) => <NumberCell value={row.task_counts.active} />,
       },
       {
         key: "done",
@@ -428,6 +440,20 @@ export function Projects() {
         sortValue: (row) => row.last_change?.at ?? "",
         cell: (row) => <LastChange row={row} now={now} seatName={(handle) => who(handle).name} />,
       },
+      {
+        key: "target",
+        header: "Target",
+        shrink: true,
+        // THE LEAD'S DAY, and a project with none is ABSENT rather than the
+        // soonest — the engine sorts it last in both directions.
+        sortValue: (row) => row.target_date ?? "",
+        cell: (row) =>
+          row.target_date ? (
+            <span className="t-num">{targetLabel(row.target_date)}</span>
+          ) : (
+            <EmptyValue label="No target set" />
+          ),
+      },
     ],
     [who, now],
   );
@@ -452,7 +478,8 @@ export function Projects() {
             are over WHAT IS SHOWN, which is why the switch beside them changes
             them and why a short page says so. */}
         <span className="work-summary" style={{ marginLeft: 0 }}>
-          {counted} {noun} · {totals.open} open · {totals.done} done · {totals.closed} closed
+          {counted} {noun} · {totals.todo} to do · {totals.active} active · {totals.done} done ·{" "}
+          {totals.closed} closed
         </span>
         {short && (
           <span className="t-caption">
@@ -595,7 +622,7 @@ function LastChange({
 }) {
   const change = row.last_change;
   if (!change) {
-    return row.task_counts.open + row.task_counts.done + row.task_counts.closed === 0 ? (
+    return filed(row.task_counts) === 0 ? (
       <EmptyValue label="Nothing has been filed here" />
     ) : (
       <EmptyValue label="Filed before this node recorded one" />

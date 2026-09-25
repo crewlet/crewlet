@@ -203,6 +203,16 @@ type Writer struct {
 	// nothing on the write path reads a clock the applier is forbidden.
 	Now func() time.Time
 
+	// Zone is the company's clock (ADR-0018), which a value that holds a
+	// DAY is cut in — a date field or a project's target date given as an
+	// instant is stored as the date that instant falls on HERE. See
+	// [coerceDay].
+	//
+	// READ PER CALL, for the reason [Writer.Leads] is: the company's clock
+	// is the epoch's, and a zone captured when the node booted would cut
+	// every later day on the clock the company had then. Nil is UTC.
+	Zone func() *time.Location
+
 	// after is one of this writer's OWN earlier writes, carried so the
 	// framework waits for this node's applier to reach it before it opens
 	// the next snapshot. Zero means there is nothing the next write has to
@@ -237,6 +247,9 @@ type WriterDeps struct {
 	ActorKind AuthorKind
 	Leads     Leads
 	Now       func() time.Time
+
+	// Zone is the company's clock — see [Writer.Zone].
+	Zone func() *time.Location
 }
 
 // As is this writer acting as somebody else, and it is the ONLY way the actor
@@ -462,7 +475,19 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
+		Zone: d.Zone,
 	}, nil
+}
+
+// zone is the company's clock as this call reads it, or UTC.
+func (w *Writer) zone() *time.Location {
+	if w.Zone == nil {
+		return time.UTC
+	}
+	if loc := w.Zone(); loc != nil {
+		return loc
+	}
+	return time.UTC
 }
 
 // UpdateTask changes one.
@@ -646,7 +671,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// the next create of the same shape would refuse.
 				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				coerced, warned, err := settleFields(ctx, tx, current.Project,
-					current.Type, *charged.Fields, w.World)
+					current.Type, *charged.Fields, w.World, w.zone())
 				if err != nil {
 					return statelog.Decision{}, err
 				}

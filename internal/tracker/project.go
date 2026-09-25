@@ -21,16 +21,16 @@ import (
 //     the company's projects out from under the file they came from.
 //   - ITS TAG SET — its own object on its own subject, so that every seat's add
 //     never contends with a lead's policy edit. [Writer.WriteTags].
-//   - ITS POLICY — the field declarations, the default assignee and the
-//     archived flag. Those are here.
+//   - ITS POLICY — the field declarations, the default assignee, the target
+//     date and the archived flag. Those are here.
 //
 // # Why the policy facets are one verb and the tags are not
 //
-// Because they share an authority and a contention profile. All three below are
+// Because they share an authority and a contention profile. All four below are
 // a LEAD's decision about how their project runs, edited a handful of times a
-// quarter; a tag is every seat's, several times a day. One verb over the first
-// three costs nothing and keeps "may you set your project's policy" a single
-// question; folding the fourth in would make every tag add contend with them.
+// quarter; a tag is every seat's, several times a day. One verb over them
+// costs nothing and keeps "may you set your project's policy" a single
+// question; folding the tags in would make every tag add contend with them.
 
 // ProjectEdit is one change to a project's own policy.
 //
@@ -50,6 +50,16 @@ type ProjectEdit struct {
 	// empty string is a real setting: it means triage.
 	DefaultAssignee *string
 
+	// TargetDate is when the lead means the project to be finished: a
+	// calendar date, or an instant, which is stored as the day it falls on
+	// on the company's clock and says so ([coerceDay]). The empty string
+	// clears it — "no target" is a real setting.
+	//
+	// THE LEAD'S, like the two above, and NOT the chart's: a target is how
+	// the team plans, re-set when the plan moves, where the chart holds
+	// what a founder wrote in the config.
+	TargetDate *string
+
 	// Archived stops the project taking new work. An OPERATOR's, not a
 	// lead's — a project holds the company's tasks, and taking one out of
 	// circulation is a decision about the company.
@@ -58,12 +68,13 @@ type ProjectEdit struct {
 
 // Empty reports an edit that sets nothing.
 func (e ProjectEdit) Empty() bool {
-	return e.Fields == nil && e.DefaultAssignee == nil && e.Archived == nil
+	return e.Fields == nil && e.DefaultAssignee == nil && e.TargetDate == nil &&
+		e.Archived == nil
 }
 
 // ProjectAuthority is what a caller may do to a project's policy.
 //
-// TWO AUTHORITIES, EITHER OF WHICH IS ENOUGH for the three facets a lead owns,
+// TWO AUTHORITIES, EITHER OF WHICH IS ENOUGH for the facets a lead owns,
 // and this is [PersonAuthority]'s shape rather than a ladder. An OPERATOR is a
 // person acting through their own credential — the founder at the dashboard,
 // or the assistant they run the company through — and they are not a seat at
@@ -98,13 +109,14 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			"nothing — the name, purpose and owning unit come from the org "+
 			"chart, and the tags are write_project(tags.add)", key)
 	case !authority.Lead && !authority.Operator:
-		return WriteResult{}, fmt.Errorf("tracker: %s's field declarations "+
-			"and default assignee are the project lead's or a person's own — "+
-			"they decide how everybody's work in it is filed, which is not a "+
-			"call one other seat makes for the team: %w", key, ErrForbidden)
+		return WriteResult{}, fmt.Errorf("tracker: %s's field declarations, "+
+			"default assignee and target date are the project lead's or a "+
+			"person's own — they decide how everybody's work in it is filed "+
+			"and when it is due, which is not a call one other seat makes for "+
+			"the team: %w", key, ErrForbidden)
 	case edit.Archived != nil && !authority.Operator:
 		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
-		// this one did have authority over the other two facets and
+		// this one did have authority over the other facets and
 		// the useful answer is which facet, not "no".
 		return WriteResult{}, fmt.Errorf("tracker: archiving %s takes a "+
 			"person's own credential — a project holds the company's tasks, "+
@@ -120,13 +132,32 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			return WriteResult{}, err
 		}
 	}
+	// THE TARGET DATE IS COERCED HERE, for the same reason: what a
+	// spelling means does not depend on the project, and the edit the
+	// decide applies carries the canonical day. A COPY of the edit, so
+	// the caller's own value is not rewritten under it.
+	var warnings []string
+	if edit.TargetDate != nil {
+		target := strings.TrimSpace(*edit.TargetDate)
+		if target != "" {
+			day, warning, err := coerceDay("the target date", target, w.zone())
+			if err != nil {
+				return WriteResult{}, err
+			}
+			target = day
+			if warning != "" {
+				warnings = append(warnings, warning)
+			}
+		}
+		edit.TargetDate = &target
+	}
 	subject := ProjectSubject(key)
 	// THE CONTAINER, not just the subject: a field declaration and an
 	// archive both change what every read of every task in this project
 	// answers, so a deferred record here concerns the whole project.
 	scope := ScopeSet{Subject: true, Container: key}
 	at := w.Now()
-	return w.published(ctx, statelog.Request{
+	result, err := w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -159,6 +190,11 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			return decision, nil
 		},
 	})
+	if err != nil {
+		return result, err
+	}
+	result.Warnings = append(result.Warnings, warnings...)
+	return result, nil
 }
 
 // applyProjectEdit is the whole rule, as a pure function over one project.
@@ -197,6 +233,10 @@ func applyProjectEdit(current Project, edit ProjectEdit, actor string,
 			next.DefaultAssignee = want
 			changed = true
 		}
+	}
+	if edit.TargetDate != nil && *edit.TargetDate != current.TargetDate {
+		next.TargetDate = *edit.TargetDate
+		changed = true
 	}
 	if edit.Archived != nil && *edit.Archived != current.Archived {
 		next.Archived = *edit.Archived

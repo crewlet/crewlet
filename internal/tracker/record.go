@@ -1092,6 +1092,18 @@ type Project struct {
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`
 
+	// TargetDate is when the project's LEAD means it to be finished: a day
+	// on the company's clock, `YYYY-MM-DD`, empty for no target.
+	//
+	// A DATE AND NOT AN INSTANT, because a target is a day somebody named
+	// and an instant would have to invent the hour and the zone that day
+	// ends in. LEAD-OWNED rather than chart-owned — it is how the team
+	// plans, not a fact the founder wrote in the config — so it is set
+	// through [Writer.WriteProject] and a chart apply carries it through
+	// untouched. A version-7 field ([versionedFields]): a build reading 6
+	// has no column for it and retains a record carrying one.
+	TargetDate string `json:"target_date,omitempty"`
+
 	// PolicyVersion moves on a fields edit — NOT on tags.
 	PolicyVersion int `json:"policy_version,omitempty"`
 

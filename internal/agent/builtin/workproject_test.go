@@ -427,3 +427,59 @@ func projectRegistryIn(t *testing.T, trk *fakeTracker, leads builtin.LeadsProjec
 	}
 	return reg
 }
+
+// THE TARGET DATE TRAVELS AS SENT, AND NULL CLEARS IT.
+//
+// Presence decides here too: a call that says nothing about the target must
+// not clear the one the lead set, and one that sends null or "" must — "no
+// target" is a setting. What the value MEANS is the tracker's to coerce, so
+// the tool carries the text and surfaces what the write was not refused for:
+// an instant stored as its day changed the caller's value, and an answer that
+// said `applied` alone would read as stored verbatim.
+func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		args map[string]any
+		want *string
+	}{
+		"absent leaves it alone": {map[string]any{"default_assignee": ""}, nil},
+		"a date is carried":      {map[string]any{"target_date": " 2026-12-18 "}, new("2026-12-18")},
+		"null clears it":         {map[string]any{"target_date": nil}, new("")},
+		"empty clears it":        {map[string]any{"target_date": ""}, new("")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := projectRegistry(t, trk, leadAlways)
+			tc.args["project"] = "ENG"
+			if got := callWork(t, reg, tracker.WriteProjectTool, tc.args); got.Failed {
+				t.Fatalf("write_project failed: %q", got.Output)
+			}
+			if len(trk.projectEdits) != 1 {
+				t.Fatalf("%d policy writes, want one", len(trk.projectEdits))
+			}
+			got := trk.projectEdits[0].TargetDate
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("the target reached the writer as %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	trk := newFakeTracker()
+	reg := projectRegistry(t, trk, leadAlways)
+	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "target_date": 20261218,
+	}); !got.Failed || !strings.Contains(got.Output, "target_date") {
+		t.Errorf("a number for a date answered %+v, want a failure naming the "+
+			"argument", got)
+	}
+
+	trk.projectWarnings = []string{"the target date holds a date and not a " +
+		"time, so 2026-12-18T20:00:00Z was stored as 2026-12-19"}
+	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "target_date": "2026-12-18T20:00:00Z",
+	})
+	if got.Failed || !strings.Contains(got.Output, "2026-12-19") {
+		t.Errorf("a truncated target answered %q, want the warning carried", got.Output)
+	}
+}

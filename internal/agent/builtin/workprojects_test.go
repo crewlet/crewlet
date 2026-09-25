@@ -85,7 +85,7 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 
 	callWork(t, reg, tracker.ListProjectsTool, map[string]any{
 		"q": "platform", "unit": "Engineering", "archived": "only",
-		"sort": "-open", "limit": 12,
+		"sort": "-active", "limit": 12,
 	})
 	q := trk.projectQuery
 	if q.Q != "platform" || q.Unit != "Engineering" || q.Limit != 12 {
@@ -99,8 +99,8 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 		t.Errorf("archived=only reached the query as %q, want %q",
 			q.Archived, tracker.ArchivedOnly)
 	}
-	if q.Sort != tracker.ProjectSortOpen || !q.Descending {
-		t.Errorf("sort=-open reached the query as %q/%v, want open descending "+
+	if q.Sort != tracker.ProjectSortActive || !q.Descending {
+		t.Errorf("sort=-active reached the query as %q/%v, want active descending "+
 			"— a seat's page is fifty of the company's projects, so which "+
 			"fifty is what the ordering decides", q.Sort, q.Descending)
 	}
