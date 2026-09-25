@@ -32,9 +32,17 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return a.purgeTask(ctx, tx, c)
 	}
 
-	current, held, err := readTask(ctx, tx, id)
+	current, filed, held, err := readTaskRow(ctx, tx, id)
 	if err != nil {
 		return 0, err
+	}
+	if held && c.record.V < keepsPlaceVersion {
+		// A RECORD AN OLDER BUILD WROTE, applied by that build's rule: the
+		// rank its document was filed at, not the one the order moved the
+		// row to. Every node applies it this way whichever build it runs,
+		// which is the only way two builds reading one log keep one row —
+		// see [keepsPlaceVersion].
+		current.Rank = filed
 	}
 	if held && c.packed <= int64(max(current.Version, current.ScopedThrough)) {
 		// A REDELIVERY OR A REPROCESS, and both are ordinary traffic. The
@@ -280,26 +288,64 @@ func effectiveOf(c applyContext) (time.Time, error) {
 	return c.brokerAt.UTC(), nil
 }
 
-// readTask reads the stored document, reporting whether the row exists.
+// readTask reads the stored task, reporting whether the row exists — with the
+// rank its ROW holds, which is the task's place on its board.
+//
+// THE RANK IS THE COLUMN'S, never the document's. After its create a task's
+// place is the ORDER's to write — [Applier.applyRankOrder] moves the column
+// and stamps `scoped_through`, and deliberately leaves the task's own document
+// alone — so the document's copy is whatever the create or the last project
+// move minted. Every writer deciding against a task, and the applier merging a
+// record at [keepsPlaceVersion] or above, reads the place from here, so a task
+// write carries the order's key through unchanged and only a record that
+// MINTS one — a create, a move into another project — changes it.
 func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
+	task, _, held, err := readTaskRow(ctx, tx, id)
+	return task, held, err
+}
+
+// readTaskRow is [readTask] plus the rank the task's DOCUMENT holds — the key
+// it was filed or last re-homed at — which is what a record below
+// [keepsPlaceVersion] is applied with, because it is what the build that
+// wrote that record applies it with.
+func readTaskRow(ctx context.Context, tx *sql.Tx, id string) (Task, Rank, bool, error) {
 	var document []byte
 	var version, scoped int64
+	var rank string
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, version, scoped_through FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&document, &version, &scoped)
+		`SELECT document, version, scoped_through, rank FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&document, &version, &scoped, &rank)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Task{}, false, nil
+		return Task{}, "", false, nil
 	case err != nil:
-		return Task{}, false, fmt.Errorf("tracker: read task %s: %w", id, err)
+		return Task{}, "", false, fmt.Errorf("tracker: read task %s: %w", id, err)
 	}
 	var task Task
 	if err := json.Unmarshal(document, &task); err != nil {
-		return Task{}, false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
+		return Task{}, "", false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
 	}
 	task.Version = uint64(version)
 	task.ScopedThrough = uint64(scoped)
-	return task, true, nil
+	filed := task.Rank
+	task.Rank = Rank(rank)
+	return task, filed, true, nil
+}
+
+// mergesIntoRow reports whether a record on subject is applied by MERGING into
+// a task row that already exists — the three ops [mergeTask] decodes as a
+// [TaskPatch]. Those are the records that carry [MutationRecord.KeepsPlace]:
+// a create mints its own rank and a purge removes the row, so neither has a
+// place to keep.
+func mergesIntoRow(subject Subject, op OpKind) bool {
+	if subject.Kind != KindTask {
+		return false
+	}
+	switch op {
+	case OpPatch, OpTombstone, OpRestore:
+		return true
+	}
+	return false
 }
 
 // mergeTask produces the new state from the stored one and the record.

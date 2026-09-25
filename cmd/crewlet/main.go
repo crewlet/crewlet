@@ -2666,6 +2666,10 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 			Merges: func(actor builtin.Actor) builtin.WorkMerger {
 				return operatorWriter(writer, actor)
 			},
+			// AND THE CROSS-PROJECT MOVE, a sequence of its own: a
+			// top-level item and its subtree re-keyed into another
+			// project. A seat holds it too, behind the project lead's
+			// gate; see internal/agent/builtin/workmove.go.
 			Moves: func(actor builtin.Actor) builtin.WorkMover {
 				return operatorWriter(writer, actor)
 			},
@@ -2704,6 +2708,12 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 			// purge the CLI guards with a typed confirmation. No seat
 			// holds either — see internal/agent/builtin/worktrash.go.
 			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
+				return operatorWriter(writer, actor)
+			},
+			// AND THE BOARD DRAG. A card's place in its project's order is
+			// a person's arrangement, so no seat holds it either — see
+			// internal/agent/builtin/workplace.go.
+			Placer: func(actor builtin.Actor) builtin.WorkPlacer {
 				return operatorWriter(writer, actor)
 			},
 			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,

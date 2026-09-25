@@ -67,6 +67,7 @@ func operatorOnlyTools(t *testing.T) []string {
 	work.CatalogueWriter = func(builtin.Actor) builtin.CatalogueWriter { return nil }
 	work.PersonWriter = func(builtin.Actor) builtin.PersonWriter { return nil }
 	work.TrashWriter = func(builtin.Actor) builtin.TrashWriter { return nil }
+	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
 		Pages: full.Pages})
@@ -102,6 +103,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	work.CatalogueWriter = func(builtin.Actor) builtin.CatalogueWriter { return nil }
 	work.PersonWriter = func(builtin.Actor) builtin.PersonWriter { return nil }
 	work.TrashWriter = func(builtin.Actor) builtin.TrashWriter { return nil }
+	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
 		Pages: full.Pages, Knowledge: full.Knowledge})

@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The SIX sequences that stay genuinely cross-object, and the one property
+// The SEVEN sequences that stay genuinely cross-object, and the one property
 // that makes them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
@@ -38,7 +38,8 @@ import (
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
 // key, because a key is what people paste into chat. An item promotion marks
 // its parent LAST, because the other order leaves an item marked promoted with
-// no subtask behind it.
+// no subtask behind it. A board drag across lanes (move.go) writes the task's
+// status FIRST, because that is the half the caller's if_match guards.
 //
 // # Every step is a step ON THE LOG
 //
@@ -1948,7 +1949,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			return err
 		}
 		if len(kids) > 0 {
-			return fmt.Errorf("tracker: task %s's subtasks are in %s and %s is "+
+			return invalid("tracker: task %s's subtasks are in %s and %s is "+
 				"in %s, so re-parenting them onto it would file subtasks under "+
 				"an item in another project: move %s into %s first — its "+
 				"subtasks go with it — or merge without re-parenting them: %w",

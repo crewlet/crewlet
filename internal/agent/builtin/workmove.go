@@ -12,7 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// Moving a work item to another project.
+// Moving a work item to another project — `move_work_item`. Never a board
+// drag, which re-orders a card inside its own project and is
+// `place_work_item` (workplace.go): the two differ in every property a tool is
+// registered with, so they are two verbs.
 //
 // # Why this is a verb and not an argument
 //

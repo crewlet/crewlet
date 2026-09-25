@@ -1191,6 +1191,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+		Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 		ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range tracker.OperatorOnlyTools() {
@@ -1210,6 +1211,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+			Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Inbox:           trk,
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {

@@ -54,9 +54,11 @@ var everyWriteCall = map[string]map[string]any{
 	tracker.RemoveWorkItemTool:  {"item": "ENG-1"},
 	tracker.RestoreWorkItemTool: {"item": "ENG-5"},
 	tracker.MoveWorkItemTool:    {"item": "ENG-1", "project": "OPS"},
-	builtin.WritePageTool:       {"title": "Runbook", "body": "step one", "container": "ENG"},
-	builtin.SavePageTool:        {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
-	builtin.CommentOnPageTool:   {"page": "p1", "body": "is this current?"},
+	tracker.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
+		"status": "in_progress", "if_match": 7},
+	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
+	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
+	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
 }
 
 // EVERY WRITE ANSWERS FOR EVERY RECORD IT APPENDED, AT THE TOP. The writers
@@ -352,6 +354,7 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return w },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return w },
 			Moves:           func(builtin.Actor) builtin.WorkMover { return w },
+			Placer:          func(builtin.Actor) builtin.WorkPlacer { return w },
 			Inbox:           trk,
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
@@ -535,6 +538,26 @@ func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return f.written(opID)
+}
+
+// PlaceTask appends the two records a drag across lanes is, each at its own
+// derived step — the way the tracker's own sequence derives them.
+func (f *ledgerFake) PlaceTask(_ context.Context, opID string, place tracker.Place,
+	_ *tracker.Notify) (tracker.PlaceResult, error) {
+	out := tracker.PlaceResult{Version: int64(place.IfMatch)}
+	if place.Status != nil {
+		lane, err := f.written(statelog.StepOpID(opID, "lane"))
+		if err != nil {
+			return tracker.PlaceResult{}, err
+		}
+		out.Lane, out.Version = lane, lane.Version
+	}
+	order, err := f.written(statelog.StepOpID(opID, "order"))
+	if err != nil {
+		return tracker.PlaceResult{}, err
+	}
+	out.Order, out.Rank = order, "a0V"
+	return out, nil
 }
 
 // MoveTaskToProject is the cross-project move: one record here, at the move's

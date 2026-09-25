@@ -166,6 +166,39 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Actor: "founder", ActorKind: tracker.AuthorOperator,
 			OperatorID: "founder", ActorSeat: "jane-founder",
 		}.Encode()
+	case "MutationRecord.KeepsPlace":
+		// AN ORDINARY EDIT OF A TASK: every task patch this build writes
+		// keeps the place its project's order gave it, and says so.
+		body, err := json.Marshal(tracker.TaskPatch{Title: new("suite, renamed")})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFields, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent, KeepsPlace: true,
+		}.Encode()
+	case "TaskPatch.Moving":
+		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
+		// the mark its walk is still running under.
+		moving := true
+		body, err := json.Marshal(tracker.TaskPatch{Moving: &moving})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeMoved, Mutation: body,
+			Actor: "lead", ActorKind: tracker.AuthorAgent,
+		}.Encode()
 	case "Project.TargetDate":
 		// A LEAD SETTING THE PROJECT'S TARGET: the whole document, as
 		// both the lead's edit and a chart apply carrying it through write.
@@ -183,23 +216,6 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
 			},
 			Kind: tracker.ChangeProjectUpdated, Mutation: body,
-			Actor: "lead", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "TaskPatch.Moving":
-		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
-		// the mark its walk is still running under.
-		moving := true
-		body, err := json.Marshal(tracker.TaskPatch{Moving: &moving})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeMoved, Mutation: body,
 			Actor: "lead", ActorKind: tracker.AuthorAgent,
 		}.Encode()
 	default:
@@ -240,7 +256,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	}
 	return tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: op,
+			// PINNED, as the production writer pins it: a gate is read
+			// by every build there will ever be ([tracker.GateRecordVersion]).
+			V: tracker.GateRecordVersion, OpID: op,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			CreatedAt: at, Writer: "suite-peer",
 			Scope: tracker.ScopeSet{Subject: true},

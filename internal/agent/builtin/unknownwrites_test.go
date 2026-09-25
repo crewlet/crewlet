@@ -85,6 +85,14 @@ func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
 	return u.answer(opID)
 }
 
+// PlaceTask answers both steps of a drag unknown.
+func (u *unknownWriter) PlaceTask(_ context.Context, opID string, _ tracker.Place,
+	_ *tracker.Notify) (tracker.PlaceResult, error) {
+	lane, _ := u.answer(statelog.StepOpID(opID, "lane"))
+	return tracker.PlaceResult{Lane: lane, Version: 9901,
+		Unplaced: statelog.ErrUnavailable}, nil
+}
+
 func (u *unknownWriter) WriteProject(_ context.Context, opID, _ string,
 	_ tracker.ProjectEdit, _ tracker.ProjectAuthority) (tracker.WriteResult, error) {
 	return u.answer(opID)
@@ -103,6 +111,7 @@ func (u *unknownWriter) deps() builtin.WorkDeps {
 		Dependencies:    u.depends,
 		Merges:          func(builtin.Actor) builtin.WorkMerger { return u },
 		Moves:           func(builtin.Actor) builtin.WorkMover { return u },
+		Placer:          func(builtin.Actor) builtin.WorkPlacer { return u },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return u },
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return u },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return u },
@@ -143,10 +152,12 @@ var receipt = []string{`"version"`, `"comment_id"`, `"key"`, `"id"`, `"outcome"`
 func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T) {
 	t.Parallel()
 	operatorCalls := map[string]map[string]any{
-		builtin.UpdateWorkItemTool:     {"item": "ENG-1", "status": "done"},
-		builtin.CommentOnWorkTool:      {"item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
-		tracker.MergeWorkItemTool:      {"item": "ENG-2", "into": "ENG-1"},
-		tracker.MoveWorkItemTool:       {"item": "ENG-1", "project": "OPS"},
+		builtin.UpdateWorkItemTool: {"item": "ENG-1", "status": "done"},
+		builtin.CommentOnWorkTool:  {"item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
+		tracker.MergeWorkItemTool:  {"item": "ENG-2", "into": "ENG-1"},
+		tracker.MoveWorkItemTool:   {"item": "ENG-1", "project": "OPS"},
+		tracker.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
+			"status": "in_progress", "if_match": 7},
 		tracker.RemoveWorkItemTool:     {"item": "ENG-1"},
 		tracker.RestoreWorkItemTool:    {"item": "ENG-1"},
 		tracker.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
