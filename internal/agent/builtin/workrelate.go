@@ -396,6 +396,13 @@ func answerRefusal(err error) (tools.Result, bool) {
 	default:
 		return tools.Result{}, false
 	}
+	if class == tools.RefusalAlreadyAnswered {
+		// NOT "CHANGE `answers`": nothing about the call is wrong, the
+		// question simply has its answer — and the reader's sentence
+		// names who gave it and when, which is where to look.
+		return refused(class, fmt.Sprintf("%s was refused: %v. Nothing was "+
+			"posted.", CommentOnWorkTool, err)), true
+	}
 	return refused(class, fmt.Sprintf("%s was refused: %v. Nothing was "+
 		"posted — change `answers` (or leave it out) and comment again.",
 		CommentOnWorkTool, err)), true

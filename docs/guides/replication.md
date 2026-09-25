@@ -473,11 +473,12 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, three versions past the base carry something a later
+In the tracker today, four versions past the base carry something a later
 build added. Version 2 is a turn's charge to its task when it counts delegated
 workers or reviews that sent the work back. Version 3 is a person's own record
 when their read position is in a generation after a reanchor — a build reading
 2 stored that position as the bare sequence and lost the generation. Version 4
+is a comment that asks for a decision or answers one with a choice. Version 5
 is a task change carrying a cross-project move's mark: only the root of the
 subtree being moved carries it, and only until the move's walk is done. An old
 node holds those records back, with the task or the person they are about, and

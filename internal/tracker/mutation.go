@@ -40,9 +40,10 @@ import (
 // Version 2 is the turn record's spend split: [TurnSpend.Workers] and
 // [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
 // ([Position.Generation]), which a build reading 2 decoded and then stored as
-// the bare sequence. Version 4 is the cross-project move's marker on a task
+// the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
+// [Comment.Choice]. Version 5 is the cross-project move's marker on a task
 // patch: [TaskPatch.Moving].
-const RecordVersion = 4
+const RecordVersion = 5
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -102,7 +103,17 @@ var versionedFields = statelog.RecordFields{
 	// under; no task patch carries `seen_through`.
 	{Name: "Person.SeenThrough.Generation", Since: 3, Op: string(OpPatch),
 		Path: []string{"mutation", "seen_through", "generation"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 4. A build reading 3
+	// A DECISION AND A CHOICE, both at version 4. A build reading 3 has no
+	// field for either, so it would write the comment row with both
+	// dropped from its document: its copy of the ask would offer no
+	// options, and its copy of the answer would name none — for good, on
+	// a table the fleet compares byte for byte. A comment rides only a
+	// task PATCH, which is why both rows are scoped to that op.
+	{Name: "Comment.Decision", Since: 4, Op: string(OpPatch),
+		Path: []string{"mutation", "comment", "decision"}},
+	{Name: "Comment.Choice", Since: 4, Op: string(OpPatch),
+		Path: []string{"mutation", "comment", "choice"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 5. A build reading 4
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -113,7 +124,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 4, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 5, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 

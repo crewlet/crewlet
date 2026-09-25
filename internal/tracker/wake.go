@@ -71,6 +71,14 @@ type Wake struct {
 	// comment, or from the body on a create.
 	Excerpt string
 
+	// AnswersDecision is the decision of the ask this comment answers —
+	// [ResolvedThread.AnswersDecision] — carried so the card can say which
+	// option the answer chose by its LABEL. The comment names the option
+	// by id, and an id alone tells the asker nothing it can read at a
+	// glance; the label lives on a different row, which is why the caller
+	// fills it rather than this package resolving it.
+	AnswersDecision *Decision
+
 	// Dependents, Parent and Thread are the three routing facts this
 	// package cannot derive from the two states of ONE task, and they are
 	// filled by the caller for the same reason [Wake.Mentions] is: every
@@ -834,15 +842,43 @@ func relationText(relations []Relation, kind RelationKind) string {
 // different message. [textcut.Within] rather than Ellipsis because
 // [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker outside the
 // budget would turn every long comment into a failed write.
+//
+// AN ANSWER THAT CHOSE LEADS WITH THE CHOICE — `Chose “Ship Friday”: <body>` —
+// because the choice is the answer and the body is its reason: cut at the cap,
+// a card that led with the body could lose the one thing the asker was waiting
+// for.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
 	if text == "" && w.Comment != nil {
 		text = w.Comment.Body
+		if option := w.chosen(); option != nil {
+			text = choiceExcerpt(option.Label, strings.TrimSpace(text))
+		}
 	}
 	if text == "" && w.Kind == ChangeCreated {
 		text = w.After.Body
 	}
 	return textcut.Within(strings.TrimSpace(text), MaxExcerpt)
+}
+
+// chosen is the option this wake's comment chose, when its ask carried one.
+func (w Wake) chosen() *DecisionOption {
+	if w.Comment == nil || w.Comment.Choice == "" || w.AnswersDecision == nil {
+		return nil
+	}
+	option, ok := w.AnswersDecision.Option(w.Comment.Choice)
+	if !ok {
+		return nil
+	}
+	return &option
+}
+
+// choiceExcerpt is the card line an answer that chose is summed up as.
+func choiceExcerpt(label, body string) string {
+	if body == "" {
+		return "Chose “" + label + "”"
+	}
+	return "Chose “" + label + "”: " + body
 }
 
 // without is a minus b, order preserved.

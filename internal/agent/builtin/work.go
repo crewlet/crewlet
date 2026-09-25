@@ -2986,6 +2986,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// answering the question put to their seat stamped nothing, and
 		// the ask stayed open on the board.
 		Author: actor.Record(),
+		// THIS COMMENT'S OWN ID, so a re-run turn whose first answer
+		// landed is told nothing is wrong rather than that somebody —
+		// itself — already answered.
+		Comment: comment.ID,
+		Choice:  comment.Choice,
 	})
 	if threadRefusal != nil {
 		return *threadRefusal, nil
@@ -3036,7 +3041,8 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			// there rather than refused.
 			After:   patched(before.Task, patch),
 			Comment: comment, Mentions: comment.Mentions,
-			Thread: thread.ThreadParties,
+			Thread:          thread.ThreadParties,
+			AnswersDecision: thread.AnswersDecision,
 		}.Notify(t.deps.Leads))
 	if err != nil {
 		return writeFailure(actor, CommentOnWorkTool, err), nil
@@ -3258,6 +3264,13 @@ func writeFailure(actor Actor, name string, err error) tools.Result {
 			"refused: %v. Nothing is wrong with your edit — somebody "+
 			"changed the item after you read it. Call get_work_item again "+
 			"and decide from what it says now.", name, err))
+	case errors.Is(err, tracker.ErrAlreadyAnswered):
+		// THE ANSWER THAT LOST A RACE. The thread read passed it and the
+		// write's own snapshot found the question answered in between,
+		// so the sentence names who answered and when — the move is to
+		// read that answer, never to send this one again.
+		return refused(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
+			"refused: %v. Nothing was posted.", name, err))
 	case errors.Is(err, tracker.ErrInboxFull):
 		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
 		// `read_through`, which marks everything up to a notice in one move
