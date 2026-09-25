@@ -56,7 +56,7 @@ How the engine works, one subsystem per page:
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
 - **[Conversation Sessions](concepts/conversation-sessions.md)** — What a seat already said in one Slack thread / issue / pull request, carried into that conversation's next turn: the entry shape and its elision budgets, which turns are recorded, why the key is the conversation and the dedupe is the work key, and why this is a structured ledger rather than a transcript replay
 - **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop
-- **[Decision Framework](concepts/decision-framework.md)** — DACI model for multi-agent decisions
+- **[Decision Framework](concepts/decision-framework.md)** — DACI model for multi-agent decisions, and the structured ask a decision is recorded as
 
 ## Integrations
 

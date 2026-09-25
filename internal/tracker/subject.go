@@ -46,6 +46,15 @@
 // the first boot of a build whose rules differ re-derives the column from the
 // rows, in the applier's own Go, inside one transaction — never backfilled a
 // second time in a migration's SQL.
+//
+// # A decision is a structured ask, and nothing more
+//
+// ADR-0023 is the record: a decision somebody needs is an ask comment carrying
+// a [Decision], answered by a comment whose [Comment.Choice] names one of its
+// options, and the engine enforces exactly its shape, that the choice names an
+// option of the ask it answers, and that a promised inform is kept — never an
+// approval chain, a quorum or a state machine. decision.go holds the type and
+// the rules; the ADR says why the engine stops there.
 package tracker
 
 import (

@@ -193,7 +193,7 @@ With the window at `0`, an idle-agent burst worst-cases at **two** turns (the fi
 
 **Relation to the rate limiter.** `notification_rate_limit` (the notification service's valve, default off) *drops* notifications above N per seat per second. It remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
 
-DACI decisions are conducted in **Slack threads** — the driver opens a thread in the team channel with its own Slack MCP tools and all contributions, proposals, and approvals are thread replies; there is no engine-side decision machinery. See [Decision Framework](decision-framework.md) for details.
+DACI discussion happens in the team channel on the company's chat surface (Mattermost or Slack), with each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
 
 ---
 
@@ -239,10 +239,12 @@ scheduled_task_fired
 #      as inbox wakes (a2a_request, a2a_message), which are not stored
 a2a_channel_opened, a2a_message_sent, a2a_channel_closed
 
-# decision: DACI is behavioural guidance on the org's own chat surfaces, so
-#           NOTHING in Crewlet publishes these four. They stay mapped as the
-#           seam an extension that does model decisions writes through, and
-#           they are why the category exists to filter on at all
+# decision: NOTHING in Crewlet publishes these four. DACI discussion is
+#           behavioural guidance on the org's own chat surfaces, and a
+#           decision somebody must make is a structured ask on a work item —
+#           a tracker record, woken as `asked`/`answered`, not an event here.
+#           They stay mapped as the seam an extension writes through, and they
+#           are why the category exists to filter on at all
 decision_requested, decision_resolved
 contribution_requested, contribution_received
 
@@ -339,10 +341,12 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
 **Categorised, and published by nothing in this build.** The category map also
 files four types no code path publishes, so a filter on them matches no rows:
 `decision_requested`, `decision_resolved`, `contribution_requested` and
-`contribution_received`. DACI is behavioural guidance on the org's own chat
-surfaces, so they stay mapped as the seam an extension that does model
-decisions writes through, which is why the `decision` category exists to filter
-on at all.
+`contribution_received`. DACI discussion is behavioural guidance on the org's
+own chat surfaces, and a decision somebody has to make is a structured ask on a
+work item — a tracker record whose wakes are the tracker's own (`asked`,
+`answered`), not one of these types. They stay mapped as the seam an extension
+writes through, which is why the `decision` category exists to filter on at
+all.
 
 They are what is left of a longer list. The eleven types that described an
 engine-owned task object, a role edited in place, a message the engine sent
@@ -581,9 +585,9 @@ Two communication systems:
 
 Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
 
-- **Org-wide** — announcements (via Slack `#announcements` channel)
-- **Department** — leads-only coordination (via Slack department channel)
-- **Team** — team coordination, DACI decisions (via Slack team channel)
+- **Org-wide** — announcements (via an `#announcements` channel)
+- **Department** — leads-only coordination (via the department's `channel`)
+- **Team** — team coordination and DACI discussion (via the unit's `channel`)
 
 ### Ephemeral A2A channels (`internal/a2a`)
 

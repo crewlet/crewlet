@@ -65,11 +65,13 @@ var categories = map[string]string{
 	"a2a_message_sent":   "a2a",
 	"a2a_channel_closed": "a2a",
 
-	// DACI is behavioural guidance carried on the org's own chat surfaces,
-	// not an engine subsystem — nothing in Crewlet publishes these four.
-	// They stay mapped as the seam an extension that DOES model decisions
-	// writes through, and they are why the dashboard has a `decision`
-	// category to filter on at all.
+	// Nothing in Crewlet publishes these four. DACI discussion is
+	// behavioural guidance carried on the org's own chat surfaces, and a
+	// decision somebody must make is a structured ask on a work item
+	// (ADR-0023) — a tracker record whose wakes are the tracker's own
+	// `asked` and `answered`, not an event of this category. They stay
+	// mapped as the seam an extension writes through, and they are why the
+	// dashboard has a `decision` category to filter on at all.
 	"decision_requested":     "decision",
 	"decision_resolved":      "decision",
 	"contribution_requested": "decision",
