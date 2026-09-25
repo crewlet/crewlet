@@ -270,3 +270,34 @@ func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 		}
 	}
 }
+
+// A SEAT THAT CAN ASK IS TOLD HOW TO ASK FOR A DECISION, AND TO STOP.
+//
+// The shape is the engine's — options, a recommendation, the evidence, the
+// role — because the person answers by choosing and the asker is woken with
+// the choice. And the guidance ends the branch: a seat that asked and carried
+// on has decided for the person, or is waiting inside a turn that cannot
+// receive the reply. Gated on the tool it names, like every other instruction
+// to call something: a seat without it is told nothing.
+func TestTheExecutorIsToldToAskWithOptionsAndStopOnTheBranch(t *testing.T) {
+	t.Parallel()
+	asking := BuildExecutor(engineer(), ExecutorInput{
+		AvailableTools: []string{"comment_on_work_item"},
+	})
+	contains(t, asking,
+		"## When a decision is not yours to make",
+		"`ask` and `decision`",
+		"**Two to four options**",
+		"**Your recommendation**",
+		"**The evidence**",
+		"`approver`", "`contributor`",
+		"END THIS TURN BLOCKED ON THAT BRANCH",
+		"Their answer wakes you with the option")
+	// AFTER THE CONTRACT, which it qualifies, and before the tools.
+	if strings.Index(asking, "## When a decision") < strings.Index(asking, "## Your turn") {
+		t.Error("the escalation guidance renders before the turn contract it qualifies")
+	}
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{
+		AvailableTools: []string{"post_message"},
+	}), "## When a decision is not yours to make")
+}

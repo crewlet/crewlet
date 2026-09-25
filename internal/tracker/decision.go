@@ -363,9 +363,11 @@ type EvidenceLookup interface {
 	// TaskID resolves a key or an id to the task's id, or [ErrNoTask].
 	TaskID(ctx context.Context, ref string) (string, error)
 
-	// PageExists reports whether a live page has this id. An error is
-	// the lookup failing, never "no".
-	PageExists(ctx context.Context, id string) (bool, error)
+	// PageID resolves a page reference — an id, or the
+	// "CONTAINER/Title" address a person and a model name a page by — to
+	// the id of a LIVE page, reporting false for none. An error is the
+	// lookup failing, never "no".
+	PageID(ctx context.Context, ref string) (id string, found bool, err error)
 }
 
 // ValidateDecision is [Decision.Validate] plus the checks that need the
@@ -374,7 +376,8 @@ type EvidenceLookup interface {
 // A TASK IS RESOLVED TO ITS ID, because a key is retired by a move and the
 // record is kept for ever; a PAGE MUST EXIST, because a decision citing a page
 // that is not there sends the person deciding to a dead link at the moment
-// they are weighing it. Turns, runs and URLs are not looked up: a turn or a
+// they are weighing it — and it is stored by ITS id too, for the task's
+// reason: a page's address is its title, and a rename retires the title. Turns, runs and URLs are not looked up: a turn or a
 // run is named by the asker's own tooling, and a URL is outside the company.
 //
 // A lookup that FAILS is returned unmarked — the node could not check, which
@@ -404,7 +407,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 			}
 			out.Evidence[i].Ref = id
 		case EvidencePage:
-			exists, err := lookup.PageExists(ctx, evidence.Ref)
+			id, exists, err := lookup.PageID(ctx, evidence.Ref)
 			switch {
 			case err != nil:
 				return Decision{}, fmt.Errorf("tracker: check %s.ref %q: %w",
@@ -413,6 +416,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 				return Decision{}, invalid("tracker: %s.ref names the page "+
 					"%q, which does not exist", field, evidence.Ref)
 			}
+			out.Evidence[i].Ref = id
 		}
 	}
 	return out, nil

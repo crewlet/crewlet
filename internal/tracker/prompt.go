@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -179,6 +180,7 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	var b strings.Builder
 
 	promptOpener(&b, n, parties, reason)
+	promptDecision(&b, meta, reason)
 
 	promptChanged(&b, n)
 	promptContext(&b, meta)
@@ -291,6 +293,144 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		body = "(no text)"
 	}
 	b.WriteString("\n**Comment:**\n" + body + "\n")
+}
+
+// promptDecision renders a structured ask to the person asked, and the choice
+// to the person who asked.
+//
+// THE ANSWERING CALL IS WRITTEN OUT WHOLE, ids included, because every part
+// of it is something a seat otherwise has to go and find: the ask's comment id
+// is in a thread it would read for no other reason, and an option's id is
+// typed back exactly or refused. A seat told "answer with `choice`" and not
+// shown the call spends a round reading the item to learn what it was already
+// holding.
+//
+// ONLY FOR THE TWO REASONS THE DECISION IS ADDRESSED TO. A watcher on the item
+// sees the question in the comment like any other remark; the options are for
+// the person who owes the answer, and the choice for the person waiting on it.
+// A decision that does not decode renders nothing rather than half a block —
+// the comment above still carries what was said.
+func promptDecision(b *strings.Builder, meta map[string]string, reason Reason) {
+	switch reason {
+	case ReasonAsked:
+		var decision Decision
+		raw := meta[MetaDecision]
+		if raw == "" || json.Unmarshal([]byte(raw), &decision) != nil ||
+			len(decision.Options) == 0 {
+			return
+		}
+		promptAskedDecision(b, meta, decision)
+	case ReasonAnswered:
+		promptAnsweredDecision(b, meta)
+	}
+}
+
+// promptAskedDecision is the decision block the person asked reads.
+func promptAskedDecision(b *strings.Builder, meta map[string]string, d Decision) {
+	b.WriteString("\n## The decision you are asked for\n")
+	b.WriteString("**Question:** " + d.Question + "\n")
+	switch d.Role {
+	case RoleApprover:
+		b.WriteString("**You are asked as:** approver — your answer IS the " +
+			"decision.\n")
+	case RoleContributor:
+		b.WriteString("**You are asked as:** contributor — your answer is an " +
+			"input to a decision somebody else makes.\n")
+	}
+	b.WriteString("**Options:**\n")
+	for _, option := range d.Options {
+		line := "- `" + option.ID + "` — " + option.Label
+		if option.Detail != "" {
+			line += ": " + option.Detail
+		}
+		if option.ID == d.Recommended {
+			line += " *(recommended)*"
+		}
+		b.WriteString(line + "\n")
+	}
+	if d.Rationale != "" {
+		b.WriteString("**Why the asker recommends it:** " + d.Rationale + "\n")
+	}
+	if len(d.Evidence) > 0 {
+		b.WriteString("**What the asker looked at:**\n")
+		for _, evidence := range d.Evidence {
+			line := "- " + string(evidence.Kind) + " " + evidence.Ref
+			if evidence.Label != "" {
+				line += " — " + evidence.Label
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+	if d.Inform != nil {
+		b.WriteString("**Where the outcome goes:** the asker will report it in " +
+			d.Inform.Channel + " on " + string(d.Inform.Surface) + ".\n")
+	}
+	// THE RECOMMENDED OPTION IN THE EXAMPLE, because it is the one the
+	// asker thought most likely — and the first when there is none. The
+	// sentence after the call says it is an example to change, and the
+	// list of ids beside it is what the choice is checked against.
+	choice := d.Recommended
+	if choice == "" {
+		choice = d.Options[0].ID
+	}
+	call := answeringCall{
+		Item: meta[MetaTaskKey], Answers: meta[MetaCommentID],
+		Choice: choice, Body: "<why, in a sentence or two>",
+	}
+	if call.Item == "" {
+		call.Item = meta[MetaTaskID]
+	}
+	b.WriteString("\nAnswer with ONE call to `" + CommentOnWorkTool + "`, " +
+		"naming the option you choose by its id in `choice` (one of: " +
+		strings.Join(d.OptionIDs(), ", ") + "):\n\n" +
+		"```json\n" + jsonText(call) + "\n```\n\n" +
+		"If none of the options is right, answer without `choice` and say in " +
+		"`body` what you would do instead — that is an answer too. The asker " +
+		"is woken with whatever you send, so send it once.\n")
+}
+
+// answeringCall is the literal arguments of the call that answers an ask, in
+// the order a person reads them.
+type answeringCall struct {
+	Item    string `json:"item"`
+	Answers string `json:"answers,omitempty"`
+	Choice  string `json:"choice"`
+	Body    string `json:"body"`
+}
+
+// promptAnsweredDecision is the choice block the asker reads.
+//
+// IT SAYS WHAT HAPPENS NEXT, because the asker is the one that stopped: the
+// escalation guidance tells a seat to end its turn blocked on the branch it
+// asked about, and this wake is what that branch was waiting for.
+func promptAnsweredDecision(b *strings.Builder, meta map[string]string) {
+	var option DecisionOption
+	chose := meta[MetaChoice] != "" &&
+		json.Unmarshal([]byte(meta[MetaChoice]), &option) == nil && option.ID != ""
+	var inform Inform
+	informs := meta[MetaInform] != "" &&
+		json.Unmarshal([]byte(meta[MetaInform]), &inform) == nil && inform.Channel != ""
+	if !chose && !informs && meta[MetaQuestion] == "" {
+		return
+	}
+	b.WriteString("\n## The decision\n")
+	if question := meta[MetaQuestion]; question != "" {
+		b.WriteString("**You asked:** " + question + "\n")
+	}
+	if chose {
+		b.WriteString("**They chose:** " + option.Label + " (`" + option.ID + "`)\n")
+	} else {
+		b.WriteString("**They answered in prose** rather than choosing one of " +
+			"your options — read the comment above for what they would do " +
+			"instead.\n")
+	}
+	if informs {
+		b.WriteString("**You said you would report the outcome in** " +
+			inform.Channel + " on " + string(inform.Surface) + " — post it " +
+			"there in this turn.\n")
+	}
+	b.WriteString("\nCarry on from this answer: it unblocks the branch you " +
+		"stopped on when you asked.\n")
 }
 
 // promptHeader is the identifying block every opener shares.

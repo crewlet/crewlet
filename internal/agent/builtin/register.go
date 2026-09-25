@@ -156,10 +156,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
 		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
-		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
+		{&createWorkItem{deps: deps.Work, pages: deps.Pages.Reader}, deps.Work.Writer != nil},
 		{&updateWorkItem{deps: deps.Work, leads: deps.LeadsProject},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
-		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		{&commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader},
+			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		// AND THE FOLD, which is a seat's for the reason the trash is
 		// not: it leaves the item where it was, cancelled and linked, so
 		// there is no absence for anybody to miss — and a seat can

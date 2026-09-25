@@ -76,10 +76,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	}{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
-		{&createWorkItem{deps: work}, work.Writer != nil},
+		{&createWorkItem{deps: work, pages: pages.Reader}, work.Writer != nil},
 		{&updateWorkItem{deps: work, leads: deps.LeadsProject},
 			work.Writer != nil && work.Reader != nil},
-		{&commentOnWorkItem{deps: work}, work.Writer != nil && work.Reader != nil},
+		{&commentOnWorkItem{deps: work, pages: pages.Reader},
+			work.Writer != nil && work.Reader != nil},
 		{&mergeWorkItem{deps: work}, work.Merges != nil && work.Reader != nil},
 		{&searchWorkItems{deps: work}, work.Search != nil},
 		// THE VIEW TOOLS ARE HERE AND IN NO SEAT'S REGISTRY. A saved

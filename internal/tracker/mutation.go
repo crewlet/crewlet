@@ -42,8 +42,9 @@ import (
 // ([Position.Generation]), which a build reading 2 decoded and then stored as
 // the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
 // [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
-// value — see [actorSeatVersion].
-const RecordVersion = 5
+// value — see [actorSeatVersion]. Version 6 is a create that carries the
+// question its task was filed as: [TaskCreate.Comment].
+const RecordVersion = 6
 
 // actorSeatVersion is the record version from which the applier copies
 // [MutationRecord.ActorSeat] onto the history row.
@@ -121,6 +122,14 @@ var versionedFields = statelog.RecordFields{
 	// operator makes writes a history row.
 	{Name: "MutationRecord.ActorSeat", Since: actorSeatVersion,
 		Path: []string{"actor_seat"}},
+	// THE QUESTION A TASK WAS FILED AS, at version 6. A build reading 5
+	// decodes a create as a bare task and writes no comment row from it,
+	// so its copy of the item would have no ask on it — nothing in its
+	// `asked_of_me`, nothing for an answer to close — for good. Scoped to
+	// the create op, because a patch has carried `comment` since the base
+	// format.
+	{Name: "TaskCreate.Comment", Since: 6, Op: string(OpCreate),
+		Path: []string{"mutation", "comment"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1285,7 +1294,61 @@ type Notify struct {
 	// duplicate.
 	Late bool `json:"late,omitempty"`
 
+	// Answered is the decision an answer closed — what the ASKER is woken
+	// to read. Nil on every wake that answers no decision.
+	Answered *AnsweredDecision `json:"answered,omitempty"`
+
 	Snapshot Snapshot `json:"snapshot"`
+}
+
+// check bounds what an answered decision carries by the caps the decision it
+// was copied from was written under, so the record cannot carry more of it
+// than the ask itself could.
+func (a *AnsweredDecision) check() error {
+	if a == nil {
+		return nil
+	}
+	if err := checkText("answered.question", a.Question, MaxDecisionQuestion, false); err != nil {
+		return err
+	}
+	if a.Choice != nil {
+		if err := checkText("answered.choice.label", a.Choice.Label, MaxOptionLabel, false); err != nil {
+			return err
+		}
+		if err := checkText("answered.choice.detail", a.Choice.Detail, MaxOptionDetail, false); err != nil {
+			return err
+		}
+	}
+	if a.Inform != nil {
+		return checkText("answered.inform.channel", a.Inform.Channel, MaxInformChannel, false)
+	}
+	return nil
+}
+
+// AnsweredDecision is what an answer to a decision tells the person who asked.
+//
+// ON THE NOTIFICATION rather than looked up, for the reason the snapshot is:
+// the question, the options' labels and the channel the asker promised to
+// report in live on the ASK's row, and the node that wins the wake's delivery
+// may not have applied it. The comment names its choice by id alone, and an
+// id tells the asker nothing it can act on at a glance.
+//
+// NOT A ROUTING FACT AND NOT A ROW: [Candidates] never reads it and no
+// applier stores it — the history row keeps the mutation and the inbox row the
+// excerpt — so a build that does not know the key decodes around it and every
+// node's rows still agree. What such a build loses is the prompt's rendering
+// of the choice, which the excerpt (`Chose “<label>”: …`) still carries.
+type AnsweredDecision struct {
+	// Question is the decision's own question, at most
+	// [MaxDecisionQuestion] bytes.
+	Question string `json:"question"`
+
+	// Choice is the option the answer chose. Nil for an answer in prose,
+	// which is an answer too — "none of these" is one.
+	Choice *DecisionOption `json:"choice,omitempty"`
+
+	// Inform is where the asker said it would report the outcome.
+	Inform *Inform `json:"inform,omitempty"`
 }
 
 // Batched reports a record written as part of a BULK GESTURE.
@@ -1325,6 +1388,9 @@ func (n *Notify) Validate() error {
 	if len(n.Excerpt) > MaxExcerpt {
 		return invalid("tracker: a notification excerpt is %d bytes against a "+
 			"%d cap", len(n.Excerpt), MaxExcerpt)
+	}
+	if err := n.Answered.check(); err != nil {
+		return err
 	}
 	return n.checkSnapshot()
 }

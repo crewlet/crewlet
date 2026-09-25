@@ -79,6 +79,11 @@ type WorkReader interface {
 type WorkWriter interface {
 	CreateTask(ctx context.Context, opID string, task tracker.Task,
 		notify *tracker.Notify) (tracker.WriteResult, error)
+	// CreateTaskAsking files a task AS a question — the task and the ask
+	// on it in one record, so the question can never land without the
+	// item or the item without the question.
+	CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+		ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error)
 	// UpdateTask takes the change KIND beside the notification because
 	// they are two facts: what happened, and who is told about it. A tool
 	// that stated only the second left the record's kind to be guessed
@@ -1221,7 +1226,13 @@ func shownBody(body string, whole bool) string {
 
 // ---- create_work_item -------------------------------------------------- //
 
-type createWorkItem struct{ deps WorkDeps }
+type createWorkItem struct {
+	deps WorkDeps
+
+	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
+	// on a company with no native knowledge base.
+	pages PageReader
+}
 
 var _ tools.SeatCallable = (*createWorkItem)(nil)
 
@@ -1231,7 +1242,9 @@ func (t *createWorkItem) Description() string {
 	return "File a new work item. Search with list_work_items first — a " +
 		"duplicate costs somebody a triage turn. Leave the assignee empty " +
 		"and the item lands in triage, where the team's lead is told about " +
-		"it; name an assignee and it goes straight to their queue."
+		"it; name an assignee and it goes straight to their queue. Name " +
+		"`ask` to file the item AS a question to that person — the title " +
+		"is the question — with `decision` when they have to choose."
 }
 
 func (t *createWorkItem) Parameters() map[string]any {
@@ -1305,9 +1318,64 @@ func (t *createWorkItem) Parameters() map[string]any {
 					"does not have, then file. Say true only when you MEANT " +
 					"to add a grouping — the answer lists what it created.",
 			},
+			"ask": map[string]any{
+				"type": "string",
+				"description": "A colleague's handle: the item IS a question " +
+					"they owe an answer to, and its title is the question. " +
+					"They are woken asking for one and follow the item, and " +
+					"their answer wakes you. Filed in one record with the " +
+					"item, so the question cannot be lost between two writes.",
+			},
+			"decision": decisionSchema(),
 		},
 		"required": []any{"title"},
 	}, false)
+}
+
+// askFor is the question a create is filed as, or nil when it asks nobody.
+//
+// THE TITLE IS THE QUESTION, and it is the ask's body: an item filed to ask
+// somebody something is phrased as that question — "Ask" and "Message" on a
+// person's screen write it there — and the body beside it is the context,
+// which the item already carries. An ask row with no text would render as
+// nothing in the thread and in the asked person's `asked_of_me`.
+func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.Task,
+	args map[string]any) (*tracker.Comment, *tools.Result) {
+
+	asked := strings.TrimSpace(argString(args, "ask"))
+	rawDecision, decided := args["decision"]
+	switch {
+	case asked == "" && decided:
+		return nil, refusalOf(failed("create_work_item: `decision` needs `ask` " +
+			"— the handle of the person who has to choose. A decision asked " +
+			"of nobody wakes nobody."))
+	case asked == "":
+		return nil, nil
+	}
+	resolved, refusal := t.deps.resolveHandle(CreateWorkItemTool, "`ask`", asked)
+	if refusal != "" {
+		return nil, refusalOf(failed(refusal))
+	}
+	ask := &tracker.Comment{
+		// DERIVED LIKE EVERY COMMENT'S, so a re-run turn files one
+		// question rather than two.
+		ID:         commentID(actor, task.ID),
+		Task:       task.ID,
+		Author:     actor.Handle,
+		AuthorKind: actor.Kind,
+		Body:       task.Title,
+		Ask:        resolved,
+		CreatedAt:  task.CreatedAt,
+	}
+	if decided {
+		decision, refusal := t.deps.readDecision(ctx, CreateWorkItemTool,
+			rawDecision, t.pages)
+		if refusal != nil {
+			return nil, refusal
+		}
+		ask.Decision = decision
+	}
+	return ask, nil
 }
 
 // scheduleInto merges the scheduling parameters into a tool's own schema.
@@ -1455,17 +1523,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// heard nothing about it again.
 	task.Watchers = handles(actor.Record(), task.Assignee)
 
-	// THE LABELS BEFORE THE TASK, because the create refuses one the
-	// project has not declared and the declare is a separate record on a
-	// separate subject: doing it after would file the task that already
-	// failed.
-	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
-		task.Project, task.Tags)
-	if labelRefusal != nil {
-		return *labelRefusal, nil
+	// THE QUESTION, when the item is filed as one. Resolved and checked
+	// before anything is published, like every other argument here.
+	ask, askRefusal := t.askFor(ctx, actor, task, args)
+	if askRefusal != nil {
+		return *askRefusal, nil
 	}
 	notify := tracker.Wake{
-		Kind: tracker.ChangeCreated, After: task,
+		Kind: tracker.ChangeCreated, After: task, Comment: ask,
 	}.Notify(t.deps.Leads)
 	// THE BLOCKERS ARE RESOLVED BEFORE THE CREATE, so a dependency on a
 	// task that does not exist refuses the whole call rather than leaving
@@ -1481,7 +1546,25 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if len(blockers) > 0 && t.deps.Dependencies == nil {
 		return unconfigured(CreateWorkItemTool), nil
 	}
-	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
+	// THE LABELS BEFORE THE TASK, because the create refuses one the
+	// project has not declared and the declare is a separate record on a
+	// separate subject: doing it after would file the task that already
+	// failed. And AFTER EVERY REFUSAL ABOVE, because the declare is the
+	// call's first PUBLISH — a call refused over its ask, its decision or
+	// a blocker after it would have filed nothing and still left the
+	// project with labels nobody went on to use.
+	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
+		task.Project, task.Tags)
+	if labelRefusal != nil {
+		return *labelRefusal, nil
+	}
+	var got tracker.WriteResult
+	if ask != nil {
+		got, err = writer.CreateTaskAsking(ctx, opIDFor(actor, "create", task.ID),
+			task, *ask, notify)
+	} else {
+		got, err = writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
+	}
 	if err != nil {
 		return writeFailure(CreateWorkItemTool, err), nil
 	}
@@ -1490,6 +1573,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		"key": got.Key, "id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"labels_created": declared, "version": got.Version,
+	}
+	if ask != nil {
+		// THE ASK'S OWN ID, which is what the answer will name in
+		// `answers` and what my_work lists it under.
+		answer["asked"], answer["comment_id"] = ask.Ask, ask.ID
+		if ask.Decision != nil {
+			answer["decision"] = ask.Decision
+		}
 	}
 	if len(got.Warnings) > 0 {
 		answer["warnings"] = got.Warnings
@@ -1971,16 +2062,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		patch.Assignee = &assignee
 	}
-	var declared []string
-	if patch.Tags != nil {
-		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
-		// the write is checked against — never the caller's default.
-		var labelRefusal *tools.Result
-		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, args,
-			before.Task.Project, *patch.Tags); labelRefusal != nil {
-			return *labelRefusal, nil
-		}
-	}
 	// THE RE-ROUTE IS ITS OWN KIND AND ITS OWN GATE. `routed` carries
 	// exactly one delta, and the new unit's lead hears it as an ORDINARY
 	// candidate rather than a fallback — which is what makes the promise
@@ -2042,6 +2123,26 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if dependencyRefusal != nil {
 		return *dependencyRefusal, nil
 	}
+	// BEFORE THE PATCH, because a call that cannot write its dependency
+	// change must write nothing: refused after the patch landed, the
+	// caller is told the call failed about an item whose fields it did
+	// in fact change.
+	if !change.Empty() && t.deps.Dependencies == nil {
+		return unconfigured(UpdateWorkItemTool), nil
+	}
+	// THE LABELS LAST AMONG THE CHECKS, because declaring them is this
+	// call's first PUBLISH: every refusal above has to have had its chance
+	// first, or a refused update leaves its project with labels nobody
+	// went on to use. Against the task's HOME project, which is the one
+	// whose set the write is checked against — never the caller's default.
+	var declared []string
+	if patch.Tags != nil {
+		var labelRefusal *tools.Result
+		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, args,
+			before.Task.Project, *patch.Tags); labelRefusal != nil {
+			return *labelRefusal, nil
+		}
+	}
 
 	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
 	var (
@@ -2082,9 +2183,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	if !change.Empty() {
-		if t.deps.Dependencies == nil {
-			return unconfigured(UpdateWorkItemTool), nil
-		}
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
 			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
 		if err != nil {
@@ -2323,7 +2421,13 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 
 // ---- comment_on_work_item ---------------------------------------------- //
 
-type commentOnWorkItem struct{ deps WorkDeps }
+type commentOnWorkItem struct {
+	deps WorkDeps
+
+	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
+	// on a company with no native knowledge base.
+	pages PageReader
+}
 
 var _ tools.SeatCallable = (*commentOnWorkItem)(nil)
 
@@ -2333,7 +2437,9 @@ func (t *commentOnWorkItem) Description() string {
 	return "Post a comment on a work item. Everyone following the item is " +
 		"told, and anyone you @-mention by handle is woken specifically. " +
 		"Post ONE substantive comment when you have something to say — " +
-		"running commentary is noise on a surface other people read."
+		"running commentary is noise on a surface other people read. " +
+		"`ask` puts a question to somebody, and `decision` structures it " +
+		"when they have to choose; `answers` with `choice` answers one."
 }
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
@@ -2356,11 +2462,19 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 					"for one and start following the item. It does not hand " +
 					"the item over, and it does not stop anybody closing it.",
 			},
+			"decision": decisionSchema(),
 			"answers": map[string]any{
 				"type": "string",
 				"description": "The comment id of the question this answers, " +
 					"which closes it. Omitted, it is inferred when exactly " +
 					"one open question on the item is addressed to you.",
+			},
+			"choice": map[string]any{
+				"type": "string",
+				"description": "When the question you answer carries a " +
+					"decision: the id of the option you choose. `body` is " +
+					"then optional — say why in it. Leave it out to answer " +
+					"in prose when none of the options is right.",
 			},
 			"reply_to": map[string]any{
 				"type": "string",
@@ -2370,7 +2484,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 					"`answers` is what does.",
 			},
 		},
-		"required": []any{"item", "body"},
+		"required": []any{"item"},
 	}
 }
 
@@ -2391,11 +2505,27 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	ref := strings.TrimSpace(argString(args, "item"))
 	body := strings.TrimSpace(argString(args, "body"))
+	choice := strings.TrimSpace(argString(args, "choice"))
+	rawDecision, decided := args["decision"]
 	switch {
 	case ref == "":
 		return failed("comment_on_work_item needs an `item` — a key like ENG-42, or an id."), nil
-	case body == "":
-		return failed("comment_on_work_item needs a `body`. Say the substantive thing, once."), nil
+	case body == "" && choice == "":
+		// A CHOICE IS AN ANSWER ON ITS OWN: the option is what the asker
+		// was waiting for, and a reason is welcome but not owed.
+		return failed("comment_on_work_item needs a `body`. Say the substantive " +
+			"thing, once — or, answering a decision, a `choice`."), nil
+	case decided && strings.TrimSpace(argString(args, "ask")) == "":
+		// REFUSED BEFORE ANY READ, because nothing about the item can make
+		// it right: a decision is a question put to somebody, and one
+		// asked of nobody is a set of options nobody is woken to weigh.
+		return failed("comment_on_work_item: `decision` needs `ask` — the " +
+			"handle of the person who has to choose. A decision asked of " +
+			"nobody wakes nobody."), nil
+	case decided && choice != "":
+		return failed("comment_on_work_item: a comment either asks a decision " +
+			"(`decision`) or answers one (`choice`), never both — they are two " +
+			"comments, by two people."), nil
 	}
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
@@ -2416,7 +2546,16 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
 		Body:       body,
+		Choice:     choice,
 		CreatedAt:  now,
+	}
+	if decided {
+		decision, refusal := t.deps.readDecision(ctx, CommentOnWorkTool,
+			rawDecision, t.pages)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		comment.Decision = decision
 	}
 	if reply := strings.TrimSpace(argString(args, "reply_to")); reply != "" {
 		comment.ReplyTo = &reply
@@ -2458,6 +2597,16 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	comment.Ask = thread.Asked
 	if thread.Answers != "" {
 		comment.Answers = &thread.Answers
+	}
+	if comment.Choice != "" && comment.Answers == nil {
+		// A CHOICE THAT ANSWERS NOTHING: no `answers` was named and no
+		// open question on the item is addressed to this caller, so there
+		// is no decision for the option to be one of.
+		return failed(fmt.Sprintf("comment_on_work_item: `choice` %q answers "+
+			"a decision, and no open question on %s is addressed to you. Name "+
+			"the question with `answers` (its comment id), or answer in "+
+			"`body` without a choice.", clip(comment.Choice),
+			before.Task.Key)), nil
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a
@@ -2518,6 +2667,14 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if comment.Answers != nil {
 		answer["answered"] = *comment.Answers
+	}
+	if comment.Choice != "" {
+		answer["choice"] = comment.Choice
+	}
+	if comment.Decision != nil {
+		// WHAT THE PERSON ASKED WILL CHOOSE BETWEEN, as it was stored — a
+		// task named by key in the evidence comes back as its id.
+		answer["decision"] = comment.Decision
 	}
 	// THE WARNING THE CALLER CANNOT SEE FOR THEMSELVES. A comment from
 	// somebody who is not the assignee, naming nobody, still WAKES the

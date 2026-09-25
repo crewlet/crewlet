@@ -314,6 +314,62 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 	}
 }
 
+// A REFUSED CALL DECLARES NO LABEL. The declare is the call's first PUBLISH,
+// on its own subject, so it has to come after every check that can still
+// refuse the call — its ask, its decision, its blockers, its re-route. A call
+// the tool turned down files nothing and must leave the project's label set
+// exactly as it found it, or every refused retry adds a label nobody went on
+// to use.
+//
+// And an update that cannot write its dependency change writes NOTHING: the
+// patch landing before a refusal would tell the caller the call failed about
+// an item whose fields it did in fact change.
+func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
+	t.Parallel()
+	labels := func(args map[string]any) map[string]any {
+		args["labels"] = []any{"regression"}
+		args["labels_create_missing"] = true
+		return args
+	}
+	for name, tc := range map[string]struct {
+		tool string
+		args map[string]any
+	}{
+		"create with a decision asked of nobody": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "Which?", "decision": decisionArg()})},
+		"create with a malformed decision": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "Which?", "ask": "pm",
+				"decision": map[string]any{"question": "Which?", "options": []any{}}})},
+		"create waiting on an item that does not exist": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-99"}})},
+		"create waiting on work with no dependency writer": {tracker.CreateWorkItemTool,
+			labels(map[string]any{"title": "A task", "waiting_on": []any{"ENG-2"}})},
+		"update re-routed by somebody who does not lead the project": {
+			tracker.UpdateWorkItemTool,
+			labels(map[string]any{"item": "ENG-1", "routing_unit": "platform"})},
+		"update waiting on work with no dependency writer": {tracker.UpdateWorkItemTool,
+			labels(map[string]any{"item": "ENG-1",
+				"waiting_on": map[string]any{"add": []any{"ENG-2"}}})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := projectRegistryIn(t, trk, nil, "ENG")
+			got := callWork(t, reg, tc.tool, tc.args)
+			if !got.Failed {
+				t.Fatalf("the call was accepted: %s", got.Output)
+			}
+			if len(trk.ensured) != 0 {
+				t.Errorf("a refused call declared %v", trk.ensured)
+			}
+			if len(trk.created) != 0 || len(trk.patched) != 0 {
+				t.Errorf("a refused call wrote: %d creates, %d patches",
+					len(trk.created), len(trk.patched))
+			}
+		})
+	}
+}
+
 // THE VERB IS DECLARED DESTRUCTIVE, and the facet that makes it so is the one
 // a caller is most likely to reach for by accident rather than the one it is
 // named after: `fields` REPLACES a project's declarations, so a call sending a

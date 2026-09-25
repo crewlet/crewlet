@@ -310,11 +310,15 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	switch c.record.Op {
 	case OpCreate:
-		var created Task
-		if err := decodePayload(c.record.Mutation, &created); err != nil {
+		// A [TaskCreate]: the task, and the question it was filed as —
+		// which is a comment ROW, written by [Applier.writeThread], and
+		// never part of the document this returns.
+		var payload TaskCreate
+		if err := decodePayload(c.record.Mutation, &payload); err != nil {
 			return Task{}, fmt.Errorf("tracker: decode the create at %s: %w",
 				c.position, err)
 		}
+		created := payload.Task
 		// A CREATE ON A LIVE ROW IS APPLIED, NOT REFUSED — and the
 		// reason is the rule the whole applier is written to: a record
 		// the broker committed is a record every node must be able to
@@ -1485,10 +1489,27 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	}
 	written += items
 
+	if c.record.Op == OpCreate {
+		// A CREATE CARRIES AT MOST ONE COMMENT — the question the task
+		// was filed as ([TaskCreate]) — and never a body revision, since
+		// there is no earlier body for one to keep.
+		var created TaskCreate
+		if err := decodePayload(c.record.Mutation, &created); err != nil {
+			return 0, fmt.Errorf("tracker: decode the create at %s: %w", c.position, err)
+		}
+		if created.Comment != nil {
+			n, err := writeComment(ctx, tx, task, *created.Comment, c)
+			if err != nil {
+				return 0, err
+			}
+			written += n
+		}
+		return written, nil
+	}
 	if c.record.Op != OpPatch {
-		// ONLY A PATCH CARRIES ONE. A create carries the task and a
-		// tombstone carries a stamp, and decoding either as a patch to
-		// look for a comment would be reading a shape that is not there.
+		// ONLY A PATCH OR A CREATE CARRIES ONE. A tombstone carries a
+		// stamp, and decoding it as a patch to look for a comment would
+		// be reading a shape that is not there.
 		return written, nil
 	}
 	var patch TaskPatch

@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 
@@ -327,4 +328,58 @@ func BuildUnitContextSection(s Seat) []string {
 		}
 	}
 	return parts
+}
+
+// escalationTool is the tool the escalation guidance names — the one a seat
+// asks a decision through. The guidance renders only when the seat holds it.
+const escalationTool = "comment_on_work_item"
+
+// BuildEscalationSection is how a seat asks for a decision it cannot make.
+//
+// # Why the engine says this rather than the role's own guidelines
+//
+// Because the SHAPE is the engine's: an ask carries a structured decision the
+// person answers by choosing an option, and the asker is woken with that
+// choice. A seat that escalates in prose — "what do you think we should do?"
+// in a comment — leaves the person to reconstruct the options, the
+// recommendation and the evidence the seat already had, and hands the seat
+// back an answer it must map onto the options it had in mind. What a role
+// escalates, and to whom, stays the role's; how to ask is the same for every
+// seat, so it is written once.
+//
+// # And it ends the branch, which is the half a model gets wrong
+//
+// A seat that asked and kept going has either chosen for the person — so the
+// answer arrives to a decision already acted on — or is waiting inside a turn
+// that cannot receive the reply. The reply is a WAKE, so the only correct move
+// after asking is to finish everything that does not depend on the answer and
+// stop.
+//
+// GATED ON THE TOOL, the same rule the onboarding hint follows: a prompt never
+// tells a model to call something it does not hold.
+func BuildEscalationSection(availableTools []string) []string {
+	if !slices.Contains(availableTools, escalationTool) {
+		return nil
+	}
+	return []string{
+		"\n## When a decision is not yours to make",
+		"When your work reaches a choice above your authority, one that trades " +
+			"off something your role does not own, or one you are genuinely " +
+			"torn on, ask the person who decides — on the work item, with `" +
+			escalationTool + "` (`ask` and `decision`), or with " +
+			"`create_work_item` (`ask` and `decision`) when there is no item " +
+			"yet. Shape it so it can be answered at a glance:",
+		"- **The question** in one sentence; the context goes in the body.",
+		"- **Two to four options**, each saying what choosing it means.",
+		"- **Your recommendation** and why — you have looked at this longer " +
+			"than they will.",
+		"- **The evidence** you looked at: the work items, pages, turns or " +
+			"links, so they can check rather than trust.",
+		"- **The role** you ask them in: `approver` when their answer IS the " +
+			"decision, `contributor` when it is an input to one.",
+		"Then END THIS TURN BLOCKED ON THAT BRANCH. Do not pick an option " +
+			"yourself and do not wait or poll: finish whatever does not depend " +
+			"on the answer, and stop. Their answer wakes you with the option " +
+			"they chose, and you continue from there.",
+	}
 }

@@ -348,6 +348,11 @@ func (f *ledgerFake) CreateTask(_ context.Context, opID string, _ tracker.Task,
 	return r, err
 }
 
+func (f *ledgerFake) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+	return f.CreateTask(ctx, opID, task, notify)
+}
+
 func (f *ledgerFake) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
 	_ tracker.TaskPatch, _ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
 	return f.written(opID)

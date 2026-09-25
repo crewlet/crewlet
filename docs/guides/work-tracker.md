@@ -417,7 +417,8 @@ refusal, and both are deliberate rather than automatic:
 - `write_project(tags_add: [...])` declares one, which **any seat** may do.
 - `labels_create_missing: true` on `create_work_item` or `update_work_item`
   declares what that write is about to use, in one append before the task's
-  own. The answer lists what it created under `labels_created`, so a caller
+  own — and only once every other argument has been checked, so a write
+  refused over its ask, a blocker or a re-route declares nothing. The answer lists what it created under `labels_created`, so a caller
   that set the flag out of habit still sees a typo now rather than on a board
   three weeks later.
 
@@ -723,10 +724,10 @@ that container a seat owns, and one about CHANGE rather than about state:
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
+| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
-| `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
+| `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
@@ -1165,7 +1166,7 @@ may say why in its body.
 | `options` | 2 to 6, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval — ask *yes* or *no* |
 | `recommended` | optional; one of the option ids |
 | `rationale` | optional, at most 1,500 bytes |
-| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (stored as the task's id, since a key moves), `page` (must exist), `turn`, `run`, or `url` (an absolute `https://` address) |
+| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title — a company with no native knowledge base cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
 | `inform` | optional `{surface, channel}`: the chat channel (`mattermost` or `slack`) the asker will report the outcome in |
 
@@ -1182,9 +1183,34 @@ The asker is woken with the choice **by its label** — the card reads
 the decision, with the recommendation already filled in as the `choice` of its
 `answer_with` call, so a reader who agrees sends it as written.
 
-A record carrying a decision or a choice is **record version 4**: a node still
-reading version 3 retains it rather than applying it with the options dropped,
-until it is upgraded.
+**Asking.** `comment_on_work_item` takes `ask` and `decision` together — a
+`decision` without `ask` is refused, since options put to nobody wake nobody —
+and a comment either asks a decision or answers one, never both.
+`create_work_item` takes the same two to file an item **as a question**: the
+title is the question, the body its context, and the task and the ask on it
+land in **one record**, so a crash can never leave an item with nobody asked on
+it. Whoever a question asks **starts following** the item, on either tool —
+unless they muted it, which is the one gesture that says they chose not to; the
+question still reaches them under `asked`. An edit of the question does not
+re-watch anybody.
+
+**Answering.** `comment_on_work_item` with `answers` and `choice` (the option's
+id) answers it, and `body` is then optional — the choice is the answer, and
+the body its reason. Leave `choice` out to answer in prose when none of the
+options is right. A `choice` with no question to answer — nothing named, and no
+open ask on the item addressed to you — is refused.
+
+**The wakes.** The person asked is woken with the options listed by id, the
+recommendation marked, the evidence, and the answering call written out whole —
+item, the ask's comment id and a `choice` — so a seat edits one value and sends
+it rather than reading the thread to find the ids. The asker is woken with the
+question, the option chosen by its label, and — when the decision named an
+`inform` channel — where it said it would report the outcome.
+
+A record carrying a decision or a choice on a comment is **record version 4**,
+and a create carrying the question it was filed as is **version 6**: a node
+still reading an older version retains it rather than applying it with the
+options — or the whole question — dropped, until it is upgraded.
 
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without

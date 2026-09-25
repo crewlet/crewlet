@@ -349,6 +349,12 @@ func (stubWorkWriterT) MergeDuplicates(context.Context, string, string, string,
 	return tracker.WriteResult{}, nil
 }
 
+func (stubWorkWriterT) CreateTaskAsking(context.Context, string, tracker.Task,
+	tracker.Comment, *tracker.Notify) (tracker.WriteResult, error) {
+
+	return tracker.WriteResult{}, nil
+}
+
 func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
 	*tracker.Notify) (tracker.WriteResult, error) {
 

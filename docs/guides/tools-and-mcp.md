@@ -40,9 +40,9 @@ thirteen in full.
 |------|-------------|
 | `list_work_items` | The board, filtered — what you are assigned, what is open in a project, whether something was already filed |
 | `get_work_item` | One item's description, thread, history and links, by key or id |
-| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
+| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `ask` (with an optional `decision`) files it as a question to that person, in one record |
 | `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
-| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
+| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_pages` | Browse the knowledge base by container, parent or title |

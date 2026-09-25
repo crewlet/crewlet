@@ -137,12 +137,12 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	t.Parallel()
 	lookup := fakeEvidence{
 		tasks: map[string]string{"ENG-7": "task-uuid-7"},
-		pages: map[string]bool{"page-1": true},
+		pages: map[string]string{"KB/Audit plan": "page-uuid-1"},
 	}
 	d := *decisionFixture()
 	d.Evidence = []tracker.Evidence{
 		{Kind: tracker.EvidenceTask, Ref: "ENG-7", Label: "the audit"},
-		{Kind: tracker.EvidencePage, Ref: "page-1"},
+		{Kind: tracker.EvidencePage, Ref: "KB/Audit plan"},
 	}
 	got, err := tracker.ValidateDecision(t.Context(), d, lookup)
 	if err != nil {
@@ -150,6 +150,11 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	}
 	if got.Evidence[0].Ref != "task-uuid-7" {
 		t.Errorf("the task reference is stored as %q, want the id", got.Evidence[0].Ref)
+	}
+	// A PAGE BY ITS ID TOO: its address is its title, and a rename
+	// retires the title while the decision is kept for ever.
+	if got.Evidence[1].Ref != "page-uuid-1" {
+		t.Errorf("the page reference is stored as %q, want the id", got.Evidence[1].Ref)
 	}
 	if d.Evidence[0].Ref != "ENG-7" {
 		t.Error("ValidateDecision rewrote its caller's evidence in place")
@@ -506,7 +511,7 @@ func decisionFixture() *tracker.Decision {
 
 type fakeEvidence struct {
 	tasks map[string]string
-	pages map[string]bool
+	pages map[string]string
 }
 
 func (f fakeEvidence) TaskID(_ context.Context, ref string) (string, error) {
@@ -516,9 +521,10 @@ func (f fakeEvidence) TaskID(_ context.Context, ref string) (string, error) {
 	return "", fmt.Errorf("resolve %s: %w", ref, tracker.ErrNoTask)
 }
 
-func (f fakeEvidence) PageExists(_ context.Context, id string) (bool, error) {
-	if id == "boom" {
-		return false, errors.New("pages: read: database is locked")
+func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error) {
+	if ref == "boom" {
+		return "", false, errors.New("pages: read: database is locked")
 	}
-	return f.pages[id], nil
+	id, ok := f.pages[ref]
+	return id, ok, nil
 }

@@ -52,6 +52,28 @@ const (
 	// "you were mentioned" and "you are watching this" ask for different
 	// things, and the prompt renders them as an ask and as news.
 	MetaVia = "routed_via"
+
+	// MetaCommentID is the comment the change carried — for an ask, the
+	// id the answer names in `answers`, which is what lets the prompt
+	// write the answering call out whole rather than leaving the seat to
+	// find the id in a thread read.
+	MetaCommentID = "comment_id"
+
+	// MetaDecision is the [Decision] a new ask carries, as JSON: the
+	// question, the options and what the asker recommends. JSON rather
+	// than flattened keys because the spine's envelope is a string map
+	// and a decision is a structure, and the prompt is its one reader.
+	MetaDecision = "decision"
+
+	// MetaChoice, MetaQuestion and MetaInform are the [AnsweredDecision]
+	// an answer closed: the option it chose (a [DecisionOption] as JSON,
+	// absent for an answer in prose), the question it answered, and the
+	// channel the asker said it would report the outcome in (an [Inform]
+	// as JSON). They are what the asker's wake renders — which choice was
+	// made by its label, and where it promised to say so.
+	MetaChoice   = "choice"
+	MetaQuestion = "question"
+	MetaInform   = "inform"
 )
 
 // Parser turns a mutation record into the notifications it implies.
@@ -204,6 +226,23 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if text := changedText(record.Notify.Fields); text != "" {
 		metadata[MetaDeltas] = text
 	}
+	if record.Notify.CommentID != "" {
+		metadata[MetaCommentID] = record.Notify.CommentID
+	}
+	if decision := askedDecision(record); decision != nil {
+		metadata[MetaDecision] = jsonText(decision)
+	}
+	if answered := record.Notify.Answered; answered != nil {
+		if answered.Question != "" {
+			metadata[MetaQuestion] = answered.Question
+		}
+		if answered.Choice != nil {
+			metadata[MetaChoice] = jsonText(answered.Choice)
+		}
+		if answered.Inform != nil {
+			metadata[MetaInform] = jsonText(answered.Inform)
+		}
+	}
 	if record.Notify.Late {
 		// THE FLAG A READER NEEDS to understand why they are hearing
 		// about something that happened hours ago: it is a repair, not
@@ -218,6 +257,41 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Body:      record.Notify.Excerpt,
 		Metadata:  metadata,
 	}
+}
+
+// askedDecision is the decision a record's NEW ask carries, or nil.
+//
+// READ FROM THE RECORD'S OWN PAYLOAD, where the comment travels whole: a
+// patch's `comment`, or the question a create was filed as ([TaskCreate]) —
+// both under the same key, which is why one shape decodes either. Only on the
+// kinds that WRITE an ask: an edit re-sends the whole comment, decision
+// included, and a wake rendering the options again would ask the question
+// twice.
+func askedDecision(record MutationRecord) *Decision {
+	switch record.Notify.Kind {
+	case ChangeComment, ChangeCreated:
+	default:
+		return nil
+	}
+	var carried struct {
+		Comment *Comment `json:"comment"`
+	}
+	if json.Unmarshal(record.Mutation, &carried) != nil || carried.Comment == nil ||
+		carried.Comment.Ask == "" {
+		return nil
+	}
+	return carried.Comment.Decision
+}
+
+// jsonText is a value as the compact JSON a metadata string carries. Every
+// value handed here is one of this package's own plain structs, which cannot
+// fail to encode.
+func jsonText(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // subjectLine is the one line a recipient sees before they read anything.

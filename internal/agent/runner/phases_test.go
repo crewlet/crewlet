@@ -190,6 +190,9 @@ type buildOpts struct {
 	context prefetch.Blocks
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
+	// register adds tools beyond the fixture's standard catalogue, for a
+	// case whose behaviour depends on a first-party tool the seat holds.
+	register func(t *testing.T, reg *tools.Registry)
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -232,6 +235,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	if err := reg.RegisterWith(stubTool{name: "jira_create", out: "created"},
 		tools.Origin("jira"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
+	}
+	if opts.register != nil {
+		opts.register(t, reg)
 	}
 
 	models, err := phase.NewRegistry(entries)

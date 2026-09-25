@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -607,10 +608,15 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 			}
+			asks := ""
 			if patch.Comment != nil {
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := settleComment(ctx, tx, id, patch.Comment); err != nil {
+				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+				fresh, err := settleComment(ctx, tx, id, patch.Comment)
+				if err != nil {
 					return statelog.Decision{}, err
+				}
+				if fresh {
+					asks = patch.Comment.Ask
 				}
 			}
 			charged, err := w.chargeHandOff(current, patch)
@@ -620,6 +626,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			charged, err = settleWatch(current, charged)
 			if err != nil {
 				return statelog.Decision{}, err
+			}
+			if asks != "" {
+				charged = settleAskWatch(current, charged, asks)
 			}
 			charged, err = w.settleRelations(current, charged)
 			if err != nil {
@@ -697,26 +706,33 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 // second round's expectation, and the re-decide reads the ask answered and
 // refuses it by name. The ask's decision is immutable, so the choice checked
 // against it here is the choice every node will read beside it.
-func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Comment) error {
+//
+// It reports whether the comment is NEW — no row holds its id yet — because a
+// question asks somebody only when it is written: an edit re-sends the whole
+// comment, `ask` included, and must not put the person asked back on a
+// watcher list they have since left.
+func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Comment) (bool, error) {
 	var document []byte
+	fresh := false
 	err := tx.QueryRowContext(ctx, `
 		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
 		comment.ID, task).Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// A NEW COMMENT, which is the only place a decision may be set.
+		fresh = true
 	case err != nil:
-		return fmt.Errorf("tracker: read comment %s: %w", comment.ID, err)
+		return false, fmt.Errorf("tracker: read comment %s: %w", comment.ID, err)
 	default:
 		var stored Comment
 		if len(document) > 0 {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := json.Unmarshal(document, &stored); err != nil {
-				return fmt.Errorf("tracker: decode comment %s: %w", comment.ID, err)
+				return false, fmt.Errorf("tracker: decode comment %s: %w", comment.ID, err)
 			}
 		}
 		if !sameDecision(stored.Decision, comment.Decision) {
-			return invalid("tracker: comment %s on task %s already exists, and "+
+			return false, invalid("tracker: comment %s on task %s already exists, and "+
 				"a decision is set only when the question is asked and never "+
 				"changed after — an answer names an option by id, and options "+
 				"edited under it would make that answer mean something else; "+
@@ -724,16 +740,58 @@ func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Commen
 		}
 	}
 	if comment.Answers == nil || *comment.Answers == "" {
-		return nil
+		return fresh, nil
 	}
 	ask, err := readAsk(ctx, tx, task, *comment.Answers)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = ask.answerableBy("", comment.ID); err != nil {
-		return err
+		return false, err
 	}
-	return checkChoice(task, ask.id, ask.decision, comment.Choice)
+	return fresh, checkChoice(task, ask.id, ask.decision, comment.Choice)
+}
+
+// settleAskWatch puts the person a new question asks on the task's watchers.
+//
+// AN ASK IS AN OBLIGATION, and the person holding one has to hear what happens
+// to the thing they owe an answer about — a follow-up, a correction, the item
+// closing under them. The tool and the guide both promised it ("they start
+// following the item") and nothing did it: the asked party was woken once,
+// under `asked`, and heard nothing further unless they happened to comment.
+//
+// INSIDE THE DECIDE and over whatever the commenter's own watch already
+// settled, for the reason [settleWatch] gives: the set is carried whole, so
+// it is formed from the snapshot the record is decided in.
+func settleAskWatch(current Task, patch TaskPatch, asked string) TaskPatch {
+	watchers, muted := current.Watchers, current.Muted
+	if patch.Watchers != nil {
+		watchers = *patch.Watchers
+	}
+	if patch.Muted != nil {
+		muted = *patch.Muted
+	}
+	if next, ok := followAsk(watchers, muted, asked); ok {
+		patch.Watchers = &next
+	}
+	return patch
+}
+
+// followAsk is a watcher set with the person asked added, and false when it
+// does not change.
+//
+// THREE CASES LEAVE IT ALONE. Already watching. MUTED — the mute is what says
+// somebody CHOSE not to follow this item, and a question put to them is
+// delivered under `asked` whether or not they follow it; re-watching them
+// would undo the one gesture they made about it. And AT THE CAP, where the
+// watch is skipped rather than the question refused — [WatchIntent.Auto]'s
+// rule, since the asker did not ask for a watch at all.
+func followAsk(watchers, muted []string, asked string) ([]string, bool) {
+	if asked == "" || slices.Contains(watchers, asked) ||
+		slices.Contains(muted, asked) || len(watchers) >= MaxWatchers {
+		return watchers, false
+	}
+	return append(slices.Clone(watchers), asked), true
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.

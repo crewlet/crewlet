@@ -71,8 +71,11 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ExecutorInput{
-		ToolCatalogue:     "- post_message: Post to a channel.",
-		AvailableTools:    []string{"post_message", "mark_onboarded", "refresh_memory"},
+		ToolCatalogue: "- post_message: Post to a channel.",
+		// comment_on_work_item DELIBERATELY, so the escalation guidance
+		// it gates is inside the bytes held stable across rounds.
+		AvailableTools: []string{"post_message", "mark_onboarded", "refresh_memory",
+			"comment_on_work_item"},
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",

@@ -115,6 +115,34 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeComment, Mutation: body,
 			Actor: "dev", ActorKind: tracker.AuthorAgent,
 		}.Encode()
+	case "TaskCreate.Comment":
+		// A TASK FILED AS A QUESTION: the create carries the ask.
+		body, err := json.Marshal(tracker.TaskCreate{
+			Task: tracker.Task{
+				V: tracker.DocumentVersion, ID: "suite-task", Key: "SUITE-1",
+				Project: "SUITE", Title: "ship or hold?", Type: "task",
+				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+				Priority: tracker.PriorityNone, Reporter: "dev",
+				CreatedAt: at, UpdatedAt: at,
+			},
+			Comment: &tracker.Comment{
+				ID: "suite-ask", Task: "suite-task", Author: "dev",
+				AuthorKind: tracker.AuthorAgent, Body: "ship or hold?",
+				Ask: "pm", CreatedAt: at,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpCreate, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeCreated, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
 	case "MutationRecord.ActorSeat":
 		// AN OPERATOR'S WRITE THROUGH A BOUND TOKEN: the author stays the
 		// credential and the seat rides beside it, which is the value the

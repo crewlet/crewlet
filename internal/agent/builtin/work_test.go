@@ -45,6 +45,7 @@ type fakeTracker struct {
 	wants tracker.DetailWants
 
 	created []tracker.Task
+	asks    []tracker.Comment
 	merged  []mergeCall
 
 	// searched is every text the ranked search was asked for, and ranked
@@ -353,6 +354,17 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
 		Version:  11,
 	}, nil
+}
+
+// CreateTaskAsking records the ask beside the task, and is otherwise the
+// create.
+func (f *fakeTracker) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
+	ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	if f.writeErr == nil {
+		f.asks = append(f.asks, ask)
+	}
+	return f.CreateTask(ctx, opID, task, notify)
 }
 
 func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch uint64,
