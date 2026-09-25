@@ -57,6 +57,12 @@ type OperatorDeps struct {
 	// answer either without answering the other. Nil REFUSES rather than
 	// degrading — see [LeadsProject].
 	LeadsProject LeadsProject
+
+	// Fleet answers whether the node that would carry a gesture out can,
+	// for the verbs another node carries out on a person's behalf — see
+	// fleet.go. Nil REFUSES those verbs as unavailable rather than
+	// letting them through unchecked.
+	Fleet Fleet
 }
 
 // OperatorTools is the catalogue for one operator surface.

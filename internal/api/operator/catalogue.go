@@ -137,6 +137,12 @@ type Options struct {
 	// project, which is the safe direction.
 	LeadsProject builtin.LeadsProject
 
+	// Fleet reads what each node's build can carry out, off the presence
+	// heartbeat, so a verb carried out by the node holding a seat is
+	// refused `peer_upgrading` while that node cannot. Nil refuses those
+	// verbs as unavailable.
+	Fleet builtin.Fleet
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -221,6 +227,7 @@ func New(opts Options) (*Server, error) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
+		Fleet: opts.Fleet,
 	})
 	if len(callables) == 0 {
 		return nil, nil

@@ -1,6 +1,10 @@
 package coord
 
-import "time"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/textcut"
+)
 
 // What a node reports about ITSELF, fleet-wide.
 //
@@ -83,7 +87,78 @@ type NodeStatus struct {
 	// them.
 	ProjectionsReady int
 	ProjectionsTotal int
+
+	// Features is every [Feature] this node's build honours — see
+	// features.go for why a gesture asks the fleet before it is offered.
+	//
+	// EMPTY IS "HONOURS NONE", and that is the reading an older peer has
+	// to get: a build that predates the field publishes a status without
+	// it, and a gate reading that as "unknown" would refuse the gesture as
+	// retryable for as long as the older node runs, instead of saying why.
+	// A node that published NO STATUS at all is the other case, and
+	// [StatusFromMeta] already reports it as absent.
+	Features []Feature
+
+	// MCP is what this node's MCP servers did when it last started them,
+	// one row per configured server. Nil is "this node started none"
+	// ONLY where [FeatureMCPStatus] is advertised; on an older peer it is
+	// "did not say".
+	//
+	// On the heartbeat rather than asked for, for the reason the rest of
+	// this struct is: every node already re-sends it, every peer already
+	// reads it, and the settings screen asking each node in turn would be
+	// the fan-out whose partial answers the file head refused.
+	MCP []MCPServerStatus
 }
+
+// MCPServerStatus is one configured MCP server, as ONE node started it.
+//
+// AGGREGATED PER SERVER, NOT PER CHILD. A per-role server is a template with
+// one child per seat this node holds, and a row per child would put a
+// company's seat count times its per-role servers on a lease that is re-sent
+// every heartbeat — to answer a question ("is the jira server working on this
+// node?") the counts answer as well.
+type MCPServerStatus struct {
+	// Server is the config's own name for it — `mcp_servers[].name`, never
+	// a per-seat instance name, since the row stands for every instance.
+	Server string
+
+	// Shared is true for the one company-wide child, false for a per-role
+	// template.
+	Shared bool
+
+	// Started is how many instances started and listed their tools.
+	// What happened to a child AFTER it started is not observed here:
+	// the bridge learns of a child that died only when its next call
+	// fails, and that call's own result is where that is reported.
+	Started int
+
+	// Failed is how many did not: a child that would not start or list
+	// its tools, and a config whose ${VAR} references did not resolve
+	// into a launchable spec.
+	Failed int
+
+	// Tools is how many tools one started instance serves — the largest,
+	// where the instances of one template disagree.
+	Tools int
+
+	// Error is ONE failed instance's reason, and ErrorSeat the seat it
+	// belonged to (empty for a shared server). One rather than all, for
+	// the size argument above; the first by seat handle, so two beats
+	// with the same failures publish the same row.
+	Error     string
+	ErrorSeat string
+}
+
+// MaxMCPErrorBytes bounds [MCPServerStatus.Error] on the wire.
+//
+// A start failure's text is a handshake error or a child's last stderr line,
+// and the useful part — "command not found", "401", "connection refused" — is
+// at its head. 240 bytes carries that for every server a company runs while
+// keeping each row a small fraction of a lease payload re-sent every
+// heartbeat; the full text is in the node's own log line
+// (`mcp_server_failed`), which is where a person fixing it reads anyway.
+const MaxMCPErrorBytes = 240
 
 // Meta renders the status for a lease's Meta map.
 func (s NodeStatus) Meta() map[string]any {
@@ -103,6 +178,33 @@ func (s NodeStatus) Meta() map[string]any {
 		// would otherwise have to know is not a stalled projection.
 		out["projections_ready"] = s.ProjectionsReady
 		out["projections_total"] = s.ProjectionsTotal
+	}
+	if len(s.Features) > 0 {
+		features := make([]string, len(s.Features))
+		for i, f := range s.Features {
+			features[i] = string(f)
+		}
+		out["features"] = features
+	}
+	if len(s.MCP) > 0 {
+		rows := make([]map[string]any, len(s.MCP))
+		for i, m := range s.MCP {
+			row := map[string]any{
+				"server":  m.Server,
+				"shared":  m.Shared,
+				"started": m.Started,
+				"failed":  m.Failed,
+				"tools":   m.Tools,
+			}
+			if m.Error != "" {
+				row["error"] = textcut.Within(m.Error, MaxMCPErrorBytes)
+			}
+			if m.ErrorSeat != "" {
+				row["error_seat"] = m.ErrorSeat
+			}
+			rows[i] = row
+		}
+		out["mcp"] = rows
 	}
 	return out
 }
@@ -131,7 +233,57 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {
 		status.StartedAt = at
 	}
+	for _, f := range listFromMeta(raw["features"]) {
+		if name := stringFromMeta(f); name != "" {
+			status.Features = append(status.Features, Feature(name))
+		}
+	}
+	for _, r := range listFromMeta(raw["mcp"]) {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		server := stringFromMeta(row["server"])
+		if server == "" {
+			// A row naming no server describes nothing a reader could
+			// attribute, so it is dropped rather than drawn unnamed.
+			continue
+		}
+		m := MCPServerStatus{
+			Server:    server,
+			Started:   intFromMeta(row["started"]),
+			Failed:    intFromMeta(row["failed"]),
+			Tools:     intFromMeta(row["tools"]),
+			Error:     stringFromMeta(row["error"]),
+			ErrorSeat: stringFromMeta(row["error_seat"]),
+		}
+		m.Shared, _ = row["shared"].(bool)
+		status.MCP = append(status.MCP, m)
+	}
 	return status, true
+}
+
+// listFromMeta accepts the typed slices this build writes and the []any a JSON
+// round trip returns, for the reason [intFromMeta] accepts both numbers.
+func listFromMeta(v any) []any {
+	switch l := v.(type) {
+	case []any:
+		return l
+	case []string:
+		out := make([]any, len(l))
+		for i, s := range l {
+			out[i] = s
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, len(l))
+		for i, m := range l {
+			out[i] = m
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // intFromMeta accepts the int this build writes and the float64 a JSON round

@@ -242,6 +242,27 @@ A build before the windowed counters charges one lifetime figure per scope, in a
 
 While both builds are live, only the older nodes charge anything, so only their meter is true: a newer node publishes no live budget meter until the last older lease has gone, a dashboard it serves ignores the older build's `budget_reported` frame and so draws no meter for the rollout rather than one read off the retiring counters, and its `GET /budgets` answers from the windowed counters, which start empty. The lifetime counters are **not migrated** — a lifetime total has no window to be counted in — and once no live lease is held below protocol 4, the [maintenance duty](seat-ownership.md#singleton-duties) deletes their bucket (`retired_budget_bucket`). Every later tick finds nothing to retire. A downgrade across this change needs the whole fleet stopped first, like any other protocol bump.
 
+## What a node says about itself
+
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and two things a peer acts on rather than just displays:
+
+- **`features`** — the gestures this node's *build* can carry out on a peer's behalf. It is fixed at compile time, and a name joins it only in the build that implements it.
+- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A child that dies after starting is not observed here; its next call fails and says so.
+
+Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero.
+
+### Why a gesture asks the fleet first
+
+Some gestures are accepted by one node and carried out by another: a person pauses a seat through whichever node serves their dashboard, and the node *holding* the seat is the one that has to stop taking its mail. Mid-upgrade that node may run a build that has never heard of the gesture — it would not refuse it, it would simply never do it. So before such a gesture is written it is checked against the heartbeats, and the answer is three-valued:
+
+| The fleet says | The gesture |
+|---|---|
+| every node that could carry it out advertises the feature | goes ahead |
+| one of them runs a build without it (a status with no such feature) | refused **`peer_upgrading`** — nothing to retry until the upgrade reaches that node |
+| the store could not be read, a node published no status, the seat's holder has no presence (it is draining), or no node is live | refused **`unavailable`** — a retry may well clear it |
+
+A gesture only the seat's holder carries out asks about the node whose process holds the seat lease — matched by process incarnation, so a node that restarted since does not answer for its predecessor — and one every future holder must respect asks about every live node. A seat nobody holds is answered for every live node, since any of them may claim it next.
+
 ---
 
 ## What stays node-local
@@ -259,7 +280,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 And two things stay **per-process** deliberately:
 
 - **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate every agent turn passes through, and it is per node — so an org's ceiling is N × the configured value. Size it per node, not per company. This is the one knob a fleet genuinely changes the meaning of.
-- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release.
+- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release. Only their *status* is shared, on the heartbeat ([above](#what-a-node-says-about-itself)).
 
 ---
 

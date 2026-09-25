@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -340,9 +341,16 @@ type Engine struct {
 	// and re-claimed. Both maps are guarded by mcpMu because they must
 	// never disagree: a registry naming tools of a bridge that is gone
 	// offers the model entries that can only fail.
+	//
+	// mcpShared and mcpSeats are what each start of a server concluded —
+	// the shared servers per apply, the per-role children per seat claim —
+	// for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too, because
+	// a seat's outcomes are replaced and forgotten with its bridge.
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*mcp.Bridge
 	seatTools map[string]*tools.Registry
+	mcpShared []mcpOutcome
+	mcpSeats  map[string][]mcpOutcome
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the turn's
@@ -1678,7 +1686,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
 func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
-	status := coord.NodeStatus{StartedAt: e.startedAt}
+	// FEATURES FIRST and unconditionally: they are what this BUILD honours,
+	// fixed at compile time, so no read below can change them. The MCP rows
+	// are this process's own record of what it started, read under a lock
+	// and never from a child.
+	status := coord.NodeStatus{
+		StartedAt: e.startedAt,
+		Features:  slices.Clone(coord.Features),
+		MCP:       e.mcpStatus(),
+	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()
 	}
