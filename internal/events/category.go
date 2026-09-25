@@ -108,6 +108,7 @@ var categories = map[string]string{
 	"agent_turn_started":           "system",
 	"agent_turn_completed":         "system",
 	"agent_turn_stopped":           "system",
+	"agent_turn_steered":           "system",
 	"agent_phase_started":          "system",
 	"agent_phase_completed":        "system",
 	"phase.tool_skill_blocked":     "system",

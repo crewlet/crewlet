@@ -321,6 +321,15 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
 agent_turn_stopped         # a pause with stop_running ended this turn at its
                            # next round: stopped_by, stopped_by_seat, reason.
                            # Its trigger is recorded as worked, not retried
+agent_turn_steered         # what became of a person's note to this running
+                           # turn, published by the node that ran it:
+                           # `delivered` with the phase, iteration and round
+                           # that first read it, or `expired` — the turn ended
+                           # or parked before its next round. Carries the
+                           # note, note_id (the request's id), steered_by,
+                           # steered_by_seat and sent_at: the note itself
+                           # crossed an ephemeral scatter, so this row is its
+                           # only durable record
 agent_phase_started, agent_phase_completed
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —

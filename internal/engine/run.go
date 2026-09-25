@@ -421,6 +421,11 @@ type Engine struct {
 	history          *eventfan.Fleet
 	stopHistoryServe queue.Unsubscribe
 
+	// steers is this node's running turns' note boxes, and stopSteerServe
+	// withdraws the node as their answerer. See steer.go.
+	steers         *steerDesk
+	stopSteerServe queue.Unsubscribe
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -619,6 +624,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		steers:      newSteerDesk(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
 		bridge:      bridge,
@@ -686,6 +692,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// why a maintenance-mode node answers too.
 	if err = e.armHistory(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve the fleet's history: %w", err)
+	}
+	// AND FOR THE NOTES A PERSON SENDS ITS TURNS, which only this node can
+	// hand to them — see steer.go.
+	if err = e.armSteer(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve notes to running turns: %w", err)
 	}
 
 	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
@@ -1349,6 +1360,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// peer's question arriving mid-teardown is declined rather than read
 	// from a closing file.
 	e.stopHistory(ctx)
+	// With it, and for the same reason: a note answered `accepted` by a
+	// node that is tearing down is a note no round will read.
+	e.stopSteer(ctx)
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}
@@ -1612,6 +1626,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply)
+	// The executor's runtime, from the seat's own provider chain — see
+	// [Engine.agentRunFor] — and the box a person's note reaches this turn
+	// through, which that runtime decides can be read at all.
+	agentRun := e.agentRunFor(company, req.Handle, turnIdentity.Context)
+	box := steerBox(agentRun)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Context: blocks,
@@ -1625,11 +1644,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		}),
 		Publisher: e.backends.Queue,
 		Turn:      turnIdentity,
-		// The executor's runtime, from the seat's own provider chain —
-		// see [Engine.agentRunFor].
-		AgentRun: e.agentRunFor(company, req.Handle, turnIdentity.Context),
-		Markers:  e.markers(),
-		Latch:    e.onboarded,
+		AgentRun:  agentRun,
+		Steer:     box,
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
@@ -1672,6 +1690,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		return turn.Result{}, err
 	}
 
+	// A PERSON MAY NOW STEER IT. The box is closed as soon as the turn
+	// returns — before its completion is published, so the record of a note
+	// the turn missed precedes the record that the turn ended — and the
+	// defer is the backstop for every other way out of this frame. Closing
+	// twice records nothing twice. See steer.go.
+	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
+	defer closeSteer(ctx)
+
 	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used
 	// to onboard inside the phase that decides what to do, and could spend
 	// that phase's whole budget reading pages: the turn least likely to get
@@ -1691,6 +1717,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 		turnInputFor(req, reply))
+	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
+	// a note, and one offered from here on is answered `closed`.
+	closeSteer(ctx)
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.

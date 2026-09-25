@@ -391,6 +391,18 @@ A pause is refused `peer_upgrading` while any live node runs a build that
 cannot carry it: any of them may be the next to hold the seat. See
 [Coordination](coordination.md#what-a-node-says-about-itself).
 
+### Steering a running turn
+
+Short of stopping a turn, a person can **steer** it: send a note that the turn
+reads at its next round boundary and keeps to for the rest of the turn — from
+the live view, or from their own assistant with `steer_turn`. The note travels
+on an ephemeral scatter to every node; the node running the turn is the one
+that answers, and the turn's own record says what became of it
+(`agent_turn_steered`: `delivered` at the round that read it, or `expired` when
+the turn ended first). A turn whose executor runs as a coding CLI's own loop
+cannot take one. See [Turn Engine § Steering a running
+turn](turn-engine.md#steering-a-running-turn).
+
 ### Graceful shutdown
 
 SIGINT / SIGTERM trigger a **drain with the probes up**, designed so a restart picks up cleanly without a half-finished turn: the node stops taking new work, lets the turns already running finish, hands its seats back, and only then closes its HTTP listener and its backends. The engine owns the process signals exclusively. Nothing else in the process may install a handler, the embedded API server included.

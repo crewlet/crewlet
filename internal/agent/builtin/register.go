@@ -459,6 +459,14 @@ func annotationsFor(name string) tools.Annotations {
 		// seats works, and reaches nothing outside the engine.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No}
+	case SteerTurnTool:
+		// A WRITE SOMEBODY ELSE ACTS ON, like answer_run: the note changes
+		// what a running turn does next, and its next moves reach the
+		// company, so OpenWorld is Yes. Not destructive — it replaces
+		// nothing — and NOT idempotent as a tool: a second call with other
+		// words is a second note. A retry of ONE request is collapsed by
+		// the box, which is the engine's protection, not the tool's shape.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ResumeSeatTool:
 		// Not destructive: the held mail is delivered, nothing is lost.
 		// Idempotent: resuming a seat that is not paused changes nothing.

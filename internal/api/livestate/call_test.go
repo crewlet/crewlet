@@ -649,3 +649,24 @@ func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
 		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCall, call.RoundStartedAt)
 	}
 }
+
+// THE NOTES A PHASE READ RIDE ITS LIVE CALL, with the round that read each, so
+// a person who steered a turn sees their note land on the round it changed —
+// and a copy handed to a reader is its own, since the next frame replaces the
+// list.
+func TestTheLiveCallCarriesTheNotesItsPhaseRead(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 1,
+		"steers":    []any{map[string]any{"round": 2, "note_id": "req-1"}},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+	call := liveCallOf(t, s, "Lead")
+	if len(call.Steers) != 1 || call.Steers[0].(map[string]any)["note_id"] != "req-1" {
+		t.Fatalf("steers = %+v, want the note the frame named", call.Steers)
+	}
+	call.Steers[0] = "scribbled"
+	if again := liveCallOf(t, s, "Lead"); again.Steers[0] == "scribbled" {
+		t.Error("a reader's copy of the call aliases the projection's own list")
+	}
+}

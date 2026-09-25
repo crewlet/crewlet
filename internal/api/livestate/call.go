@@ -35,6 +35,7 @@ func (c *LiveCall) clone() *LiveCall {
 	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
 	dup.Rounds = append([]any(nil), c.Rounds...)
 	dup.RunningCall = maps.Clone(c.RunningCall)
+	dup.Steers = append([]any(nil), c.Steers...)
 	dup.WorkItem = cloneItem(c.WorkItem)
 	if c.PartialRound != nil {
 		dup.PartialRound = make(map[string]any, len(c.PartialRound))
@@ -260,11 +261,14 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		// a closed round, a call that returned — and carrying the
 		// previous one would leave a finished tool call on screen as
 		// running.
-		Rounds:           list(payload, "rounds"),
-		MaxRounds:        num(payload, "max_rounds"),
-		RoundCeiling:     num(payload, "round_ceiling"),
-		RoundStartedAt:   str(payload, "round_started_at"),
-		RunningCall:      mapping(payload, "running_call"),
+		Rounds:         list(payload, "rounds"),
+		MaxRounds:      num(payload, "max_rounds"),
+		RoundCeiling:   num(payload, "round_ceiling"),
+		RoundStartedAt: str(payload, "round_started_at"),
+		RunningCall:    mapping(payload, "running_call"),
+		// NOT carried, for Rounds' reason: every frame states the phase's
+		// whole list.
+		Steers:           list(payload, "steers"),
 		CacheReadTokens:  num(payload, "cache_read_tokens"),
 		CacheWriteTokens: num(payload, "cache_write_tokens"),
 		WorkItem:         workItem,

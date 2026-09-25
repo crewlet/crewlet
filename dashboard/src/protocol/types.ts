@@ -217,6 +217,13 @@ export interface RunningCall {
   started_at: string;
 }
 
+/** A person's note a phase read mid-turn, and the round that first read it
+ *  (`types.PhaseSteer`). */
+export interface PhaseSteer {
+  round: number;
+  note_id: string;
+}
+
 /** The one work item a turn is charged to (`types.WorkItem`). */
 export interface WorkItemRef {
   backend: string;
@@ -316,6 +323,12 @@ export interface LiveCall {
   round_started_at?: string;
   /** The tool call running RIGHT NOW; absent between calls. */
   running_call?: RunningCall | null;
+  /**
+   * Every person's note the phase has read so far, with the round whose
+   * provider call first saw it. What the note said and who sent it are on the
+   * turn's `agent_turn_steered` rows.
+   */
+  steers?: PhaseSteer[] | null;
   /** The share of `input_tokens` the prompt cache served and stored — a
    *  breakdown of it, never an addition to it. */
   cache_read_tokens?: number;

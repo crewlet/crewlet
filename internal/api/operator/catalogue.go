@@ -153,6 +153,11 @@ type Options struct {
 	// neither tool.
 	Pauses builtin.SeatPauseDeps
 
+	// Steer reaches the node running a turn, so a person can send it a note
+	// (`steer_turn`), and says who is sending it. A zero value serves no
+	// such tool.
+	Steer builtin.SteerDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -237,7 +242,7 @@ func New(opts Options) (*Server, error) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
-		Fleet: opts.Fleet, Runs: opts.Runs, Pauses: opts.Pauses,
+		Fleet: opts.Fleet, Runs: opts.Runs, Pauses: opts.Pauses, Steer: opts.Steer,
 	})
 	if len(callables) == 0 {
 		return nil, nil

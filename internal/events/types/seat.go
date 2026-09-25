@@ -1,13 +1,14 @@
 package types
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// A person's control over a running seat: pausing it, resuming it, and a turn
-// a pause stopped. A pause itself is a coordination record (coord.SeatPause);
+// A person's control over a running seat: pausing it, resuming it, a turn a
+// pause stopped, and a note a person sent a running turn. A pause itself is a coordination record (coord.SeatPause);
 // these are the fleet's account of each change, published once by the writer
 // whose compare-and-set won, so two people pausing one seat at once put one row
 // in the log rather than two.
@@ -16,6 +17,7 @@ func init() {
 	events.Register[SeatPaused]()
 	events.Register[SeatResumed]()
 	events.Register[AgentTurnStopped]()
+	events.Register[AgentTurnSteered]()
 }
 
 // SeatPaused records that a person paused a seat: it takes no new work until
@@ -147,4 +149,88 @@ func (e AgentTurnStopped) SummaryFor(actor string) string {
 		who = e.StoppedBy
 	}
 	return lead(actor, "had its turn stopped by "+who)
+}
+
+// SteerOutcome is what became of a person's note to a running turn.
+type SteerOutcome string
+
+const (
+	// SteerDelivered — the turn read the note: it entered the conversation
+	// at a round boundary, and that round's provider call was the first to
+	// see it.
+	SteerDelivered SteerOutcome = "delivered"
+
+	// SteerExpired — the turn ended or parked before its next round, so
+	// nothing read the note. It is not carried to a later turn: a note is
+	// an instruction about the work in flight, and a later turn is other
+	// work.
+	SteerExpired SteerOutcome = "expired"
+)
+
+// SteerOutcomes is every outcome this build records.
+var SteerOutcomes = []SteerOutcome{SteerDelivered, SteerExpired}
+
+// Valid reports whether an outcome off the wire is one this build knows.
+func (o SteerOutcome) Valid() bool { return slices.Contains(SteerOutcomes, o) }
+
+// AgentTurnSteered records what became of one person's note to a running turn
+// (internal/agent/steer): read at a round boundary, or expired unread because
+// the turn ended first.
+//
+// PUBLISHED BY THE NODE THAT RAN THE TURN, once it knows — never by the node
+// that took the request, which answered `pending` and cannot see the turn. The
+// note travels to the turn on an ephemeral scatter that leaves no record, so
+// this row is the only durable account that the note existed at all; that is
+// why it carries the note's text.
+type AgentTurnSteered struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the turn was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+
+	// NoteID is the note's identity, the person's request id: one request
+	// is one note, however often it was retried.
+	NoteID  string       `json:"note_id"`
+	Outcome SteerOutcome `json:"outcome"`
+
+	// Phase, Iteration and Round are where a DELIVERED note landed: the
+	// phase and iteration that read it, and the round, on the phase's
+	// one-based scale, whose provider call first saw it. Absent on an
+	// expired note, which nothing read.
+	Phase     Phase `json:"phase,omitempty"`
+	Iteration int   `json:"iteration,omitempty"`
+	Round     int   `json:"round,omitempty"`
+
+	// Note is what the person wrote.
+	Note string `json:"note"`
+
+	// SteeredBy and SteeredBySeat are who sent it, in the same two halves
+	// as [SeatPaused.PausedBy], and SentAt when the turn took it.
+	SteeredBy     string    `json:"steered_by"`
+	SteeredBySeat string    `json:"steered_by_seat,omitempty"`
+	SentAt        time.Time `json:"sent_at"`
+}
+
+// EventType is the "agent_turn_steered" wire type.
+func (AgentTurnSteered) EventType() string { return "agent_turn_steered" }
+
+// Role is the seat whose turn was steered.
+func (e AgentTurnSteered) Role() string { return e.RoleName }
+
+// AgentID is the instance whose turn was steered.
+func (e AgentTurnSteered) AgentID() string { return e.Agent }
+
+// SummaryFor names who sent the note and whether the turn read it.
+func (e AgentTurnSteered) SummaryFor(actor string) string {
+	who := e.SteeredBySeat
+	if who == "" {
+		who = e.SteeredBy
+	}
+	if e.Outcome == SteerExpired {
+		return lead(actor, "finished before reading a note from "+who)
+	}
+	return lead(actor, "read a note from "+who)
 }

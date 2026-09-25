@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -193,6 +194,10 @@ type buildOpts struct {
 	// register adds tools beyond the fixture's standard catalogue, for a
 	// case whose behaviour depends on a first-party tool the seat holds.
 	register func(t *testing.T, reg *tools.Registry)
+	// steer is the turn's note box, for the cases about a person's note.
+	steer *steer.Box
+	// subagent arms delegate on the executor's surface.
+	subagent *runner.SubagentConfig
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -274,6 +279,8 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Resume:    opts.resume,
 		Publisher: opts.pub,
 		OnPhase:   opts.onPhase,
+		Steer:     opts.steer,
+		Subagent:  opts.subagent,
 		Turn:      runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"},
 	})
 	if err != nil {

@@ -544,6 +544,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
+	// The runtime, and the note box it decides — see [steerBox].
+	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
+	box := steerBox(agentRun)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task: resumeTask(in),
@@ -561,8 +564,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// being re-entered was agentic is the state's own answer (see
 			// [execstate.State.AgentRun]), but a turn that loops to another
 			// iteration must run that one the same way it ran the first.
-			AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
-			Budget:   e.meterFor(company, in.Turn.Handle()),
+			AgentRun: agentRun,
+			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the
+			// same turn running again, and a note sent while it parked
+			// was answered `closed` — the box that segment had is gone.
+			Steer:  box,
+			Budget: e.meterFor(company, in.Turn.Handle()),
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
@@ -625,11 +632,17 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// frame makes is paired. A resume gathers no context of its own, so
 	// nothing slow is being skipped by waiting.
 	e.publishTurnStarted(ctx, tel, in.Run.DelegationDepth, in.Run.DelegationChain, true)
+	// Open once the segment is certain to run, for the reason its start is
+	// announced only now; closed the moment it returns, as on the dispatch
+	// path, with the defer as the backstop.
+	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
+	defer closeSteer(ctx)
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.
 	res, err := turn.Run(ctx, r, company.TurnSettings(0),
 		resumeInputFor(in, resumedReply))
+	closeSteer(ctx)
 	// THE TURN RAN, so from here the indicator follows what it concluded
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.

@@ -139,3 +139,32 @@ func TestTheTokenEstimateIsAboutFourCharactersAToken(t *testing.T) {
 		t.Errorf("EstimateTokens(\"a\") = %d, want 1 — a short prompt must not round to nothing", got)
 	}
 }
+
+// A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn
+// (internal/agent/steer) — renders under its own `## user` heading AFTER every
+// result, so a CLI reading the transcript never reads the note as part of a
+// tool's output.
+func TestAUserMessageAfterToolResultsIsItsOwnSectionAfterThem(t *testing.T) {
+	t.Parallel()
+	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "fix the build"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "cli_0", Name: "read_file"}, {ID: "cli_1", Name: "list_dir"},
+		}},
+		{Role: llm.RoleTool, Name: "read_file", ToolCallID: "cli_0", Content: "file contents"},
+		{Role: llm.RoleTool, Name: "list_dir", ToolCallID: "cli_1", Content: "a b c"},
+		{Role: llm.RoleUser, Content: "a note from the founder"},
+	}})
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	last := strings.LastIndex(got, "## user")
+	note := strings.Index(got, "a note from the founder")
+	second := strings.Index(got, "a b c")
+	if last < 0 || note < last || second < 0 || last < second {
+		t.Fatalf("the note is not its own user section after both results:\n%s", got)
+	}
+	if strings.Count(got, "## user") != 2 {
+		t.Errorf("want the ask and the note as two user sections:\n%s", got)
+	}
+}

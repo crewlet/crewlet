@@ -171,6 +171,12 @@ type LiveCall struct {
 	// one that returned nothing.
 	RunningCall map[string]any `json:"running_call,omitempty"`
 
+	// Steers is every person's note the phase has read so far —
+	// `{round, note_id}`, the round whose provider call first saw it — as
+	// the progress frame carries it ([types.PhaseSteer]). What the note
+	// said and who sent it are on the turn's `agent_turn_steered` rows.
+	Steers []any `json:"steers,omitempty"`
+
 	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
 	// provider's prompt cache served and stored so far — a breakdown of
 	// the input, never an addition to it.

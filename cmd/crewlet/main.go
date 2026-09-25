@@ -2631,6 +2631,13 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 		Org:      opts.Org,
 		Actor:    operator.WorkActor(opts.Org),
 	}
+	// AND A NOTE REACHES A RUNNING TURN from here, on every node: it is
+	// scattered to the fleet and answered by the node running the turn,
+	// which is the only one that can hand it to the turn's next round.
+	opts.Steer = builtin.SteerDeps{
+		Asker: e.Backends().Queue,
+		Actor: operator.WorkActor(opts.Org),
+	}
 	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,

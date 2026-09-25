@@ -111,3 +111,30 @@ func BuildPhaseUserMessage(m UserMessage) string {
 	}
 	return strings.Join(parts, "\n\n")
 }
+
+// SteerMessage is a person's note to a running turn, as the model reads it.
+//
+// A USER message, sent at a round boundary — see internal/agent/steer for why
+// there and why never a system message. It says three things a bare note
+// would leave the model to guess, and each has cost a turn when guessed wrong:
+// WHO sent it, so a note from the person who runs the company is not weighed
+// like text a tool returned; that it arrived MID-TURN, so the model neither
+// restarts the task from scratch nor reads it as a new request needing its own
+// reply; and that it STANDS for the rest of the turn, so a correction made in
+// round 3 still binds round 9. The note itself is fenced last and verbatim.
+//
+// Phase-neutral on purpose: the reviewer reads the same message as the
+// executor. For one the note is an instruction and for the other it is part
+// of what the work is now judged against, and one sentence says both.
+func SteerMessage(sender, note string) string {
+	if strings.TrimSpace(sender) == "" {
+		sender = "a person who runs this company"
+	}
+	return "## A note from " + sender + ", sent while this turn was running" +
+		"\nIt reached you between rounds. It is not a new request and not a" +
+		" repeat of the task: it is a correction or an addition to the work" +
+		" already in hand. Take it into account from here to the end of this" +
+		" turn — it overrides the task where the two disagree — and keep what" +
+		" has already been done unless the note says otherwise." +
+		"\n\n" + strings.TrimSpace(note)
+}

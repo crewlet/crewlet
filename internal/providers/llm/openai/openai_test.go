@@ -1085,3 +1085,37 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 		t.Errorf("the second call cost %d requests, want 1 — the probe repeats", extra)
 	}
 }
+
+// A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn, sent
+// straight after the round's results (internal/agent/steer) — goes as a user
+// message after every tool message, never between a call's results: this
+// endpoint requires each tool_call answered by a tool message before anything
+// else is said.
+func TestAUserMessageAfterToolResultsFollowsThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "first"}, {ID: "b", Name: "second"},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "first", Content: "one"},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "second", Content: "two"},
+		{Role: llm.RoleUser, Content: "a note from the founder"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages := api.seen()[0].body["messages"].([]any)
+	var roles []string
+	for _, m := range messages {
+		roles = append(roles, m.(map[string]any)["role"].(string))
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,tool,user" {
+		t.Fatalf("roles = %v, want both results before the note", roles)
+	}
+	if note := messages[4].(map[string]any); note["content"] != "a note from the founder" {
+		t.Errorf("the note is %v", note)
+	}
+}

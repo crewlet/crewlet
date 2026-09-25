@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -115,10 +116,13 @@ type Turn struct {
 // engine's to publish, and it must be able to report what the turn spent even
 // on a node whose phases are silent.
 type emitter struct {
-	pub   queue.Publisher
-	turn  Turn
-	role  string
-	tally *Spend
+	pub  queue.Publisher
+	turn Turn
+	role string
+	// handle is the seat's handle, for the events that name the seat as
+	// well as its role — a person's note to it among them.
+	handle string
+	tally  *Spend
 
 	// onPhase is the working indicator's hook, or nil. See
 	// [Config.OnPhase]; it is called from [emitter.started].
@@ -144,7 +148,8 @@ func (e emitter) nestedAt(round int) emitter {
 func (r *Runner) emitter() emitter {
 	return emitter{
 		pub: r.cfg.Publisher, turn: r.cfg.Turn,
-		role: r.cfg.Seat.Role.Name, tally: &r.spend, mu: &r.mu,
+		role: r.cfg.Seat.Role.Name, handle: r.cfg.Seat.Role.Handle(),
+		tally: &r.spend, mu: &r.mu,
 		onPhase: r.cfg.OnPhase,
 	}
 }
@@ -809,6 +814,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		CacheReadTokens:  res.CacheRead,
 		CacheWriteTokens: res.CacheWrite,
 		Rounds:           phaseRounds(res.Rounds),
+		Steers:           phaseSteers(res.Steers),
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
@@ -1109,6 +1115,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ToolExecutions:   toolExecutions(rec.Result.Executions),
 		RoundNarration:   roundNarration(rec.Result.Narration),
 		Rounds:           phaseRounds(rec.Result.Rounds),
+		Steers:           phaseSteers(rec.Result.Steers),
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
 		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -1293,6 +1300,46 @@ func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
 		})
 	}
 	return out
+}
+
+// phaseSteers renders the notes a phase read in their wire shape, or nil.
+func phaseSteers(marks []toolloop.SteerMark) []types.PhaseSteer {
+	if len(marks) == 0 {
+		return nil
+	}
+	out := make([]types.PhaseSteer, 0, len(marks))
+	for _, m := range marks {
+		out = append(out, types.PhaseSteer{Round: m.Round, NoteID: m.ID})
+	}
+	return out
+}
+
+// steered records that a phase read a person's note, at the round whose
+// provider call first saw it.
+func (e emitter) steered(ctx context.Context, ph phase.Phase, iteration, round int, n steer.Note) {
+	if !e.on() {
+		return
+	}
+	ev := e.steerEvent(n, types.SteerDelivered)
+	ev.Phase, ev.Iteration, ev.Round = types.Phase(ph), iteration, round
+	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+}
+
+// steerExpired records a note the turn took and never read.
+func (e emitter) steerExpired(ctx context.Context, n steer.Note) {
+	if !e.on() {
+		return
+	}
+	e.publish(ctx, events.New(e.steerEvent(n, types.SteerExpired), e.traceFor(ctx)))
+}
+
+func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.AgentTurnSteered {
+	return types.AgentTurnSteered{
+		Agent: e.turn.AgentID, AgentHandle: e.handle, RoleName: e.role,
+		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey,
+		NoteID: n.ID, Outcome: outcome, Note: n.Text,
+		SteeredBy: n.By, SteeredBySeat: n.BySeat, SentAt: utcOrZero(n.At),
+	}
 }
 
 // runningCall renders the call in flight, or nil when none is — so the key is

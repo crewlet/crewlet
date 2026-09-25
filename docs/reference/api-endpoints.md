@@ -1248,7 +1248,8 @@ model's half of the round only), each `tool_executions[]` row's `started_at`,
 phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 `input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
-turn's `work_item`. The live frame carries the same so far plus
+turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
+the phase read. The live frame carries the same so far plus
 `round_started_at` and the `running_call` in flight. Each is **absent** on a
 record an older engine wrote, and on a figure nothing measured — a tool call
 nobody timed has no `duration_ms`, never a zero — so a reader treats absent as
@@ -1779,8 +1780,9 @@ counter has since left behind as the current ones.
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
 tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
-max_rounds, round_ceiling, round_started_at, running_call, cache_read_tokens,
-cache_write_tokens, work_item, node, in_progress }` while an LLM call is under
+max_rounds, round_ceiling, round_started_at, running_call, steers,
+cache_read_tokens, cache_write_tokens, work_item, node, in_progress }` while an
+LLM call is under
 way. The fields are these:
 
 - `rounds_used` is how many rounds have come back, counted from one. A finished phase record carries the same count under the same name.
@@ -1789,6 +1791,7 @@ way. The fields are these:
 - `round_ceiling` is the highest value any extension may raise `max_rounds` to.
 - `round_started_at` is when the round in flight made its provider call.
 - `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
+- `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
 
 Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
@@ -2293,12 +2296,13 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **thirteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **fourteen no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`answer_run`](#answering-a-parked-coding-run), and
-[`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat). A view is furniture — a name, a shape
+[`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat), and
+[`steer_turn`](#steering-a-running-turn). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -2315,7 +2319,9 @@ one that is not. And a coding run's question is a person's to answer: a seat
 that could answer its own run would be guessing on its own behalf. Whether a
 seat works at all is a person's decision about it too: a seat that could pause
 a colleague, or resume itself, would be overruling the people who run the
-company.
+company. And a note to a running turn is a person redirecting the work: a seat
+that could steer a colleague's turn would be directing it past the person who
+asked for the work.
 
 ### Answering a parked coding run
 
@@ -2378,6 +2384,38 @@ takes no work a pause could hold), `invalid` for a reason past its bound,
 same pause, and `peer_upgrading` while **any** live node runs a build that
 cannot carry a pause — any of them may be the next to hold the seat, and an
 older build would run its mail as if nothing had happened.
+
+### Steering a running turn
+
+`steer_turn` sends a short note to a turn **while it runs**. The turn reads it
+at its next round — after the tool call in flight returns — as a correction or
+addition to the work in hand, and keeps to it for the rest of the turn: the
+reviewer that judges the work and every later executor iteration open with it
+too. See [Turn Engine § Steering a running turn](../concepts/turn-engine.md#steering-a-running-turn).
+
+| Argument | |
+|---|---|
+| `turn_id` | The running turn's `turn_id`, as the `agents` push names it on each seat's `live_call`. |
+| `note` | What the turn should take into account, at most 2,000 characters. Longer is a brief, and belongs on the work item. |
+
+It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending"}`: the
+node running the turn took the note, and the turn reads it at its next round.
+What became of it is recorded there, as `agent_turn_steered` — `delivered`
+naming the phase and round that read it, or `expired` if the turn ended or
+parked first. `note_id` is the request's own id, so a retry of one request is
+one note however often it is sent.
+
+`unknown` means no node answered inside two seconds. A reply lost on its way
+back is indistinguishable from none, so the note may have been taken; sending it
+again is safe for that reason.
+
+It refuses `not_running` for a turn that has ended or parked, `conflict` for one
+already holding five notes it has not read yet (once it reads them, the note may
+be sent again), `steer_unsupported` for a turn whose executor runs as a coding
+CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
+boundary to hand a note to — `invalid` for an empty or oversized note, and
+`peer_upgrading` while **any** live node runs a build that cannot take a note:
+which node runs the turn is not known until one answers.
 
 ### One catalogue, and a call is a fresh write
 

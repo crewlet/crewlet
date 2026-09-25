@@ -27,8 +27,8 @@
  *     a section that is always full is a section nobody reads.
  *
  * So the rows are split by the question they answer. WENT_WRONG is loud and
- * usually absent. GIVEN is what the turn's prompt was built from, before it
- * ran. LEFT_BEHIND is what the company learned from it, after. Anything this
+ * usually absent. GIVEN is what the turn was given to work from — its prompt,
+ * before it ran, and any note a person sent it while it ran. LEFT_BEHIND is what the company learned from it, after. Anything this
  * build has no opinion about falls through to REST rather than being dropped:
  * the event registry is additive-only and a type published by a newer node
  * must still render.

@@ -187,6 +187,17 @@ type RunningCall struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
+// PhaseSteer is one person's note a phase read mid-turn, and the round that
+// first read it — see [AgentTurnSteered] for the note itself and who sent it.
+//
+// Keyed on the round number `rounds[]`, `tool_executions[]` and
+// `round_narration[]` share, so a reader puts the note beside the round it
+// changed.
+type PhaseSteer struct {
+	Round  int    `json:"round"`
+	NoteID string `json:"note_id"`
+}
+
 // AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
 // run is resumed — before its context is assembled and before its first phase.
 //
@@ -590,7 +601,10 @@ type AgentPhaseCompleted struct {
 	// Rounds is one entry per provider call the phase made, keyed on the
 	// round number the two lists above share — see [PhaseRound]. Absent on
 	// a phase that ran no loop in this process, and on an older peer's.
-	Rounds       []PhaseRound `json:"rounds,omitempty"`
+	Rounds []PhaseRound `json:"rounds,omitempty"`
+	// Steers is every person's note this phase read, with the round that
+	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
+	Steers       []PhaseSteer `json:"steers,omitempty"`
 	InputTokens  int          `json:"input_tokens"`
 	OutputTokens int          `json:"output_tokens"`
 	TotalTokens  int          `json:"total_tokens"`
@@ -796,6 +810,9 @@ type AgentTurnProgress struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 	// Rounds is every provider call so far — see [PhaseRound].
 	Rounds []PhaseRound `json:"rounds,omitempty"`
+	// Steers is every person's note the phase has read so far — see
+	// [PhaseSteer].
+	Steers []PhaseSteer `json:"steers,omitempty"`
 	// MaxRounds is the cap the phase is running under NOW, which an
 	// extension raises mid-phase, and RoundCeiling the most it can be
 	// raised to. What "round 3 of 8" is rendered from, off the loop's own

@@ -551,6 +551,72 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 
 ---
 
+## Steering a running turn
+
+A person watching a turn sometimes sees it heading the wrong way — about to
+post to the wrong channel, re-reading what it already has, missing the one
+constraint nobody wrote down. Stopping it (a [pause with
+`stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
+waiting for it to finish costs a second turn. A **steer** is the third answer:
+a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
+that enters the running conversation at its **next round boundary**.
+
+```mermaid
+sequenceDiagram
+    participant P as Person (any node)
+    participant F as Every node
+    participant N as Node running the turn
+    participant L as The turn's tool loop
+    P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
+    F-->>P: nothing (not their turn)
+    N-->>P: accepted → outcome "pending"
+    Note over L: the round's tool calls finish
+    L->>L: fence, then drain the box
+    L->>L: the note is a user message before the next provider call
+    N->>N: agent_turn_steered{delivered, phase, round}
+```
+
+- **Where it lands, and nowhere else.** At the top of a round, immediately
+  after the seat fence. That is the one point where the conversation is
+  complete — every tool call the previous round made has its answer — so a note
+  can never sit between a call and its result, which a provider rejects and a
+  model would read as the tool's output. After the fence, so a turn whose seat
+  moved or that a person stopped is not handed an instruction it will never act
+  on. And as a **user** message, never a system message: the system prompt is
+  the frozen prefix a provider caches on.
+- **It binds the rest of the turn.** The note is read by the executor or the
+  reviewer — whichever round comes next — and carried, as the same message,
+  into every later phase: the reviewer that judges the work opens with it, and
+  so does every executor iteration after it, across a parked coding run
+  included. Without that the reviewer would grade the work against the task the
+  person had corrected.
+- **Not every loop reads it.** A [worker](#workers) is a leaf its parent
+  directs, so a note offered while a worker runs waits for the executor's next
+  round. The onboarding pass and the extension judge do not read notes either.
+  A turn whose executor runs as a [coding CLI's own agentic
+  loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
+  the CLI's — and says so: `steer_unsupported`.
+- **One node answers.** Every node serves the subject and the note names the
+  turn; the node running it is the only one that can answer, so nothing has to
+  know where a turn runs. It keeps answering `closed` (the tool's
+  `not_running`) for the last 256 turns it ended, because a note races a turn's
+  end by seconds. No answer at all inside the two-second budget is `unknown`,
+  never `not_running`: a reply lost on the way back looks exactly like none.
+- **A note is one note.** Its id is the person's request id, so a retry of one
+  request is answered `accepted` without being read twice. A turn holds at most
+  **five** unread notes (`conflict` past that) of at most **2,000 characters**
+  each: a paragraph re-points work in flight, and more than that is a brief that
+  belongs on the work item.
+- **What became of it is on the record.** A note the turn reads is recorded
+  `agent_turn_steered{delivered}` with the phase, iteration and round that first
+  read it; the phase's `steers[]` and the live call's say the same. A note the
+  turn never reads — it ended, or parked on a coding run, before its next round
+  — is recorded `expired` when the turn's note box closes, before the turn's own
+  completion. It is not carried to a later turn: a note is about the work in
+  flight.
+
+---
+
 ## The working status
 
 A turn triggered by a chat message raises a **working status** in that
@@ -784,7 +850,10 @@ arguments, started_at}` — because a round's calls are serial and an
 execution is recorded only once its call has answered: a sandbox launch
 or a slow MCP server takes minutes, and a live view that learned of a
 call only when the whole round returned showed a seat doing nothing for
-exactly the stretch somebody was watching it. The last fires once the
+exactly the stretch somebody was watching it. A round that reads a
+person's [note](#steering-a-running-turn) publishes once more, the moment
+it takes the note and before its provider call, with the note's
+`{round, note_id}` in `steers`. The last fires once the
 round's tool results are in, and names no running call, which is what
 clears it. A round of three calls therefore costs five frames. The final
 round — the one that ends the phase by making no tool call — publishes at
@@ -990,6 +1059,8 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
 | `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through |
+| `internal/agent/steer/` | A running turn's note box: what an offer is answered, the bounds on a note, and the wire a note crosses to reach the node running the turn |
+| `internal/engine/steer.go` | Each node's desk of its running turns' boxes: serving the scatter, answering only for its own turns, and recording the notes a turn never read |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |
 | `internal/agent/builtin/a2a.go` | `a2a_ask`, the only colleague wrapper; outreach to a third-party app goes through that app's MCP tools directly (`colleague.go` beside it is `lookup_colleague`) |
 | `internal/notify/status.go` | Working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |

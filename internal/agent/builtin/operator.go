@@ -72,6 +72,10 @@ type OperatorDeps struct {
 	// Pauses pauses and resumes a seat — see seatpause.go. A nil record
 	// omits both tools.
 	Pauses SeatPauseDeps
+
+	// Steer sends a note to a running turn — see steer.go. A nil asker
+	// omits the tool.
+	Steer SteerDeps
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -134,6 +138,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// would be one overruling the people who run the company.
 		{&pauseSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
 		{&resumeSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
+		// NOR THIS: a note to a running turn is a person redirecting the
+		// work, and a seat that could steer a colleague's turn would be
+		// directing it past the person who asked for the work.
+		{&steerTurn{deps: deps.Steer, fleet: deps.Fleet}, deps.Steer.Asker != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {
