@@ -2296,14 +2296,15 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **fifteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **sixteen no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`move_work_item`](#moving-a-card-on-a-board),
-[`answer_run`](#answering-a-parked-coding-run), and
-[`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat), and
-[`steer_turn`](#steering-a-running-turn). A view is furniture — a name, a shape
+[`answer_run`](#answering-a-parked-coding-run),
+[`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
+[`steer_turn`](#steering-a-running-turn), and
+[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -2439,6 +2440,72 @@ CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
 boundary to hand a note to — `invalid` for an empty or oversized note, and
 `peer_upgrading` while **any** live node runs a build that cannot take a note:
 which node runs the turn is not known until one answers.
+
+### Answering a question from the company's knowledge
+
+`answer_knowledge` answers a person's question — the dashboard's ⌘K answer —
+from what the company has written down: it searches the knowledge base
+(`hybrid`, auto-drafts hidden) for five pages and the work tracker for three
+items, reads each whole where this node holds it (the first 4 KiB of a native
+page's body or an item's description; an external wiki's search snippet), and
+asks one model to answer from those sources alone, citing each claim as `[n]`.
+See [Knowledge System § Answering a question](../concepts/knowledge-system.md#answering-a-question).
+
+| Argument | |
+|---|---|
+| `q` | The question, in plain words; at most 400 bytes. |
+
+It answers:
+
+```json
+{
+  "answer_md": "Run `make deploy` from `main` [1]; it is being automated [3].",
+  "sources": [
+    {"kind": "page", "ref": "0f7c…", "title": "Deploy runbook"},
+    {"kind": "page", "ref": "5a1d…", "title": "Rollback"},
+    {"kind": "task", "ref": "ENG-7", "title": "Automate the deploy"}
+  ],
+  "tokens": {"input": 7120, "output": 184},
+  "model": "claude-haiku-…",
+  "cached": false
+}
+```
+
+Source `[n]` is the n-th entry of `sources`: a page by its id (and its `url`,
+for a page on an external wiki), a work item by its key. `tokens` is what
+**this call** spent, and nothing converts it to money. A question nothing
+matches is answered in one sentence with no sources, no model and no tokens.
+
+**Only a person may ask.** It spends the company's tokens on somebody's
+behalf, so the act transport admits only a bound token (as for every act),
+and over [`/operator/mcp`](#operatormcp--your-own-assistant) a token bound to no seat
+is refused `forbidden`. No seat is given it: a seat has `search_knowledge` and
+a model of its own.
+
+**It is charged to the company's windows.** The model is the asker's own
+seat's auxiliary one (`llm_auxiliary`, falling back as every auxiliary pass
+does). A person has no seat budget, so before any model call it reads the
+company's day, week and month and refuses `budget_exhausted` — naming the
+window that ends last and when it resets — if one has no room; after the call
+it records exactly what the reply spent on the company's counter alone, past a
+ceiling included. It is a write rather than a read for this reason: every
+answer that misses the cache is a model call, and the dashboard's reads are
+refetched on focus and on reconnect.
+
+**A repeated question spends nothing.** Answers are cached on each node, 256
+of them, keyed on the question (case and spacing folded) and the node's
+**corpus position** — where its tracker, pages and vector logs are applied
+through — so any write that could change the answer retires every older one. A
+cache hit answers `"cached": true` and `"tokens": {"input": 0, "output": 0}`,
+and is served even while the budget is spent. A company whose knowledge base
+is not native has no position to key on, so its answers are never cached.
+
+It refuses `invalid` for an empty question, `forbidden` for an unbound token
+or a seat the chart no longer has, `budget_exhausted` as above, and
+`unavailable` for a counter it cannot read (nothing is spent), a knowledge base
+and tracker that could not be searched at all, no model configured, or a model
+that failed or wrote nothing — a reply that spent tokens and wrote nothing is
+still charged.
 
 ### One catalogue, and a call is a fresh write
 
@@ -2629,7 +2696,7 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
 | `unavailable`, `peer_upgrading` | `503` |
 
 A call interrupted before the tool answered is `503` `unavailable`, never a

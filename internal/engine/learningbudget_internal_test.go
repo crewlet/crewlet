@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -33,21 +32,20 @@ import (
 // ordinary way is charged without knowing it is being charged, which is what
 // makes a worker added later charge too.
 
-// countingMeter records what it was asked to spend and whether it refuses.
+// countingMeter records what it was asked to record.
 type countingMeter struct {
-	spent  int
-	calls  int
-	refuse bool
-	err    error
+	spent int
+	calls int
+	err   error
 }
 
-func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
+func (m *countingMeter) Record(_ context.Context, tokens int) error {
 	m.calls++
 	if m.err != nil {
-		return toolloop.SpendOutcome{}, m.err
+		return m.err
 	}
 	m.spent += tokens
-	return toolloop.SpendOutcome{OK: !m.refuse, Used: m.spent}, nil
+	return nil
 }
 
 // answeringProvider returns a completion with a known token cost.
@@ -74,11 +72,11 @@ func (m staticModels) Head(*org.Role, phase.Phase) (chain.Member, error) {
 	return chain.Member{Key: "aux", Provider: m.provider}, nil
 }
 
-func meteredHead(t *testing.T, inner llm.Provider, m toolloop.BudgetMeter) chain.Member {
+func meteredHead(t *testing.T, inner llm.Provider, m spendRecorder) chain.Member {
 	t.Helper()
 	models := meteredModels{
 		inner:  staticModels{provider: inner},
-		charge: func(*org.Role) toolloop.BudgetMeter { return m },
+		charge: func(*org.Role) spendRecorder { return m },
 	}
 	member, err := models.Head(&org.Role{Name: "Dev"}, phase.Auxiliary)
 	if err != nil {
@@ -126,7 +124,7 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	e := &Engine{backends: &Backends{Fleet: fleet}}
 	models := meteredModels{
 		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
-		charge: func(seat *org.Role) toolloop.BudgetMeter { return e.meterFor(c, seatHandle(seat)) },
+		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
 	}
 	member, err := models.Head(free, phase.Auxiliary)
 	if err != nil {
@@ -142,6 +140,53 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 			t.Errorf("%s's day = (%+v, %v), want the 42 tokens the completion spent",
 				scope, u.In(period.Day), err)
 		}
+	}
+}
+
+// SPEND PAST THE CEILING IS RECORDED, AND IT IS WHAT CLOSES THE GATE.
+//
+// The record used to go through the gate's own Charge, which REFUSED a
+// completion that did not fit and so recorded nothing: the counter stayed
+// under the ceiling, the pre-flight gate still read room, and every later
+// reflection pass ran and went uncounted in its turn. The spend has happened
+// at the vendor, so it is recorded whole — and the gate then reads no room.
+func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 90, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	gate := e.learningBudget(c)
+	if ok, err := gate(ctx, lead); err != nil || !ok {
+		t.Fatalf("gate with 10 left = (%v, %v), want (true, nil)", ok, err)
+	}
+
+	models := meteredModels{
+		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
+		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
+	}
+	member, err := models.Head(lead, phase.Auxiliary)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 132 {
+			t.Errorf("%s's day = (%+v, %v), want 132: the 42 the completion spent "+
+				"past a ceiling of 100 is still spent", scope, u.In(period.Day), err)
+		}
+	}
+	if ok, err := gate(ctx, lead); err != nil || ok {
+		t.Fatalf("gate after the ceiling was passed = (%v, %v), want (false, nil): "+
+			"a pass that starts now spends more past it, uncounted", ok, err)
 	}
 }
 

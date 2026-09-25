@@ -424,6 +424,56 @@ Static org configuration (mission, vision, policies, role profile, team roster, 
 
 ---
 
+## Answering a question
+
+The same search also answers **a person's question**: the dashboard's ⌘K answer
+block calls the operator tool
+[`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge),
+which writes a short Markdown answer from what the company has written down and
+lists what it was written from.
+
+```mermaid
+sequenceDiagram
+    participant P as Person (⌘K)
+    participant A as answer_knowledge
+    participant C as Company counter
+    participant S as Search
+    participant M as Auxiliary model
+    P->>A: q
+    A->>A: cache hit at this corpus position? → answer, cached, 0 tokens
+    A->>C: any company window with no room?
+    C-->>A: refuse budget_exhausted (nothing spent)
+    A->>S: hybrid: 5 pages + 3 work items
+    S-->>A: sources (bodies read whole, 4 KiB each)
+    A->>M: numbered sources + the question
+    M-->>A: answer citing [n]
+    A->>C: record the tokens it spent (company only)
+    A-->>P: answer_md, sources, tokens, model
+```
+
+- **From the sources and nothing else.** The model is told to say only what the
+  numbered sources say, to cite each claim as `[n]`, and to say so in one
+  sentence when they do not answer the question. Source `[n]` is the n-th entry
+  of the answer's `sources`, so a screen links every citation. A question
+  nothing matches is answered without a model at all, and costs nothing.
+- **A person's, not a seat's.** Only a token bound to a person may ask — the
+  spend is on somebody's behalf — and no seat is given the tool: a seat has
+  `search_knowledge` and its own model, and a second model's summary in its
+  context would be one it could not check.
+- **Charged to the company.** It runs on the asker's own seat's auxiliary model
+  and is judged against the company's day, week and month — a person has no seat
+  budget. A company window with no room refuses it before the call; after the
+  call, exactly what the reply spent is recorded on the company's counter.
+- **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
+  question (case and spacing folded) and where its tracker, pages and vector
+  logs are applied through. Any write that could change an answer moves the
+  position and retires every answer cached at the old one; a repeat spends
+  nothing and says `cached: true`. A company on Confluence has no position to
+  key on — the wiki changes without the node hearing — so its answers are never
+  cached.
+
+---
+
 ## Publishing knowledge docs
 
 Most shared knowledge is authored directly by humans and agents — a seat calls

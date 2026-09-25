@@ -2775,6 +2775,17 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 		// THE CHART THE SEARCH IS SCOPED AGAINST is already wired
 		// above, for every company rather than only this one.
 		opts.Knowledge = operatorKnowledge{engine: e}
+		// AND A PERSON'S QUESTION ANSWERED FROM IT, on the auxiliary model
+		// of their own seat and charged to the company's windows — a
+		// person has no seat budget. The answers are cached at this node's
+		// corpus position, which a company on an external wiki does not
+		// have, so there they are never cached.
+		opts.Answer = builtin.AnswerDeps{
+			Models: engine.AnswerModels(e),
+			Budget: engine.AnswerBudget(e),
+			Corpus: e.KnowledgeCorpus,
+			Actor:  operator.WorkActor(opts.Org),
+		}
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:
 	// it holds no org chart, and one it derived would be a second opinion

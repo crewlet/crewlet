@@ -76,6 +76,12 @@ type OperatorDeps struct {
 	// Steer sends a note to a running turn — see steer.go. A nil asker
 	// omits the tool.
 	Steer SteerDeps
+
+	// Answer answers a person's question from the company's knowledge —
+	// see answerknowledge.go. It searches through Knowledge and the work
+	// search above, so it is served only with Knowledge and Org; a nil
+	// model, budget or actor omits it.
+	Answer AnswerDeps
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -145,6 +151,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// work, and a seat that could steer a colleague's turn would be
 		// directing it past the person who asked for the work.
 		{&steerTurn{deps: deps.Steer, fleet: deps.Fleet}, deps.Steer.Asker != nil},
+		// NOR THIS: it is a person's question answered by a model at the
+		// company's expense, and a seat has search_knowledge and a model
+		// of its own — see answerknowledge.go.
+		{newAnswerKnowledge(deps), answerable(deps)},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {
@@ -153,4 +163,23 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		}
 	}
 	return out
+}
+
+// answerable reports whether the operator surface can serve answer_knowledge:
+// a search to answer from, a chart to scope it and resolve the asker's seat,
+// and a model, a budget and an actor to ask, charge and attribute it.
+func answerable(deps OperatorDeps) bool {
+	a := deps.Answer
+	return deps.Knowledge != nil && deps.Org != nil &&
+		a.Models != nil && a.Budget != nil && a.Actor != nil
+}
+
+// newAnswerKnowledge builds the answer tool with its ONE cache: the catalogue
+// is built once per surface, so this is one cache per node.
+func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
+	return &answerKnowledge{
+		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,
+		pages: deps.Pages.Reader, tasks: deps.Work.Reader, deps: deps.Answer,
+		cache: newAnswerCache(AnswerCacheEntries),
+	}
 }

@@ -154,6 +154,7 @@ a model acts on:
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
+| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to reset, or raise its ceiling |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — a read that failed, a log that refused the append (a maintenance or sealed fleet included), an unconfigured backend. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `peer_upgrading` | A node in the fleet is too old to carry this gesture | Retry after the rolling upgrade |
 

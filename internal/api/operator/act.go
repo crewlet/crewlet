@@ -117,6 +117,7 @@ var refusalStatus = map[crewletmcp.Refusal]int{
 	crewletmcp.RefusalInboxFull:          http.StatusConflict,
 	crewletmcp.RefusalNotRunning:         http.StatusConflict,
 	crewletmcp.RefusalSteerUnsupported:   http.StatusConflict,
+	crewletmcp.RefusalBudgetExhausted:    http.StatusConflict,
 	crewletmcp.RefusalUnavailable:        http.StatusServiceUnavailable,
 	crewletmcp.RefusalPeerUpgrading:      http.StatusServiceUnavailable,
 }

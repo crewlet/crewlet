@@ -1385,13 +1385,28 @@ over. That, not a counter at its cap,
 is what exhausted means: a refused charge increments nothing, so the counter
 stops short of the cap by the size of the round that did not fit.
 
-A coding run is the one spend that cannot be checked first. Its box spends
-while the turn is suspended, so its tokens are known only when the run is
-collected, and they are **post-charged**: added to both counters, in the
-windows the run is collected in, without a check, because no answer can
-un-spend them. A run that takes a counter past its
-cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
-the company attempts is refused against the recorded figure.
+Three spends cannot be checked by their own size first, because their size is
+known only once they have happened, and each is **post-charged** — added to the
+counters in the windows it is recorded in, without a check, because no answer
+can un-spend it — behind a gate that reads the room left *before* it starts:
+
+- **A coding run.** Its box spends while the turn is suspended, so its tokens
+  are known only when the run is collected, and they reach both the seat's
+  counter and the company's in the windows the run is collected in. A run that
+  takes a counter past its cap is logged as `sandbox_spend_over_budget`.
+- **An auxiliary pass** — the reflection, profiling, compaction and summary
+  calls the [learning subsystem](../concepts/agent-learning.md) makes on a
+  seat's behalf. A pass does not start for a seat or company with no room
+  left, and each completion it makes is recorded in full on the seat's counter
+  and the company's, past the ceiling included.
+- **A person's knowledge answer** — the dashboard's ⌘K answer
+  ([`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge)).
+  A person has no seat budget, so it is gated on the **company's** windows
+  alone — refused `budget_exhausted` before any model call when one of them
+  has no room — and recorded on the company's counter alone.
+
+In each case the next round the seat or the company attempts is refused
+against the recorded figure.
 
 ### Structured Logging
 

@@ -454,6 +454,16 @@ func annotationsFor(name string) tools.Annotations {
 		// exactly the distinction Destructive draws — reversible, not
 		// harmless.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
+	case AnswerKnowledgeTool:
+		// A READ THAT SPENDS, declared a write for that reason: every call
+		// that misses the cache is a model call charged to the company, so
+		// it is NOT read-only (which is also what keeps the dashboard from
+		// refetching it on focus) and NOT idempotent (a second call after
+		// the corpus moved spends again). It writes nothing anybody reads,
+		// so OpenWorld is explicitly No, and it destroys nothing.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.No, OpenWorld: mcp.No,
+		}
 	case AnswerRunTool:
 		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
 		// coding run, whose next moves reach the company, so OpenWorld

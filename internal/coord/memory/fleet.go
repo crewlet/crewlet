@@ -418,6 +418,23 @@ func (f *Fleet) PostCharge(_ context.Context, seat string, tokens int, windows c
 	}, nil
 }
 
+// PostChargeOrg adds spend that already happened to the company's counter
+// alone, refusing nothing and leaving its refusal stamps as they were. See
+// [coord.Budgets.PostChargeOrg].
+func (f *Fleet) PostChargeOrg(_ context.Context, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	org := f.budgets[coord.OrgScope].Roll(windows).Add(tokens, time.Now().UTC())
+	f.budgets[coord.OrgScope] = org
+	return org.Usage(coord.OrgScope, windows), nil
+}
+
 // Used reports one scope's counter against the given windows.
 func (f *Fleet) Used(_ context.Context, scope string, windows coord.Windows) (coord.Usage, error) {
 	if scope == "" {

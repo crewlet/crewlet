@@ -1156,6 +1156,26 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 	}, nil
 }
 
+// PostChargeOrg adds spend that already happened to the company's counter
+// alone, refusing nothing. See [coord.Budgets.PostChargeOrg].
+//
+// ONE write, so there is no half to compensate: the company's record is the
+// only key it touches, and [FleetStore.bump] with no caps carries its refusal
+// stamps through untouched.
+func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return org.Usage(coord.OrgScope, windows), nil
+}
+
 // unwindOrg takes back the org's half of a charge whose seat half did not
 // land, from the windows that charge was counted in.
 //

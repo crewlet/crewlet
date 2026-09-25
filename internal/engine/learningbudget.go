@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -34,13 +36,19 @@ import (
 // counted.
 type meteredModels struct {
 	inner  learningModels
-	charge func(seat *org.Role) toolloop.BudgetMeter
+	charge func(seat *org.Role) spendRecorder
 }
 
 // learningModels is the seam learning.Models describes, restated here so this
 // file does not import the learning package to satisfy it.
 type learningModels interface {
 	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+}
+
+// spendRecorder records tokens a completion has ALREADY spent, refusing
+// nothing. See [coord.Budgets.PostCharge].
+type spendRecorder interface {
+	Record(ctx context.Context, tokens int) error
 }
 
 func (m meteredModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error) {
@@ -60,17 +68,25 @@ func (m meteredModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error
 	return member, nil
 }
 
-// meteredProvider charges a completion's tokens after the call returns.
+// meteredProvider records a completion's tokens after the call returns.
 //
 // AFTER, not before, and that asymmetry with the turn loop is deliberate:
 // the loop knows a round's size before it spends because it is about to send
 // a request it built, while an auxiliary pass is one shot whose cost is only
-// known from the answer. Charging after means the LAST auxiliary call of a
-// company's life can overshoot the ceiling by one completion; refusing to
-// charge at all — which is what this build did — overshoots it forever.
+// known from the answer. The PRE-FLIGHT GATE is [Engine.learningBudget]; this
+// is the record of what already happened.
+//
+// A RECORD, NEVER THE GATE. It used to put the spend through Charge, which is
+// a decision about room: a completion that took a window past its ceiling was
+// REFUSED there and recorded not at all, so the counter stayed below the
+// ceiling, the pre-flight gate still read room, and the next pass ran and was
+// refused its record in turn — a company at its ceiling paid for every
+// reflection pass after it and its counter heard about none of them. Spend
+// that has happened is recorded whole, past the ceiling included, which is
+// what makes the gate read "no room" afterwards.
 type meteredProvider struct {
 	inner llm.Provider
-	meter toolloop.BudgetMeter
+	meter spendRecorder
 }
 
 func (p meteredProvider) Model() string { return p.inner.Model() }
@@ -82,10 +98,10 @@ func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Co
 	}
 	if tokens := completion.TotalTokens(); tokens > 0 {
 		// context.WithoutCancel: the tokens are already spent at the
-		// vendor. A charge skipped because the caller's deadline expired
+		// vendor. A record skipped because the caller's deadline expired
 		// between the answer and the write is money the counter never
 		// hears about — exactly the leak this file exists to close.
-		if _, spendErr := p.meter.Spend(context.WithoutCancel(ctx), tokens); spendErr != nil {
+		if spendErr := p.meter.Record(context.WithoutCancel(ctx), tokens); spendErr != nil {
 			// Logged, never propagated. The completion SUCCEEDED and the
 			// caller's work is valid; failing it here would turn a
 			// coordination blip into a reflection outage, and the
@@ -96,6 +112,38 @@ func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Co
 		}
 	}
 	return completion, err
+}
+
+// seatSpend records one seat's auxiliary spend in the seat's counter and the
+// company's, in the windows current when it is recorded.
+type seatSpend struct {
+	budgets interface {
+		PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
+	}
+	agentScope string
+	zone       *time.Location
+	now        func() time.Time
+}
+
+func (s seatSpend) Record(ctx context.Context, tokens int) error {
+	_, err := s.budgets.PostCharge(ctx, s.agentScope, tokens, coord.WindowsAt(s.now(), s.zone))
+	if err != nil {
+		return fmt.Errorf("engine: record auxiliary spend: %w", err)
+	}
+	return nil
+}
+
+// spendFor is the recorder for one seat's auxiliary spend, or nil where
+// [Engine.meterFor] would build no meter: no coordination store, or a handle
+// the epoch does not name as an agent seat. The same scope and clock as the
+// seat's turns, so a pass and a round are counted in one window.
+func (e *Engine) spendFor(c *Company, handle string) spendRecorder {
+	m, ok := e.meterFor(c, handle).(*meter)
+	if !ok || m == nil {
+		return nil
+	}
+	return seatSpend{budgets: e.backends.Fleet, agentScope: m.agentScope,
+		zone: m.basis.zone, now: m.now}
 }
 
 // learningBudget is the reflection pass's pre-flight gate.
@@ -153,6 +201,6 @@ func (e *Engine) meteredModelsFor(c *Company) learningModels {
 	}
 	return meteredModels{
 		inner:  c.Models,
-		charge: func(seat *org.Role) toolloop.BudgetMeter { return e.meterFor(c, seatHandle(seat)) },
+		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
 	}
 }

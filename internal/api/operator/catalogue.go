@@ -158,6 +158,13 @@ type Options struct {
 	// such tool.
 	Steer builtin.SteerDeps
 
+	// Answer answers a person's question from the company's knowledge
+	// (`answer_knowledge`): the model, the company's budget, the corpus
+	// position the answers are cached at, and who is asking. It searches
+	// through Knowledge and Work.Search, so it is served only with
+	// Knowledge and Org. A zero value serves no such tool.
+	Answer builtin.AnswerDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -243,6 +250,7 @@ func New(opts Options) (*Server, error) {
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
 		Fleet: opts.Fleet, Runs: opts.Runs, Pauses: opts.Pauses, Steer: opts.Steer,
+		Answer: opts.Answer,
 	})
 	if len(callables) == 0 {
 		return nil, nil
