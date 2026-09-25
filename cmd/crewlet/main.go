@@ -2569,6 +2569,18 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 		}
 		return c.Org
 	}
+	// A PARKED CODING RUN IS ANSWERABLE BY ITS TURN from here, on every
+	// node and whatever this company's sandbox configuration: the record is
+	// the fleet's, and the answer is carried out by the node holding the
+	// run's seat, which reads it off that seat's inbox. The person answering
+	// is the one the credential names, resolved as every other write here.
+	opts.Runs = builtin.RunDeps{
+		Desk: sandbox.AnswerDesk{
+			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
+			Queue:   e.Backends().Queue,
+		},
+		Actor: operator.WorkActor(opts.Org),
+	}
 	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,

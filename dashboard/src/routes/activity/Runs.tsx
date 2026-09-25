@@ -116,6 +116,10 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     task_description: box.task,
     question: box.question ?? "",
     audience: box.audience ?? "",
+    // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
+    // the durable row alone, which replaces this entry once it is read.
+    audience_handles: [],
+    audience_fallback: false,
     branch: "",
     trace_id: "",
     owner: "",

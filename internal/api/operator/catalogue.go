@@ -103,9 +103,10 @@ var log = logging.Get("api.operator")
 
 // Options configure the surface.
 type Options struct {
-	// Work and Pages are the native backends. Both nil serves nothing and
-	// the route is ABSENT — which is the honest shape for a company on
-	// Jira and Confluence: there is nothing here it could manage.
+	// Work and Pages are the native backends. Both nil serves none of
+	// their tools — the honest shape for a company on Jira and Confluence.
+	// A surface left with no tool at all (no Runs either) is ABSENT, with
+	// nothing on it to manage.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
 
@@ -142,6 +143,10 @@ type Options struct {
 	// refused `peer_upgrading` while that node cannot. Nil refuses those
 	// verbs as unavailable.
 	Fleet builtin.Fleet
+
+	// Runs is the parked coding runs a person may answer by turn
+	// (`answer_run`), and who is answering. A zero value serves no such tool.
+	Runs builtin.RunDeps
 
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
@@ -227,7 +232,7 @@ func New(opts Options) (*Server, error) {
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
-		Fleet: opts.Fleet,
+		Fleet: opts.Fleet, Runs: opts.Runs,
 	})
 	if len(callables) == 0 {
 		return nil, nil

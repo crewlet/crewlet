@@ -1043,6 +1043,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// replied.
 		d.Answer = e.sandboxCoordinator.TryResumeFromAnswer
 	}
+	if d.AnswerByTurn == nil && e.sandboxCoordinator != nil {
+		// The other way an answer reaches a parked run: named by its turn,
+		// from any node, onto this seat's inbox. See [Dispatcher.routeAnswers].
+		d.AnswerByTurn = e.sandboxCoordinator.AnswerByTurn
+	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}

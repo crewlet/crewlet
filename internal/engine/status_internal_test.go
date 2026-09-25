@@ -702,7 +702,8 @@ func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, det
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: e.backends.Queue, Pending: pending, Manager: manager,
+		Audience: noAudience{},
+		Queue:    e.backends.Queue, Pending: pending, Manager: manager,
 		// THE ENGINE'S OWN, because these cases are about what the
 		// indicator does across the seam between the two and a stub
 		// would be a second answer to the question under test.

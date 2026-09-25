@@ -425,17 +425,39 @@ type PendingRun struct {
 
 	// AudienceHandles are the seats a parked question may be answered by,
 	// and AudienceFallback whether that set fell back to a default rather
-	// than being named by the run.
+	// than being what the run named.
+	//
+	// RESOLVED ONCE, AT THE PARK, by [CoordinatorOptions.Audience] against
+	// the chart the parking node holds, and written in the same write as the
+	// question. [PendingRun.Audience] is a free label the coding agent chose
+	// — "requester", "team", "manager", or a name it typed — and it was
+	// never resolved at all, so "what is waiting on me" had no answer: a
+	// person could see every parked question in the company and none of
+	// them said it was theirs. Resolved at the park rather than at every
+	// read because the label is about the moment it was asked: who the
+	// requester's manager WAS then is who was asked.
 	//
 	// DECLARED WITH THE ITEM AND WITH [PendingRun.Extra], in one change,
 	// because all three answer the same hazard: a key an older build does
-	// not know is a key its compare-and-swap drops. This build carries both
-	// through every write and resolves neither; the park that fills them
-	// resolves [PendingRun.Audience] against the chart, and until it does
-	// they are empty, which every reader takes as "the audience string is
-	// all there is".
+	// not know is a key its compare-and-swap drops. Empty on a row parked by
+	// a build that did not resolve them, which every reader takes as "the
+	// audience string is all there is". Cleared with the question when a
+	// new job opens on the row ([PendingStore.BeginLaunch]).
 	AudienceHandles  []string `json:"audience_handles,omitempty"`
 	AudienceFallback bool     `json:"audience_fallback,omitempty"`
+
+	// Requester is the seat whose message, notice or ask woke the turn
+	// that launched this run — the person a question addressed to
+	// "requester" means — and empty when nothing a seat said woke it (a
+	// schedule, a sender this company's chart does not know).
+	//
+	// ON THE ROW because the park that resolves the audience is not the
+	// frame that saw the trigger: it runs when the job finishes, possibly
+	// days later and on another node, with nothing of the dispatch left.
+	// ADDITIVE, and carried through an older build's write by
+	// [PendingRun.Extra]; a row without it resolves "requester" to the
+	// fallback, which is what a run whose requester nobody recorded is.
+	Requester string `json:"requester,omitempty"`
 
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
@@ -977,6 +999,23 @@ type Clarification struct {
 	// [PendingRun.ParkedInputTokens].
 	InputTokens  int
 	OutputTokens int
+
+	// Answerers is who the question may be answered by, resolved from
+	// Audience against the chart — see [PendingRun.AudienceHandles].
+	Answerers Audience
+}
+
+// Audience is who a parked question may be answered by: the seats, and
+// whether they are a fallback rather than what the run asked for.
+//
+// FALLBACK IS A FACT A READER NEEDS, not an apology. A question addressed to
+// "manager" on a seat with no manager, or to a name nobody in the chart has,
+// still waits on somebody — the seat's lead chain — and a person reading "what
+// is waiting on me" has to be able to tell a question put to them from one
+// that reached them because nobody else could be named.
+type Audience struct {
+	Handles  []string
+	Fallback bool
 }
 
 // BoxRef is the box and command a run is attached to.

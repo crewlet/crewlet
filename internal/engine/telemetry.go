@@ -75,6 +75,11 @@ type turnTelemetry struct {
 	// off the payload is one it cannot reason about at all.
 	interactions []types.InboundInteraction
 
+	// requester is the seat whose wake started this turn — see
+	// [turnctx.Turn.Requester] — resolved off the same first event the
+	// trigger is described from, or off the parked row on a resume.
+	requester string
+
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
 	skills []string
@@ -142,6 +147,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
 	t.interactions = e.interactionsOf(req.Ask())
+	t.requester = requesterOf(req.Events, t.interactions)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -217,6 +223,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
+			// And who woke it, for a question a run it detaches puts to
+			// "the requester" long after this frame is gone.
+			Requester: t.requester,
 			// THE ITEM THIS TURN IS ON, and the set its writes report
 			// into. The item rides every phase event and the row of any
 			// coding run this turn detaches; the set is the one mutable
@@ -574,6 +583,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,
+		// WHO ASKED, off the row rather than off whatever resumed it: an
+		// answer is somebody replying to the run, not somebody asking this
+		// turn for something, so a second run the resumed turn detaches is
+		// still the first requester's.
+		requester: in.Run.Requester,
 		// The resumed turn's OWN span, opened by resumeTurn under the
 		// reconstructed suspended one. This used to be built by hand as
 		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
@@ -645,4 +659,30 @@ func skipDecision(decision string) types.PlanDecision {
 		return types.PlanDecisionSkip
 	}
 	return ""
+}
+
+// requesterOf is the seat whose wake started a turn, or "" when no seat's did.
+//
+// OFF THE FIRST EVENT, the one [Engine.describeTurn] describes the trigger
+// from: a colleague's ask names its asker, and a notification's first
+// constituent names the person whose thread the turn is answering — resolved
+// to a seat through the same registry the interactions were, so it is a
+// handle in the chart or nothing. The first speaker ONLY, even where a later
+// constituent's sender is known: "the requester" is who started the
+// conversation this turn answers, and a later voice in the same thread is not
+// them.
+func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) string {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if ask, ok := events.DataAs[*types.A2ARequest](ev); ok {
+			return ask.Requester
+		}
+		break
+	}
+	if len(interactions) == 0 {
+		return ""
+	}
+	return interactions[0].Sender.Handle
 }

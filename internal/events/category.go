@@ -58,7 +58,12 @@ var categories = map[string]string{
 	// that a turn was lost, and it is the one an operator goes looking for
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
-	"sandbox_run_failed":   "task",
+	"sandbox_run_failed": "task",
+	// What an answer to a run's question became, on either route. The chat
+	// route left no record at all, so this is the only account of whether a
+	// person's reply resumed the run, found it already answered, or found it
+	// gone — and of who gave it.
+	"sandbox_run_answered": "task",
 	"scheduled_task_fired": "task",
 
 	"a2a_channel_opened": "a2a",
@@ -171,6 +176,11 @@ var excluded = map[string]string{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet",
+	"sandbox_answer_given": "the WAKE an answer by turn puts on the seat's " +
+		"inbox, and never a turn. What the answer became is " +
+		"sandbox_run_answered, and that a person gave it is their " +
+		"operator_acted row, so categorising this would write a third row " +
+		"for one answer — the reason a2a_request is kept out above",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +

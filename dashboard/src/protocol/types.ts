@@ -444,6 +444,12 @@ export interface SandboxRun {
   task_description: string;
   question: string;
   audience: string;
+  /** Who the question is put to, resolved against the org chart when the run
+   *  parked. Empty on a run that is not parked. */
+  audience_handles: string[];
+  /** True when `audience` named nobody the chart has and the question was put
+   *  to the seat's lead chain instead. */
+  audience_fallback: boolean;
   branch: string;
   trace_id: string;
   owner: string;

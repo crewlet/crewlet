@@ -405,7 +405,8 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	// coordinator refuses to be built without one.
 	e := &Engine{sandboxPending: store}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
+		Audience: noAudience{},
+		Queue:    queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -564,7 +565,8 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: discardQueue{}, Pending: store, Manager: manager, Resume: resume,
+		Audience: noAudience{},
+		Queue:    discardQueue{}, Pending: store, Manager: manager, Resume: resume,
 		Account: accountant(fleet, dayCap(orgCap), dayCap(seatCap)),
 	})
 	if err != nil {
@@ -788,7 +790,8 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: &publishRecorder{}, Pending: store, Manager: manager,
+		Audience: noAudience{},
+		Queue:    &publishRecorder{}, Pending: store, Manager: manager,
 		Resume: &resumer{engine: equipped},
 	})
 	if err != nil {

@@ -999,9 +999,13 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
-		Turn:       sandboxTurnRef(ctx, t, seat.Name),
-		Brief:      brief,
-		Task:       t.Task,
+		Turn:  sandboxTurnRef(ctx, t, seat.Name),
+		Brief: brief,
+		Task:  t.Task,
+		// HOW TO ASK A PERSON, with the names the chart gives this seat —
+		// without it the coding agent was never told the ask shim its box
+		// carries exists, so no run could park on a question at all.
+		Ask:        askBrief(company.Org, seat),
 		Setup:      setup,
 		Spec:       spec,
 		LLM:        agentLLM,
@@ -1070,6 +1074,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// AND THE ITEM, for the same reason: the resumed turn is charged
 		// to what this one was on, and has no trigger to resolve it from.
 		WorkItem: t.WorkItem,
+		// AND WHO ASKED, which the park resolves a question addressed to
+		// "the requester" against — see [sandbox.PendingRun.Requester].
+		Requester: t.Requester,
 	}
 }
 
@@ -1292,6 +1299,9 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// Who a parked question is put to, resolved against the live
+		// chart at the park — see audience.go.
+		Audience: audienceResolver{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever

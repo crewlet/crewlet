@@ -47,6 +47,12 @@ const (
 	// FeatureMCPStatus — the node publishes [NodeStatus.MCP], so an absent
 	// list there means "started no MCP server" rather than "did not say".
 	FeatureMCPStatus Feature = "mcp_status"
+
+	// FeatureAnswerRunByTurn — the node routes a `sandbox_answer_given` on
+	// a seat's inbox to the parked coding run it names. An older build has
+	// no such route: the wake would reach its screening as an ordinary
+	// delivery and be run as a turn about nothing, while the run waited on.
+	FeatureAnswerRunByTurn Feature = "answer_run_by_turn"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -56,7 +62,7 @@ const (
 // is a claim a peer acts on — a gesture it gates is accepted the moment every
 // node carries the name — so a name listed ahead of its implementation is a
 // fleet told it can do something it cannot.
-var Features = []Feature{FeatureMCPStatus}
+var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn}
 
 // Valid reports whether this build knows the feature.
 func (f Feature) Valid() bool { return slices.Contains(Features, f) }

@@ -72,6 +72,11 @@ type TurnRef struct {
 	// on nothing. Written onto the row, because the resumed turn has no
 	// trigger to resolve it from — see [PendingRun.WorkItem].
 	WorkItem *types.WorkItem
+
+	// Requester is the seat whose wake started the turn, "" for none —
+	// what a question addressed to "requester" is put to. See
+	// [PendingRun.Requester].
+	Requester string
 }
 
 // LaunchRequest is everything one detached coding run needs.
@@ -86,6 +91,12 @@ type LaunchRequest struct {
 	// Task is the ask the suspended turn was working on, carried onto the
 	// row so a resume has the brief when the trigger is long gone.
 	Task string
+
+	// Ask is the addendum telling the coding agent how to stop and ask a
+	// person — the ask shim's usage, with the names it may address. The
+	// ENGINE composes it, because the names are the chart's and this
+	// package holds none; empty adds nothing.
+	Ask string
 
 	Spec       Spec
 	Setup      []SetupStep
@@ -160,6 +171,9 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
 		WorkItem: req.Turn.WorkItem,
+		// Who asked, for the park that resolves a question's audience:
+		// that frame sees no trigger.
+		Requester: req.Turn.Requester,
 		// The model the run's phase record is filed under; the store keys
 		// the rest of that record on the launch it mints.
 		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
@@ -365,6 +379,10 @@ func buildBrief(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	b.WriteString("\n")
 	b.WriteString(EnvironmentBrief(req.Setup, names))
+	if req.Ask != "" {
+		b.WriteString("\n")
+		b.WriteString(req.Ask)
+	}
 	return b.String()
 }
 

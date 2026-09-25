@@ -256,6 +256,8 @@ test("a coding run is named by the task it was given", async () => {
           task_description: "Drop the Pulsar backend",
           question: "",
           audience: "",
+          audience_handles: [],
+          audience_fallback: false,
           branch: "",
           trace_id: "",
           owner: "",

@@ -376,7 +376,8 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	// The engine's own resumer, as buildSandboxRuntime hands it over: the
 	// coordinator refuses to be built without one.
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
+		Audience: noAudience{},
+		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

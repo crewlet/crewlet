@@ -99,6 +99,17 @@ type Dispatcher struct {
 	Answer func(ctx context.Context, handle string, conv sandbox.ConversationRef,
 		answer string, trigger *events.Event) (sandbox.AnswerDisposition, error)
 
+	// AnswerByTurn hands a person's answer BY TURN — a
+	// [types.SandboxAnswerGiven] on the seat's inbox — to the parked coding
+	// run it names, and reports what to do with the delivery.
+	//
+	// ROUTED BEFORE THE SCREENING, and never a turn: see
+	// [Dispatcher.routeAnswers]. Nil is a node with no coordinator, which
+	// cannot resume a run, so the delivery is handed back for the seat's
+	// next holder rather than spent.
+	AnswerByTurn func(ctx context.Context, given types.SandboxAnswerGiven,
+		trigger *events.Event) (sandbox.AnswerDisposition, error)
+
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
@@ -343,7 +354,25 @@ type holding struct {
 // narrows held at each point where the delivery stops being answerable for an
 // event.
 func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
-	screening := inbox.Screen(d.conditions(handle), evs)
+	// AN ANSWER BY TURN FIRST, before the screening can park it behind a
+	// held seat or the ledger can read it: it is addressed to a run, never
+	// to the seat, and whatever it becomes it is not a turn.
+	//
+	// ONE READING OF THE CONDITIONS for both, taken once at the top as the
+	// screening's own contract asks: read twice, the answer stage could see
+	// a node that may not run anything and hand the delivery on, and the
+	// screening a moment later a node that may — which would PROCEED with
+	// an answer in the partition and run it as a turn.
+	conditions := d.conditions(handle)
+	evs, answered, settled := d.routeAnswers(ctx, handle, conditions, evs)
+	if settled {
+		return answered
+	}
+	held.events = evs
+	if len(evs) == 0 {
+		return queue.Ack()
+	}
+	screening := inbox.Screen(conditions, evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
@@ -1007,6 +1036,85 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return sandbox.AnswerNotMine, err
 	}
 	return disposition, err
+}
+
+// routeAnswers settles every answer BY TURN in a delivery, and returns what is
+// left for the ordinary route.
+//
+// # Before the screening, and why that is safe
+//
+// The screening's park is the one thing an answer must not be subjected to: a
+// seat held by one coding job requeues its mail until the job is done, and an
+// answer to ANOTHER of its runs — one parked on a question, holding nothing —
+// would wait behind a job it has nothing to do with. The chat route's reply is
+// offered from inside that park for the same reason.
+//
+// What the screening decides about the NODE still applies, and is left to it:
+// a node that does not hold the seat, has no turn engine, or is refusing new
+// work under a stale company runs no resume either, so on any of those the
+// whole delivery goes to the screening untouched, which defers or parks it —
+// and an answer that comes back is routed here again. A seat parked on its
+// budget waits the same way: a resume charges tokens exactly as a turn does.
+// And a PAUSED seat takes nothing off its inbox at all, this included, which is
+// what "an answer waits behind a pause" means.
+//
+// # Never a turn
+//
+// Every disposition but one spends the delivery: the answer resumed the run,
+// or the run was not waiting, or it is gone — each announced by the
+// coordinator — and there is nothing else an answer addressed to a run can
+// become. [sandbox.AnswerDeferred] hands the delivery back with a NAK, the
+// spaced return, bounded by the broker's own budget; see
+// [sandbox.Coordinator.AnswerByTurn] for why nothing shorter bounds it.
+//
+// ONE ANSWER PER DELIVERY IN PRACTICE — the event names no conversation, so it
+// partitions on its own id — but the rule holds for any mix: the answers are
+// settled first, a hand-back returns the delivery before anything else in it
+// has run, and what is left goes on as the ordinary delivery it is.
+func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Conditions,
+	evs []*events.Event,
+) ([]*events.Event, queue.Result, bool) {
+	var answers, rest []*events.Event
+	for _, ev := range evs {
+		if _, ok := events.DataAs[*types.SandboxAnswerGiven](ev); ok {
+			answers = append(answers, ev)
+			continue
+		}
+		rest = append(rest, ev)
+	}
+	if len(answers) == 0 {
+		return evs, queue.Result{}, false
+	}
+	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers {
+		return evs, queue.Result{}, false
+	}
+	if result, parked := d.parkOnBudget(ctx, handle); parked {
+		return nil, result, true
+	}
+	for _, ev := range answers {
+		given, _ := events.DataAs[*types.SandboxAnswerGiven](ev)
+		if d.AnswerByTurn == nil {
+			return nil, queue.Nak(fmt.Errorf("engine: %s holds no sandbox coordinator "+
+				"to resume run %s with the answer it was given", handle, given.TurnID)), true
+		}
+		disposition, err := d.AnswerByTurn(ctx, *given, ev)
+		switch {
+		case disposition == sandbox.AnswerDeferred:
+			return nil, d.handBackAnswer(handle, err), true
+		case !disposition.Valid():
+			log.ErrorContext(ctx, "sandbox_answer_disposition_unknown",
+				"agent_handle", handle, "turn_id", given.TurnID,
+				"disposition", disposition.String(),
+				"detail", "the sandbox coordinator answered an answer by turn with no "+
+					"disposition this build knows; it is spent, because an answer "+
+					"addressed to a run is never a turn")
+		case err != nil:
+			log.WarnContext(ctx, "sandbox_answer_by_turn_failed",
+				"agent_handle", handle, "turn_id", given.TurnID,
+				"disposition", disposition.String(), "error", err)
+		}
+	}
+	return rest, queue.Result{}, false
 }
 
 // handBackAnswer returns a delivery a parked coding run is still owed, so the

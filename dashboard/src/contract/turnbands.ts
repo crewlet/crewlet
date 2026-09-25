@@ -162,6 +162,10 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * answer. That is the band working rather than a hole in it: a swept close is
  * precisely the statement that no turn finished.
  *
+ * `sandbox_run_answered` is here beside the question it answers: a parked
+ * run's answer is work that happened to this turn between its two segments,
+ * whichever route it came by.
+ *
  * `task_assigned` was named here too and is a different mistake: it is the
  * SCHEDULER's cron fire — the wake that starts a turn — rather than work a
  * turn did. The trigger is already on the Turn screen, as the brief.
@@ -176,6 +180,7 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
 export const DID: ReadonlySet<string> = new Set([
   "sandbox_run_started",
   "sandbox_clarification_requested",
+  "sandbox_run_answered",
   "sandbox_run_completed",
   "subagent_batched",
   "skill_used",

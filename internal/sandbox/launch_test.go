@@ -171,6 +171,30 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	}
 }
 
+// THE CODING AGENT IS TOLD IT MAY ASK, and whom — the addendum the engine
+// composes rides the brief the box is started with. Without it the ask shim was
+// installed and never mentioned, so a run blocked on a decision could not park
+// on a question at all.
+//
+// And the row records WHO ASKED, which is what the park resolves a question to
+// "the requester" against days later.
+func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
+	req.Turn.Requester = "ada"
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	started := rig.runner.Started()
+	if len(started) != 1 || !strings.Contains(started[0].Brief, "crewlet-ask --to founder") {
+		t.Fatalf("the coding agent's brief does not carry how to ask:\n%v", started)
+	}
+	if got := rig.get("t1").Requester; got != "ada" {
+		t.Errorf("the row records requester %q, want the seat whose wake started the turn", got)
+	}
+}
+
 // The checkout is the expensive half of a coding run; a second call in one
 // turn continues where the first stopped.
 func TestASecondCallInOneTurnReusesTheBox(t *testing.T) {

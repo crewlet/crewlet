@@ -1865,7 +1865,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
-| `sandbox_runs` | `{}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
+| `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
@@ -2286,10 +2286,11 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **ten no seat is given**: `list_work_views`, `save_work_view`,
+Plus **eleven no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
-`remove_work_item` and `restore_work_item`. A view is furniture — a name, a shape
+`remove_work_item`, `restore_work_item` and
+[`answer_run`](#answering-a-parked-coding-run). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -2302,7 +2303,37 @@ The trash is the last of them: a removal takes an item off every board in the
 company, and a seat that could hide work it did not want to do would be marking
 its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the
-one that is not.
+one that is not. And a coding run's question is a person's to answer: a seat
+that could answer its own run would be guessing on its own behalf.
+
+### Answering a parked coding run
+
+A [coding run](../concepts/code-sandbox.md#answering-a-parked-run) that stops
+to ask a person something parks until it is answered. A reply on the
+conversation it was asked in answers it — but a run started by a schedule, a
+task assignment or a colleague's ask has **no conversation**, so `answer_run`
+answers any parked run by naming it:
+
+| Argument | |
+|---|---|
+| `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
+| `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
+
+It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
+the answer is on the inbox of the seat holding the run, and **that** node
+resumes the run with it — so an answer given while the seat is paused waits
+for the resume, exactly as a chat reply would. What it became is announced on
+the event stream as `sandbox_run_answered` (`resumed`, `not_awaiting` or
+`gone`), naming the credential and the person. An `unknown` outcome is a
+delivery the broker never confirmed; answering again is harmless, because
+whichever copy arrives second finds the run no longer waiting.
+
+It refuses `not_running` for a run that is not waiting for an answer, or has no
+record at all (a run that ended has none), and `peer_upgrading` while the node
+holding the seat runs a build that cannot route an answer by turn — that build
+would read the answer as an ordinary wake and run a turn about nothing. It is
+served on every company, native backends or not: the run record is the
+fleet's, and a company on Jira runs coding agents too.
 
 ### One catalogue, and a call is a fresh write
 
@@ -2323,7 +2354,7 @@ saved view and a person's own marks, pins and queue all follow the one rule.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets no endpoint at all. `search_knowledge` is the exception and is
+neither gets only `answer_run`, which is about the fleet's own run record. `search_knowledge` is the exception and is
 offered against **any** knowledge backend, Confluence included — a ranked
 search over the company's own wiki is exactly as useful to an assistant there.
 
@@ -2331,7 +2362,7 @@ The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
 colleague's answer comes back by waking a seat, and there is nobody here for
 it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
-does not exist).
+does not exist — answering a run a seat started is `answer_run`).
 
 ### Seeding a knowledge base with it
 
@@ -2883,7 +2914,8 @@ reclaimed, work preserved on a pushed branch) is listed on both.
       "turn_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
       "status": "awaiting_clarification", "coding_agent": "claude-code",
       "task_description": "Add retry to the webhook client",
-      "question": "Which backoff ceiling should I use?", "audience": "founder",
+      "question": "Which backoff ceiling should I use?", "audience": "manager",
+      "audience_handles": ["founder"], "audience_fallback": false,
       "branch": "crewlet/eng/retry", "trace_id": "<hex>", "owner": "core-1:8f2a",
       "box_exists": true, "paused_at": "2026-06-08T07:30:02+00:00",
       "pause_ttl_seconds": 3600,
@@ -2908,7 +2940,25 @@ resume path matches an inbound message's conversation identity against
 the one the run was parked with, and those runs stored **no conversation
 at all**: their trigger names neither key, so neither is stamped and
 neither reaches the row. Telling somebody to "reply in the thread" would
-send them to a thread that does not exist.
+send them to a thread that does not exist. Such a run is still answerable:
+[`answer_run`](#answering-a-parked-coding-run) names it by its `turn_id` instead.
+
+`audience` is the coding agent's own label for who should answer —
+`requester`, `manager`, `team`, or a name it typed. `audience_handles` is
+that label resolved against the org chart **when the run parked**: the seat
+whose message or ask woke the turn, the seat's manager, its unit's lead and the
+people in that unit, or the one colleague an exact match names.
+`audience_fallback` is `true` when the label named nobody the chart has and the
+question was put to the seat's lead chain instead (its managers, or the leads
+of the units above it). Both are empty on a run that is not parked. See
+[who is asked](../concepts/code-sandbox.md#who-a-question-is-put-to).
+
+`?audience=<handle>` narrows the board to the runs whose question is put to
+that person — every identity their rows may carry, the seat and the operator
+credential bound to it. It is a filter over the board and not a personal read,
+so it has no scope rule of its own: the unfiltered board already names every
+run's audience. A run parked by a build that resolved no audience matches no
+one.
 
 `execute_state` — the serialised Execute-loop conversation — is
 deliberately not returned: it is the largest column in the row and every

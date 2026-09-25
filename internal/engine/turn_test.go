@@ -2693,7 +2693,8 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+		Audience: noAudience{},
+		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
 		// the lookup is what fails, and a resume from here would be the
 		// answer being run after the store said it could not say which
@@ -2758,4 +2759,102 @@ func (r unreachedResumer) Resume(context.Context, sandbox.ResumeRequest) error {
 	r.t.Fatal("the answer was resumed although the lookup that matches it to a " +
 		"run could not be made")
 	return nil
+}
+
+// noAudience resolves every question to nobody: these coordinators are about
+// the answer route, not whom a question is put to (audience_internal_test.go).
+type noAudience struct{}
+
+func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
+	return sandbox.Audience{}
+}
+
+// answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.
+func answerGiven(turnID string) *events.Event {
+	return events.New(types.SandboxAnswerGiven{
+		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+	}, events.TraceContext{})
+}
+
+// AN ANSWER BY TURN IS NEVER RUN AS A TURN, whatever it became. It is
+// addressed to a parked run and not to the seat: resumed, found not waiting or
+// found gone, it is spent where it was routed, and only an answer the run is
+// still owed comes back — as a NAK, the spaced return. A seat HELD by another
+// coding job does not park it either, because the run it answers holds
+// nothing; a node that does not hold the seat routes nothing at all.
+func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
+	t.Parallel()
+	free := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
+	held := free
+	held.SeatHeldBySandbox = true
+	for name, tc := range map[string]struct {
+		conds       inbox.Conditions
+		disposition sandbox.AnswerDisposition
+		unwired     bool
+		outcome     queue.Outcome
+		routed      bool
+	}{
+		"resumed":                          {free, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
+		"not waiting or gone":              {free, sandbox.AnswerNotMine, false, queue.OutcomeAck, true},
+		"an answer this build cannot read": {free, sandbox.AnswerDisposition(""), false, queue.OutcomeAck, true},
+		"still owed":                       {free, sandbox.AnswerDeferred, false, queue.OutcomeNak, true},
+		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
+		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
+		"a node that does not hold the seat": {
+			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions { return tc.conds }
+			var routed []string
+			if !tc.unwired {
+				d.AnswerByTurn = func(_ context.Context, given types.SandboxAnswerGiven,
+					_ *events.Event) (sandbox.AnswerDisposition, error) {
+					routed = append(routed, given.TurnID)
+					return tc.disposition, nil
+				}
+			}
+			got := d.Dispatch(context.Background(), "ceo", []*events.Event{answerGiven("t1")})
+			if got.Outcome != tc.outcome {
+				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
+			}
+			if len(r.reqs) != 0 {
+				t.Errorf("an answer by turn was run as a turn: %+v", r.reqs)
+			}
+			if (len(routed) == 1) != tc.routed {
+				t.Errorf("routed to the run %v, want routed=%v", routed, tc.routed)
+			}
+			if tc.routed && len(r.parked) != 0 {
+				t.Errorf("an answer routed to its run was also parked: %v", r.parked)
+			}
+		})
+	}
+}
+
+// AN ANSWER IS TAKEN OUT OF WHATEVER IT ARRIVED WITH, and the rest of the
+// delivery is the ordinary delivery it is: the other event runs as a turn, and
+// the answer is not in it.
+func TestAnAnswerIsTakenOutOfTheDeliveryBeforeTheTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
+	d := dispatcher(t, r)
+	d.AnswerByTurn = func(context.Context, types.SandboxAnswerGiven, *events.Event) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerConsumed, nil
+	}
+	answer, other := answerGiven("t1"), ev("notification")
+	got := d.Dispatch(context.Background(), "ceo", []*events.Event{answer, other})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ack", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn ran %d times, want once for the ordinary event", len(r.reqs))
+	}
+	for _, e := range r.reqs[0].Events {
+		if e.ID == answer.ID {
+			t.Fatal("the answer by turn reached the turn as part of its trigger")
+		}
+	}
 }

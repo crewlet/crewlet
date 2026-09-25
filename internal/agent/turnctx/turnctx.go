@@ -168,6 +168,14 @@ type Turn struct {
 	Task  string
 	Reply string
 
+	// Requester is the seat whose message, notice or ask woke this turn,
+	// and empty when no seat did — a schedule, a sender the chart does not
+	// know. Carried for the reason Task and Reply are: a coding run this
+	// turn detaches can stop to ask "the requester" a question days later,
+	// on another node, and the launch is the only frame that can put who
+	// that is on the run's row.
+	Requester string
+
 	// Phase is the phase session this value was bound for, and empty on
 	// the Turn the engine built for the whole turn. Set only through
 	// [Turn.InPhase], by the frame that builds a phase's tool surface, so

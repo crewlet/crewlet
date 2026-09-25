@@ -25,7 +25,8 @@ import (
 // loaded into a phase), `a2a_ask` (a colleague ask is answered by waking a
 // seat, and there is nobody here for the answer to come back to),
 // `run_sandbox` (a detached run resumes a suspended phase that does not
-// exist), and `lookup_colleague` — which would be useful, but resolves
+// exist — though a run a seat parked on a question IS a person's to answer,
+// which is `answer_run`), and `lookup_colleague` — which would be useful, but resolves
 // against the turn's own org and has no other source.
 //
 // What is left is the surface an operator's assistant actually needs: read
@@ -63,6 +64,10 @@ type OperatorDeps struct {
 	// fleet.go. Nil REFUSES those verbs as unavailable rather than
 	// letting them through unchecked.
 	Fleet Fleet
+
+	// Runs answers a parked coding run by its turn — see answerrun.go.
+	// A nil desk omits the tool.
+	Runs RunDeps
 }
 
 // OperatorTools is the catalogue for one operator surface.
@@ -116,6 +121,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
 			deps.Knowledge != nil && deps.Org != nil},
+		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
+		// person's to answer, and a seat that could answer its own run's
+		// question would be one guessing on its own behalf.
+		{&answerRun{deps: deps.Runs, fleet: deps.Fleet}, deps.Runs.Desk != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {

@@ -442,6 +442,15 @@ func annotationsFor(name string) tools.Annotations {
 		// exactly the distinction Destructive draws — reversible, not
 		// harmless.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
+	case AnswerRunTool:
+		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
+		// coding run, whose next moves reach the company, so OpenWorld
+		// is Yes. Not destructive — it supplies what a run asked for and
+		// replaces nothing — and NOT idempotent: a second call with other
+		// words is a second answer, which the run declines once the first
+		// has resumed it, and the annotation describes the tool rather
+		// than the engine's protection.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
 		// reversible — which is exactly what Destructive asks about. The
