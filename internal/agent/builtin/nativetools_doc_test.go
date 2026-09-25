@@ -92,9 +92,10 @@ func operatorOnlyTools(t *testing.T) []string {
 
 // everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
 // that are not the tracker's: answering a parked coding run, pausing and
-// resuming a seat, and steering a running turn — each a person's decision
-// about the company, served on the operator surface alone. Counted from the
-// catalogue with every seam wired, for the page that lists them all.
+// resuming a seat, steering a running turn and answering a question from the
+// company's knowledge — each a person's decision about the company, served on
+// the operator surface alone. Counted from the catalogue with every seam
+// wired, for the page that lists them all.
 func everyOperatorOnlyTool(t *testing.T) []string {
 	t.Helper()
 	full := fullDeps(t)
@@ -114,6 +115,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		return builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator}, nil
 	}
 	company := &org.Organization{Name: "Acme"}
+	answers := newAnswerRig()
 	var only []string
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
@@ -121,14 +123,15 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: func() *org.Organization { return company }, Actor: actor},
-		Steer: builtin.SteerDeps{Asker: &fleetAsker{}, Actor: actor},
+		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Actor: actor},
+		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
 	}) {
 		if !slices.Contains(seat, tool.Name()) {
 			only = append(only, tool.Name())
 		}
 	}
 	for _, name := range []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
-		builtin.ResumeSeatTool, builtin.SteerTurnTool} {
+		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool} {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
 				"(it adds %v), so this count is not the one the page lists", name, only)

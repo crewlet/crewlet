@@ -123,7 +123,11 @@ through, instead of filing it twice. An `op_id` is that one call and no other:
 it carries a digest of the call's arguments, and brought back with any other
 argument, or to another tool, it is refused before anything is written. A seat
 is never offered the argument — its turn is its identity — and a seat's call
-that sends one is refused.
+that sends one is refused. The dashboard's transport,
+[`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface),
+takes no `op_id` either: the operation is derived from the request's own
+`request_id` (a UUIDv7) and the token that sent it, so the retry of a gesture
+is the same request sent again, and an `op_id` beside it is refused.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
@@ -215,6 +219,7 @@ a model acts on:
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
+| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to reset, or raise its ceiling |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — a read that failed, a log that refused the append (a maintenance or sealed fleet included), an unconfigured backend. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `peer_upgrading` | A node in the fleet is too old to carry this gesture | Retry after the rolling upgrade |
 

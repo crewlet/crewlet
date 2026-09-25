@@ -51,6 +51,7 @@ const (
 	RefusalInboxFull          = mcp.RefusalInboxFull
 	RefusalNotRunning         = mcp.RefusalNotRunning
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
+	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
 	RefusalPeerUpgrading      = mcp.RefusalPeerUpgrading
 )

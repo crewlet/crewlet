@@ -422,6 +422,30 @@ type Budgets interface {
 	// cap trips early rather than late.
 	PostCharge(ctx context.Context, seat string, tokens int, windows Windows) (Spend, error)
 
+	// PostChargeOrg adds spend that has ALREADY HAPPENED to the COMPANY's
+	// counter alone, in the given windows, and never refuses. The answer is
+	// the company's counter after the write — or an empty [Usage] for a
+	// charge of nothing, which writes nothing and reads nothing, exactly as
+	// PostCharge answers one.
+	//
+	// It exists for the spend nobody's SEAT made: a person asking the
+	// company's knowledge a question from the dashboard (the operator
+	// surface's `answer_knowledge`). A person has no agent scope and no
+	// seat ceiling — `token_budget` is on the company and on roles that
+	// run turns — so there is no seat half to charge, and inventing a
+	// scope for one would put a row in every listing that no ceiling can
+	// ever judge. The company's windows are what that spend is judged by,
+	// and a counter that did not hear about it would hand the next turn
+	// room the answer had already used.
+	//
+	// AFTER THE FACT for PostCharge's reason: an answer is one model call
+	// whose size is known only from its reply. The caller gates BEFORE the
+	// call by reading the company's counter ([Budgets.Used]); this records
+	// what the call cost, past a ceiling included, and — like PostCharge —
+	// leaves the refusal stamps alone, because it is not a decision about
+	// room.
+	PostChargeOrg(ctx context.Context, tokens int, windows Windows) (Usage, error)
+
 	// Used reports one scope's counter against the given windows. A scope
 	// never charged reads [Unspent]; an unreachable store is an error,
 	// never a zero.
