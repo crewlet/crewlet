@@ -2130,6 +2130,11 @@ export interface WorkComment {
   ask?: string;
   /** The comment id this one answers, which is what closes that question. */
   answers?: string;
+  /** The structure an ask carries when it asks somebody to choose. Set only
+   *  on the comment that asks, and never changed after. */
+  decision?: WorkDecision;
+  /** The option an answer chose, by id — one of the answered ask's own. */
+  choice?: string;
   mentions?: string[];
   resolved?: boolean;
   resolved_by?: string;
@@ -3051,12 +3056,48 @@ export interface WorkActivityAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** A structured ask: the question, two to six options, what the asker
+ *  recommends and why, what it looked at, and the role the person is asked
+ *  in. The engine enforces only its shape and that an answer's `choice`
+ *  names one of its options. */
+export interface WorkDecision {
+  question: string;
+  options: WorkDecisionOption[];
+  /** An option id, or absent when the asker has no view. */
+  recommended?: string;
+  rationale?: string;
+  evidence?: WorkDecisionEvidence[];
+  /** `approver`: the answer IS the decision. `contributor`: it is an input
+   *  to a decision somebody else makes. */
+  role: "approver" | "contributor";
+  /** Where the asker will report what was decided. */
+  inform?: { surface: "mattermost" | "slack"; channel: string };
+}
+
+export interface WorkDecisionOption {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+/** One thing a decision cites. A task's `ref` is its id — resolved at write,
+ *  because a key moves with the task — and a url's is https. */
+export interface WorkDecisionEvidence {
+  kind: "task" | "page" | "turn" | "run" | "url";
+  ref: string;
+  label?: string;
+}
+
 /** One question waiting on somebody, with what to do about it. */
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
   asked_at: string;
   body: string;
+  /** Present when the ask asks somebody to choose. */
+  decision?: WorkDecision;
+  /** Whether the ask is still waiting on an answer. */
+  open: boolean;
   /** The literal call that answers it. A model handed a comment id still has
    *  to compose the call, and every one it composes differently is a round
    *  spent being refused. */

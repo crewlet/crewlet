@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -68,6 +69,18 @@ type AskRow struct {
 	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
+
+	// Decision is the structure the ask carries when it asks somebody to
+	// choose — the options, the recommendation and the evidence — so the
+	// person or the model answering it decides from the same read.
+	Decision *Decision `json:"decision,omitempty"`
+
+	// Open says the ask is still waiting on an answer. Every row my_work
+	// lists is — the block is what is still owed — but the row is the
+	// shape every surface listing asks shares, and a list that also holds
+	// answered ones must be able to say which is which without the reader
+	// inferring it from which list it came from.
+	Open bool `json:"open"`
 
 	// Answer is the literal call that answers it. A model handed the
 	// comment id still has to compose the call, and every one it composes
@@ -385,7 +398,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	args := who.args()
 	args = append(args, MyWorkRows)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, c.task_id, c.author, c.body, c.created_at
+		SELECT c.id, c.task_id, c.author, c.body, c.created_at, c.document
 		FROM tracker_comments c
 		JOIN tracker_tasks t ON t.id = c.task_id
 		WHERE c.ask IN (`+placeholders(len(who.Handles()))+`)
@@ -402,12 +415,14 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	type ask struct {
 		comment, task, author, body string
 		at                          int64
+		document                    []byte
 	}
 	var pending []ask
 	for rows.Next() {
 		var a ask
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at); err != nil {
+		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at,
+			&a.document); err != nil {
 			return nil, fmt.Errorf("tracker: scan an ask: %w", err)
 		}
 		pending = append(pending, a)
@@ -441,19 +456,43 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 		if !held {
 			continue
 		}
+		var stored Comment
+		if len(a.document) > 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := json.Unmarshal(a.document, &stored); err != nil {
+				return nil, fmt.Errorf("tracker: decode the ask %s: %w",
+					a.comment, err)
+			}
+		}
 		out = append(out, AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
-			AskedAt: store.DecodeTime(a.at),
-			Body:    textcut.Within(a.body, MaxExcerpt),
+			AskedAt:  store.DecodeTime(a.at),
+			Body:     textcut.Within(a.body, MaxExcerpt),
+			Decision: stored.Decision,
+			Open:     true,
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a
 			// round spent being refused.
-			Answer: fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q)",
-				CommentOnWorkTool, row.Key, a.comment),
+			Answer: answerCall(row.Key, a.comment, stored.Decision),
 		})
 	}
 	return out, nil
+}
+
+// answerCall is the literal call that answers an ask.
+//
+// A DECISION'S CALL CARRIES ITS RECOMMENDATION as the choice, because that is
+// the answer the asker proposed and the one most answers are: a reader who
+// agrees sends it as written, and one who does not changes one value rather
+// than composing a call from the options.
+func answerCall(key, comment string, decision *Decision) string {
+	if decision != nil && decision.Recommended != "" {
+		return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q, choice: %q)",
+			CommentOnWorkTool, key, comment, decision.Recommended)
+	}
+	return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q)",
+		CommentOnWorkTool, key, comment)
 }
 
 // readChecklistClaims reads the sub-items this person owns.

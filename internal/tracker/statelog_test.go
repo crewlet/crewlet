@@ -87,6 +87,34 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangePersonUpdated, Mutation: body,
 			Actor: "suite-person", ActorKind: tracker.AuthorHuman,
 		}.Encode()
+	case "Comment.Decision", "Comment.Choice":
+		// A COMMENT ON A TASK PATCH, the only record a comment rides.
+		comment := tracker.Comment{
+			ID: "suite-comment", Task: "suite-task", Author: "dev",
+			AuthorKind: tracker.AuthorAgent, Body: "ship or hold?",
+			CreatedAt: at,
+		}
+		if field.Name == "Comment.Decision" {
+			comment.Ask = "pm"
+			comment.Decision = decisionFixture()
+		} else {
+			answers := "suite-ask"
+			comment.Answers = &answers
+			comment.Choice = "ship"
+		}
+		body, err := json.Marshal(tracker.TaskPatch{Comment: &comment})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeComment, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)

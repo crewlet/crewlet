@@ -40,8 +40,9 @@ import (
 // Version 2 is the turn record's spend split: [TurnSpend.Workers] and
 // [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
 // ([Position.Generation]), which a build reading 2 decoded and then stored as
-// the bare sequence.
-const RecordVersion = 3
+// the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
+// [Comment.Choice].
+const RecordVersion = 4
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -87,6 +88,16 @@ var versionedFields = statelog.RecordFields{
 	// under; no task patch carries `seen_through`.
 	{Name: "Person.SeenThrough.Generation", Since: 3, Op: string(OpPatch),
 		Path: []string{"mutation", "seen_through", "generation"}},
+	// A DECISION AND A CHOICE, both at version 4. A build reading 3 has no
+	// field for either, so it would write the comment row with both
+	// dropped from its document: its copy of the ask would offer no
+	// options, and its copy of the answer would name none — for good, on
+	// a table the fleet compares byte for byte. A comment rides only a
+	// task PATCH, which is why both rows are scoped to that op.
+	{Name: "Comment.Decision", Since: 4, Op: string(OpPatch),
+		Path: []string{"mutation", "comment", "decision"}},
+	{Name: "Comment.Choice", Since: 4, Op: string(OpPatch),
+		Path: []string{"mutation", "comment", "choice"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

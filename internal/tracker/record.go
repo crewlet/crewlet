@@ -488,6 +488,16 @@ type Comment struct {
 	Ask     string  `json:"ask,omitempty"`
 	Answers *string `json:"answers,omitempty"`
 
+	// Decision is the structure an ask carries when it needs somebody to
+	// choose — see decision.go. Only on the comment that ASKS, and never
+	// changed after: an answer names an option by id, and options edited
+	// under it would turn that answer into an answer to something else.
+	Decision *Decision `json:"decision,omitempty"`
+
+	// Choice is the option an ANSWER chose, by id, checked against the
+	// decision of the ask it answers inside the write's own snapshot.
+	Choice string `json:"choice,omitempty"`
+
 	Resolved   bool       `json:"resolved,omitempty"`
 	ResolvedBy string     `json:"resolved_by,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`

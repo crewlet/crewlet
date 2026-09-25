@@ -1136,8 +1136,51 @@ caller; with several it is required, and the refusal lists them. Answering
 wakes the person who **asked** — not the person who just replied, which is what
 routing off the answering comment's author would have done.
 
+A question has **one** answer. An `answers` naming a question that already has
+one is refused `already_answered`, naming who answered it and when — the move
+is to read that answer. The check is made in the write's own snapshot rather
+than only in the read before it, so of two answers sent at once exactly one
+lands; the other is refused rather than posted beside it claiming to answer a
+question it did not close.
+
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
-seat, and the `has_open_asks` filter finds the items carrying any.
+seat, and the `has_open_asks` filter finds the items carrying any. Each row
+carries `answer_with`, the literal call that answers it, and `open`.
+
+### Asking for a decision
+
+A question that needs somebody to **choose** carries a **decision** on the ask:
+the question in one sentence, two to six options, the option the asker
+recommends and why, the evidence it looked at, and the role the person is asked
+in. The answer names the option it chose — `choice`, by the option's id — and
+may say why in its body.
+
+| Part | Rule |
+|---|---|
+| `question` | required, at most 300 bytes — one sentence on a card; the context goes in the comment's body |
+| `options` | 2 to 6, each `{id, label, detail?}`. An `id` is 1–32 of `a-z 0-9 _ -` because it is typed back in `choice`; a `label` is at most 80 bytes and a `detail` 500. One option is an approval — ask *yes* or *no* |
+| `recommended` | optional; one of the option ids |
+| `rationale` | optional, at most 1,500 bytes |
+| `evidence` | at most 8, each `{kind, ref, label?}`: `task` (stored as the task's id, since a key moves), `page` (must exist), `turn`, `run`, or `url` (an absolute `https://` address) |
+| `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
+| `inform` | optional `{surface, channel}`: the chat channel (`mattermost` or `slack`) the asker will report the outcome in |
+
+What the engine enforces is deliberately small: that a decision is well formed,
+that it rides only the comment that **asks** (a remark cannot carry one, and it
+is never changed after — an answer names an option by id, and options edited
+under it would change what that answer meant), and that a `choice` names an
+option **of the ask it answers**, checked against that ask's own row. There is
+no approval chain, quorum or state machine: a decision is still one question to
+one person, answered once, and what happens next is the asker's turn.
+
+The asker is woken with the choice **by its label** — the card reads
+`Chose “Ship Friday”: <the body>` — and the ask's row in `asked_of_me` carries
+the decision, with the recommendation already filled in as the `choice` of its
+`answer_with` call, so a reader who agrees sends it as written.
+
+A record carrying a decision or a choice is **record version 4**: a node still
+reading version 3 retains it rather than applying it with the options dropped,
+until it is upgraded.
 
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without

@@ -36,6 +36,11 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// A FULL INBOX LIST asks for a different gesture, not a smaller
 		// one — read_through — so it is not a content refusal either.
 		{"inbox full", fmt.Errorf("x: %w", tracker.ErrInboxFull), tools.RefusalInboxFull},
+		// A SECOND ANSWER THAT LOST THE RACE is refused by the write's own
+		// snapshot, after the thread read passed it — typed, naming who
+		// answered. It is not the node's failure and not a retry.
+		{"already answered", fmt.Errorf("x: %w", &tracker.AlreadyAnsweredError{
+			Task: "t-1", Comment: "c-1", By: "ana"}), tools.RefusalAlreadyAnswered},
 		// A maintenance or sealed fleet has no publisher and an evicted,
 		// deferred or full-log node refuses the append: all of them
 		// arrive as a statelog refusal.

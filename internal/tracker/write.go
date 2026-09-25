@@ -512,6 +512,11 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	if err := checkTextCaps(id, patch.Title, patch.Body, commentBody); err != nil {
 		return WriteResult{}, err
 	}
+	if patch.Comment != nil {
+		if err := checkCommentShape(id, patch.Comment); err != nil {
+			return WriteResult{}, err
+		}
+	}
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —
@@ -602,6 +607,12 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 			}
+			if patch.Comment != nil {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := settleComment(ctx, tx, id, patch.Comment); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -672,6 +683,57 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
 	return result, err
+}
+
+// settleComment is the comment's check against the rows it lands among.
+//
+// INSIDE THE DECIDE SNAPSHOT, because both facts it checks are about OTHER
+// rows and one of them moves: whether the ask an answer names is still open.
+// The thread read that routes the wake runs before the publish, so two answers
+// decided at once both passed it; the applier's `answered_by IS NULL` then
+// kept the first on the ask while the second landed anyway, claiming to
+// answer a question it did not close. Checked here, the second loses: the
+// first answer's append moved the task's subject, the broker refused the
+// second round's expectation, and the re-decide reads the ask answered and
+// refuses it by name. The ask's decision is immutable, so the choice checked
+// against it here is the choice every node will read beside it.
+func settleComment(ctx context.Context, tx *sql.Tx, task string, comment *Comment) error {
+	var document []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task).Scan(&document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// A NEW COMMENT, which is the only place a decision may be set.
+	case err != nil:
+		return fmt.Errorf("tracker: read comment %s: %w", comment.ID, err)
+	default:
+		var stored Comment
+		if len(document) > 0 {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := json.Unmarshal(document, &stored); err != nil {
+				return fmt.Errorf("tracker: decode comment %s: %w", comment.ID, err)
+			}
+		}
+		if !sameDecision(stored.Decision, comment.Decision) {
+			return invalid("tracker: comment %s on task %s already exists, and "+
+				"a decision is set only when the question is asked and never "+
+				"changed after — an answer names an option by id, and options "+
+				"edited under it would make that answer mean something else; "+
+				"ask again in a new comment", comment.ID, task)
+		}
+	}
+	if comment.Answers == nil || *comment.Answers == "" {
+		return nil
+	}
+	ask, err := readAsk(ctx, tx, task, *comment.Answers)
+	if err != nil {
+		return err
+	}
+	if err = ask.answerableBy("", comment.ID); err != nil {
+		return err
+	}
+	return checkChoice(task, ask.id, ask.decision, comment.Choice)
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.

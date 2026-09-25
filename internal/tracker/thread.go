@@ -3,10 +3,13 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // What a comment's routing needs to know about the conversation it lands in.
@@ -43,6 +46,16 @@ type ThreadQuery struct {
 	// Author is who is writing, which the inference needs: an ask is
 	// answered by the person it was addressed to.
 	Author string
+
+	// Comment is the id the comment being written will carry, so that an
+	// ask this very comment already answered — a retried write whose
+	// first attempt landed — is not reported as answered by somebody
+	// else. Empty treats every answer as another's.
+	Comment string
+
+	// Choice is the option the comment chooses, checked against the
+	// decision of the ask it answers.
+	Choice string
 }
 
 // ResolvedThread is the answer, ready to travel on a wake.
@@ -52,7 +65,52 @@ type ResolvedThread struct {
 	// Answers is the comment id the write should stamp, which may be the
 	// one the caller named or the one that was inferred.
 	Answers string
+
+	// AnswersDecision is the decision the answered ask carries, or nil —
+	// what a wake needs to say which option was chosen, and what the
+	// caller shows beside the choice. Immutable once asked, so reading it
+	// here rather than inside the write's snapshot cannot go stale.
+	AnswersDecision *Decision
 }
+
+// AlreadyAnsweredError reports an `answers` naming a question that already
+// has its answer, and WHO gave it and WHEN — because the useful move is to
+// read that answer, and a refusal that does not name it sends the caller
+// looking. It is [ErrAlreadyAnswered].
+type AlreadyAnsweredError struct {
+	Task    string
+	Comment string
+
+	// By is who answered — the author of the answering comment — or who
+	// resolved the question without an answer.
+	By string
+	At time.Time
+
+	// Resolved is a question closed by a resolve rather than by an
+	// answer, which the sentence has to tell apart.
+	Resolved bool
+}
+
+func (e *AlreadyAnsweredError) Error() string {
+	how := "answered"
+	if e.Resolved {
+		how = "resolved"
+	}
+	who := ""
+	if e.By != "" {
+		who = " by " + e.By
+	}
+	when := ""
+	if !e.At.IsZero() {
+		when = " at " + e.At.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("tracker: the question in comment %s on task %s was "+
+		"already %s%s%s — read that answer rather than giving a second one",
+		e.Comment, e.Task, how, who, when)
+}
+
+// Unwrap makes the typed error [ErrAlreadyAnswered].
+func (e *AlreadyAnsweredError) Unwrap() error { return ErrAlreadyAnswered }
 
 // ErrAmbiguousAnswer reports a comment whose `answers` could not be inferred
 // because more than one open ask is addressed to its author.
@@ -120,11 +178,18 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		if out.Answers == "" {
 			return nil
 		}
-		author, err := askAuthor(ctx, tx, q.Task, out.Answers, q.Author)
+		ask, err := readAsk(ctx, tx, q.Task, out.Answers)
 		if err != nil {
 			return err
 		}
-		out.AnsweredAuthor = author
+		if err := ask.answerableBy(q.Author, q.Comment); err != nil {
+			return err
+		}
+		if err := checkChoice(q.Task, ask.id, ask.decision, q.Choice); err != nil {
+			return err
+		}
+		out.AnswersDecision = ask.decision
+		out.AnsweredAuthor = ask.author
 		return nil
 	})
 	if err != nil {
@@ -219,42 +284,108 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	return "", &ErrAmbiguousAnswer{Task: task, Asks: found, Actor: author}
 }
 
-// askAuthor is who wrote the comment being answered, and the check that it was
-// an open ask addressed to this author at all.
+// openAsk is the row an answer is checked against.
+type openAsk struct {
+	id, task, author, asked string
+	removed                 bool
+	decision                *Decision
+
+	// answeredBy is the comment that answered it, with its author and
+	// instant; resolvedBy and resolvedAt a resolve that closed it.
+	answeredBy, answerAuthor string
+	answeredAt               time.Time
+	resolved                 bool
+	resolvedBy               string
+	resolvedAt               time.Time
+}
+
+// readAsk reads the comment an answer names, with what answered it.
 //
-// REFUSED RATHER THAN IGNORED. An `answers` naming a comment that asked
-// somebody else would close that person's question on their behalf, and one
-// naming a comment that is not an ask would stamp a remark as answered.
-func askAuthor(ctx context.Context, tx *sql.Tx, task, comment, author string) (string, error) {
-	var wrote, asked string
+// ONE READ FOR BOTH CALLERS — the thread read that routes the wake, and the
+// write's own decide that makes the answer authoritative — because two
+// spellings of "is this ask still open" are how one of them stops agreeing.
+func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, error) {
+	out := openAsk{id: comment, task: task}
 	var resolved, removed int
-	var answered sql.NullString
+	var answered, answerAuthor, resolvedBy sql.NullString
+	var answeredAt, resolvedAt sql.NullInt64
+	var document []byte
 	err := tx.QueryRowContext(ctx, `
-		SELECT author, ask, resolved, removed, answered_by
-		FROM tracker_comments WHERE id = ? AND task_id = ?`,
-		comment, task).Scan(&wrote, &asked, &resolved, &removed, &answered)
+		SELECT c.author, c.ask, c.resolved, c.removed, c.answered_by,
+		       a.author, a.created_at, c.resolved_by, c.resolved_at, c.document
+		FROM tracker_comments c
+		LEFT JOIN tracker_comments a ON a.id = c.answered_by
+		WHERE c.id = ? AND c.task_id = ?`,
+		comment, task).Scan(&out.author, &out.asked, &resolved, &removed,
+		&answered, &answerAuthor, &answeredAt, &resolvedBy, &resolvedAt,
+		&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("tracker: task %s has no comment %s, so there is "+
-			"nothing for this one to answer: %w", task, comment, ErrNoComment)
+		return openAsk{}, fmt.Errorf("tracker: task %s has no comment %s, so "+
+			"there is nothing for this one to answer: %w", task, comment,
+			ErrNoComment)
 	case err != nil:
-		return "", fmt.Errorf("tracker: read the ask %s: %w", comment, err)
-	case asked == "":
-		return "", invalid("tracker: comment %s on task %s asked nobody a "+
-			"question, so it cannot be answered — `answers` names an open ask",
-			comment, task)
-	case author != "" && asked != author:
-		return "", fmt.Errorf("tracker: comment %s on task %s asked %s rather "+
-			"than %s, and answering it would close somebody else's question: %w",
-			comment, task, asked, author, ErrForbidden)
-	case removed == 1:
-		return "", invalid("tracker: comment %s on task %s was removed",
-			comment, task)
-	case resolved == 1 || answered.Valid:
-		return "", fmt.Errorf("tracker: the question in comment %s on task %s "+
-			"is already answered: %w", comment, task, ErrAlreadyAnswered)
+		return openAsk{}, fmt.Errorf("tracker: read the ask %s: %w", comment, err)
 	}
-	return wrote, nil
+	out.removed = removed == 1
+	out.resolved = resolved == 1
+	out.answeredBy = answered.String
+	out.answerAuthor = answerAuthor.String
+	if answeredAt.Valid {
+		out.answeredAt = store.DecodeTime(answeredAt.Int64)
+	}
+	out.resolvedBy = resolvedBy.String
+	if resolvedAt.Valid {
+		out.resolvedAt = store.DecodeTime(resolvedAt.Int64)
+	}
+	if len(document) > 0 {
+		var stored Comment
+		if err := json.Unmarshal(document, &stored); err != nil {
+			return openAsk{}, fmt.Errorf("tracker: decode the ask %s: %w",
+				comment, err)
+		}
+		out.decision = stored.Decision
+	}
+	return out, nil
+}
+
+// answerableBy is the check that this ask is an open question addressed to
+// this author — or, with author empty, to anybody, which is the decide's
+// re-check of the facts that can move between the thread read and the append.
+//
+// REFUSED RATHER THAN IGNORED. An `answers` naming a comment that asked
+// somebody else would close that person's question on their behalf, one
+// naming a comment that is not an ask would stamp a remark as answered, and
+// one naming a question already answered would land a second answer beside
+// the first — which the applier's `answered_by IS NULL` guard kept off the
+// ask while the answering comment still claimed to answer it.
+//
+// self is the id of the comment being written: an ask THIS comment already
+// answered is a retried write whose first attempt landed, not a second
+// answer.
+func (a openAsk) answerableBy(author, self string) error {
+	switch {
+	case a.asked == "":
+		return invalid("tracker: comment %s on task %s asked nobody a "+
+			"question, so it cannot be answered — `answers` names an open ask",
+			a.id, a.task)
+	case author != "" && a.asked != author:
+		return fmt.Errorf("tracker: comment %s on task %s asked %s rather "+
+			"than %s, and answering it would close somebody else's question: %w",
+			a.id, a.task, a.asked, author, ErrForbidden)
+	case a.removed:
+		return invalid("tracker: comment %s on task %s was removed",
+			a.id, a.task)
+	case self != "" && a.answeredBy == self:
+		return nil
+	case a.answeredBy != "":
+		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
+			By: a.answerAuthor, At: a.answeredAt}
+	case a.resolved:
+		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
+			By: a.resolvedBy, At: a.resolvedAt, Resolved: true}
+	}
+	return nil
 }
 
 // MaxOpenAsksNamed is how many candidates an ambiguous-answer refusal lists.
