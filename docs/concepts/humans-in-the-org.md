@@ -97,6 +97,18 @@ writes as the person whose token it holds — never as "the dashboard", which is
 nobody. A token bound to no seat has no inbox to mark and is refused there;
 what the screen shows is what the engine recorded.
 
+**Answering an agent's decision.** When an agent asks you to choose, the
+question arrives with its options, the one it recommends and why. Your answer
+names an option, and the card tells you what happens next: *"&lt;asker&gt; is
+woken with your answer and posts it to #&lt;channel&gt;"* when the agent
+promised to report the outcome in a channel, or *"&lt;asker&gt; continues from
+your answer"* when it did not. The first is enforced, not hoped for: the
+agent's turn is held open until it has posted on that chat surface. It is also
+why **your own** asks cannot carry that promise — the engine keeps it by
+holding the asker's turn, and a person has none, so an ask you put through the
+dashboard or your assistant with an `inform` is refused; post the outcome
+yourself.
+
 **Your own writes count as yours — and the record still names the token.**
 A work item you file through your assistant is attributed to the **credential**
 you filed it with, with author kind `operator`, never to your seat handle.

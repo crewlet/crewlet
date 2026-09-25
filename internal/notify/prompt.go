@@ -170,6 +170,22 @@ type Inbound struct {
 	Body string
 
 	Metadata map[string]string
+
+	// Owes names the CHAT SURFACE the woken seat promised to post on, when
+	// the promise is not simply "answer where you were asked" — which
+	// [Prompt.Addressed] already says, on this notification's own source.
+	//
+	// SET BY THE PARSER, PER RECIPIENT, because only the parser knows which
+	// copy of one change carries a promise: today that is the tracker's
+	// `answered` wake to an asker whose decision said it would report the
+	// outcome in a channel, and none of the other copies of that answer.
+	// Empty — every vendor edge — owes nothing beyond the source.
+	//
+	// A FIELD rather than a [Prompt] method, unlike Addressed, because it is
+	// not a reading of the source's routing that every source has to give:
+	// it is one first-party promise, and nine prompts answering "" to it
+	// would be nine places to forget that a merge has to carry it.
+	Owes string
 }
 
 // Parties resolves a third-party app's external id to a colleague in the org.

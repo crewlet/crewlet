@@ -56,6 +56,30 @@ Each agent's system prompt includes their team channel, with guidance to use it 
 
 ---
 
+## When the outcome is promised to a channel
+
+A structured ask on a work item (see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision))
+can name the channel the asker will report the outcome in — `inform:
+{surface, channel}`. That is the **Informed** role made concrete, and it is one
+of the two things the engine enforces about a decision (the other is that a
+choice names an option of the ask it answers):
+
+- **Only an agent seat may promise it.** The engine keeps the promise by
+  holding the asker's turn, and a person asking from the dashboard or through
+  an assistant has no turn to hold.
+- **The channel is the chart's.** The surface must be one the company runs and
+  the asking seat holds a bot on, and the channel one a unit declares with
+  `channel`.
+- **The answer owes the post.** The asker is woken by the answer owing that
+  chat surface, and its turn is not finished until a tool there has posted — a
+  comment on the work item does not discharge it.
+
+The person answering sees the consequence on the card: *"&lt;asker&gt; is woken
+with your answer and posts it to #&lt;channel&gt;"*, or, with no inform,
+*"&lt;asker&gt; continues from your answer"*.
+
+---
+
 ## Why No Decision Engine?
 
 Agents already have chat MCP tools for posting messages, threading, reading channels, and reacting. The org hierarchy already defines who reports to whom. Adding a separate decision engine with structured tools, internal state machines, and formatted messages would duplicate what the chat surface and the org chart already provide.
