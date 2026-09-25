@@ -487,37 +487,165 @@ func KeysBetween(a, b Rank, n int) ([]Rank, error) {
 	return out, nil
 }
 
-// RespreadWindow is how many neighbours a re-spread takes, DERIVED from
-// [RankRenormaliseAt] rather than declared beside it.
+// MoveKeys mints n keys in ascending order strictly between a and b for a
+// MOVE — and none of them is a key a create could mint.
 //
-// Start at the threshold and double until the keys the window would produce
-// fall under it. One constant, one derivation: a second constant for the
-// window is a second thing to keep in step with the first, and the two have
-// no independent reason to differ.
+// # Why a move cannot simply call [KeysBetween]
 //
-// It stops at [RankRespreadInline]; past that the drag still succeeds and the
-// project is marked for the duty's paced walk.
-func RespreadWindow(a, b Rank) (int, error) {
-	window := RankRenormaliseAt
-	for {
-		keys, err := KeysBetween(a, b, window)
-		if err != nil {
-			return 0, err
+// Because KeysBetween takes the cheapest key in the gap, and at both ends of a
+// project the cheapest key is a pure integer: after the last task it is the
+// NEXT integer, and before a first task at or above the origin it is the
+// integer below it. Both are in the create lattice. The first is the one that
+// bites — it is exactly the key the project's next create will mint, so a card
+// dragged to the bottom of a board and the next task anybody files would share
+// a rank, which the applier reports as a duplicate for the duty to repair.
+// The proof [Writer.CreateTask] rests on — every move's key carries a fraction
+// or sits strictly below the origin — was a sentence about the value that no
+// mint enforced.
+//
+// So the upper bound is TIGHTENED before minting, never the lower: after a key
+// the ceiling is the next integer above its own integer part, which leaves
+// only keys carrying a fraction of it; before everything the ceiling is the
+// origin, which leaves only head placements. Neither tightening can fail a
+// mint the untightened gap would have allowed — each keeps a non-empty open
+// interval — and each keeps the keys as short as the untightened mint below
+// the ceiling would have been.
+func MoveKeys(a, b Rank, n int) ([]Rank, error) {
+	ceiling, err := moveCeiling(a, b)
+	if err != nil {
+		return nil, err
+	}
+	return KeysBetween(a, ceiling, n)
+}
+
+// moveCeiling is the tightest upper bound a move may mint under — see
+// [MoveKeys].
+func moveCeiling(a, b Rank) (Rank, error) {
+	if a == "" {
+		if b == "" || string(b) > RankOrigin {
+			return RankOrigin, nil
 		}
-		longest := 0
-		for _, k := range keys {
-			if len(k) > longest {
-				longest = len(k)
+		return b, nil
+	}
+	integer, err := integerPart(string(a))
+	if err != nil {
+		return "", err
+	}
+	next, err := incrementInteger(integer)
+	if err != nil {
+		// THE LATTICE IS EXHAUSTED UPWARD, 62^26 positions above the
+		// origin: there is no next integer to stay under, and no create
+		// can mint above this key either, so the untightened bound is
+		// already safe.
+		return b, nil //nolint:nilerr // an exhausted lattice is the answer, not a failure
+	}
+	if b == "" || string(b) > next {
+		return Rank(next), nil
+	}
+	return b, nil
+}
+
+// PlaceInGap decides where one moved task lands, and which of its neighbours a
+// long key makes it re-spread in the same record.
+//
+// PURE OVER VALUES, for the reason the rest of this file is: the rows it
+// decides from are read inside the write's own snapshot by [Writer.MoveTask],
+// and the decision over them is the part worth exercising without a database.
+//
+// below are the tasks strictly beneath the gap, NEAREST FIRST (descending);
+// above are the tasks strictly over it, nearest first (ascending). Neither
+// includes the moved task itself. Each side needs at most
+// [RankRespreadInline]/2 + 1 rows — the window's own half plus the one row
+// that bounds it.
+//
+// It answers nil when the task already sits in the gap, so dropping a card
+// where it already is writes nothing.
+//
+// # The window, and why the drag always lands
+//
+// The first answer is one key between the two nearest neighbours. When that
+// key is longer than [RankRenormaliseAt] — or when the two neighbours share a
+// key, so nothing fits between them — the window WIDENS: it starts at
+// [RankRenormaliseAt] rows centred on the gap and doubles until every key
+// minted across it is short again, stopping at [RankRespreadInline]. The
+// outer bounds are the first rows OUTSIDE the window, which is what makes the
+// widening converge: a same-gap nest shares a long prefix only inside itself,
+// so the bounds eventually escape it. A shared key inside the window is
+// re-minted apart as a side effect, which is the duty's duplicate repair done
+// by the drag that found it.
+//
+// Past the inline cap the drag STILL LANDS with its long key and the applier
+// flags the project for the duty's paced walk: a drag refused because a board
+// is crowded is a person told their own board is broken. The one refusal left
+// is a gap that has no key at all even at the cap — more than a hundred rows
+// sharing one key on both sides — which only a repair can clear.
+func PlaceInGap(mover Placement, below, above []Placement) ([]Placement, error) {
+	var lower, upper Rank
+	if len(below) > 0 {
+		lower = below[0].Rank
+	}
+	if len(above) > 0 {
+		upper = above[0].Rank
+	}
+	if (lower == "" || string(mover.Rank) > string(lower)) &&
+		(upper == "" || string(mover.Rank) < string(upper)) {
+		return nil, nil
+	}
+	single, singleErr := MoveKeys(lower, upper, 1)
+	if singleErr == nil && len(single[0]) <= RankRenormaliseAt {
+		return []Placement{{Task: mover.Task, Rank: single[0]}}, nil
+	}
+
+	half := RankRespreadInline / 2
+	for k := RankRenormaliseAt / 2; ; k *= 2 {
+		k = min(k, half)
+		lo, outerLo := windowSide(below, k, half)
+		hi, outerHi := windowSide(above, k, half)
+		keys, err := MoveKeys(outerLo, outerHi, len(lo)+1+len(hi))
+		if err == nil && longest(keys) <= RankRenormaliseAt {
+			placements := make([]Placement, 0, len(keys))
+			for i := len(lo) - 1; i >= 0; i-- {
+				placements = append(placements, Placement{Task: lo[i].Task})
 			}
+			placements = append(placements, Placement{Task: mover.Task})
+			for _, p := range hi {
+				placements = append(placements, Placement{Task: p.Task})
+			}
+			for i := range placements {
+				placements[i].Rank = keys[i]
+			}
+			return placements, nil
 		}
-		if longest < RankRenormaliseAt || window >= RankRespreadInline {
-			return window, nil
-		}
-		window *= 2
-		if window > RankRespreadInline {
-			return RankRespreadInline, nil
+		if k == half {
+			break
 		}
 	}
+	if singleErr != nil {
+		return nil, fmt.Errorf("tracker: there is no key between %q and %q "+
+			"and the %d rows around them share keys too: %w",
+			lower, upper, RankRespreadInline, singleErr)
+	}
+	return []Placement{{Task: mover.Task, Rank: single[0]}}, nil
+}
+
+// windowSide is the k nearest rows of one side, capped at half, and the key
+// of the first row outside them — empty when the side ran out, which is the
+// project's own end.
+func windowSide(side []Placement, k, half int) ([]Placement, Rank) {
+	n := min(k, half, len(side))
+	if n < len(side) {
+		return side[:n], side[n].Rank
+	}
+	return side, ""
+}
+
+// longest is the length of the longest key.
+func longest(keys []Rank) int {
+	n := 0
+	for _, k := range keys {
+		n = max(n, len(k))
+	}
+	return n
 }
 
 // RespreadKeys is n keys, evenly spaced, all sharing one integer head.

@@ -44,8 +44,10 @@ import (
 // [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
 // value — see [actorSeatVersion]. Version 6 is a create that carries the
 // question its task was filed as: [TaskCreate.Comment]. Version 7 is a
-// project's lead-owned target date: [Project.TargetDate].
-const RecordVersion = 7
+// project's lead-owned target date: [Project.TargetDate]. Version 8 is a task
+// write that carries its place through: [MutationRecord.KeepsPlace] — see
+// [keepsPlaceVersion].
+const RecordVersion = 8
 
 // actorSeatVersion is the record version from which the applier copies
 // [MutationRecord.ActorSeat] onto the history row.
@@ -60,6 +62,27 @@ const RecordVersion = 7
 // only from a record at this version or above: a record an older build wrote
 // yields the same empty column wherever it is applied.
 const actorSeatVersion = 5
+
+// keepsPlaceVersion is the record version from which a task write takes the
+// task's rank from its ROW rather than from its document.
+//
+// THE ORDER MOVES THE COLUMN AND NEVER THE DOCUMENT. After its create a task's
+// place is written by its project's order ([Applier.applyRankOrder]), which
+// sets `tracker_tasks.rank` and leaves the task's own document alone — so the
+// document's `rank` is only the key the task was filed or last re-homed at. A
+// build reading 7 merges every task write into the DOCUMENT and upserts the
+// row from the result, which puts a dragged card back where it was filed the
+// next time anybody touches it. A build that took the rank from the column on
+// every record would therefore disagree with that build about every task
+// written after a drag — permanently, on a table the fleet compares byte for
+// byte, with nothing ever re-deriving a rank. So the rule is the
+// [actorSeatVersion] rule: every task patch, removal and restore this build
+// writes carries [MutationRecord.KeepsPlace] (the row in [versionedFields],
+// which makes a build reading 7 retain it rather than apply it the old way),
+// and the column is carried through only for a record at this version or
+// above. A record an older build wrote is applied exactly as that build
+// applied it, wherever it is applied.
+const keepsPlaceVersion = 8
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -140,6 +163,16 @@ var versionedFields = statelog.RecordFields{
 	// and no other record's payload has a `target_date` to collide with.
 	{Name: "Project.TargetDate", Since: 7,
 		Path: []string{"mutation", "target_date"}},
+	// A TASK WRITE THAT KEEPS ITS PLACE, at version 8. Not a new value but a
+	// new APPLY RULE — see [keepsPlaceVersion]: a build reading 7 would
+	// apply the record by re-upserting the rank its document holds, which
+	// is the key the task was filed at rather than the one its project's
+	// order gave it, and its row would differ from every upgraded node's
+	// for good. On the record's root rather than in the payload because it
+	// states how the record is applied, and every op, because the ops that
+	// carry it (a task's patch, removal and restore) are three.
+	{Name: "MutationRecord.KeepsPlace", Since: keepsPlaceVersion,
+		Path: []string{"keeps_place"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -732,6 +765,15 @@ type MutationRecord struct {
 	// rests on.
 	ActorSeat string `json:"actor_seat,omitempty"`
 
+	// KeepsPlace says this task write leaves the task where its project's
+	// ORDER put it: the applier carries the row's rank through rather than
+	// re-writing the one the task's document was filed at. Set by the
+	// writer on every task patch, removal and restore, and read through the
+	// record's VERSION — see [keepsPlaceVersion] — because what it exists
+	// to do is stamp every such record at a version an older build retains
+	// rather than applies by its own rule.
+	KeepsPlace bool `json:"keeps_place,omitempty"`
+
 	TurnID  string   `json:"turn_id,omitempty"`
 	Chain   []string `json:"chain,omitempty"`
 	BatchID *string  `json:"batch_id,omitempty"`
@@ -886,7 +928,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "operator_id", "actor_seat",
-	"turn_id", "chain", "batch_id", "kind", "notify",
+	"keeps_place", "turn_id", "chain", "batch_id", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

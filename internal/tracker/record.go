@@ -567,7 +567,9 @@ type RankOrder struct {
 	ScopedThrough uint64 `json:"scoped_through,omitempty"`
 	Project       string `json:"project"`
 
-	// Placements is one to sixty-four moves in one record.
+	// Placements is one record's moves: at least one, and at most
+	// [MaxBulkTasks] of a caller's own plus a re-spread's
+	// [RankRespreadInline] neighbours — see [Writer.MoveTasks].
 	Placements []Placement `json:"placements"`
 
 	Extra map[string]json.RawMessage `json:"-"`

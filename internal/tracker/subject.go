@@ -39,6 +39,14 @@
 // readable by every build. [RecordVersion] moves with the table and only with
 // it (see its doc for the whole rule).
 //
+// A change to how the applier treats a field it ALREADY copies is the same
+// hazard with no new field to carry it, and takes the same gate: a marker the
+// writer sets and a row that stamps it, with the new rule applied only to a
+// record at that version or above. An older build's record is then applied
+// by that build's rule on every node — [actorSeatVersion] (the history row's
+// seat) and [keepsPlaceVersion] (a task write carrying its board place
+// through rather than re-filing the rank its document holds) are the two.
+//
 // A column the applier COMPUTES from the rows it holds, rather than copies out
 // of a record, is the other half: no record version can see it, because what
 // differs between builds is the rule. Such a column is maintained under

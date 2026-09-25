@@ -201,8 +201,22 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 // THE FIRST BY ID KEEPS ITS KEY, so every node computes the same repair from
 // the same rows — which is what makes running this twice a no-op rather than a
 // second round of moves.
+//
+// # Every loser of one key gets a key of its OWN, between that key and the next
+//
+// Each group is re-minted with [MoveKeys] between the key it shares and the
+// first key above it in the project, so a duplicate stays adjacent to where
+// somebody put it. The repair this replaces minted "the key after this one"
+// for every loser separately, and both halves of that were wrong: three tasks
+// sharing a key left two of them sharing the next one, and the key after a
+// pure integer is the next INTEGER — the create lattice — so a duplicate at
+// the bottom of a board was repaired onto exactly the key the project's next
+// create mints, and the repair manufactured the collision it exists to clear.
 func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, error) {
-	var losers []Placement
+	var (
+		losers  []Placement
+		ceiling = map[Rank]Rank{}
+	)
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
@@ -224,22 +238,47 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 			p.Rank = Rank(rank)
 			losers = append(losers, p)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// THE NEXT KEY ABOVE EACH SHARED ONE, over EVERY row of the
+		// project — a removed task still holds its key, and a restore
+		// brings it back to exactly that place.
+		for _, loser := range losers {
+			if _, read := ceiling[loser.Rank]; read {
+				continue
+			}
+			var next sql.NullString
+			if err := tx.QueryRowContext(ctx, `
+				SELECT MIN(rank) FROM tracker_tasks
+				WHERE project_key = ? AND rank > ?`,
+				project, string(loser.Rank)).Scan(&next); err != nil {
+				return fmt.Errorf("tracker: read the key above %q in %s: %w",
+					loser.Rank, project, err)
+			}
+			ceiling[loser.Rank] = Rank(next.String)
+		}
+		return nil
 	})
 	if err != nil || len(losers) == 0 {
 		return nil, err
 	}
-	// A FRESH KEY JUST ABOVE THE ONE THEY SHARE, which keeps each
-	// duplicate adjacent to where somebody put it rather than moving it
-	// to the end of the board.
 	placements := make([]Placement, 0, len(losers))
-	for _, loser := range losers {
-		next, err := KeyBetween(loser.Rank, "")
-		if err != nil {
-			return nil, fmt.Errorf("tracker: mint a key above %q for %s: %w",
-				loser.Rank, loser.Task, err)
+	for from := 0; from < len(losers); {
+		shared := losers[from].Rank
+		to := from
+		for to < len(losers) && losers[to].Rank == shared {
+			to++
 		}
-		placements = append(placements, Placement{Task: loser.Task, Rank: next})
+		keys, err := MoveKeys(shared, ceiling[shared], to-from)
+		if err != nil {
+			return nil, fmt.Errorf("tracker: mint %d keys above %q in %s: %w",
+				to-from, shared, project, err)
+		}
+		for i, loser := range losers[from:to] {
+			placements = append(placements, Placement{Task: loser.Task, Rank: keys[i]})
+		}
+		from = to
 	}
 	return placements, nil
 }

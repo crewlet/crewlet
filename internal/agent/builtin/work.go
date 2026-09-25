@@ -199,6 +199,13 @@ type WorkDeps struct {
 	// no trace — the board simply has one fewer item on it.
 	TrashWriter func(actor Actor) TrashWriter
 
+	// Mover resolves the board-drag side for one actor, and is the
+	// operator surface's alone for the reason [WorkDeps.ViewWriter] is: a
+	// board's manual order is furniture a person arranges. Its lane half is
+	// a status change, which every surface already makes through
+	// [WorkDeps.Writer].
+	Mover func(actor Actor) WorkMover
+
 	// Seats is the company's roster, for validating a handle a caller
 	// typed. Nil admits every handle, which is the honest state for a
 	// surface with no chart loaded.

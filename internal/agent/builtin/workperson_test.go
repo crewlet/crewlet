@@ -591,6 +591,7 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 		tracker.SaveWorkViewTool:       true,
 		tracker.RemoveWorkItemTool:     true,
 		tracker.RestoreWorkItemTool:    true,
+		tracker.MoveWorkItemTool:       true,
 
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE. Each is written
 		// only on behalf of the person whose it is, so a second caller

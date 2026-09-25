@@ -724,14 +724,40 @@ furniture, and a seat's job is the work rather than the furniture around it.
 ### Manual order
 
 A board is drag-ordered, and the order is a real value on the task rather than
-a position in a list. Dragging one task writes one record; the key it mints
-sits between its new neighbours.
+a position in a list. A person drags a card with `move_work_item` — through the
+dashboard or their own assistant; no seat holds it, because where a card sits
+is a person's arrangement and a seat moves work between lanes with
+`update_work_item`. The call names the card it was dropped **beside**
+(`before` or `after`), never a position: the engine mints the new key inside
+its own write, between that card and the one next to it as the board stands
+when the move lands. So two people dragging in one project at once both land
+where they dropped, rather than between two keys that no longer bound anything.
 
-Repeated insertion at the same point makes keys grow — about one character per
-sixty-two placements — and past a threshold the engine **re-spreads** the
-affected range in the background, in batches, order-preserving. Every
-intermediate state is the original order, so an interrupted re-spread leaves a
-correct board.
+A drag within a lane writes one record, on the project's order, and wakes
+nobody — where a card sits says nothing about what the work is. It never
+changes the card's `version`, so the board's next `if_match` on it still holds.
+A drag **across** lanes also changes the card's status, and that half is an
+ordinary status change: history, and a wake for the people on the card — and
+it is written first, as its own record, before the place. It is refused
+`stale_version` before anything lands if the card changed since the board was
+drawn. If somebody changes the card between the two halves, the new lane stands
+and the answer says `placed: false`, naming why in `unplaced`: the card is in
+the lane it was dropped into, at the place it already held there, and can be
+dragged again.
+
+During a rolling upgrade a card keeps its dragged place only through edits
+written by an upgraded node; an edit an older node writes puts it back where it
+was filed, on every node alike — see
+[Which records an upgrade holds back](replication.md#which-records-an-upgrade-holds-back).
+
+Repeated insertion at the same point makes keys grow, and a drop that would
+mint a key past 64 characters re-spreads the cards around it in the same
+record instead — widening the window until the keys are short again, up to 256
+cards. Past that the drag still lands and the engine **re-spreads** the
+project in the background, in batches, order-preserving. Every intermediate
+state is the original order, so an interrupted re-spread leaves a correct
+board. A card dragged to the very bottom never takes the key the project's next
+new task will be filed at, so the two can never share a place.
 
 ## What a seat can do
 
@@ -910,8 +936,8 @@ can say a company has filed nothing while sitting on its Active segment, and
 can tell a reader whose company wound a programme down exactly how many
 projects are waiting under Archived.
 
-An operator holds the same thirteen and more that no seat does, including the
-two below. `remove_work_item` puts an item
+An operator holds the same thirteen and more that no seat does, including
+`move_work_item` — see [Manual order](#manual-order) — and the two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
@@ -1051,10 +1077,11 @@ screens rather than one:
   the ways work arrives, rather than showing an empty list.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same work tools above, ten more no seat is
+`/operator/mcp`. It serves the same work tools above, eleven more no seat is
 given — `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
-`set_priorities`, `remove_work_item` and `restore_work_item`
+`set_priorities`, `remove_work_item`, `restore_work_item` and
+`move_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the

@@ -129,6 +129,14 @@ const (
 	// write is not a freeze.
 	RemoveWorkItemTool  = "remove_work_item"
 	RestoreWorkItemTool = "restore_work_item"
+
+	// MoveWorkItemTool is a board DRAG: a card dropped beside another, in
+	// its own lane or the next. The order is furniture a person arranges —
+	// where a card sits says what somebody wants looked at first — for the
+	// reason the view tools above are a person's; the lane half is an
+	// ordinary status change every seat already makes with
+	// `update_work_item`.
+	MoveWorkItemTool = "move_work_item"
 )
 
 // GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
@@ -147,6 +155,7 @@ func OperatorOnlyTools() []string {
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
 		WorkInboxTool,
 		RemoveWorkItemTool, RestoreWorkItemTool,
+		MoveWorkItemTool,
 	}
 }
 

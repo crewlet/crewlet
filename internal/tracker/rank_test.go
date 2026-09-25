@@ -325,29 +325,6 @@ func TestASpreadIsAscendingDistinctAndShort(t *testing.T) {
 	}
 }
 
-// THE RE-SPREAD WINDOW IS DERIVED, AND IT STOPS.
-//
-// One constant, one derivation. The window doubles until the keys it would
-// produce fall under the threshold, and it never exceeds the inline cap —
-// past which the drag still succeeds and the duty's paced walk finishes the
-// tidying.
-func TestTheRespreadWindowIsDerivedAndBounded(t *testing.T) {
-	t.Parallel()
-	window, err := tracker.RespreadWindow("a0", "a1")
-	if err != nil {
-		t.Fatalf("RespreadWindow: %v", err)
-	}
-	if window < tracker.RankRenormaliseAt {
-		t.Fatalf("the window is %d, below the threshold it starts at (%d)",
-			window, tracker.RankRenormaliseAt)
-	}
-	if window > tracker.RankRespreadInline {
-		t.Fatalf("the window is %d, past the inline cap (%d) — beyond that the "+
-			"repair belongs to the duty rather than to the drag's own commit",
-			window, tracker.RankRespreadInline)
-	}
-}
-
 // AN ILL-FORMED KEY IS REFUSED RATHER THAN COMPARED.
 //
 // A length-invalid key still compares, which is exactly why it has to be

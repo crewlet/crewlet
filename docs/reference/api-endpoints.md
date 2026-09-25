@@ -2296,10 +2296,11 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **fourteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **fifteen no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
+[`move_work_item`](#moving-a-card-on-a-board),
 [`answer_run`](#answering-a-parked-coding-run), and
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat), and
 [`steer_turn`](#steering-a-running-turn). A view is furniture — a name, a shape
@@ -2311,17 +2312,39 @@ was working around is the signal a person needs to see — which is why reading
 the catalogue *is* a seat's and writing it is not. And a person's record is a
 HUMAN's: a seat has a mailbox — the durable subscription the engine attaches
 when it acquires the seat — and nothing on a person's record describes one.
-The trash is the last of them: a removal takes an item off every board in the
+The trash is another: a removal takes an item off every board in the
 company, and a seat that could hide work it did not want to do would be marking
 its own homework in the one way that leaves no trace. Neither destroys
 anything — a removal is reversible at any age, and `crewlet work purge` is the
-one that is not. And a coding run's question is a person's to answer: a seat
+one that is not. A board's manual order is furniture too — where a card sits
+says what a person wants looked at first — so dragging one is a person's; a
+seat moves work between lanes with `update_work_item`. And a coding run's question is a person's to answer: a seat
 that could answer its own run would be guessing on its own behalf. Whether a
 seat works at all is a person's decision about it too: a seat that could pause
 a colleague, or resume itself, would be overruling the people who run the
 company. And a note to a running turn is a person redirecting the work: a seat
 that could steer a colleague's turn would be directing it past the person who
 asked for the work.
+
+### Moving a card on a board
+
+`move_work_item` is a board drag: one item dropped beside another of the same
+project, in its own lane or into the next one, in one call.
+
+| Argument | |
+|---|---|
+| `item` | The item being moved, by key or id. |
+| `before` / `after` | The item it now sits directly above, or directly below — one of them, never both. It names a **neighbour, never a position**: the engine mints the new place inside its own write, between that item and the one beside it as the board stands when the move lands, so two people dragging in one project at once both land where they dropped. |
+| `status` | The lane it was dropped into. Omitted — or the lane it is already in — keeps its own. Given with neither neighbour, it is a drop into an empty lane: the status changes and its place in the order does not. |
+| `if_match` | Required: the item's `version` as the board read it. A move of an item somebody changed since is refused `stale_version`, and nothing lands. A move never changes the version itself, so dragging the same card twice needs no re-read. |
+
+It answers `{key, status, placed, rank, version, outcome, position}`. A move
+across lanes is **two records** — the status change on the item, which is
+history and wakes the people on it exactly as `update_work_item` does, then the
+place in the project's order, which wakes nobody. If the item changes between
+the two, the lane change stands and the answer says `placed: false` with the
+reason in `unplaced`, rather than failing a call whose status write landed.
+Dropping a card where it already sits writes nothing and answers `applied`.
 
 ### Answering a parked coding run
 

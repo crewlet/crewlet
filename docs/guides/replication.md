@@ -248,7 +248,7 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, six kinds of record carry a later version. Version 2 is a
+In the tracker today, seven kinds of record carry a later version. Version 2 is a
 turn's charge to its task when it counts delegated workers or reviews that sent
 the work back. Version 3 is a person's own record when their read position is
 in a generation after a reanchor — a build reading 2 stored that position as the
@@ -261,9 +261,14 @@ the seat is stored only from records at version 5; a change an older build
 wrote names no seat on any node, whichever build applies it. Version 6 is a task
 filed as a question — the create carries the ask, which a build reading 5 would
 file as a bare task with no question on it. Version 7 is a project carrying a
-target date, which a build reading 6 has no column for. An old node holds those
-records back, with the task, the person or the project they are about, and
-applies every other write as it arrives.
+target date, which a build reading 6 has no column for. Version 8 is every
+edit, removal and restore of a task: a build reading 8 keeps a card where its
+board was last dragged to, while a build reading 7 re-files it at the place it
+was created at the next time anybody changes it. So a card keeps its dragged
+place only through a change written at version 8; a change an older build
+wrote re-files the card on every node, whichever build applies it, exactly as
+it always did. An old node holds those records back, with the task, the person
+or the project they are about, and applies every other write as it arrives.
 
 ### Values the engine computes are recomputed once
 

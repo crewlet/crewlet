@@ -51,9 +51,11 @@ var everyWriteCall = map[string]map[string]any{
 		"tags_add": []any{map[string]any{"slug": "ops", "label": "Ops"}}, "default_assignee": ""},
 	tracker.RemoveWorkItemTool:  {"item": "ENG-1"},
 	tracker.RestoreWorkItemTool: {"item": "ENG-5"},
-	builtin.WritePageTool:       {"title": "Runbook", "body": "step one", "container": "ENG"},
-	builtin.SavePageTool:        {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
-	builtin.CommentOnPageTool:   {"page": "p1", "body": "is this current?"},
+	tracker.MoveWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
+		"status": "in_progress", "if_match": 7},
+	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
+	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
+	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
 }
 
 // EVERY WRITE ANSWERS FOR EVERY RECORD IT APPENDED, AT THE TOP. The writers
@@ -206,6 +208,7 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return w },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return w },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return w },
+			Mover:           func(builtin.Actor) builtin.WorkMover { return w },
 			Inbox:           trk,
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
@@ -377,6 +380,26 @@ func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return f.written(opID)
+}
+
+// MoveTask appends the two records a drag across lanes is, each at its own
+// derived step — the way the tracker's own sequence derives them.
+func (f *ledgerFake) MoveTask(_ context.Context, opID string, move tracker.Move,
+	_ *tracker.Notify) (tracker.MoveResult, error) {
+	var out tracker.MoveResult
+	if move.Status != nil {
+		lane, err := f.written(opID + ".lane")
+		if err != nil {
+			return tracker.MoveResult{}, err
+		}
+		out.Lane = lane
+	}
+	order, err := f.written(opID + ".order")
+	if err != nil {
+		return tracker.MoveResult{}, err
+	}
+	out.Order, out.Rank = order, "a0V"
+	return out, nil
 }
 
 func (f *ledgerFake) WriteView(_ context.Context, opID string, _ tracker.View) (tracker.WriteResult, error) {

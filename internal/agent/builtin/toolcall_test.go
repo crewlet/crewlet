@@ -98,6 +98,7 @@ func operatorCatalogue() map[string]servedTool {
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
+			Mover:           func(builtin.Actor) builtin.WorkMover { return nil },
 			Inbox:           work,
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil

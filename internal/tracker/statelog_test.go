@@ -161,6 +161,22 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Actor: "founder", ActorKind: tracker.AuthorOperator,
 			OperatorID: "founder", ActorSeat: "jane-founder",
 		}.Encode()
+	case "MutationRecord.KeepsPlace":
+		// AN ORDINARY EDIT OF A TASK: every task patch this build writes
+		// keeps the place its project's order gave it, and says so.
+		body, err := json.Marshal(tracker.TaskPatch{Title: new("suite, renamed")})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFields, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent, KeepsPlace: true,
+		}.Encode()
 	case "Project.TargetDate":
 		// A LEAD SETTING THE PROJECT'S TARGET: the whole document, as
 		// both the lead's edit and a chart apply carrying it through write.

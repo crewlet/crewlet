@@ -407,6 +407,18 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
+	case tracker.MoveWorkItemTool:
+		// A WRITE EVERYBODY SEES — the board is shared, and a lane change
+		// is a status change the item's people are woken about — so
+		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true.
+		// Not destructive: nothing is lost that dragging the card back
+		// does not restore. And IDEMPOTENT: the same drop again finds the
+		// card already between its neighbours and in its lane, and writes
+		// nothing.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case CreateWorkItemTool:
 		// A write everybody in the company sees, so OpenWorld is Yes and
 		// [mcp.WritesToSharedSurface] reads true — which keeps it away

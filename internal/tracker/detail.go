@@ -478,7 +478,12 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // puts a newer node's fields on the wire, and a reader that rebuilt a task
 // from its columns would hand a caller a task with the new field stripped.
 //
-// # `status_entered_at` IS THE ONE EXCEPTION, and it is joined here
+// # `status_entered_at` and `rank` ARE THE TWO EXCEPTIONS, joined here
+//
+// `rank` because a task's place after its create is written by its project's
+// ORDER, which moves the column and never the task's document (see
+// [Applier.applyRankOrder]); the document's copy is only the key it was filed
+// at. The rest of this section is about the other one.
 //
 // Every other column is extracted from what the WRITER wrote, so the document
 // is the authority and the column is the copy. This one is DERIVED by the
@@ -497,9 +502,10 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var body []byte
 	var entered int64
+	var rank string
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&body, &entered)
+		`SELECT document, status_entered_at, rank FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&body, &entered, &rank)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, fmt.Errorf("%w: %s", ErrNoTask, id)
@@ -516,6 +522,11 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
+	// AND THE RANK, for the same reason: the order moves the column and
+	// never the document, so the document's copy is the key the task was
+	// filed or last re-homed at — which a detail read answered as the
+	// card's place long after a drag had moved it.
+	task.Rank = Rank(rank)
 	return task, nil
 }
 

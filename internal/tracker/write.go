@@ -982,6 +982,26 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			"a re-spread's %d neighbours", len(placements),
 			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
 	}
+	for _, placement := range placements {
+		if !placement.Rank.Valid() {
+			return WriteResult{}, invalid("tracker: %q is not a well-formed "+
+				"rank key", placement.Rank)
+		}
+	}
+	return w.publishOrder(ctx, opID, project,
+		func(*sql.Tx) ([]Placement, error) { return placements, nil })
+}
+
+// publishOrder appends one record on a project's order, its placements
+// decided inside the write's own snapshot.
+//
+// ONE PATH FOR A GIVEN LIST AND A DECIDED ONE, because the subject, the scope
+// and the rule that a reposition wakes nobody are the same for both — and a
+// drag, whose keys are only honest when minted from the neighbours the
+// broker's arbitration is about, is the one that needs the decide.
+func (w *Writer) publishOrder(ctx context.Context, opID, project string,
+	place func(*sql.Tx) ([]Placement, error)) (WriteResult, error) {
+
 	subject := RankOrderSubject(project)
 	scope := ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: project}}}
 	at := w.Now()
@@ -993,11 +1013,11 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			for _, placement := range placements {
-				if !placement.Rank.Valid() {
-					return statelog.Decision{}, invalid("tracker: %q is not "+
-						"a well-formed rank key", placement.Rank)
-				}
+			placements, err := place(tx)
+			if err != nil || len(placements) == 0 {
+				// NOTHING TO MOVE IS A SUCCESS THAT APPENDS NOTHING
+				// — a card dropped where it already sits.
+				return statelog.Decision{}, err
 			}
 			// A RANK MOVE CARRIES NO NOTIFICATION. A reposition is not
 			// history: it changes where a card sits and nothing about
@@ -1299,9 +1319,16 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 		// [Provenance.Seat]. Empty for every writer that is already a
 		// seat, which is every in-engine caller.
 		ActorSeat: w.Seat,
-		TurnID:    w.TurnID,
-		Chain:     w.Chain,
-		Notify:    notify,
+		// EVERY TASK WRITE THAT MERGES INTO A HELD ROW keeps the place
+		// the project's order gave it, and says so — which is what
+		// stamps it at a version a build still re-writing the filed rank
+		// retains rather than applies. See [keepsPlaceVersion]. A create
+		// mints its rank and a purge removes the row, so neither carries
+		// it.
+		KeepsPlace: mergesIntoRow(subject, op),
+		TurnID:     w.TurnID,
+		Chain:      w.Chain,
+		Notify:     notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {
@@ -1477,113 +1504,6 @@ func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) typ
 		}
 	}
 	return named
-}
-
-// MoveTask drops one task between two neighbours, re-spreading inline when the
-// gap has run out of room.
-//
-// # The gesture, and the one place a rank key can grow without bound
-//
-// A drag mints a key strictly between the two neighbours it landed between.
-// Repeatedly dropping at the same spot subdivides the same gap, and the key
-// grows one symbol per halving — so a board somebody keeps re-ordering at one
-// point reaches [RankRenormaliseAt] in a few hundred drags. That is the
-// designed rate, not a fault: what makes it harmless is that the mint is
-// REPLACED by a re-spread rather than allowed to keep growing.
-//
-// A re-spread rewrites a window of neighbours to evenly spaced short keys and
-// carries them in the SAME record as the drag, so the order is never observed
-// half-spread. The window is derived from the gap rather than fixed —
-// [RespreadWindow] widens until the keys it would produce are short — and it
-// stops at [RankRespreadInline]. Past that the drag STILL SUCCEEDS with its
-// long key, and the applier flags the project for the duty's paced walk on
-// every node: a drag refused because a board is crowded is a person told their
-// own board is broken.
-func (w *Writer) MoveTask(ctx context.Context, opID, project, taskID string,
-	after, before Rank) (WriteResult, error) {
-
-	switch {
-	case project == "":
-		return WriteResult{}, invalid("tracker: a move names no project")
-	case taskID == "":
-		return WriteResult{}, invalid("tracker: a move names no task")
-	}
-	placements, err := w.placeBetween(ctx, project, taskID, after, before)
-	if err != nil {
-		return WriteResult{}, err
-	}
-	return w.MoveTasks(ctx, opID, project, placements)
-}
-
-// placeBetween mints the drag's own key and, when it is too long, the window
-// of neighbours that shortens it.
-func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
-	after, before Rank) ([]Placement, error) {
-
-	key, err := KeyBetween(after, before)
-	if err != nil {
-		return nil, invalid("tracker: mint a key between %q and %q: %w",
-			after, before, err)
-	}
-	if len(key) <= RankRenormaliseAt {
-		return []Placement{{Task: taskID, Rank: key}}, nil
-	}
-	window, err := RespreadWindow(after, before)
-	if err != nil {
-		return nil, err
-	}
-	if w.db == nil {
-		// NO STORE, NO RE-SPREAD, AND THE DRAG STILL LANDS. The applier
-		// flags the project from the key's own length, so the repair is
-		// scheduled by the record rather than by whoever wrote it.
-		return []Placement{{Task: taskID, Rank: key}}, nil
-	}
-
-	var neighbours []Placement
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id, rank FROM tracker_tasks
-			WHERE project_key = ? AND rank > ? AND rank < ?
-			ORDER BY rank, id LIMIT ?`,
-			project, string(after), string(before), window)
-		if err != nil {
-			return fmt.Errorf("tracker: read the re-spread window in %s: %w",
-				project, err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var p Placement
-			var rank string
-			if err := rows.Scan(&p.Task, &rank); err != nil {
-				return fmt.Errorf("tracker: read a re-spread neighbour: %w", err)
-			}
-			p.Rank = Rank(rank)
-			neighbours = append(neighbours, p)
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, err
-	}
-
-	// THE MOVED TASK TAKES ITS PLACE IN THE WINDOW rather than being
-	// appended to it: the whole point of the re-spread is that the record
-	// states one consistent order, and a drag written beside a window it
-	// is not part of would land between two keys the same record has just
-	// moved.
-	fresh, err := KeysBetween(after, before, len(neighbours)+1)
-	if err != nil {
-		return nil, invalid("tracker: re-spread %d neighbours between %q "+
-			"and %q: %w", len(neighbours), after, before, err)
-	}
-	placements := make([]Placement, 0, len(fresh))
-	placements = append(placements, Placement{Task: taskID, Rank: fresh[0]})
-	for i, neighbour := range neighbours {
-		placements = append(placements, Placement{
-			Task: neighbour.Task, Rank: fresh[i+1],
-		})
-	}
-	return placements, nil
 }
 
 // count records one of this package's own counters.

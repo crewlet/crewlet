@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,57 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	if len(ranks) != 2 || ranks[0] == ranks[1] {
 		t.Fatalf("the board still reads %v — the repair mints a fresh key for "+
 			"one of them so the order between the two is defined", ranks)
+	}
+}
+
+// EVERY LOSER OF ONE KEY GETS A KEY OF ITS OWN, and none of them is the next
+// create's.
+//
+// The repair used to mint "the key after this one" for each loser separately:
+// three cards sharing a key left two of them sharing the next one, and after a
+// pure integer the next key is the next INTEGER — the create lattice — so a
+// duplicate at the bottom of a board was repaired onto the key the project's
+// next create mints.
+func TestTheDutyGivesEveryLoserOfOneKeyItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2", "t-3", "t-4"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+			newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	// THREE CARDS ON THE LAST CARD'S OWN KEY, at the bottom of the board.
+	last := r.task(t, "t-4").Task.Rank
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+		[]tracker.Placement{
+			{Task: "t-1", Rank: last}, {Task: "t-2", Rank: last},
+		}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	holdTheAppliersPin(t, r)
+	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-5", newTask("t-5"), nil); err != nil {
+		t.Fatalf("CreateTask t-5: %v", err)
+	}
+	r.drain()
+
+	ranks := boardRanks(t, r)
+	for i := 1; i < len(ranks); i++ {
+		if ranks[i] == ranks[i-1] {
+			t.Fatalf("the board still shares %q after the repair and a create: %v",
+				ranks[i], ranks)
+		}
+	}
+	if order := strings.Join(boardOrder(t, r), ","); order != "t-3,t-1,t-2,t-4,t-5" {
+		t.Fatalf("the board reads %s — the first by id keeps the shared key, "+
+			"the rest sit just above it in id order, and the next create "+
+			"below all of them", order)
 	}
 }
 

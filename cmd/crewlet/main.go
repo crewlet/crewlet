@@ -2699,6 +2699,12 @@ func operatorSurface(e *engine.Engine) (*operator.Server, error) {
 			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
 				return operatorWriter(writer, actor)
 			},
+			// AND THE BOARD DRAG. A card's place in its project's order is
+			// a person's arrangement, so no seat holds it either — see
+			// internal/agent/builtin/workmove.go.
+			Mover: func(actor builtin.Actor) builtin.WorkMover {
+				return operatorWriter(writer, actor)
+			},
 			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
 			// this one is on every surface — declaring a tag is open
 			// to every seat — and what an operator adds here is the

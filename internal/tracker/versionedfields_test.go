@@ -28,6 +28,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		5: {"MutationRecord.ActorSeat"},
 		6: {"TaskCreate.Comment"},
 		7: {"Project.TargetDate"},
+		8: {"MutationRecord.KeepsPlace"},
 	}
 	got := map[int][]string{}
 	for _, field := range tracker.VersionedFields() {

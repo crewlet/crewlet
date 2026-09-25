@@ -122,6 +122,9 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			work.ProjectWriter != nil},
 		{&removeWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&restoreWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
+		// AND THE BOARD DRAG: the order is a person's arrangement, and a
+		// seat moves a card between lanes with update_work_item instead.
+		{&moveWorkItem{deps: work}, work.Mover != nil && work.Reader != nil},
 		{&listPages{deps: pages}, pages.Reader != nil},
 		{&getPage{deps: pages}, pages.Reader != nil},
 		{&writePage{deps: pages}, pages.Writer != nil},
