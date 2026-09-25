@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// A DECISION IS A STRUCTURED ASK.
+// A DECISION IS A STRUCTURED ASK — ADR-0023.
 //
 // A question that needs somebody to choose — ship or hold, which region, which
 // of three designs — used to travel as prose on an `ask` comment, and every
