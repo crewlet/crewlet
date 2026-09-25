@@ -709,11 +709,6 @@ func seatSecrets(company *config.Company, kind string) int {
 
 func boolPtr(v bool) *bool { return &v }
 
-// agentMemory answers a seat's memory: its diary and its episodes.
-//
-// Both halves, because they answer different questions. The diary is what this
-// seat chose to remember; the episodes are what it did, summarised. A page
-// showing one without the other reads as a seat with half a history.
 // agentIDOf resolves a seat handle to the derived agent id the diary is keyed
 // by, passing anything else through — a caller that already holds an id is
 // unaffected.
@@ -739,6 +734,11 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
+// agentMemory answers a seat's memory: its diary and its episodes.
+//
+// Both halves, because they answer different questions. The diary is what this
+// seat chose to remember; the episodes are what it did, summarised. A page
+// showing one without the other reads as a seat with half a history.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	id := p.String("id")
 	if id == "" {

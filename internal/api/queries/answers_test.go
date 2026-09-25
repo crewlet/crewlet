@@ -162,12 +162,13 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 			[]string{"event", "event_series", "events", "phases",
 				"trace", "turn", "turns", "viewer"}},
 		// `token_series` is the spend with a time axis, which the
-		// breakdown has no dimension for — folded from phase costs, a
-		// source of its own rather than the fleet's turn detail.
-		{"the phase costs alone", queries.Sources{Spend: db.Events()},
+		// breakdown has no dimension for — folded from the usage domain's
+		// company days, a source of its own rather than the fleet's turn
+		// detail.
+		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
 			[]string{"token_series", "viewer"}},
 		{"all of them, plus health", queries.Sources{
-			State: state, Events: fleetOf(db.Events()), Spend: db.Events(),
+			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
 			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
 		}, []string{"agent", "event", "event_series", "events", "phases", "stream",
 			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
@@ -249,100 +250,6 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	// counted twice.
 	if got.AggregatedThrough != "2026-06-14T12:00:00Z" {
 		t.Errorf("aggregated_through = %q", got.AggregatedThrough)
-	}
-}
-
-func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
-	t.Parallel()
-	// The live projection can only answer for its own window. Any other one
-	// is a scan — folded by the SAME aggregator, so the number a reader
-	// sees when they change the window is comparable with the one they
-	// were looking at.
-	db := openStore(t)
-	log := db.Events()
-	write := func(id, role, phase string, total int) {
-		t.Helper()
-		payload, _ := json.Marshal(map[string]any{
-			"role": role, "phase": phase, "model": "m-1", "turn_id": "tn-1",
-			"input_tokens": total / 2, "output_tokens": total / 2,
-			"total_tokens": total,
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Hour),
-			Category: "system", Actor: role, Summary: "phase",
-			Tags: map[string]string{"agent_role": role}, Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	write("s1", "Lead", "plan", 10)
-	write("s2", "Lead", "execute", 20)
-	write("s3", "Coder", "plan", 6)
-
-	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
-	got := askRaw(t, r, "tokens", map[string]any{"since_days": 3}).(tokens.Rollup)
-
-	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
-		t.Errorf("totals = %+v", got.Totals)
-	}
-	if width := windowWidth(t, got); width != 3*24*time.Hour {
-		t.Errorf("window = %s .. %s (%s), want the three days asked for",
-			got.Since, got.Until, width)
-	}
-	// Biggest first, and every dimension present.
-	if len(got.ByPhase) != 2 || got.ByPhase[0].Phase != "execute" {
-		t.Errorf("by_phase = %+v, want execute first", got.ByPhase)
-	}
-	if len(got.ByAgent) != 2 || got.ByAgent[0].Role != "Lead" {
-		t.Errorf("by_agent = %+v", got.ByAgent)
-	}
-	if len(got.ByTurn) != 1 || got.ByTurn[0].TurnID != "tn-1" {
-		t.Errorf("by_turn = %+v", got.ByTurn)
-	}
-}
-
-func TestOneRoleCanBeAskedForAlone(t *testing.T) {
-	t.Parallel()
-	// A per-seat window is a store read even when it IS the live window:
-	// the projection holds the whole org, and filtering it here would be a
-	// second implementation of the store's own filter.
-	db := openStore(t)
-	log := db.Events()
-	for _, seat := range []struct{ id, role string }{{"a", "Lead"}, {"b", "Coder"}} {
-		payload, _ := json.Marshal(map[string]any{
-			"role": seat.role, "phase": "plan", "total_tokens": 5,
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: seat.id, Type: "agent_phase_completed", Time: time.Now().UTC(),
-			Category: "system", Tags: map[string]string{"agent_role": seat.role},
-			Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
-	got := askRaw(t, r, "tokens", map[string]any{"agent_role": "Lead"}).(tokens.Rollup)
-
-	if got.Totals.Calls != 1 || got.AgentRole != "Lead" {
-		t.Errorf("rollup = %+v", got)
-	}
-}
-
-func TestAWindowNobodyCanSeeIsLabelledAsAsked(t *testing.T) {
-	t.Parallel()
-	// A registry holding the projection and no event log cannot see a
-	// fourteen-day window. It answers an empty rollup labelled with the
-	// window ASKED for, not the live one relabelled: a week's heading over an
-	// hour's numbers is a lie about what a reader is looking at.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
-	if width := windowWidth(t, got); width != 14*24*time.Hour || got.Totals.Calls != 0 {
-		t.Errorf("rollup = %+v (window %s)", got, width)
-	}
-	// Never nil: the client does `d.by_phase.length`, so a null throws in
-	// the browser rather than rendering an empty table.
-	if got.ByPhase == nil || got.ByAgent == nil || got.ByTurn == nil {
-		t.Error("an empty rollup carries nil slices, which marshal to null")
 	}
 }
 
@@ -1183,57 +1090,4 @@ func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
 		t.Fatalf("until = %q: %v", got.Until, err)
 	}
 	return until.Sub(since)
-}
-
-func TestTokensTakeTheSameTwoInstantsTheSeriesDoes(t *testing.T) {
-	t.Parallel()
-	// THE WHOLE POINT OF THE WINDOW BEING INSTANTS. A time-range control
-	// produces two edges, and a reader who names one that ended yesterday
-	// gets a chart over it and figures above the chart over this afternoon
-	// — two facts on one screen that cannot be compared — unless the
-	// breakdown takes the same pair.
-	db := openStore(t)
-	log := db.Events()
-	at := time.Now().UTC().Add(-5 * 24 * time.Hour)
-	write := func(id string, when time.Time, total int) {
-		payload, _ := json.Marshal(map[string]any{
-			"role": "Lead", "phase": "plan", "total_tokens": total, "turn_id": "tn-1",
-		})
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: "agent_phase_completed", Time: when,
-			Category: "system", Payload: payload,
-		}); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	write("old", at.Add(-48*time.Hour), 100)
-	write("in", at.Add(time.Hour), 7)
-	write("new", time.Now().UTC(), 500)
-
-	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
-	got := askRaw(t, r, "tokens", map[string]any{
-		"since": at.Format(time.RFC3339),
-		"until": at.Add(24 * time.Hour).Format(time.RFC3339),
-	}).(tokens.Rollup)
-
-	if got.Totals.TotalTokens != 7 {
-		t.Errorf("totals = %+v, want only the record inside the named window", got.Totals)
-	}
-	if width := windowWidth(t, got); width != 24*time.Hour {
-		t.Errorf("window = %s .. %s (%s), want the day that was named",
-			got.Since, got.Until, width)
-	}
-}
-
-func TestATokensWindowThatEndsWhereItBeginsIsRefused(t *testing.T) {
-	t.Parallel()
-	// Half-open, so an empty window names no rows at all. The same refusal
-	// the events and series questions give, in the same words, because a
-	// reader scrubbing a range hits all three.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	at := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.Answer(t.Context(), "tokens", map[string]any{"since": at, "until": at}, "")
-	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("err = %v, want ErrBadParams", err)
-	}
 }

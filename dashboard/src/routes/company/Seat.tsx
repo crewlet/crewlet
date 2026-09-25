@@ -637,10 +637,21 @@ export function SeatScreen({ handle }: { handle: string }) {
     // ticking; and the turn a reader opened the tab to watch was never in it.
     { enabled: tab === "turns" && role !== "", pollMs: 20_000 },
   );
+  // THIS SEAT'S LAST SEVEN COMPANY DAYS, by its HANDLE: every node's days
+  // from the usage domain, so a seat that moved between nodes this week is
+  // one seat with all of its spend rather than whichever node's share
+  // answered.
   const spend = useQuery(
     "tokens",
-    { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
-    { enabled: tab === "cost" && !!seat },
+    { seat: seat?.handle ?? "", days: 7 },
+    { enabled: tab === "cost" && !!seat?.handle },
+  );
+  // AND ITS TURNS OVER THE SAME DAYS, from the fleet's turn list: a company
+  // day's row holds no turn, so the per-turn table is the list, newest first.
+  const spendTurns = useQuery(
+    "turns",
+    { role, days: 7, limit: 50 },
+    { enabled: tab === "cost" && role !== "" },
   );
   // THE GUARDED HALF. A seat's email, model chain, token budget, contact
   // identities, tool credentials, integrations and schedules are NOT on the
@@ -755,11 +766,11 @@ export function SeatScreen({ handle }: { handle: string }) {
   // many runs each trigger got in the window.
   const spendReruns = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of spend.data?.by_turn ?? []) {
+    for (const t of spendTurns.data?.turns ?? []) {
       if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
     }
     return counts;
-  }, [spend.data]);
+  }, [spendTurns.data]);
   // THE ENGINE'S OWN ROW FOR EACH CARD. One turn, one set of figures: the card
   // reads its start and its duration off the same record the table above draws,
   // and falls back to its phases only where there is no row. They disagreed
@@ -2104,7 +2115,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </Card.Header>
                 <DataGrid
                   name="turns"
-                  rows={spend.data?.by_turn ?? []}
+                  rows={spendTurns.data?.turns ?? []}
                   rowKey={(t) => t.turn_id}
                   defaultSort="-started"
                   onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
@@ -2150,11 +2161,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       cell: (t) => <TokenCell value={t.total_tokens} />,
                     },
                     {
-                      key: "calls",
-                      header: "Calls",
+                      key: "phases",
+                      header: "Phases",
                       align: "right",
-                      sortValue: (t) => t.calls,
-                      cell: (t) => <NumberCell value={t.calls} />,
+                      sortValue: (t) => t.phases,
+                      cell: (t) => <NumberCell value={t.phases} />,
                     },
                   ]}
                 />

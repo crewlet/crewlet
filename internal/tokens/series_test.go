@@ -2,302 +2,404 @@ package tokens_test
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
-func at(s string) time.Time {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		panic(err)
+// cell is one company day's spend cell for a seat, with only the dimensions a
+// case sets.
+func cell(day, handle, phase, model string, total int) tokens.Cell {
+	return tokens.Cell{
+		Day: day, AgentID: "id-" + handle, Handle: handle, Role: strings.ToUpper(handle),
+		Phase: phase, Model: model, ProviderKey: "p-" + model,
+		Bucket: tokens.Bucket{InputTokens: total, TotalTokens: total, Calls: 1},
 	}
-	return t
 }
 
-func priced(r tokens.Record, usd float64) tokens.Record { r.CostUSD = usd; return r }
-
-func TestEveryBucketInTheWindowIsDrawn(t *testing.T) {
-	t.Parallel()
-	// A HOLE IN A TIME SERIES IS NOT AN EMPTY HOUR, it is a chart the
-	// client has to repair — and repairing it in the browser is the copy of
-	// this bucketing that this package exists to have stopped.
-	got := tokens.Bucketed([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:10:00Z", 60, 20),
-		rec("CEO", "plan", "sonnet", "t2", "2026-06-14T15:40:00Z", 10, 10),
-	}, tokens.SeriesOptions{
-		Group:    tokens.GroupPhase,
-		Interval: tokens.IntervalHour,
-		Since:    at("2026-06-14T12:00:00Z"),
-		Until:    at("2026-06-14T16:00:00Z"),
-	})
-
-	if len(got.Points) != 4 {
-		t.Fatalf("points = %d, want one per hour of the window", len(got.Points))
+// days is the range first..last on loc.
+func days(t *testing.T, first, last string, loc *time.Location) tokens.Range {
+	t.Helper()
+	r, err := tokens.DaysBetween(first, last, loc)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.Points[0].At != "2026-06-14T12:00:00Z" {
-		t.Errorf("first bucket at %q, want the window's own start", got.Points[0].At)
+	return r
+}
+
+func TestEveryDayInTheWindowIsDrawn(t *testing.T) {
+	t.Parallel()
+	// A HOLE IN A TIME SERIES IS NOT AN EMPTY DAY, it is a chart the client
+	// has to repair — and repairing it in the browser is the copy of this
+	// bucketing that this package exists to have stopped.
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 80),
+		cell("2026-06-17", "ceo", "execute", "sonnet", 20),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Interval: tokens.IntervalDay,
+		Range: days(t, "2026-06-14", "2026-06-17", time.UTC),
+	})
+	if len(got.Points) != 4 {
+		t.Fatalf("points = %d, want one per day of the window", len(got.Points))
+	}
+	if got.Points[0].At != "2026-06-14T00:00:00Z" || got.Points[0].Window != "2026-06-14" {
+		t.Errorf("first bucket = %s %s, want the window's own first day",
+			got.Points[0].At, got.Points[0].Window)
 	}
 	if got.Points[0].TotalTokens != 80 || got.Points[3].TotalTokens != 20 {
 		t.Errorf("edges = %d and %d", got.Points[0].TotalTokens, got.Points[3].TotalTokens)
 	}
 	if got.Points[1].Calls != 0 || got.Points[2].Calls != 0 {
-		t.Errorf("the quiet hours are not empty: %+v %+v", got.Points[1], got.Points[2])
+		t.Errorf("the quiet days are not empty: %+v %+v", got.Points[1], got.Points[2])
 	}
-	if got.Until != "2026-06-14T16:00:00Z" {
-		t.Errorf("until = %q, want the end of the last bucket", got.Until)
+	if got.Until != "2026-06-18T00:00:00Z" || got.Days != 4 {
+		t.Errorf("until = %q over %d days, want the end of the last day over 4",
+			got.Until, got.Days)
 	}
 }
 
-func TestABucketIsUTCMidnightAndNotAnAbsoluteMultiple(t *testing.T) {
+// A WEEK BUCKET IS THE COMPANY'S ISO WEEK, from its own Monday midnight — not
+// seven UTC days from the window's first. Cut in Tokyo, a Monday begins at 15:00
+// the Sunday before in UTC, and a week holding a clock change elsewhere is not
+// 168 hours long; the axis is walked by label so neither can move a boundary.
+func TestAWeekBucketIsTheCompanysISOWeek(t *testing.T) {
 	t.Parallel()
-	// The obvious spelling is time.Truncate(24*time.Hour), which truncates
-	// the duration since year 1 and lands on a UTC midnight only because
-	// year 1 happened to begin at one. It also silently uses whatever
-	// Location the value carries. Both are asserted here so the calendar
-	// arithmetic cannot be "simplified" back.
-	east := time.FixedZone("east", 9*3600)
-	start := tokens.IntervalDay.Start(time.Date(2026, 6, 15, 3, 0, 0, 0, east))
-	if want := "2026-06-14T00:00:00Z"; start.Format(time.RFC3339) != want {
-		t.Errorf("day start = %s, want %s — the UTC day, not the local one",
-			start.Format(time.RFC3339), want)
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
 	}
-	hour := tokens.IntervalHour.Start(time.Date(2026, 6, 15, 3, 59, 59, 0, east))
-	if want := "2026-06-14T18:00:00Z"; hour.Format(time.RFC3339) != want {
-		t.Errorf("hour start = %s, want %s", hour.Format(time.RFC3339), want)
+	// Wednesday 10 June 2026 to Tuesday 23 June: a partial week, a whole
+	// one, and a partial one.
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-10", "ceo", "execute", "sonnet", 1),
+		cell("2026-06-14", "ceo", "execute", "sonnet", 2), // Sunday: still W24
+		cell("2026-06-15", "ceo", "execute", "sonnet", 4), // Monday: W25
+		cell("2026-06-23", "ceo", "execute", "sonnet", 8),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Interval: tokens.IntervalWeek,
+		Range: days(t, "2026-06-10", "2026-06-23", tokyo),
+	})
+	want := []struct {
+		window, at  string
+		days, total int
+	}{
+		{"2026-W24", "2026-06-07T15:00:00Z", 5, 3},
+		{"2026-W25", "2026-06-14T15:00:00Z", 7, 4},
+		{"2026-W26", "2026-06-21T15:00:00Z", 2, 8},
+	}
+	if len(got.Points) != len(want) {
+		t.Fatalf("points = %+v, want three weeks", got.Points)
+	}
+	for i, w := range want {
+		p := got.Points[i]
+		if p.Window != w.window || p.At != w.at || p.Days != w.days || p.TotalTokens != w.total {
+			t.Errorf("week %d = {%s %s %d days %d}, want %+v",
+				i, p.Window, p.At, p.Days, p.TotalTokens, w)
+		}
+	}
+	if got.Interval != tokens.IntervalWeek || got.Since != "2026-06-09T15:00:00Z" {
+		t.Errorf("series = %s from %s, want weeks from Tokyo's midnight on the 10th",
+			got.Interval, got.Since)
+	}
+}
+
+// SANDBOX IS EXECUTE. A detached coding run is the executor's own work done in
+// a box, and drawn as a band of its own it would read as a fifth kind of
+// spend the palette has no hue for.
+func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
+	t.Parallel()
+	for phase, want := range map[string]tokens.Band{
+		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute, "plan": tokens.BandExecute,
+		"review":    tokens.BandReview,
+		"subagent":  tokens.BandWorkers,
+		"auxiliary": tokens.BandAuxiliary, "judge": tokens.BandAuxiliary,
+		"onboarding": tokens.BandAuxiliary, "": tokens.BandAuxiliary,
+		"a-phase-from-a-newer-peer": tokens.BandAuxiliary,
+	} {
+		if got := tokens.PhaseBand(phase); got != want {
+			t.Errorf("PhaseBand(%q) = %q, want %q", phase, got, want)
+		}
+	}
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
+		cell("2026-06-14", "ceo", "sandbox", "cli", 30),
+		cell("2026-06-14", "ceo", "subagent", "haiku", 5),
+		cell("2026-06-14", "ceo", "judge", "haiku", 1),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
+	})
+	bands := map[string]int{}
+	for _, row := range got.ByGroup {
+		bands[row.Group] = row.TotalTokens
+	}
+	if bands["execute"] != 40 || bands["workers"] != 5 || bands["auxiliary"] != 1 {
+		t.Errorf("bands = %v, want the coding run inside execute", bands)
+	}
+	if _, ok := bands["sandbox"]; ok {
+		t.Error("sandbox is a band of its own")
+	}
+}
+
+// EVERY PHASE THE ENGINE WRITES IS FOLDED ON PURPOSE. A phase added to the
+// event catalogue lands in Auxiliary by default — which is right for a value a
+// NEWER peer wrote, and wrong for one this build produces and forgot to place.
+func TestEveryPhaseThisBuildWritesHasABandChosenForIt(t *testing.T) {
+	t.Parallel()
+	chosen := map[types.Phase]tokens.Band{
+		types.PhaseOnboarding: tokens.BandAuxiliary,
+		types.PhaseExecute:    tokens.BandExecute,
+		types.PhaseReview:     tokens.BandReview,
+		types.PhaseSubagent:   tokens.BandWorkers,
+		types.PhaseAuxiliary:  tokens.BandAuxiliary,
+		types.PhaseJudge:      tokens.BandAuxiliary,
+		types.PhaseSandbox:    tokens.BandExecute,
+	}
+	for phase, band := range chosen {
+		if got := tokens.PhaseBand(string(phase)); got != band {
+			t.Errorf("PhaseBand(%q) = %q, want %q", phase, got, band)
+		}
+	}
+}
+
+// THE PHASE LEGEND NEVER MOVES. By size, a week where review ran long would put
+// Review first and hand it Execute's place — and with a positional palette its
+// colour.
+func TestThePhaseBandsAreInStackingOrderAndNeverFold(t *testing.T) {
+	t.Parallel()
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "review", "haiku", 900),
+		cell("2026-06-14", "ceo", "auxiliary", "haiku", 500),
+		cell("2026-06-14", "ceo", "subagent", "haiku", 50),
+		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Groups: 1,
+		Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
+	})
+	var order []string
+	for _, row := range got.ByGroup {
+		order = append(order, row.Group)
+	}
+	if want := []string{"execute", "review", "workers", "auxiliary"}; !slices.Equal(order, want) {
+		t.Errorf("phase bands = %v, want %v whatever their size or the cap", order, want)
 	}
 }
 
 func TestTheBandsPastTheCapFoldIntoOneResidual(t *testing.T) {
 	t.Parallel()
-	// Grouping by turn over a busy window is thousands of bands. The chart
-	// carries five and the rest are ONE row — and that row is marked rather
-	// than named, so a phase or a model genuinely called "other" cannot be
+	// The chart carries four and the rest are ONE row — and that row is
+	// marked rather than named, so a model genuinely called "other" cannot be
 	// mistaken for it.
-	var records []tokens.Record
-	for i, size := range []int{700, 600, 500, 400, 300, 200, 100} {
-		records = append(records, tokens.Record{
-			EventID:   string(rune('a' + i)),
-			Timestamp: "2026-06-14T12:00:00Z",
-			AgentRole: "CEO", Phase: "plan", Model: string(rune('a' + i)),
-			TotalTokens: size, InputTokens: size,
-		})
+	var cells []tokens.Cell
+	for i, size := range []int{700, 600, 500, 400, 300, 200} {
+		c := cell("2026-06-14", "ceo", "execute", string(rune('a'+i)), size)
+		c.CacheReadTokens = size / 10
+		cells = append(cells, c)
 	}
-	got := tokens.Bucketed(records, tokens.SeriesOptions{
-		Group: tokens.GroupModel, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+	got := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupModel, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
 	})
-
-	if len(got.ByGroup) != 6 {
-		t.Fatalf("by_group = %d rows, want five bands and one residual", len(got.ByGroup))
+	if len(got.ByGroup) != tokens.DefaultSeriesGroups+1 {
+		t.Fatalf("by_group = %d rows, want four bands and one residual", len(got.ByGroup))
 	}
-	last := got.ByGroup[5]
-	if !last.Other || last.Folded != 2 {
-		t.Errorf("residual = %+v, want other with two groups folded", last)
+	last := got.ByGroup[len(got.ByGroup)-1]
+	if !last.Other || last.Folded != 2 || last.Group != "" {
+		t.Errorf("residual = %+v, want an unnamed other with two groups folded", last)
 	}
-	if last.TotalTokens != 300 {
-		t.Errorf("residual tokens = %d, want 300", last.TotalTokens)
-	}
-	if last.Group != "" {
-		t.Errorf("residual group = %q, want empty so no real name can collide", last.Group)
-	}
-	if got.ByGroup[0].Group != "a" {
-		t.Errorf("first band = %q, want the biggest", got.ByGroup[0].Group)
+	// EVERY FIELD OF THE BUCKET, the cache counts included: the residual
+	// was summed field by field and forgot the two added last, so "other"
+	// claimed none of its input was ever served from cache.
+	if last.TotalTokens != 500 || last.CacheReadTokens != 50 || last.Calls != 2 {
+		t.Errorf("residual = %+v, want 500 tokens, 50 cached, 2 calls", last.Bucket)
 	}
 	point := got.Points[0]
-	if point.Residual.TotalTokens != 300 {
-		t.Errorf("the bucket's residual = %d, want 300", point.Residual.TotalTokens)
+	if point.Residual.TotalTokens != 500 {
+		t.Errorf("the bucket's residual = %d, want 500", point.Residual.TotalTokens)
 	}
 	if _, ok := point.Groups["f"]; ok {
 		t.Error("a folded band is still its own key in the bucket")
 	}
-	if point.TotalTokens != 2800 {
+	if point.TotalTokens != 2700 {
 		t.Errorf("the bucket's own total = %d, want every band", point.TotalTokens)
 	}
 }
 
 func TestWhichBandsSurviveIsDecidedOverTheWholeWindow(t *testing.T) {
 	t.Parallel()
-	// A per-bucket decision would put a model in the chart for the hours it
+	// A per-bucket decision would put a model in the chart for the days it
 	// happened to lead and in the residual for the rest — one band that
 	// appears and disappears, which reads as spend that stopped.
-	var records []tokens.Record
-	for i, name := range []string{"a", "b", "c", "d", "e"} {
-		records = append(records, tokens.Record{
-			EventID: "big" + name, Timestamp: "2026-06-14T12:00:00Z",
-			Phase: "plan", Model: name, TotalTokens: 1000 - i,
-		})
+	var cells []tokens.Cell
+	for i, name := range []string{"a", "b", "c", "d"} {
+		cells = append(cells, cell("2026-06-14", "ceo", "execute", name, 1000-i))
 	}
-	// `small` leads the SECOND hour outright and is still last overall.
-	records = append(records, tokens.Record{
-		EventID: "small", Timestamp: "2026-06-14T13:30:00Z",
-		Phase: "plan", Model: "small", TotalTokens: 5,
-	})
-	got := tokens.Bucketed(records, tokens.SeriesOptions{
-		Group: tokens.GroupModel, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T14:00:00Z"),
+	// `small` leads the SECOND day outright and is still last overall.
+	cells = append(cells, cell("2026-06-15", "ceo", "execute", "small", 5))
+	got := tokens.BucketDaily(cells, tokens.SeriesOptions{
+		Group: tokens.GroupModel, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
 	})
 	if _, ok := got.Points[1].Groups["small"]; ok {
-		t.Error("a band that leads one bucket got its own key there, " +
-			"so the legend's five are not the chart's five")
+		t.Error("a band that leads one bucket got its own key there")
 	}
 	if got.Points[1].Residual.TotalTokens != 5 {
-		t.Errorf("the second hour's residual = %d, want the folded band's 5",
+		t.Errorf("the second day's residual = %d, want the folded band's 5",
 			got.Points[1].Residual.TotalTokens)
 	}
 }
 
-func TestARecordThisGroupingPlacesNowhereStillCounts(t *testing.T) {
+func TestACellThisGroupingPlacesNowhereStillCounts(t *testing.T) {
 	t.Parallel()
-	// Grouping by worker leaves out every phase that is not an auxiliary
-	// worker's. Those are real spend, and a chart whose bands sum to less
-	// than the company's total has to SAY so rather than let a reader
-	// discover it by comparing two screens.
-	got := tokens.Bucketed([]tokens.Record{
-		{EventID: "w", Timestamp: "2026-06-14T12:00:00Z",
-			Phase: "auxiliary", Worker: "reflect", TotalTokens: 30},
-		{EventID: "p", Timestamp: "2026-06-14T12:00:00Z",
-			Phase: "plan", TotalTokens: 70},
-		// Worker set on a phase that is not auxiliary: the pair is what
-		// keys the band, so this one counts nowhere either.
-		{EventID: "stray", Timestamp: "2026-06-14T12:00:00Z",
-			Phase: "plan", Worker: "reflect", TotalTokens: 1},
+	w := cell("2026-06-14", "ceo", "auxiliary", "haiku", 30)
+	w.Worker = "reflect"
+	stray := cell("2026-06-14", "ceo", "execute", "haiku", 1)
+	stray.Worker = "reflect"
+	got := tokens.BucketDaily([]tokens.Cell{
+		w, cell("2026-06-14", "ceo", "execute", "sonnet", 70), stray,
 	}, tokens.SeriesOptions{
-		Group: tokens.GroupWorker, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+		Group: tokens.GroupWorker, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
 	})
-	if got.Totals.TotalTokens != 101 {
-		t.Errorf("totals = %d, want every record in the window", got.Totals.TotalTokens)
-	}
-	if got.Grouped.TotalTokens != 30 {
-		t.Errorf("grouped = %d, want only the auxiliary worker's", got.Grouped.TotalTokens)
+	if got.Totals.TotalTokens != 101 || got.Grouped.TotalTokens != 30 {
+		t.Errorf("totals %d grouped %d, want 101 and only the worker's 30",
+			got.Totals.TotalTokens, got.Grouped.TotalTokens)
 	}
 	if len(got.ByGroup) != 1 || got.ByGroup[0].Group != "reflect" {
 		t.Errorf("by_group = %+v, want one band", got.ByGroup)
 	}
 }
 
-func TestASeatWithNoUnitIsPlacedRatherThanPooledWithTheUnknown(t *testing.T) {
+func TestAUnitBandCountsItsSeatsAndARootSeatHasItsOwn(t *testing.T) {
 	t.Parallel()
-	got := tokens.Bucketed([]tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0),
-		rec("ENG", "plan", "sonnet", "t2", "2026-06-14T12:00:00Z", 20, 0),
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
+		cell("2026-06-14", "dev", "execute", "sonnet", 20),
+		cell("2026-06-15", "dev", "review", "sonnet", 5),
+		cell("2026-06-15", "ops", "execute", "sonnet", 1),
 	}, tokens.SeriesOptions{
-		Group: tokens.GroupUnit, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
-		Units: map[string]string{"ENG": "Engineering"},
+		Group: tokens.GroupUnit, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
+		Units: map[string]string{"dev": "Engineering", "ops": "Engineering"},
 	})
-	names := map[string]int{}
+	rows := map[string]tokens.GroupRow{}
 	for _, row := range got.ByGroup {
-		names[row.Group] = row.TotalTokens
+		rows[row.Group] = row
 	}
-	if names["Engineering"] != 20 {
-		t.Errorf("by_group = %+v, want the mapped unit", got.ByGroup)
+	if eng := rows["Engineering"]; eng.TotalTokens != 26 || eng.Seats != 2 {
+		t.Errorf("Engineering = %+v, want 26 tokens over two seats", eng)
 	}
-	if names["no unit"] != 10 {
-		t.Errorf("by_group = %+v, want the root seat in its own band", got.ByGroup)
-	}
-	if _, ok := names["unknown"]; ok {
-		t.Error("a root seat was pooled with the records that carried no role at all")
+	if root := rows["no unit"]; root.TotalTokens != 10 || root.Seats != 1 {
+		t.Errorf("the root seat's band = %+v, want its own", root)
 	}
 }
 
-func TestOnlyAPositivePriceCountsAndTheCountIsCarriedBesideIt(t *testing.T) {
+func TestProviderAndSeatAreBandsOfTheirOwn(t *testing.T) {
 	t.Parallel()
-	// A price is reported by ONE backend. Zero dollars over zero priced
-	// calls means nobody said; zero over two means two runs were billed
-	// nothing — and a negative is a bad payload, never a rebate.
-	got := tokens.Bucketed([]tokens.Record{
-		priced(rec("CEO", "execute", "cli", "t1", "2026-06-14T12:00:00Z", 10, 0), 0.25),
-		priced(rec("CEO", "execute", "cli", "t2", "2026-06-14T12:10:00Z", 10, 0), -1),
-		rec("CEO", "plan", "sonnet", "t3", "2026-06-14T12:20:00Z", 10, 0),
-	}, tokens.SeriesOptions{
-		Group: tokens.GroupPhase, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
-	})
-	if got.Totals.CostUSD != 0.25 || got.Totals.PricedCalls != 1 {
-		t.Errorf("totals = %+v, want one priced call at 0.25", got.Totals)
+	a := cell("2026-06-14", "ceo", "execute", "sonnet", 10)
+	b := cell("2026-06-14", "dev", "execute", "opus", 30)
+	b.ProviderKey = a.ProviderKey
+	opts := tokens.SeriesOptions{Range: days(t, "2026-06-14", "2026-06-14", time.UTC)}
+
+	opts.Group = tokens.GroupProvider
+	byProvider := tokens.BucketDaily([]tokens.Cell{a, b}, opts)
+	if len(byProvider.ByGroup) != 1 || byProvider.ByGroup[0].TotalTokens != 40 {
+		t.Errorf("by provider = %+v, want one entry serving both models", byProvider.ByGroup)
 	}
-	if b := got.Points[0].Groups["plan"]; b.PricedCalls != 0 || b.CostUSD != 0 {
-		t.Errorf("the unpriced band = %+v, want nothing quoted", b)
+	opts.Group = tokens.GroupSeat
+	bySeat := tokens.BucketDaily([]tokens.Cell{a, b}, opts)
+	if bySeat.ByGroup[0].Group != "dev" || bySeat.ByGroup[0].Handle != "dev" {
+		t.Errorf("by seat = %+v, want the handle as the band and its link", bySeat.ByGroup[0])
+	}
+}
+
+func TestACellOutsideTheWindowCountsNowhere(t *testing.T) {
+	t.Parallel()
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-13", "ceo", "execute", "sonnet", 99),
+		cell("2026-06-14", "ceo", "execute", "sonnet", 1),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
+	})
+	if got.Totals.TotalTokens != 1 {
+		t.Errorf("totals = %d, want only the window's own day", got.Totals.TotalTokens)
 	}
 }
 
 func TestOrderOfArrivalDoesNotChangeTheSeries(t *testing.T) {
 	t.Parallel()
-	forward := []tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-		rec("ENG", "execute", "opus", "t2", "2026-06-14T13:30:00Z", 10, 40),
-		rec("CEO", "review", "haiku", "t1", "2026-06-14T14:59:59Z", 5, 5),
+	forward := []tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 80),
+		cell("2026-06-15", "dev", "review", "opus", 50),
+		cell("2026-06-15", "ceo", "subagent", "haiku", 10),
 	}
-	backward := []tokens.Record{forward[2], forward[1], forward[0]}
+	backward := []tokens.Cell{forward[2], forward[1], forward[0]}
 	opts := tokens.SeriesOptions{
-		Group: tokens.GroupSeat, Interval: tokens.IntervalHour,
-		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T15:00:00Z"),
-		Handles: map[string]string{"CEO": "ceo"},
+		Group: tokens.GroupSeat, Range: days(t, "2026-06-14", "2026-06-15", time.UTC),
 	}
-	a, _ := json.Marshal(tokens.Bucketed(forward, opts))
-	b, _ := json.Marshal(tokens.Bucketed(backward, opts))
+	a, _ := json.Marshal(tokens.BucketDaily(forward, opts))
+	b, _ := json.Marshal(tokens.BucketDaily(backward, opts))
 	if string(a) != string(b) {
-		t.Errorf("the same records in two orders gave two series:\n%s\n%s", a, b)
-	}
-	got := tokens.Bucketed(forward, opts)
-	if got.ByGroup[0].Group != "CEO" || got.ByGroup[0].Handle != "ceo" {
-		t.Errorf("by_group[0] = %+v, want the seat and its handle", got.ByGroup[0])
-	}
-	if got.ByGroup[1].Handle != "" {
-		t.Errorf("an unmapped role got the handle %q rather than none",
-			got.ByGroup[1].Handle)
+		t.Errorf("the same cells in two orders gave two series:\n%s\n%s", a, b)
 	}
 }
 
-func TestTheWindowIsHalfOpenSoTwoAdjacentOnesNeitherLoseNorDouble(t *testing.T) {
+// THE PREVIOUS WINDOW IS THE SAME NUMBER OF COMPANY DAYS ending the day before,
+// never the same number of hours: across a clock change the two would be cut
+// on different midnights and the comparison would report a change nobody made.
+func TestThePreviousWindowIsTheSameDaysEndingTheDayBefore(t *testing.T) {
 	t.Parallel()
-	// Compare-to-previous asks for [since-span, since) and [since, until).
-	// A record exactly on the boundary belongs to the later window and to
-	// exactly one of them.
-	edge := []tokens.Record{
-		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0),
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
 	}
-	since, until := at("2026-06-14T12:00:00Z"), at("2026-06-14T13:00:00Z")
-	prevSince, prevUntil := tokens.PreviousWindow(since, until)
-	if prevSince != at("2026-06-14T11:00:00Z") || prevUntil != since {
-		t.Fatalf("previous window = %s..%s", prevSince, prevUntil)
-	}
-	now := tokens.Bucketed(edge, tokens.SeriesOptions{
-		Group: tokens.GroupPhase, Since: since, Until: until,
-	})
-	prev := tokens.Bucketed(edge, tokens.SeriesOptions{
-		Group: tokens.GroupPhase, Since: prevSince, Until: prevUntil,
-	})
-	if now.Totals.Calls != 1 {
-		t.Errorf("the later window missed the record on its own start")
-	}
-	if prev.Totals.Calls != 0 {
-		t.Errorf("the earlier window claimed the record on its exclusive end")
+	// 8 March 2026 is the spring-forward Sunday in New York.
+	now := time.Date(2026, 3, 14, 12, 0, 0, 0, ny)
+	for _, n := range []int{7, 30, 90} {
+		r := tokens.LastDays(n, now, ny)
+		if r.Days() != n || r.Last.Label != "2026-03-14" {
+			t.Fatalf("LastDays(%d) = %s..%s (%d days)", n, r.First.Label, r.Last.Label, r.Days())
+		}
+		prev := r.Previous()
+		if prev.Days() != n || prev.Last.Next().Label != r.First.Label {
+			t.Errorf("previous of %d days = %s..%s (%d days), want %d days ending the day before %s",
+				n, prev.First.Label, prev.Last.Label, prev.Days(), n, r.First.Label)
+		}
+		if !prev.Until().Equal(r.Since()) {
+			t.Errorf("previous of %d ends %s, this window begins %s — the two share no edge",
+				n, prev.Until(), r.Since())
+		}
 	}
 }
 
-func TestAWindowTooLongForTheAxisKeepsTheNewestAndSaysSo(t *testing.T) {
+// THE HORIZON ADMITS WHAT THE USAGE APPLIER KEEPS. Its own cutoff keeps the day
+// exactly `days` before today, so a ninety-day window's previous half — which
+// begins 179 days back — is inside it, and the day past the floor is not.
+func TestTheHorizonAdmitsExactlyTheDaysTheApplierKeeps(t *testing.T) {
 	t.Parallel()
-	// Silently dropping the oldest buckets would put a year's heading over
-	// forty days of bars. The window is REPORTED as what was covered.
-	since := at("2020-01-01T00:00:00Z")
-	until := at("2026-06-14T12:30:00Z")
-	got := tokens.Bucketed(nil, tokens.SeriesOptions{
-		Group: tokens.GroupPhase, Interval: tokens.IntervalHour,
-		Since: since, Until: until,
-	})
-	if len(got.Points) != tokens.MaxSeriesPoints {
-		t.Fatalf("points = %d, want the cap", len(got.Points))
+	today := period.At(period.Day, time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC), time.UTC)
+	h := tokens.NewHorizon(181, today)
+	if h.Floor != today.Shift(-181).Label || h.Days != 181 {
+		t.Fatalf("horizon = %+v", h)
 	}
-	if got.Since == since.Format(time.RFC3339) {
-		t.Error("the answer claims the window it was asked for, not the one it drew")
+	ninety := tokens.LastDays(90, today.Start, time.UTC)
+	if !h.Admits(ninety.Previous()) {
+		t.Errorf("the previous ninety days (%s..) are refused under a floor of %s",
+			ninety.Previous().First.Label, h.Floor)
 	}
-	last := got.Points[len(got.Points)-1].At
-	if last != "2026-06-14T12:00:00Z" {
-		t.Errorf("last bucket at %q, want the one holding the window's end", last)
+	past := tokens.Range{First: today.Shift(-182), Last: today}
+	if h.Admits(past) {
+		t.Errorf("a window from %s is admitted under a floor of %s", past.First.Label, h.Floor)
+	}
+}
+
+func TestARangeRunsForwards(t *testing.T) {
+	t.Parallel()
+	if _, err := tokens.DaysBetween("2026-06-15", "2026-06-14", time.UTC); err == nil {
+		t.Error("an inverted range was accepted")
+	}
+	if _, err := tokens.DaysBetween("2026-02-29", "2026-03-01", time.UTC); err == nil {
+		t.Error("a date the calendar does not have was accepted")
 	}
 }
 
@@ -313,36 +415,30 @@ func TestAnUnknownIntervalOrGroupIsAValueTheCallerCanRefuse(t *testing.T) {
 			t.Errorf("%q is in the closed set and reports invalid", g)
 		}
 	}
-	if tokens.Interval("minute").Valid() || tokens.Group("project").Valid() {
-		t.Error("an unknown value reports valid, so a caller cannot refuse it")
-	}
-}
-
-func TestNoWindowAndNoRecordsIsAnEmptyAxisNotTheYearOne(t *testing.T) {
-	t.Parallel()
-	got := tokens.Bucketed(nil, tokens.SeriesOptions{Group: tokens.GroupPhase})
-	if len(got.Points) != 0 {
-		t.Errorf("points = %+v, want none", got.Points)
-	}
-	if got.Since != "" || got.Until != "" {
-		t.Errorf("window = %q..%q, want none claimed", got.Since, got.Until)
-	}
-	if body, _ := json.Marshal(got); string(body) == "" {
-		t.Fatal("unmarshalable")
-	} else if !jsonHas(body, `"series":[]`) || !jsonHas(body, `"by_group":[]`) {
-		t.Errorf("empty lists marshalled as null, which throws in the browser: %s", body)
-	}
-}
-
-func jsonHas(body []byte, want string) bool {
-	return len(body) > 0 && contains(string(body), want)
-}
-
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
+	// THE TWO A DAILY ROW CANNOT ANSWER are gone from the closed sets, so a
+	// caller asking for them is refused rather than handed a guess.
+	for _, gone := range []string{"hour", "minute"} {
+		if tokens.Interval(gone).Valid() {
+			t.Errorf("the interval %q is still accepted", gone)
 		}
 	}
-	return false
+	for _, gone := range []string{"turn", "project"} {
+		if tokens.Group(gone).Valid() {
+			t.Errorf("the group %q is still accepted", gone)
+		}
+	}
+}
+
+func TestAnEmptyWindowIsAnAxisOfEmptyDaysNotNulls(t *testing.T) {
+	t.Parallel()
+	got := tokens.BucketDaily(nil, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Range: days(t, "2026-06-14", "2026-06-16", time.UTC),
+	})
+	if len(got.Points) != 3 {
+		t.Errorf("points = %d, want the window's three empty days", len(got.Points))
+	}
+	body, _ := json.Marshal(got)
+	if !strings.Contains(string(body), `"by_group":[]`) || !strings.Contains(string(body), `"groups":{}`) {
+		t.Errorf("empty lists marshalled as null, which throws in the browser: %s", body)
+	}
 }

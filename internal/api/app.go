@@ -309,6 +309,14 @@ func New(opts Options) (*App, error) {
 	if sources.State == nil {
 		sources.State = state
 	}
+	// ONE CLOCK for the surface. The app's own was pinned by a test and the
+	// answers' was the wall clock, so a question stamping "now" on its answer
+	// — the live spend window's edges — answered a REST call and a socket call
+	// a second apart with two different windows, and nothing but the call's
+	// timing said which.
+	if sources.Now == nil {
+		sources.Now = now
+	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
 	// the caller: one source for each, and the one that actually knows.

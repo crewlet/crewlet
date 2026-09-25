@@ -21,7 +21,7 @@ import { Spend } from "./Spend.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { Bucket, Rollup, TurnSpendRow } from "~/protocol/index.ts";
+import type { Bucket, Rollup, TurnRow } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -58,10 +58,10 @@ function rollup(total: number): Rollup {
   return {
     since: "2026-09-12T10:00:00Z",
     until: "2026-09-13T10:00:00Z",
-    agent_role: "",
     totals: bucket(total),
     by_phase: [],
     by_model: [],
+    by_provider: [],
     by_worker: [],
     by_agent: [],
     by_turn: [],
@@ -72,12 +72,24 @@ function rollup(total: number): Rollup {
 /** The live figure, which must never appear under a 30-day heading. */
 const LIVE = "5,000 exactly";
 
-/** Mount the screen with a pushed rollup and one stubbed `tokens` answer. */
-function mount(asked: () => Promise<unknown>) {
+/** Every question the screen asked, with its parameters. */
+let asks: { what: string; params: unknown }[] = [];
+
+/** Mount the screen with a pushed rollup, one stubbed `tokens` answer and,
+ *  optionally, one `turns` answer. */
+function mount(asked: () => Promise<unknown>, turns?: () => Promise<unknown>) {
+  asks = [];
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    what === "tokens" ? asked() : new Promise(() => {});
+  (socket as unknown as { query: (what: string, params: unknown) => Promise<unknown> }).query = (
+    what: string,
+    params: unknown,
+  ) => {
+    asks.push({ what, params });
+    if (what === "tokens") return asked();
+    if (what === "turns" && turns) return turns();
+    return new Promise(() => {});
+  };
   store.applyTokens(rollup(5_000));
   return render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -142,30 +154,66 @@ test("a window whose answer was refused shows the refusal, not the live rollup",
  * invites when it is scanned for what cost the most.
  */
 test("two runs of one trigger are two rows, each marked a re-run", async () => {
-  const turn = (id: string, key: string | undefined, total: number): TurnSpendRow => ({
+  const turn = (id: string, key: string | undefined, total: number): TurnRow => ({
     turn_id: id,
     work_key: key,
     role: "CEO",
-    handle: "ceo",
-    agent_id: "a-1",
     started_at: "2026-09-13T09:00:00Z",
     ended_at: "2026-09-13T09:01:00Z",
-    by_phase: {},
-    ...bucket(total),
+    duration_ms: 60_000,
+    complete: true,
+    parked: false,
+    phases: 2,
+    iterations: 1,
+    failed: false,
+    input_tokens: total,
+    output_tokens: 0,
+    total_tokens: total,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
   });
-  const answer = { ...rollup(0) };
-  answer.by_turn = [
-    turn("run-1", "wk-1", 10),
-    turn("run-2", "wk-1", 327_000),
-    // A turn that ran once, and one with no trigger key at all: neither is a
-    // re-run, and grouping the keyless ones together would report every
-    // unledgered turn as an attempt at every other.
-    turn("run-3", "wk-2", 5),
-    turn("run-4", undefined, 5),
-    turn("run-5", undefined, 5),
-  ];
-  mount(() => Promise.resolve(answer));
+  mount(
+    () => Promise.resolve(rollup(0)),
+    () =>
+      Promise.resolve({
+        turns: [
+          turn("run-1", "wk-1", 10),
+          turn("run-2", "wk-1", 327_000),
+          // A turn that ran once, and one with no trigger key at all: neither
+          // is a re-run, and grouping the keyless ones together would report
+          // every unledgered turn as an attempt at every other.
+          turn("run-3", "wk-2", 5),
+          turn("run-4", undefined, 5),
+          turn("run-5", undefined, 5),
+        ],
+        next: null,
+        coverage: { nodes: [], complete: true },
+      }),
+  );
 
   await screen.findByText("run-1".slice(0, 8));
   expect(screen.getAllByText("re-run")).toHaveLength(2);
+});
+
+/**
+ * A NAMED WINDOW IS COMPANY DAYS, asked as `days`.
+ *
+ * The usage domain holds whole company days, cut on the company's clock, so the
+ * screen names the window by its length and lets the engine cut it — never two
+ * instants this browser subtracted on its own clock, which named a different
+ * week from the one the engine would. And the per-turn table is the fleet's
+ * turn list ranked by tokens, since a company day holds no turn.
+ */
+test("the breakdown, the chart and the turn table all ask for the window's company days", async () => {
+  mount(() => Promise.resolve(rollup(41_000)));
+  await settle();
+  const params = (what: string) =>
+    asks.filter((a) => a.what === what).map((a) => a.params as Record<string, unknown>);
+  expect(params("tokens")).toEqual([{ days: 30 }]);
+  expect(params("token_series")[0]).toMatchObject({ days: 30, bucket: "day", group: "phase" });
+  expect(params("turns")).toEqual([{ days: 30, sort: "-tokens", limit: 50 }]);
+  for (const ask of asks) {
+    expect(ask.params).not.toHaveProperty("since");
+    expect(ask.params).not.toHaveProperty("until");
+  }
 });

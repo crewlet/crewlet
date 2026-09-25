@@ -4,15 +4,34 @@
  * The engine's own closed set minus nothing: `token_series` refuses a `group`
  * it does not know, naming what it accepts, so this list and `tokens.Groups`
  * have to agree — and `internal/api/queries`' cost-dimension gate holds them
- * against each other in both directions.
+ * against each other in both directions. There is no `turn`: the series is
+ * read from company days, which hold none, and per-turn spend is the turn
+ * list sorted by tokens.
  */
 export const GROUPS = [
   { value: "phase", label: "Phase" },
   { value: "model", label: "Model" },
+  { value: "provider", label: "Provider" },
   { value: "seat", label: "Seat" },
   { value: "unit", label: "Unit" },
   { value: "worker", label: "Worker" },
-  { value: "turn", label: "Turn" },
+] as const;
+
+/**
+ * The four bands a phase breakdown is drawn in, and the data series each one
+ * takes — the engine folds every phase into one of them ONCE
+ * (`tokens.PhaseBand`: execute and a coding run are Execute, review is Review,
+ * delegated workers are Workers, the learning workers, the judge and
+ * onboarding are Auxiliary), so no screen folds a phase itself.
+ *
+ * `series` is the 1-based data hue, in stacking order; `internal/api/queries`'
+ * band gate holds `value` against `tokens.Bands` in both directions.
+ */
+export const BANDS = [
+  { value: "execute", label: "Execute", series: 1 },
+  { value: "review", label: "Review", series: 2 },
+  { value: "workers", label: "Workers", series: 3 },
+  { value: "auxiliary", label: "Auxiliary", series: 4 },
 ] as const;
 
 /**
