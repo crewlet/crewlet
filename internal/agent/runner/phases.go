@@ -814,7 +814,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			Elapsed:   time.Since(began),
 			StartedAt: segment,
 			Caps:      capsOf(policy, maxRounds(out, in.rounds)),
-			Failed:    true, Err: err,
+			// A PHASE A PERSON STOPPED DID NOT FAIL. It carries the stop as
+			// its error, so the card says why it ended, and is not marked
+			// failed — a turn is listed as failed when any of its rows is,
+			// and a turn somebody deliberately ended is not one that broke.
+			Failed: !turn.Stopped(err), Err: err,
 		})
 		return ctx, phaseResult{}, err
 	}

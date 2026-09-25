@@ -222,6 +222,14 @@ operator_acted             # an operator tool call that is not a proven read,
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
+seat_paused                # a person paused a seat (paused_by, paused_by_seat,
+                           # reason, stop_running, paused_at). Published once
+                           # per CHANGE by the caller whose compare-and-set
+                           # won, so a second pause of a paused seat is none;
+                           # re-announced when a pause is amended to stop the
+                           # running turn
+seat_resumed               # the pause was lifted (resumed_by, resumed_by_seat,
+                           # and the paused_by / paused_at it ended)
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection
@@ -308,7 +316,11 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
                            # including by `sole_write`, which only a
                            # completion can conclude — and carries
                            # `suspended` on a segment that parked on a
-                           # coding run rather than ended
+                           # coding run rather than ended, and `stopped`
+                           # (never with `failed`) on a turn a person ended
+agent_turn_stopped         # a pause with stop_running ended this turn at its
+                           # next round: stopped_by, stopped_by_seat, reason.
+                           # Its trigger is recorded as worked, not retried
 agent_phase_started, agent_phase_completed
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —

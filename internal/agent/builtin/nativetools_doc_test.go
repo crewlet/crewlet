@@ -11,6 +11,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -88,9 +90,10 @@ func operatorOnlyTools(t *testing.T) []string {
 }
 
 // everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
-// that are not the tracker's: answering a parked coding run — a person's
-// decision about the company, served on the operator surface alone. Counted
-// from the catalogue with every seam wired, for the page that lists them all.
+// that are not the tracker's: answering a parked coding run, and pausing and
+// resuming a seat — each a person's decision about the company, served on the
+// operator surface alone. Counted from the catalogue with every seam wired,
+// for the page that lists them all.
 func everyOperatorOnlyTool(t *testing.T) []string {
 	t.Helper()
 	full := fullDeps(t)
@@ -108,19 +111,25 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	actor := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 		return builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator}, nil
 	}
+	company := &org.Organization{Name: "Acme"}
 	var only []string
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
+		Org:  func() *org.Organization { return company },
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
+		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
+			Org: func() *org.Organization { return company }, Actor: actor},
 	}) {
 		if !slices.Contains(seat, tool.Name()) {
 			only = append(only, tool.Name())
 		}
 	}
-	if !slices.Contains(only, builtin.AnswerRunTool) {
-		t.Fatalf("the operator surface with every seam wired does not serve %s "+
-			"(it adds %v), so this count is not the one the page lists",
-			builtin.AnswerRunTool, only)
+	for _, name := range []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool} {
+		if !slices.Contains(only, name) {
+			t.Fatalf("the operator surface with every seam wired does not serve %s "+
+				"(it adds %v), so this count is not the one the page lists", name, only)
+		}
 	}
 	return only
 }

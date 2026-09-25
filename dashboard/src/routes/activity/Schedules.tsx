@@ -13,11 +13,12 @@
  * identity the ledger keys on — (scope_type, scope_id, name) — because that is
  * where the fact actually lives.
  *
- * AND THE LEDGER HAS TWO OUTCOMES. `schedule.Outcome` is `fired` or
- * `skipped_catchup`: it is a DISPATCH ledger, not a turn-outcome one, so
- * "recent failures" counted a value the engine cannot emit and read 0 for ever
- * on every company. What it can honestly say is how many ticks were skipped,
- * which is the catchup cap doing its job or a node that was down too long.
+ * AND THE LEDGER HAS THREE OUTCOMES. `schedule.Outcome` is `fired`,
+ * `skipped_catchup` or `skipped_paused`: it is a DISPATCH ledger, not a
+ * turn-outcome one, so "recent failures" counted a value the engine cannot
+ * emit and read 0 for ever on every company. What it can honestly say is how
+ * many ticks were skipped, which is the catchup cap doing its job, a node that
+ * was down too long, or a seat a person had paused.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -48,11 +49,25 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 
-/** The ledger's two outcomes, and nothing else — see the note above. */
+/** The ledger's three outcomes, and nothing else — see the note above. A fire
+ *  skipped because a person paused its seat is NEUTRAL, not a warning: the
+ *  pause is the decision it followed. */
 const OUTCOME_TONE: Record<string, "success" | "warning" | "neutral"> = {
   fired: "success",
   skipped_catchup: "warning",
-};
+  skipped_paused: "neutral",
+} satisfies Record<LedgerOutcome, "success" | "warning" | "neutral">;
+
+/** Why a fire was skipped, for the badge's title — one sentence per skip, held
+ *  to the ledger's own vocabulary by the type so a new skip cannot arrive
+ *  unexplained. */
+const OUTCOME_WHY: Record<string, string> = {
+  skipped_catchup: "the tick was missed and fell outside the catchup window",
+  skipped_paused: "the seat was paused when the fire came due, so it was recorded and not sent",
+} satisfies Record<Exclude<LedgerOutcome, "fired">, string>;
+
+/** Every outcome the ledger can record. */
+type LedgerOutcome = Exclude<ScheduleRunRow["outcome"], "">;
 
 /** The identity a ledger row and a schedule row share. */
 function identity(scopeType: string, scopeID: string, name: string): string {
@@ -709,11 +724,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   r.outcome ? (
                     <Tag
                       variant={OUTCOME_TONE[r.outcome] ?? "neutral"}
-                      title={
-                        r.outcome === "skipped_catchup"
-                          ? "the tick was missed and fell outside the catchup window"
-                          : undefined
-                      }
+                      title={OUTCOME_WHY[r.outcome]}
                     >
                       {r.outcome}
                     </Tag>

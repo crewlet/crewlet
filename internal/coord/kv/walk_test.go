@@ -188,7 +188,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 
 // A FAILED LISTING NAMES THE LISTING, not the bucket it lives in.
 //
-// Seven key classes share the positions register, so every one of them used to
+// Eight key classes share the positions register, so every one of them used to
 // fail with "read crewlet_positions" — a sentence that names the file an
 // operator would inspect and never the duty that stalled. The trim floors, the
 // trim holds and the maintenance acknowledgements are three very different
@@ -213,7 +213,7 @@ func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
 		t.Errorf("err = %v, want it to wrap ErrUnavailable", err)
 	}
 	if !strings.Contains(err.Error(), listing) {
-		t.Errorf("err = %q, which does not name %q. Seven classes share this "+
+		t.Errorf("err = %q, which does not name %q. Eight classes share this "+
 			"bucket, so a message naming only the bucket is the same sentence "+
 			"for all of them", err, listing)
 	}

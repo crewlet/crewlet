@@ -43,6 +43,7 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
+	pauses       map[string]coord.SeatPause
 	positions    map[string]coord.NodePositions
 	holds        map[string]coord.TrimHold
 	floors       map[string]coord.TrimFloor
@@ -51,6 +52,10 @@ type Fleet struct {
 	admissions   map[string]coord.Admission
 	maintAcks    map[string]coord.MaintenanceAck
 	maintRev     uint64
+
+	// pauseWatchers are the open seat-pause watches, each told of every
+	// change under the lock that made it.
+	pauseWatchers map[*pauseWatcher]struct{}
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs and mailbox records alike. Store-wide rather than per record, as
@@ -94,6 +99,7 @@ func NewFleet() *Fleet {
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
+		pauses:       map[string]coord.SeatPause{},
 	}
 }
 

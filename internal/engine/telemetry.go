@@ -323,7 +323,12 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	spend runner.Spend, res turn.Result, err error,
 ) {
 	ended := time.Now().UTC()
-	failed := err != nil || res.Decision == phase.Failed
+	// A TURN A PERSON STOPPED DID NOT FAIL, although it ended on an error:
+	// the error is how the stop reached this frame. Read as a failure it
+	// would be listed with the turns that broke, and its seat drawn as in
+	// trouble for being stopped by somebody who meant to.
+	stopped := turn.Stopped(err)
+	failed := !stopped && (err != nil || res.Decision == phase.Failed)
 	decision := string(res.Decision)
 	// THE ITEM THIS COMPLETION IS CHARGED TO: dispatch's, or — for a turn
 	// nothing named one for — the one item its writes committed to, which
@@ -374,6 +379,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Iterations:      res.Rounds,
 		Decision:        decision,
 		Failed:          failed,
+		Stopped:         stopped,
 		ConversationKey: t.convKey,
 	}
 	if err != nil {
@@ -383,6 +389,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
 		summary.ErrorKind = "error"
+		if stopped {
+			summary.ErrorKind = runner.StoppedKind
+		}
 	}
 	if res.Breach != nil {
 		// A guard breach is not an error: the turn ran and was stopped by

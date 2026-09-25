@@ -321,10 +321,18 @@ type AgentTurnCompleted struct {
 	// the agent's LLM-history view does not read — so the turn a dashboard
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
-	// Error is the failure's message, truncated. Empty unless Failed.
+	// Stopped is true when a PERSON ended the turn — a pause that asked to
+	// stop the running turn reached its next round — rather than the turn
+	// finishing or failing. Never both: a stop is not a failure, and read as
+	// one it would list a turn somebody deliberately ended among the ones
+	// that broke. Who stopped it is the turn's [AgentTurnStopped].
+	Stopped bool `json:"stopped,omitempty"`
+	// Error is the failure's message, truncated. Empty unless Failed or
+	// Stopped.
 	Error string `json:"error"`
 	// ErrorKind is the machine-readable failure class: the classified provider
-	// error, or the guard-breach kind.
+	// error, or the guard-breach kind — or `stopped` for a turn a person
+	// ended, which is the one kind that is not a failure.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation the turn served, "{source}:{local}".
 	// Stamped so the event store can answer "what has this seat done on this
@@ -349,6 +357,9 @@ func (e AgentTurnCompleted) AgentID() string { return e.Agent }
 // scans a feed for. A2A turns keep their channel tag either way.
 func (e AgentTurnCompleted) SummaryFor(actor string) string {
 	tag := a2aTag(e.A2AContext)
+	if e.Stopped {
+		return lead(actor, "turn stopped by a person"+tag)
+	}
 	if e.Failed {
 		reason := e.ErrorKind
 		if reason == "" {

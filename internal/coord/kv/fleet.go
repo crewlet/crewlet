@@ -583,10 +583,10 @@ type FleetStore struct {
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
-	// a domain's published floor, a capacity operation, a node's admission
-	// and its maintenance acknowledgement. They are together because none
-	// of them may ever expire — each is read to decide what somebody ELSE
-	// may delete or publish — and every listing over the bucket filters by
+	// a domain's published floor, a capacity operation, a node's admission,
+	// its maintenance acknowledgement and a seat pause. They are together
+	// because none of them may ever expire — each is read to decide what
+	// somebody ELSE may delete, publish or run — and every listing over the bucket filters by
 	// class, which is the load-bearing half of sharing it. The document
 	// families that once had buckets beside this one left with the last
 	// projector; only their key grammar outlived them, in coord/keys.go.

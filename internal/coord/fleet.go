@@ -938,6 +938,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Mailboxes
+	SeatPauses
 	PositionRegister
 	HoldRegister
 	FloorRegister

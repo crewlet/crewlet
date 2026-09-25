@@ -181,6 +181,21 @@ type Options struct {
 	// [DutyFunc] and [ClaimDuty].
 	Duty DutyFunc
 
+	// Paused reports whether a person has paused a runner seat, so its fire
+	// is recorded [OutcomeSkippedPaused] instead of dispatched. Nil pauses
+	// nothing.
+	//
+	// SKIPPED, not dispatched into the held inbox, because a fire parked
+	// behind a pause is a standup that runs whenever somebody resumes the
+	// seat — days late, and one per day it was paused.
+	//
+	// An ERROR IS UNKNOWN and the fire is DISPATCHED, the opposite of the
+	// duty's polarity and for a reason: the paused seat's inbox is held by
+	// the node that runs it, so a fire that reaches a paused seat waits
+	// there rather than running, while a fire skipped on a read that
+	// failed is a standup lost for a seat nobody paused.
+	Paused func(handle string) (bool, error)
+
 	// Trace mints the trace context each fire runs under; nil uses a
 	// built-in W3C-shaped random minter.
 	//
@@ -204,6 +219,7 @@ type Scheduler struct {
 
 	admits func() bool
 	duty   DutyFunc
+	paused func(handle string) (bool, error)
 	trace  func(context.Context) events.TraceContext
 
 	// mu serialises ticks and guards lastTick.
@@ -258,6 +274,7 @@ func New(opts Options) (*Scheduler, error) {
 		catchupMax: durOr(opts.CatchupMax, DefaultCatchupMax),
 		admits:     opts.Admits,
 		duty:       opts.Duty,
+		paused:     opts.Paused,
 		trace:      cmpOrFunc(opts.Trace, newTrace),
 	}
 	// A max below the min is a config the operator did not mean; taking the
@@ -507,6 +524,10 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}
 
 	label := FireLabel(fireUTC, loc)
+	if s.pausedSeat(ctx, handle, e) {
+		s.recordPaused(ctx, e, handle, fireUTC, label)
+		return false
+	}
 	// Each dispatched run gets its OWN trace, detached from the tick, so the
 	// ledger row and exactly this turn's calls are linked. The TaskAssigned
 	// carries it and the agent's turn restores it.
@@ -606,6 +627,55 @@ func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, 
 	}
 	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
 		"scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
+}
+
+// pausedSeat reports whether a person has handle's seat paused, dispatching on
+// an unknown — see [Options.Paused] for why that is the safe direction here.
+func (s *Scheduler) pausedSeat(ctx context.Context, handle string, e Entry) bool {
+	if s.paused == nil {
+		return false
+	}
+	paused, err := s.paused(handle)
+	if err != nil {
+		log.WarnContext(ctx, "schedule_pause_unknown", "schedule", e.Schedule.Name,
+			"handle", handle, "error", err,
+			"detail", "whether the seat is paused could not be read, so the fire is "+
+				"dispatched; a paused seat's inbox holds it rather than running it")
+		return false
+	}
+	return paused
+}
+
+// recordPaused claims a fire that came due on a paused seat without
+// dispatching it, so the resume does not replay it.
+//
+// UNDER THE FIRE'S OWN IDENTITY, runner handle included, which is what makes
+// it at-most-once on both sides: a peer's tick that reaches the same minute
+// finds the claim and does not fire it either, and the ledger answers "why did
+// this not run" for exactly the seat that was paused.
+func (s *Scheduler) recordPaused(ctx context.Context, e Entry, handle string, fireUTC time.Time, label string) {
+	claimed, err := s.ledger.Claim(ctx, Run{
+		FireKey: FireKey{
+			Scope:        e.Scope,
+			ScopeID:      e.ScopeID,
+			ScheduleName: e.Schedule.Name,
+			FireLabel:    label,
+			TargetHandle: handle,
+		},
+		ScheduledAt: fireUTC,
+		Outcome:     OutcomeSkippedPaused,
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name,
+			"handle", handle, "fire_label", label, "error", err)
+		return
+	}
+	if claimed {
+		log.InfoContext(ctx, "schedule_skipped_paused", "schedule", e.Schedule.Name,
+			"scope_type", e.Scope, "scope_id", e.ScopeID, "handle", handle,
+			"scheduled_at", fireUTC.Format(time.RFC3339),
+			"detail", "a person has this seat paused, so the fire was recorded and not sent")
+	}
 }
 
 // holdsDuty asks whether this node runs the tick, failing closed on unknown.

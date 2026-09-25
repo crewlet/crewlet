@@ -159,6 +159,12 @@ type agentLive struct {
 	// lastTurn is the newest turn the seat ended, and lastTurnAt when.
 	lastTurn   *LastTurn
 	lastTurnAt stamp
+
+	// paused is the seat's pause, nil when it has none, and pausedAt the
+	// instant of the event that last moved it — its own reorder guard. See
+	// pause.go.
+	paused   *Paused
+	pausedAt stamp
 }
 
 func (a *agentLive) overlay() Overlay {
@@ -173,6 +179,7 @@ func (a *agentLive) overlay() Overlay {
 		AFKReason:        a.afkReason,
 		Turn:             a.turn.clone(),
 		LastTurn:         a.lastTurn.clone(),
+		Paused:           a.paused.clone(),
 	}
 }
 
@@ -494,6 +501,13 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	agent := s.ensureAgent(role)
 	if id := str(payload, "agent_id"); id != "" {
 		agent.runtimeID = id
+	}
+
+	// A PERSON'S PAUSE, on its own guard: it moves nothing else about the
+	// seat, and nothing else moves it.
+	if s.applyPause(agent, *env, payload) {
+		change.agentMoved(role)
+		return change
 	}
 
 	// THE TURN FIRST, and on its own guards: an event the state machine

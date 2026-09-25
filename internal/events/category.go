@@ -40,6 +40,13 @@ var categories = map[string]string{
 	"config_revision_applied":   "lifecycle",
 	"operator_acted":            "lifecycle",
 	"backup_requested":          "lifecycle",
+	// A person pausing and resuming a seat — the change itself, published
+	// once by the writer whose compare-and-set won. Beside the runtime
+	// audit rather than folded into it: operator_acted records that a call
+	// was made, and these what it changed about the company, so a pause
+	// taken and a pause refused as already taken read differently.
+	"seat_paused":  "lifecycle",
+	"seat_resumed": "lifecycle",
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.
@@ -100,6 +107,7 @@ var categories = map[string]string{
 	"llm_unavailable":              "system",
 	"agent_turn_started":           "system",
 	"agent_turn_completed":         "system",
+	"agent_turn_stopped":           "system",
 	"agent_phase_started":          "system",
 	"agent_phase_completed":        "system",
 	"phase.tool_skill_blocked":     "system",

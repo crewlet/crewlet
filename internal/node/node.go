@@ -88,6 +88,20 @@ type Config struct {
 	// coding job that is still going.
 	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
 
+	// AttachHolds names the pause holds a seat's mailbox must already carry
+	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
+	// given for it, taken after SeatReady and BEFORE the attach. Nil takes
+	// none.
+	//
+	// BEFORE, for the reason the attach is last: a hold taken after the
+	// consumer starts is taken after the first delivery can arrive. A seat
+	// a person paused that placement moves here is the case — the node
+	// that released it held its mail, the release dropped that hold with
+	// the attachment, and the mail waiting on the inbox would be the first
+	// thing this node's consumer ran. A hold is keyed on the subscription
+	// rather than on an attachment, which is what lets it be taken first.
+	AttachHolds func(handle string) []string
+
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
 	// [seat.Config.Ready] for why it is neither the seat list nor the
@@ -487,6 +501,18 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 			// whose in-flight runs could not be recovered would take new
 			// work beside a coding job nothing is tracking.
 			return fmt.Errorf("node: preparing seat %q: %w", handle, err)
+		}
+	}
+
+	if n.cfg.AttachHolds != nil {
+		for _, hold := range n.cfg.AttachHolds(handle) {
+			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
+				// REFUSED rather than attached without it: a seat whose
+				// hold could not be taken would run the mail it exists to
+				// keep. A pause fails only on a client that has stopped.
+				return fmt.Errorf("node: hold seat %q under %q before attaching it: %w",
+					handle, hold, err)
+			}
 		}
 	}
 
