@@ -198,6 +198,14 @@ type TaskDetail struct {
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
 
+	// ReassignmentBudget is [ReassignmentBudget], served beside the
+	// counter it bounds ([Task.Reassignments]) so a screen saying "hand-off
+	// 7 of 8" reads the limit from the engine that enforces it. The
+	// dashboard used to hold its own figure — a warning at six against a
+	// budget of eight — and a number stated twice is two numbers the day
+	// either moves.
+	ReassignmentBudget int `json:"reassignment_budget"`
+
 	// The coverage half, identical in meaning to a board's — see [Answer].
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -260,6 +268,13 @@ type HistoryEntry struct {
 
 	// Fields is what changed, as the notification snapshot recorded it.
 	Fields map[string]any `json:"fields,omitempty"`
+
+	// Reassignments is the task's hand-off counter as this commit left it
+	// — the "3" of "hand-off 3 of 8" on a row that moved the assignee, and
+	// the zero a person's touch reset it to on a row that did anything
+	// else (migration 0022). ABSENT on a row this node holds no count for,
+	// never a zero it did not derive.
+	Reassignments *int `json:"reassignments,omitempty"`
 
 	// Quiet marks a commit that ANNOUNCED NOTHING — one that carried no
 	// notification at all. It is a fact about the change rather than
@@ -418,6 +433,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// reads no row, so there is nothing to keep consistent with the ones
 	// above.
 	out.Units = taskUnits(want.Units, out.Task)
+	out.ReassignmentBudget = ReassignmentBudget
 	// THE LEVEL SERVED, never the level asked for. Assigning the argument
 	// here — which is the only thing this function used to do with it —
 	// is what made the level a label: a read that refused and one that
@@ -659,7 +675,7 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, kind, actor, actor_kind, operator_id, actor_seat,
 		       comment_id, excerpt, fields_json, turn_id, notified,
-		       effective_at, log_seq
+		       effective_at, log_seq, reassignments
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
@@ -682,10 +698,15 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		var actorKind, fields string
 		var notified int
 		var effective, seq int64
+		var handOffs sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Actor, &actorKind, &e.OperatorID,
 			&e.ActorSeat, &e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
-			&effective, &seq); err != nil {
+			&effective, &seq, &handOffs); err != nil {
 			return nil, err
+		}
+		if handOffs.Valid {
+			n := int(handOffs.Int64)
+			e.Reassignments = &n
 		}
 		e.ActorKind = AuthorKind(actorKind)
 		e.Quiet = notified == 0

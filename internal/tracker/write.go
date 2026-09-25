@@ -663,6 +663,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			charged, err = settleChecklist(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			if charged.Fields != nil {
 				// THE COERCION TABLE, and the required-field half that
 				// only ever ran on a create. A patch reaching here

@@ -1,0 +1,41 @@
+-- A hand-off says which one it was.
+--
+-- # What was missing
+--
+-- A task carries a hand-off counter, `tracker_tasks.reassignments`: an agent
+-- moving the assignee spends one, a person touching the task at all returns
+-- the whole budget, and past `tracker.ReassignmentBudget` the next agent
+-- hand-off is refused. The counter is the task's CURRENT value, and nothing
+-- kept what it was when each hand-off happened — so a feed row reading "eng
+-- reassigned it to ops" could not say "hand-off 3 of 8", and the history of an
+-- item that circulated between two seats read exactly like the history of one
+-- that was routed twice by people.
+--
+-- # What this column holds
+--
+-- The task's hand-off counter AS THIS COMMIT LEFT IT, on every task history
+-- row, and NULL on every other subject's. Every row rather than only the ones
+-- that moved the assignee, because a person's commit that changed nothing but
+-- a title is exactly the one that RESET the counter, and a reader walking the
+-- rows would otherwise have to find that out from the document.
+--
+-- # A derived column, not a record-carried one
+--
+-- The counter is a value the WRITER decides inside its snapshot and the record
+-- carries whenever it moves (`reassignments` on the payload), so what a row
+-- holds is a function of the task's history in log order: the value the
+-- record states, or the value the row before it holds. That makes it a
+-- derived column in the sense migration 0018 names — maintained by the apply
+-- as each history row is written, and filled on a node upgrading onto rows its
+-- predecessor wrote without it by the applier's own `Rederive`, which the
+-- derivation version's bump (3 -> 4) schedules. So this migration adds the
+-- column and NOTHING ELSE: a backfill written here in SQL would be a second
+-- statement of the carry-forward rule, and two statements of one rule are two
+-- answers the day either is edited.
+--
+-- # No index
+--
+-- It is read as part of the row it sits on — a task's own history, and the
+-- company feed's hand-off rows, both selected by indexes that already exist —
+-- and never filtered or sorted on.
+ALTER TABLE tracker_history ADD COLUMN reassignments INTEGER;

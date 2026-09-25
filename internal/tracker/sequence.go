@@ -785,10 +785,15 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		return created, err
 	}
 
-	lists := markPromoted(parent, itemID, subtask.ID)
+	// A GESTURE, resolved against the parent as the commit's own snapshot
+	// holds it. The collection this used to write was composed from the
+	// parent as the MINT read it — another transaction, a broker round trip
+	// earlier — so an item added or ticked on the parent in between was
+	// silently undone by the promotion.
 	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists},
-		ChangeChecklist, nil)
+		parent.Project, NoIfMatch, TaskPatch{Checklist: &ChecklistIntent{
+			Op: ChecklistPromote, Item: itemID, PromotedTo: subtask.ID,
+		}}, ChangeChecklist, nil)
 	if err != nil {
 		return created, fmt.Errorf("tracker: subtask %s was created and its "+
 			"item in %s is still un-marked; re-run the promotion, which "+
@@ -809,25 +814,6 @@ func findItem(task Task, itemID string) (list, item int, found bool) {
 		}
 	}
 	return 0, 0, false
-}
-
-// markPromoted is the parent's own new checklist state.
-//
-// THE ITEM IS NOT DELETED. It stays, pointing at the subtask, which is what
-// renders it struck through with the new key — a deletion would lose the fact
-// that this line became that task.
-func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
-	lists := make([]Checklist, len(parent.Checklists))
-	copy(lists, parent.Checklists)
-	l, i, found := findItem(parent, itemID)
-	if !found {
-		return lists
-	}
-	items := make([]ChecklistItem, len(lists[l].Items))
-	copy(items, lists[l].Items)
-	items[i].PromotedTo = &subtaskID
-	lists[l].Items = items
-	return lists
 }
 
 // held is one durable claim, heartbeated for as long as a walk runs.

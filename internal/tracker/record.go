@@ -101,10 +101,19 @@ const (
 	MaxDependents = 64
 
 	// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal bound
-	// the checklist tree.
+	// the checklist tree, and every gesture that grows it is refused past
+	// them ([ApplyChecklist]).
 	MaxChecklists          = 16
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
+
+	// MaxChecklistName and MaxChecklistItemName bound the tree's text: a
+	// list is headed by a few words and an item is one line, and the
+	// figures are the ones [MaxCommitBytes] counts the tree at — 256
+	// items at a 256-byte line is the "100 KiB" in its arithmetic. A line
+	// longer than that is a task of its own.
+	MaxChecklistName     = 128
+	MaxChecklistItemName = 256
 
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
@@ -715,6 +724,13 @@ type TaskPatch struct {
 	// re-deriving a set from whatever it had applied by then.
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
+
+	// Checklist is the same kind of gesture over the checklists, and for
+	// the same reason: [TaskPatch.Checklists] is carried whole, and one
+	// person ticking an item while another adds one is the ordinary way a
+	// checklist is used. Resolved by [settleChecklist] inside the decide;
+	// NEVER ON THE WIRE, like Watch.
+	Checklist *ChecklistIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`

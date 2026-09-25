@@ -660,9 +660,9 @@ func bodyText(body string) string {
 // reason.
 //
 // PROMOTIONS ARE COUNTED SEPARATELY, and that is not decoration: promoting an
-// item to a subtask is a `checklist` commit ([markPromoted]) that moves
-// neither the done count nor the total, so counts alone would have left the
-// one checklist gesture this build actually has recording nothing.
+// item to a subtask is a `checklist` commit ([ChecklistPromote]) that moves
+// neither the done count nor the total, so counts alone would record nothing
+// for it.
 //
 // IN DOCUMENT ORDER, unlike the people sets above and like a person's
 // `priorities`: a checklist collection renders in the order it is stored, so

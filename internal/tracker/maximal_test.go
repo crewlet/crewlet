@@ -47,13 +47,13 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 		for i := range perList {
 			items = append(items, tracker.ChecklistItem{
 				ID:       fmt.Sprintf("c%032d-%03d", l, i),
-				Name:     strings.Repeat("n", 256),
+				Name:     strings.Repeat("n", tracker.MaxChecklistItemName),
 				Assignee: "somebody-with-a-long-handle",
 				Order:    i,
 			})
 		}
 		checklists = append(checklists, tracker.Checklist{
-			ID: fmt.Sprintf("l%032d", l), Name: strings.Repeat("t", 128),
+			ID: fmt.Sprintf("l%032d", l), Name: strings.Repeat("t", tracker.MaxChecklistName),
 			Items: items,
 		})
 	}

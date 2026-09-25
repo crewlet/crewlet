@@ -294,6 +294,13 @@ progress. The first boot of a build that keeps it counts each project's tasks
 in the `active` status group, removed ones excluded, and the task apply keeps
 the number from then on.
 
+The fourth is the **hand-off count on each history row** — how many times
+agents had handed the task on as of that change, which is what lets an item's
+history say "hand-off 3 of 8". The count is the value the change's own record
+states when it moved it, or the one the row before it holds, so the first boot
+of a build that keeps it walks every task's history in log order and fills
+every row, and the apply carries it forward from then on.
+
 ### The other direction: a kind that was removed
 
 The deferral above handles a **newer** peer's records, and it is keyed on the

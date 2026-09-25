@@ -180,7 +180,7 @@ answer is that there is no such work.
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
-| **checklist** | items with their own assignees. |
+| **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
 | **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
@@ -744,7 +744,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
-| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
@@ -1623,6 +1623,58 @@ That is deliberate: an assignment is an ownership transfer down a chart of
 known height, not a nested ask, so bounding it by delegation depth would bound
 the wrong thing. What it catches is the loop where two seats hand one task back
 and forth, which is the failure mode that actually happens.
+
+The budget is **8**: an agent moving the assignee spends one, re-asserting the
+current assignee spends nothing, and a person or an operator touching the task
+at all — any field — returns the whole budget. The ninth agent hand-off is
+refused `reassignment_budget`, and the refusal says to explain on the item what
+is blocking it instead.
+
+The limit is **served**, not copied: the item answer (`GET /work/{id}`,
+`get_work_item`) carries `reassignment_budget` beside the task's own
+`reassignments`, so a screen saying "hand-off 7 of 8" reads the figure from the
+engine that enforces it. And every task history row carries **`reassignments`
+as that change left it** — the count after a hand-off, and the zero a person's
+touch reset it to — so the item's history can say which hand-off each one was.
+An assignment made with a `reason` shows it as that row's excerpt.
+
+## Checklists
+
+A task carries named checklists — up to **16** lists, **64** items in a list
+and **256** items between them, a list's name at most 128 bytes and an item's
+at most 256. Each item can be ticked, given to somebody (which puts it in their
+`my_work` answer under `checklist_items`) or promoted into a subtask.
+
+`update_work_item` changes them with a **`checklist` gesture** — one change per
+call, stated as what somebody did rather than as the lists they want to end
+with:
+
+| `op` | Arguments | What it does |
+|---|---|---|
+| `add_list` | `name`, optional `items` (names, in order) | adds a list, with its first lines |
+| `remove_list` | `list` | removes a list and everything in it |
+| `rename_list` | `list`, `name` | renames a list |
+| `add_item` | `list`, `name`, optional `assignee` | adds a line at the end of a list |
+| `remove_item` | `item` | removes a line and the lines nested under it |
+| `rename_item` | `item`, `name` | renames a line |
+| `set_done` | `item`, `done` | ticks or unticks a line |
+| `assign_item` | `item`, `assignee` (`""` for nobody) | gives a line to somebody |
+
+Lists and items are named by the ids `get_work_item` shows; item ids are unique
+across the whole task, so an item gesture names the item alone. A gesture is a
+**gesture rather than the collection** because the collection is carried whole
+on the record: two people working one checklist is the ordinary case, and one
+ticking a line while the other adds one would otherwise have whichever landed
+second silently undo the other. The engine applies the gesture to the
+checklists as they are when it lands, so both changes survive in either order.
+The ids a gesture adds are derived from the operation, so a retried request
+names the same list rather than adding a second one.
+
+A gesture that would grow the checklists past a cap is refused naming it; one
+that removes, renames, ticks or assigns is never refused for a size the task
+already has. Promoting an item into a subtask marks the item with the subtask's
+key rather than deleting it — also resolved against the checklists as they are
+when the promotion lands.
 
 ## Removing, deleting and purging
 

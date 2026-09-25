@@ -169,6 +169,14 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
+	// AND THE HAND-OFF COUNT this commit left, from the history rather than
+	// the task row — see apply_handoffs.go for why.
+	handOffs := 0
+	if subject.Kind == KindTask {
+		if handOffs, err = deriveHandOffs(ctx, tx, subject.ID, c.packed); err != nil {
+			return 0, err
+		}
+	}
 	successors, err := a.raiseSuccessors(ctx, tx, subject.ID, c)
 	if err != nil {
 		return 0, err
@@ -181,7 +189,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	return rows + reopens + successors + stamped + inbox, nil
+	return rows + reopens + handOffs + successors + stamped + inbox, nil
 }
 
 // stampProjectChange records that this commit changed the project's work, and

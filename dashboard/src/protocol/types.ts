@@ -2210,6 +2210,10 @@ export interface WorkChange {
   /** A commit that woke nobody — a fact about the change rather than about
    *  its importance, since a bulk edit is quiet by construction. */
   quiet?: boolean;
+  /** The item's hand-off counter AS THIS COMMIT LEFT IT — the "3" of "hand-off
+   *  3 of 8" on a row that moved the assignee. Absent on a row the answering
+   *  node holds no count for, never a zero it did not derive. */
+  reassignments?: number;
   /** The EFFECTIVE instant: the fleet-agreed one rather than the writer's own
    *  clock, so two nodes render one feed in one order. */
   at: string;
@@ -2426,6 +2430,10 @@ export interface WorkItemDetail {
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** How many times agents may hand this item on before the engine refuses
+   *  the next one — the limit `task.reassignments` counts against, served by
+   *  the engine that enforces it so no screen carries a figure of its own. */
+  reassignment_budget: number;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
