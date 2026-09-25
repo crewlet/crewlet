@@ -1,5 +1,6 @@
-// Package tokens rolls per-phase LLM spend up into the breakdown a dashboard
-// renders: by phase, by model, by worker, by agent and by turn.
+// Package tokens rolls LLM spend up into the breakdown a dashboard renders:
+// by phase, by model, by provider entry, by worker, by agent — and, for the
+// live window alone, by turn.
 //
 // ONE IMPLEMENTATION, and that is the whole point of the package existing.
 // This aggregation had three copies once — the REST endpoint's, a
@@ -8,11 +9,24 @@
 // projection HOLDS records and this folds them, so the live rollup and the
 // queried one cannot differ.
 //
-// A leaf package, importing nothing from Crewlet, because both ends need it:
-// the live projection (which holds the records) and the event store (which
-// answers for a window other than the live one). Either of those importing the
-// other would be a cycle, and a second record type to bridge them would be the
-// same duplication one directory further out.
+// # Two inputs, one breakdown
+//
+// The LIVE window is a list of phase records the projection holds ([Record],
+// folded by [Aggregate]). Every NAMED window is company days read from the
+// replicated `usage` domain ([Cell] and [SeatDay], folded by [FoldDaily] and
+// bucketed by [BucketDaily]) — every node's day, so the answer is the same on
+// whichever node is asked and still includes a node that has left the fleet
+// (ADR-0020). The two are folded into the same [Rollup] and [Bucket], so a
+// reader moving from "the last 24 hours" to "the last 7 days" compares like
+// with like. What a daily row cannot answer it does not pretend to: a turn and
+// an hour are not in it, so a windowed answer has no `by_turn` and a series
+// has no hourly bucket — per-turn spend is the turn list's `sort=-tokens`.
+//
+// A leaf in everything but the calendar: it imports [period] and nothing else
+// from Crewlet, because both ends need it — the live projection (which holds
+// the records) and the query surface (which reads the usage rows). A week
+// bucket is the company's ISO week, and only the calendar knows where one
+// begins.
 //
 // BOTH PRODUCERS FILL EVERY FIELD OF [Record], and that is a contract rather
 // than a coincidence: the live projection reads the phase record's payload and
@@ -151,6 +165,24 @@ func (b *Bucket) add(r Record) {
 	}
 }
 
+// merge adds another bucket's totals to this one — EVERY field of it.
+//
+// One function rather than a field list at each call site, because a list
+// written out beside the struct is the one that forgets the field added last:
+// the series' residual summed tokens, calls and price and dropped both cache
+// counts, so the "other" band of every chart claimed its calls were never
+// served from cache.
+func (b *Bucket) merge(o Bucket) {
+	b.InputTokens += o.InputTokens
+	b.OutputTokens += o.OutputTokens
+	b.TotalTokens += o.TotalTokens
+	b.CacheReadTokens += o.CacheReadTokens
+	b.CacheWriteTokens += o.CacheWriteTokens
+	b.Calls += o.Calls
+	b.CostUSD += o.CostUSD
+	b.PricedCalls += o.PricedCalls
+}
+
 // PhaseRow is the per-phase breakdown of a rollup.
 type PhaseRow struct {
 	Phase string `json:"phase"`
@@ -164,6 +196,40 @@ type ModelRow struct {
 	Model string `json:"model"`
 	Bucket
 }
+
+// ProviderRow is the per-provider-entry breakdown of a rollup: which of the
+// company's configured entries (`providers.llm.<key>`) served the calls, which
+// models it answered with, and who leaned on it.
+//
+// NOT [ModelRow] regrouped. A fallback chain serves several models under one
+// key, and one model can be configured under several keys — so "which entry do
+// we pay for" and "which model answered" are two questions, and only this row
+// answers the first.
+type ProviderRow struct {
+	// ProviderKey is the configured entry, "unknown" on a call that named
+	// none (a record from before node/0030 promoted the column).
+	ProviderKey string `json:"provider_key"`
+
+	// Models are every model this entry answered with in the window,
+	// biggest first.
+	Models []string `json:"models"`
+
+	// Seats are the handles of the TopProviderSeats seats that spent the
+	// most through this entry, biggest first; SeatsTotal is how many seats
+	// spent through it at all, so a reader can say "and n more" rather than
+	// read three names as the whole list.
+	Seats      []string `json:"seats"`
+	SeatsTotal int      `json:"seats_total"`
+
+	Bucket
+}
+
+// TopProviderSeats is how many seats a [ProviderRow] names.
+//
+// THREE, because the row is read as "used by": a name or three is a sentence
+// ("used by lead, coder and 4 more") and a list of every seat is a table the
+// per-seat breakdown already is.
+const TopProviderSeats = 3
 
 // WorkerRow is the per-worker breakdown of a rollup — the background duties
 // (reflection, summarisation) that spend tokens outside any seat's turn.
@@ -184,6 +250,18 @@ type AgentRow struct {
 	AgentID string `json:"agent_id"`
 	Bucket
 	ByPhase map[string]*Bucket `json:"by_phase"`
+
+	// Turns and Failed are how many of this seat's turns ENDED in the
+	// window, and how many of those failed — from the usage domain's turn
+	// rows, so a named window carries them and the live window does not.
+	//
+	// POINTERS, because the live window cannot say: it holds phase records,
+	// and a count of the distinct turn ids among them is "turns that spent",
+	// which is a different number (a turn parked across the window's edge
+	// spends in both) presented under the same name. Absent is "this answer
+	// does not count turns"; zero is "none ended".
+	Turns  *int `json:"turns,omitempty"`
+	Failed *int `json:"failed,omitempty"`
 }
 
 // TurnRow is one turn's spend, split by phase.
@@ -215,26 +293,45 @@ type Rollup struct {
 	// set by the caller that chose them, not derived here.
 	//
 	// INSTANTS RATHER THAN A DAY COUNT, which is what this was. A count is
-	// a window anchored at now, and a time-range control produces two edges
-	// that need not be: "1 June to 8 June" is not any number of days back
-	// from this afternoon, and a rollup that could only say "7 days" put a
-	// heading over the figures that disagreed with the chart beside them
-	// the moment a reader named their own window.
+	// a window anchored at now, and a heading has to say where the window
+	// sits, not only how long it is.
 	//
 	// Until is EXCLUSIVE, matching every other half-open window in this
 	// engine, so two adjacent rollups share their boundary instant without
-	// either losing it or counting it twice.
+	// either losing it or counting it twice. On a named window they are the
+	// first instant of its first company day and the first instant after its
+	// last.
 	Since string `json:"since"`
 	Until string `json:"until"`
 
-	AgentRole string `json:"agent_role"`
+	// From, To and Days name a NAMED window by its company days — the first
+	// and last, inclusive, and how many — which is what it was read by.
+	// Absent on the live window, which is a rolling span rather than a run of
+	// days.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	Days int    `json:"days,omitempty"`
 
-	Totals   Bucket      `json:"totals"`
-	ByPhase  []PhaseRow  `json:"by_phase"`
-	ByModel  []ModelRow  `json:"by_model"`
-	ByWorker []WorkerRow `json:"by_worker"`
-	ByAgent  []AgentRow  `json:"by_agent"`
-	ByTurn   []TurnRow   `json:"by_turn"`
+	// Seat is the handle this answer was narrowed to, absent for the whole
+	// company.
+	Seat string `json:"seat,omitempty"`
+
+	// Horizon is how far back a named window can reach, stated beside the
+	// answer; absent on the live window. See [Horizon].
+	Horizon *Horizon `json:"horizon,omitempty"`
+
+	Totals     Bucket        `json:"totals"`
+	ByPhase    []PhaseRow    `json:"by_phase"`
+	ByModel    []ModelRow    `json:"by_model"`
+	ByProvider []ProviderRow `json:"by_provider"`
+	ByWorker   []WorkerRow   `json:"by_worker"`
+	ByAgent    []AgentRow    `json:"by_agent"`
+
+	// ByTurn is the tail of recent turns — on the LIVE window only. A
+	// company day's row holds no turn, so a named window has none to list
+	// and the field is absent there; per-turn spend over any window is the
+	// turn list sorted by tokens.
+	ByTurn []TurnRow `json:"by_turn,omitempty"`
 
 	// AggregatedThrough is the latest timestamp this rollup counted.
 	//
@@ -244,7 +341,10 @@ type Rollup struct {
 	// as the watermark it skipped already-counted events by; the server
 	// holds the records and re-folds the whole window now, which is what
 	// leaves exactly one implementation of the aggregation.
-	AggregatedThrough string `json:"aggregated_through"`
+	//
+	// The live window's only: a day's row carries no instant per call, so
+	// a named window has no watermark to report and says nothing.
+	AggregatedThrough string `json:"aggregated_through,omitempty"`
 }
 
 // Options tune one aggregation.
@@ -254,8 +354,8 @@ type Options struct {
 	// guessing one — a wrong link is worse than no link.
 	Handles map[string]string
 
-	// Since, Until and AgentRole are recorded on the rollup as the window
-	// it describes. The caller does the filtering; this only reports it.
+	// Since and Until are recorded on the rollup as the window it
+	// describes. The caller does the filtering; this only reports it.
 	//
 	// Each is rendered as it is given, and a zero one renders EMPTY —
 	// unbounded on that side. Aggregate never reads the clock to fill one
@@ -265,8 +365,6 @@ type Options struct {
 	// window somebody already decided.
 	Since time.Time
 	Until time.Time
-
-	AgentRole string
 
 	// RecentTurns caps the per-turn list. Zero takes DefaultRecentTurns.
 	RecentTurns int
@@ -288,9 +386,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 	}
 
 	out := Rollup{
-		Since:     stamp(opts.Since),
-		Until:     stamp(opts.Until),
-		AgentRole: opts.AgentRole,
+		Since: stamp(opts.Since),
+		Until: stamp(opts.Until),
 		// Never nil. A nil slice marshals to `null`, and the client does
 		// `d.by_phase.length` — so an empty window would throw in the
 		// browser rather than rendering an empty table.
@@ -300,6 +397,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 		ByAgent:  []AgentRow{},
 		ByTurn:   []TurnRow{},
 	}
+	providers := providerFold{}
 
 	byPhase := map[string]*Bucket{}
 	byModel := map[string]*Bucket{}
@@ -319,6 +417,14 @@ func Aggregate(records []Record, opts Options) Rollup {
 		out.Totals.add(r)
 		bucketFor(byPhase, phase).add(r)
 		bucketFor(byModel, model).add(r)
+		// The seat a provider row names is its HANDLE where the org has
+		// one, which is what every other surface links by, and the role
+		// otherwise — a name, never a blank entry in "used by".
+		seat := opts.Handles[role]
+		if seat == "" {
+			seat = role
+		}
+		providers.add(r.ProviderKey, model, seat, Bucket{}.plus(r))
 		// Keyed on the PAIR, not on the worker alone: Worker is set only
 		// on an auxiliary phase, so a bare non-empty check would fold a
 		// stray value on some other phase into a worker's total.
@@ -382,6 +488,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 	for _, a := range byAgent {
 		out.ByAgent = append(out.ByAgent, *a)
 	}
+	out.ByProvider = providers.rows()
 	for _, t := range byTurn {
 		out.ByTurn = append(out.ByTurn, *t)
 	}
@@ -413,6 +520,71 @@ func Aggregate(records []Record, opts Options) Rollup {
 		out.ByTurn = out.ByTurn[:limit]
 	}
 	return out
+}
+
+// plus is this bucket with one record added — the shape a fold that is handed
+// buckets rather than records (the provider fold) takes a record in.
+func (b Bucket) plus(r Record) Bucket {
+	b.add(r)
+	return b
+}
+
+// providerFold accumulates the per-provider rows, for both inputs: a live
+// record and a company day's cell each land here as one (key, model, seat,
+// bucket), so the two answers cannot rank "used by" differently.
+type providerFold map[string]*providerAcc
+
+type providerAcc struct {
+	Bucket
+	models map[string]int
+	seats  map[string]int
+}
+
+func (f providerFold) add(key, model, seat string, b Bucket) {
+	key = orUnknown(key)
+	acc := f[key]
+	if acc == nil {
+		acc = &providerAcc{models: map[string]int{}, seats: map[string]int{}}
+		f[key] = acc
+	}
+	acc.merge(b)
+	acc.models[model] += b.TotalTokens
+	acc.seats[seat] += b.TotalTokens
+}
+
+// rows are the providers biggest first, each with its models biggest first and
+// its TopProviderSeats biggest seats. Never nil, for the reason every list on
+// the rollup is not.
+func (f providerFold) rows() []ProviderRow {
+	out := make([]ProviderRow, 0, len(f))
+	for key, acc := range f {
+		seats := ranked(acc.seats)
+		row := ProviderRow{
+			ProviderKey: key,
+			Models:      ranked(acc.models),
+			SeatsTotal:  len(seats),
+			Bucket:      acc.Bucket,
+		}
+		row.Seats = seats[:min(len(seats), TopProviderSeats)]
+		out = append(out, row)
+	}
+	byTokensThen(out, func(r ProviderRow) (int, string) { return r.TotalTokens, r.ProviderKey })
+	return out
+}
+
+// ranked is a map's keys, biggest value first, ties on the name.
+func ranked(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if c := cmp.Compare(m[b], m[a]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
+	})
+	return keys
 }
 
 // PhaseAuxiliary is the phase whose records carry a worker. Named here rather

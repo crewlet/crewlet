@@ -139,7 +139,7 @@ func wireAPI(
 		// does — from every live member.
 		Sources: queries.Sources{
 			Events:  e.History(),
-			Spend:   backends.Store.Events(),
+			Usage:   e.UsageEstate(),
 			Company: company,
 			NodeID:  nodeID,
 		},

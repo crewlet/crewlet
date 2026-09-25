@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -69,6 +70,14 @@ type Health struct {
 	// days, because the retention is a duration and a client that has to
 	// re-derive the unit is a second place the number can be wrong.
 	EventHistorySeconds int `json:"event_history_seconds"`
+
+	// SpendHistorySeconds is how far back a NAMED spend window can reach:
+	// the replicated usage domain's own history (ADR-0020), which is not
+	// the event log's. The two floors answer different questions — "can I
+	// still open that turn" and "can I still chart that month" — and a
+	// screen stating one under the other's name tells a reader a ninety-day
+	// spend chart is impossible, or that a month-old turn can still be read.
+	SpendHistorySeconds int `json:"spend_history_seconds"`
 
 	InFlight     int      `json:"in_flight"`
 	ShuttingDown bool     `json:"shutting_down"`
@@ -154,6 +163,7 @@ func (a *App) health(ctx context.Context) Health {
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
+		SpendHistorySeconds: int(usage.History.Seconds()),
 	}
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always

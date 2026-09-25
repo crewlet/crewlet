@@ -94,3 +94,15 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 	}
 	return seat.Handle(), true
 }
+
+// UsageEstate is the replicated estate as a reader of the usage domain's rows
+// needs it — the spend answers' source (ADR-0020).
+//
+// RESOLVED ON EVERY READ through the node handle, never captured: an adoption
+// replaces the replicated peer, and a reader holding the handle it booted with
+// would answer every named spend window from a file no longer at that name.
+// The window in which there is no peer answers [store.ErrNoEstate], which the
+// query surface reports as "not available yet".
+func (e *Engine) UsageEstate() usage.Estate {
+	return replicatedEstate{node: e.backends.Store}
+}

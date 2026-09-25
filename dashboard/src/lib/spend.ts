@@ -19,8 +19,39 @@
  */
 
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
-import { phaseColor } from "~/ui/charts.tsx";
+import { BANDS } from "~/contract/spend.ts";
+import { RANGE_MS, isRange, spanOf } from "~/lib/range.ts";
+import type { Window } from "~/lib/range.ts";
 import type { SeriesPoint, TokenSeries } from "~/protocol/types.ts";
+
+/**
+ * How many company days a window asks the engine for.
+ *
+ * A NAMED spend window is whole company days (the usage domain holds nothing
+ * finer), so the screen asks for `days` rather than two instants: "7d" is the
+ * seven company days ending today, on the company's clock, which the engine
+ * cuts — a browser subtracting on its own clock would name a different week.
+ */
+export function spendDays(w: Window): number {
+  return Math.max(1, Math.round((isRange(w) ? RANGE_MS[w] : spanOf(w)) / 86_400_000));
+}
+
+/**
+ * A phase band's colour: its data hue, from `BANDS`.
+ *
+ * The ENGINE folds every phase into one of four bands (`tokens.PhaseBand`) and
+ * the contract gives each its hue, so a band is the same colour on every chart
+ * whatever the window's biggest band was. Anything else is the residual.
+ */
+export function bandColor(band: string): string {
+  const found = BANDS.find((b) => b.value === band);
+  return found ? dataColor(found.series - 1) : DATA_COLOR_OTHER;
+}
+
+/** A phase band's label, or the key itself for a band this build has not met. */
+export function bandLabel(band: string): string {
+  return BANDS.find((b) => b.value === band)?.label ?? band;
+}
 
 export interface Band {
   /** The band's key in a point's `groups`. Empty on, and only on, the residual. */
@@ -39,19 +70,17 @@ export interface Band {
  * columns and the per-phase bar list), so a second spelling of the same five
  * values is the drift `textcut` and `whsec` are named after in this repo.
  *
- * EXCEPT WHERE THE VALUE HAS A COLOUR OF ITS OWN. A PHASE does: `phaseColor`
- * is what the by-phase bar list, the per-seat share bar and the turn page all
- * draw it in. Grouped by phase — which is this screen's DEFAULT — the time
- * chart drew `execute` from the positional ramp and the panel below it drew
- * the same `execute` from the phase palette, so one screen carried two
- * legends that disagreed about the same three words. The positional half was
- * the worse of the two on its own terms as well: `dataColor(i)` is keyed on a
- * band's ORDER, and `by_group` is biggest-first, so a phase changed colour
- * whenever the window changed which phase was biggest.
+ * EXCEPT WHERE THE VALUE HAS A COLOUR OF ITS OWN. A PHASE BAND does:
+ * grouped by phase — this screen's DEFAULT — the engine answers its four
+ * bands, and `bandColor` gives each the hue `BANDS` assigns it. Positionally,
+ * `dataColor(i)` is keyed on a band's ORDER, and a band that changed colour
+ * whenever the window changed which one was biggest is a legend nobody can
+ * learn.
  *
- * THE ORDER IS NOT RE-DERIVED. `by_group` is already biggest-first with the
- * residual last, and re-sorting here would put a residual larger than the
- * fifth band ahead of it — at which point it stops meaning "the rest".
+ * THE ORDER IS NOT RE-DERIVED. `by_group` is already in the engine's order —
+ * biggest-first with the residual last, or the phase bands' stacking order —
+ * and re-sorting here would put a residual larger than the last band ahead of
+ * it, at which point it stops meaning "the rest".
  *
  * The residual is identified by its FLAG, never by its name: it carries an
  * empty key precisely so that a phase, a model or a seat genuinely called
@@ -60,11 +89,11 @@ export interface Band {
 export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
-    label: b.other ? `other (${b.folded})` : b.group,
-    // THE RESIDUAL IS NEVER A PHASE. It is "the rest", so it keeps the
-    // residual hue whatever the grouping is — a fold of three phases drawn
+    label: b.other ? `other (${b.folded})` : group === "phase" ? bandLabel(b.group) : b.group,
+    // THE RESIDUAL IS NEVER A BAND. It is "the rest", so it keeps the
+    // residual hue whatever the grouping is — a fold of three models drawn
     // in one of their colours would name one of them.
-    color: b.other ? DATA_COLOR_OTHER : group === "phase" ? phaseColor(b.group) : dataColor(i),
+    color: b.other ? DATA_COLOR_OTHER : group === "phase" ? bandColor(b.group) : dataColor(i),
     total: b.total_tokens,
   }));
 }
@@ -103,11 +132,10 @@ export function columnsOf(series: TokenSeries | null, bands: Band[]): Column[] {
 /**
  * How much of the window falls under no band at all.
  *
- * Grouping by worker leaves out every phase that is not a worker's, and
- * grouping by turn every phase that carried no turn id. A chart whose bands
- * sum to less than the company's total, with nothing said, reads as spend that
- * went missing — so this is a number the screen states rather than a gap a
- * reader discovers by comparing two screens.
+ * Grouping by worker leaves out every phase that is not a worker's. A chart
+ * whose bands sum to less than the company's total, with nothing said, reads
+ * as spend that went missing — so this is a number the screen states rather
+ * than a gap a reader discovers by comparing two screens.
  */
 export function unbandedTokens(series: TokenSeries | null): number {
   if (!series) return 0;

@@ -234,9 +234,16 @@ func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"by_phase", "by_model", "by_worker", "by_agent", "by_turn"} {
+	for _, key := range []string{"by_phase", "by_model", "by_provider", "by_worker", "by_agent"} {
 		if _, ok := body[key].([]any); !ok {
 			t.Errorf("%s marshalled as %T, want an array", key, body[key])
+		}
+	}
+	// THE TURN TAIL IS ABSENT OR A LIST, never null: a named window has
+	// none to carry, and the client reads `by_turn ?? []`.
+	if v, ok := body["by_turn"]; ok {
+		if _, list := v.([]any); !list {
+			t.Errorf("by_turn marshalled as %T, want an array or nothing", v)
 		}
 	}
 	// THE WINDOW IS TWO INSTANTS, so an empty rollup still says what it is
@@ -262,7 +269,7 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, key := range []string{
-		"since", "until", "agent_role", "totals", "by_phase", "by_model",
+		"since", "until", "totals", "by_phase", "by_model", "by_provider",
 		"by_worker", "by_agent", "by_turn", "aggregated_through",
 	} {
 		if _, ok := body[key]; !ok {

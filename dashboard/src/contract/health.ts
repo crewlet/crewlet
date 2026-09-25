@@ -41,6 +41,13 @@ export interface EngineHealth {
    * `eventHistoryLabel` in `lib/format.ts`.
    */
   event_history_seconds?: number;
+  /**
+   * How far back a NAMED spend window can reach, in SECONDS: the replicated
+   * usage domain's own history, which is not the event log's. A spend chart
+   * states this floor, never `event_history_seconds` — the two answer "can I
+   * still chart that month" and "can I still open that turn".
+   */
+  spend_history_seconds?: number;
   in_flight?: number;
   shutting_down?: boolean;
   posture?: string;

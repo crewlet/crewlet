@@ -1623,9 +1623,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// because the roster is its lease view and the answerer it
 			// registered is the other half of the same protocol.
 			Events: e.History(),
-			// The phase records the windowed spend rollup and its
-			// series fold, from this node's store.
-			Spend: e.Backends().Store.Events(),
+			// EVERY NODE'S company days, for every named spend window
+			// and its series — the replicated usage domain (ADR-0020),
+			// resolved per read so an adoption's reopened estate is the
+			// one answered from.
+			Usage: e.UsageEstate(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that

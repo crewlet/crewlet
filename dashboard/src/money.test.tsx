@@ -343,10 +343,18 @@ function rollup(): Rollup {
   return {
     since: "2026-09-12T10:00:00Z",
     until: "2026-09-13T10:00:00Z",
-    agent_role: "",
     totals: bucket(),
     by_phase: [phase],
     by_model: [{ ...bucket(), model: "claude-sonnet-5" }],
+    by_provider: [
+      {
+        ...bucket(),
+        provider_key: "anthropic",
+        models: ["claude-sonnet-5"],
+        seats: ["ceo"],
+        seats_total: 1,
+      },
+    ],
     by_worker: [{ ...bucket(), worker: "researcher" }],
     by_agent: [
       { ...bucket(), role: "CEO", handle: "ceo", agent_id: "a-1", by_phase: { execute: bucket() } },
@@ -374,13 +382,19 @@ function rollup(): Rollup {
 function series() {
   return {
     group: "phase",
-    bucket: "hour",
-    since: "2026-09-12T10:00:00Z",
-    until: "2026-09-13T10:00:00Z",
+    bucket: "day",
+    since: "2026-09-13T00:00:00Z",
+    until: "2026-09-14T00:00:00Z",
+    from: "2026-09-13",
+    to: "2026-09-13",
+    days: 1,
+    horizon: { days: 181, floor: "2026-03-16" },
     series: [
       {
         ...bucket(),
-        at: "2026-09-13T09:00:00Z",
+        at: "2026-09-13T00:00:00Z",
+        window: "2026-09-13",
+        days: 1,
         groups: { execute: bucket() },
         other: bucket(0),
       },

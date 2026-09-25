@@ -58,10 +58,10 @@ function rollup(since: string, until: string): Rollup {
   return {
     since,
     until,
-    agent_role: "",
     totals: bucket(),
     by_phase: [],
     by_model: [],
+    by_provider: [],
     by_worker: [],
     by_agent: [{ ...bucket(), role: "CEO", handle: "ceo", agent_id: "a-1", by_phase: {} }],
     by_turn: [],

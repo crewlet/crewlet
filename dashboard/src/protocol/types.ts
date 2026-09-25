@@ -27,7 +27,7 @@
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
-import type { BudgetState } from "../contract/spend.ts";
+import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
@@ -557,6 +557,28 @@ export interface AgentSpendRow extends Bucket {
   handle: string;
   agent_id: string;
   by_phase: Record<string, Bucket>;
+  /** How many of the seat's turns ENDED in the window, and how many failed —
+   *  on a named window only. The live window holds phase records and cannot
+   *  count endings, so there both are absent, never zero. */
+  turns?: number;
+  failed?: number;
+}
+/** One configured provider entry (`providers.llm.<key>`): what it served, the
+ *  models it answered with, and the seats that leaned on it most. */
+export interface ProviderSpendRow extends Bucket {
+  provider_key: string;
+  /** Every model the entry answered with, biggest first. */
+  models: string[];
+  /** The three seats that spent the most through it, by handle; `seats_total`
+   *  is how many did at all. */
+  seats: string[];
+  seats_total: number;
+}
+/** How far back a named spend window can reach: the usage domain's history in
+ *  days, and the oldest company day still answerable. */
+export interface SpendHorizon {
+  days: number;
+  floor: string;
 }
 export interface TurnSpendRow extends Bucket {
   /** ONE ROW PER RUN. Each attempt at a redelivered trigger really did spend
@@ -577,15 +599,28 @@ export interface Rollup {
   /** The window this covers, as two RFC3339 instants — `until` exclusive. */
   since: string;
   until: string;
-  agent_role: string;
+  /** A NAMED window's company days — first, last (inclusive) and how many.
+   *  Absent on the live window, which is a rolling span. */
+  from?: string;
+  to?: string;
+  days?: number;
+  /** The handle this answer was narrowed to. */
+  seat?: string;
+  /** How far back a named window can reach. Absent on the live window. */
+  horizon?: SpendHorizon;
   totals: Bucket;
   by_phase: PhaseRow[];
   by_model: ModelRow[];
+  by_provider: ProviderSpendRow[];
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
-  by_turn: TurnSpendRow[];
-  /** High-water mark: live completions past it are folded in, earlier ones skipped. */
-  aggregated_through: string;
+  /** The tail of recent turns — the LIVE window's only. A company day holds no
+   *  turn, so a named window has none; per-turn spend is `turns` sorted by
+   *  tokens. */
+  by_turn?: TurnSpendRow[];
+  /** How far the live window has counted; absent on a named window, whose
+   *  company days carry no per-call instant. */
+  aggregated_through?: string;
 }
 
 /**
@@ -600,24 +635,37 @@ export interface SeriesBand extends Bucket {
   /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
   group: string;
   handle?: string;
+  /** How many seats spent in a UNIT band over the window. */
+  seats?: number;
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
   folded: number;
 }
 
 export interface SeriesPoint extends Bucket {
-  /** The bucket's START, RFC 3339 in UTC — never its middle or its end. */
+  /** The bucket's START — the first instant of its company day or ISO week,
+   *  RFC 3339 in UTC. A week's start can be before the window's. */
   at: string;
+  /** The bucket's label on the company calendar: `2026-09-23` or `2026-W39`. */
+  window: string;
+  /** How many of the window's days fall in the bucket — 7 for a whole week,
+   *  fewer for the first and last a window cuts short. */
+  days: number;
   groups: Record<string, Bucket>;
   other: Bucket;
 }
 
 export interface TokenSeries {
-  group: "phase" | "model" | "seat" | "unit" | "worker" | "turn";
-  bucket: "hour" | "day";
-  /** The window COVERED, which the store may have floored below what was asked. */
+  group: (typeof GROUPS)[number]["value"];
+  bucket: "day" | "week";
+  /** The window, as instants (`until` exclusive) and as its company days. */
   since: string;
   until: string;
+  from: string;
+  to: string;
+  days: number;
+  seat?: string;
+  horizon: SpendHorizon;
   series: SeriesPoint[];
   by_group: SeriesBand[];
   /**

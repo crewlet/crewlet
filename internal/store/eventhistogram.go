@@ -22,10 +22,11 @@ import (
 // EventBucket is a bar's width on that axis.
 //
 // THREE, and a closed set rather than a duration, for the reason
-// [tokens.Interval] is two: a chart with an arbitrary bucket width has an x
-// axis nobody can label. A log needs the minute the spend series does not —
-// "what just happened" is the commonest question asked of an event log, and an
-// hour is the whole of the answer's window.
+// [tokens.Interval] is one too: a chart with an arbitrary bucket width has an x
+// axis nobody can label. A log needs the minute and the hour the spend series
+// does not — "what just happened" is the commonest question asked of an event
+// log, and an hour is the whole of the answer's window — while the spend
+// series is read from company days, which hold nothing finer.
 type EventBucket string
 
 // The buckets, finest first.

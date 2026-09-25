@@ -17,10 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 var log = logging.Get("api.queries")
@@ -69,13 +68,12 @@ type Sources struct {
 	// be handed without being told.
 	Events FleetEvents
 
-	// Spend is this node's own phase records, for the windowed spend
-	// rollup and its series — the two answers folded from phase costs
-	// rather than from turn detail. Nil leaves `token_series` unregistered
-	// and a named `tokens` window empty.
-	Spend interface {
-		PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error)
-	}
+	// Usage is the replicated estate's usage domain: every node's company
+	// days, for every NAMED spend window and its series (ADR-0020). Not
+	// this node's event log, which answered for this node alone and only
+	// thirty days back. Nil leaves `token_series` unregistered and a named
+	// `tokens` window empty.
+	Usage usage.Estate
 
 	// Health answers the stream question, which is deliberately not called
 	// health: a query must never share a name with a push kind, or a
@@ -364,15 +362,14 @@ func Register(r *Registry, s Sources) {
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
 	}
-	if s.Spend != nil {
+	if s.Usage != nil {
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
-		// question a cost explorer is for. Gated on the event store rather
-		// than on the projection: the projection holds a day, and an axis
-		// that changed source when a reader widened the range is a seam
-		// across the one comparison the screen exists to make. Gated on
-		// the phase records it folds rather than on the fleet's history,
-		// which is a different source.
+		// question a cost explorer is for. Gated on the usage domain rather
+		// than on the projection: its buckets are company days, which only
+		// the replicated rows hold, and an axis that changed source when a
+		// reader widened the range is a seam across the one comparison the
+		// screen exists to make.
 		r.Register("token_series", s.tokenSeries)
 	}
 	if s.Health != nil {
@@ -697,110 +694,6 @@ func (s Sources) roleOf(id string) string {
 		return role.Name
 	}
 	return id
-}
-
-// tokens answers the live spend window.
-// tokens answers the spend breakdown.
-//
-// TWO SOURCES, one aggregation. The live projection holds the records for its
-// own window and answers instantly; any other window is a scan of the event
-// store. Both are folded by internal/tokens, so the number a reader sees when
-// they change the window is comparable with the one they were looking at — a
-// second implementation for the second source is precisely how those two came
-// to disagree before.
-//
-// The live window is the default because it is what the dashboard opens on: a
-// page load that scanned the store would put a query on the critical path of
-// every tab, for an answer already in memory.
-func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
-	opts := tokens.Options{
-		Handles:     s.RoleHandles(),
-		AgentRole:   p.String("agent_role"),
-		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
-	}
-	// THE WINDOW AS TWO INSTANTS, which `since_days` cannot name: a
-	// time-range control produces two edges and they need not end at now.
-	// The same pair the series takes, and the same refusal, so a reader who
-	// scrubs to a window sees the chart and the figures above it move
-	// together rather than one of them staying anchored to this afternoon.
-	since, err := instantParam(p, "since")
-	if err != nil {
-		return nil, err
-	}
-	until, err := instantParam(p, "until")
-	if err != nil {
-		return nil, err
-	}
-	if !since.IsZero() && !until.IsZero() && !until.After(since) {
-		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
-			"window is half-open, so an empty one names no rows at all",
-			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
-	}
-	live := livestate.LiveSpendWindowDays()
-	days := p.Int("since_days", live)
-	q := store.PhaseTokenQuery{
-		SinceDays: days,
-		Since:     since,
-		Until:     until,
-		AgentRole: opts.AgentRole,
-	}
-	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
-	// asked for: `since` is floored at the retention window, so a request
-	// for a year answered over thirty days and headed "a year" is a lie
-	// about the numbers beside it.
-	opts.Since, opts.Until = q.Window(time.Now())
-
-	// The live window, unfiltered, is the one the projection can answer —
-	// and only when the caller named no instants of their own, since the
-	// projection holds one rolling window and cannot look behind it.
-	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
-		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
-	}
-	if s.Spend == nil {
-		// A registry wired without the phase records (a caller asking only
-		// the projection's questions) cannot see this window. The honest answer
-		// is an EMPTY rollup labelled with the window asked for, not the
-		// live one relabelled, which would put a week's heading over an
-		// hour's numbers.
-		return tokens.Aggregate(nil, opts), nil
-	}
-	records, err := s.Spend.PhaseTokens(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	return tokens.Aggregate(records, opts), nil
-}
-
-// RoleHandles maps each seat's role name to its handle, for the per-agent
-// rollup's cross-links. Empty when no revision is active, which links to
-// nothing rather than guessing a handle.
-//
-// Exported because the live stream needs the same map for the rollup it
-// pushes: two derivations of "which handle is this role" is how a pushed row
-// and a queried one come to link to different pages.
-func (s Sources) RoleHandles() map[string]string {
-	out := map[string]string{}
-	if s.Company == nil {
-		return out
-	}
-	company := s.Company()
-	if company == nil {
-		return out
-	}
-	for _, role := range company.Roles {
-		if role.Name == "" {
-			continue
-		}
-		// The SAME derivation the org uses, not a re-spelling of it: a
-		// handle that differs from the seat's real one is a cross-link
-		// to a page that does not exist.
-		handle := role.Handle
-		if handle == "" {
-			handle = org.Slugify(role.Name)
-		}
-		out[role.Name] = handle
-	}
-	return out
 }
 
 // stream answers the engine's health.

@@ -69,8 +69,8 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
-| `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
-| `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per hour or day, split into bands (see [below](#get-tokensseries)) |
+| `GET` | `/tokens/breakdown` | The token-spend rollup by phase / model / provider entry / worker / seat — the live 24 hours, or any window of up to 90 company days from the replicated usage domain (see [below](#token-spend-breakdown)) |
+| `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
@@ -1870,8 +1870,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `turns` | `{days, role, agent_id, model, work_key, work_item, failed, sort, before, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the work item come from the completion record's own payload, read from the one row per turn that carries it. `work_item` is `{backend, id, key, project}` — the one item the turn was charged to (see [which work a turn is on](../concepts/turn-engine.md#which-work-a-turn-is-on)) — and ABSENT for a turn on nothing, including one still running, since a sole write names its item only at the end. `work_item=` narrows to the turns on one item, by the same `<backend>:<id>` identity `/events` takes (and the same **400** for anything else); it selects TURNS rather than rows, so a turn is listed whole — every phase and every segment folded — when any of its records names the item. There is no `task_id` on a row: the key it read was declared on the completion and never set, and `task_id` elsewhere means a delegated worker's task or a schedule fire's run, never a tracker item. A turn that launched a detached coding run PARKS: the segment that launched it publishes a completion with `suspended: true`, and the same turn completes again when the run is collected — so one turn can hold several completion records and "a completion exists" is not "the turn ended". The NEWEST completion decides: `complete` is true when it is not a suspension, and `parked` when it is, so the two are never both true; a turn with neither is running or died mid-flight. A `sandbox_run_failed` also counts as an end. It is a coding run that was LOST, and nothing resumes the turn that was parked on it, so a list reading completions alone called that turn parked for good. The newest end still decides: a run lost while it was still launching is followed by its turn's own completion. A completion from a build that predates the flag names no `suspended` and reads as an end. `duration_ms` is the turn's OWN measurement — the SUM of every segment's, so the wait for the coding run between them is not counted — which is not the span of its events either: the span covers the reflection pass that publishes afterwards. `cache_read_tokens` and `cache_write_tokens` are the turn's phases' prompt-cache counts (migration `0030`), a breakdown of `input_tokens` rather than an addition to `total_tokens`. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list — and a turn counts as failed when ANY of its events carried a failure OR was a failure BY ITS TYPE (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`), which is the same rule `/events` applies to a row. The second half is what a turn the engine killed BETWEEN phases leaves behind — a refused charge, an exhausted chain, a breached guard — so reading the failure flag alone reported those as clean turns with no completion record, which is indistinguishable from a turn still running. The cursor is on the turn's START, which is what the listing is ordered by; a keyset on any one event pages a turn twice. `sort` is `-started` (the default, newest first) or `-tokens` (the most total tokens first, the spend screen's drill-down per turn) — anything else is **400** naming both. Read from EVERY node and merged, with a `coverage` — see [Reading the fleet's history](#reading-the-fleets-history-coverage) |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, so a turn between eight and thirty days old names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
-| `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
-| `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
+| `tokens` | `{days, since, until, previous, seat}` | `GET /tokens/breakdown`. With no parameters, the live 24-hour window from the projection; with any, whole company days from the replicated usage domain — every node's, up to 90 days, within the 181-day horizon (see [Token Spend Breakdown](#token-spend-breakdown)) |
+| `token_series` | `{days, since, until, previous, seat, group, bucket, groups}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE, by company day or ISO week from the usage domain. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -3484,35 +3484,57 @@ empty `next_run`.
 
 ## Token Spend Breakdown
 
-### `GET /tokens/breakdown`
+Two sources, one aggregation, and which one answers is decided by the
+parameters:
 
-Rolls up per-phase LLM spend across the whole org so the dashboard's
-**Tokens** view can render every breakdown from a single fetch.
-Reads `agent_phase_completed` events via
-the event store's phase-token query and groups them by phase, model,
-auxiliary worker, agent, and turn.
+- **The live window** — a request naming no `days`, no dates, no `seat` and no
+  `previous` — is the projection's: the phase records of the last
+  24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
+  the [`tokens` push](#pushes). It is what the Spend screen opens on, and the
+  only answer with a per-turn tail (`by_turn`) and a watermark
+  (`aggregated_through`).
+- **Every named window** is whole **company days** read from the replicated
+  [`usage` domain](../guides/replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) (ADR-0020): every
+  node's day, applied on every node. So the answer is the same whichever node
+  is asked, reaches back **181 days** (the domain's history, not the event
+  log's 30), and still counts a node that has left the fleet. It replaced a
+  scan of the answering node's own event log, which reported a third of a
+  three-node fleet's spend under the company's name and drew a ninety-day chart
+  over thirty days of rows.
 
-**Query parameters**
+Both are folded by `internal/tokens`, so a reader moving between the two
+compares like with like. The guide [Budgets and spend](../guides/budgets-and-spend.md)
+explains the windows, the counter a budget enforces and how it differs from
+this rollup.
+
+**The window parameters**, shared by both routes:
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `since` / `until` | (the `since_days` window) | RFC 3339 instants, and the pair a time-range control produces. The window is **half-open** — `[since, until)` — so two adjacent windows share their boundary instant without either losing it or counting it twice, and one that ends where it begins is refused rather than answered as a quiet company. `since` is floored at the store's 30-day retention. The same pair `GET /tokens/series` takes, so a reader scrubbing a range sees the figures and the chart move together. |
-| `since_days` | `7` | The same window as a count of days back from now, for a caller that has no instants. Clamped to `[1, 30]` — the event store keeps 30 days. Ignored when `since` or `until` is given. The **whole** window is folded either way: there is no row cap, so the number is the window's real total rather than a prefix of it. |
-| `agent_role` | (none) | Restrict to one role. Used by the agent detail page's per-phase summary. |
-| `recent_turns` | `50` | Cap on the per-turn list. |
+| `days` | `1` on a named window | The company days ending today, on the company's [clock](../getting-started/configuration.md#the-companys-clock): `7` is today and the six before it. `1` to `90` (`tokens.MaxSpendRangeDays`); anything else is **400** naming `days`. |
+| `since` / `until` | — | Instead of `days`: two company dates, `2026-06-01`, **both inclusive** — `since=2026-06-01&until=2026-06-08` is eight days. A pair or neither; at most 90 days; never together with `days`. |
+| `previous` | `false` | The same number of company days ending the day before the window begins — compare-to-previous, cut on the company's calendar rather than a browser's, so the two windows are never different weeks. |
+| `seat` | (every seat) | One seat, by its **handle**. Matched on the agent id every node derives from the org name and the handle, so a seat since removed from the chart still answers for the days it left behind. |
 
-The answer is labelled with the window it actually **covered**, never with the
-one that was asked for: a request further back than the retention is floored,
-and a rollup headed with a year over a month of rows is a lie about the numbers
-beside it.
+A window whose first day — or whose `previous` window's first day — is older
+than the history's floor is **400** (`tokens.ErrOutOfRange`) naming the
+parameter to change, never answered short: the rows before the floor are gone
+on every node, and a heading over fewer days than it names is a lie about the
+numbers under it. At 90 days the previous window begins 179 days back, inside
+the 181.
 
-**Response**
+### `GET /tokens/breakdown`
+
+The rollup: the window's spend by phase, model, provider entry, worker and seat.
+
+**Response** (a named window)
 
 ```json
 {
-  "since": "2026-06-08T12:00:00Z",
-  "until": "2026-06-15T12:00:00Z",
-  "agent_role": "",
+  "since": "2026-06-08T15:00:00Z",
+  "until": "2026-06-15T15:00:00Z",
+  "from": "2026-06-09", "to": "2026-06-15", "days": 7,
+  "horizon": { "days": 181, "floor": "2025-12-16" },
   "totals": {
     "input_tokens": 17700, "output_tokens": 2750,
     "total_tokens": 20450, "calls": 6,
@@ -3521,167 +3543,159 @@ beside it.
   "by_phase": [
     { "phase": "execute", "input_tokens": 14000, "output_tokens": 2000,
       "total_tokens": 16000, "calls": 2 },
-    { "phase": "plan", "input_tokens": 1700, "output_tokens": 450,
-      "total_tokens": 2150, "calls": 2 },
     ...
   ],
   "by_model": [
-    { "model": "claude-sonnet-5", "input_tokens": 16700,
-      "output_tokens": 2600, "total_tokens": 19300, "calls": 4 },
+    { "model": "claude-sonnet-5", "total_tokens": 19300, "calls": 4, ... },
     ...
   ],
+  "by_provider": [
+    { "provider_key": "anthropic", "models": ["claude-sonnet-5", "claude-haiku-4"],
+      "seats": ["pm", "coder", "reviewer"], "seats_total": 5,
+      "total_tokens": 20100, "calls": 5, ... }
+  ],
   "by_worker": [
-    { "worker": "persist_decider", "input_tokens": 800,
-      "output_tokens": 100, "total_tokens": 900, "calls": 1 }
+    { "worker": "persist_decider", "total_tokens": 900, "calls": 1, ... }
   ],
   "by_agent": [
-    { "role": "PM", "handle": "pm", "agent_id": "<runtime uuid>",
-      "input_tokens": 17500, "output_tokens": 2700,
-      "total_tokens": 20200, "calls": 5,
+    { "role": "PM", "handle": "pm", "agent_id": "<derived uuid>",
+      "turns": 4, "failed": 1,
+      "total_tokens": 20200, "calls": 5, ...,
       "by_phase": {
-        "plan":      { "input_tokens": 1500, "output_tokens": 400,  "total_tokens": 1900, "calls": 1 },
-        "execute":   { "input_tokens": 14000,"output_tokens": 2000, "total_tokens": 16000,"calls": 2 },
-        "review":    { "input_tokens": 1200, "output_tokens": 200,  "total_tokens": 1400, "calls": 1 },
-        "auxiliary": { "input_tokens": 800,  "output_tokens": 100,  "total_tokens": 900,  "calls": 1 }
+        "execute":   { "total_tokens": 16000, "calls": 2, ... },
+        "review":    { "total_tokens": 1400,  "calls": 1, ... },
+        "auxiliary": { "total_tokens": 900,   "calls": 1, ... }
       }
     },
     ...
-  ],
-  "by_turn": [
-    { "turn_id": "<uuid>", "role": "PM", "handle": "pm",
-      "agent_id": "<runtime uuid>",
-      "started_at": "...", "ended_at": "...",
-      "input_tokens": 17500, "output_tokens": 2700,
-      "total_tokens": 20200, "calls": 5,
-      "by_phase": { "plan": {...}, "execute": {...}, ... } },
-    ...
-  ],
-  "aggregated_through": "2026-06-21T10:00:30+00:00"
+  ]
 }
 ```
 
 Notes:
 
-- `by_phase` covers every phase emitted by the
-  [Turn Engine](../concepts/turn-engine.md): `onboarding`, `execute`,
-  `review`, `subagent` (a delegated worker), `auxiliary`, and `judge`
-  (the round-cap extension judge). A store that predates the two-stage
-  redesign also holds `plan` rows, and they still roll up.
-- `by_worker` covers the rows that name one: an `auxiliary` row's worker
-  is the learning-subsystem caller (e.g. `persist_decider`,
-  `counterparty_profiler`, `skill_synthesizer`), and a `subagent` row's
-  is the `workers:` template it ran — empty on a delegation that wrote
-  its prompt inline.
-- `by_model` is useful when roles override `llm_auxiliary` with a
-  cheaper model for reflection / summarisation work.
-- All lists are sorted by `total_tokens` descending; `by_turn` is
-  sorted by `ended_at` descending and capped at `recent_turns`.
-- `aggregated_through` is the latest event timestamp this rollup
-  aggregated, and empty when no events matched. It is the rollup's own
-  freshness: the dashboard renders it as "counted through", so a reader
-  looking at a total knows how recent the last thing in it is. It is not a
-  baseline a client folds onto: the whole rollup is re-folded and pushed
-  by the server, which is what keeps one aggregation rather than a second
-  one in the browser.
-- Returns the same skeleton with zero totals (and an empty
-  `aggregated_through`) when the event store is unavailable rather than
-  erroring.
+- `since`/`until` are the window as instants — the first instant of its first
+  company day and the first instant after its last, `until` exclusive — and
+  `from`/`to`/`days` name the same window by its days. The live window carries
+  only the instants.
+- `horizon` states how far back a named window can reach: the history in days
+  and `floor`, the oldest company day still answerable. It is named `horizon`
+  rather than `coverage` because nothing here was asked of a node — the rows
+  are replicated whole, and what bounds them is time, not presence.
+- `by_phase` covers every phase the [Turn Engine](../concepts/turn-engine.md)
+  emits (`onboarding`, `execute`, `review`, `subagent`, `auxiliary`, `judge`,
+  `sandbox`), as recorded; a store that predates the two-stage redesign also
+  holds `plan`. The series folds these into four bands; the rollup does not.
+- `by_provider` answers "which configured entry (`providers.llm.<key>`) do we
+  pay for", which `by_model` cannot: a fallback chain serves several models
+  under one key. `models` is every model the entry answered with, biggest
+  first; `seats` the three handles that spent the most through it and
+  `seats_total` how many did at all. A call recorded before the key was
+  promoted (node migration 0030) is under `unknown`.
+- `by_agent[].turns` and `failed` are how many of the seat's turns ENDED in
+  the window, and how many of those failed — a named window only. The live
+  window holds phase records, not endings, so it carries neither rather than
+  a count of "turns that spent", which is a different number. A seat that
+  ended a turn without spending is still listed.
+- `by_turn` — one row per RUN, newest first, capped at 50 — and
+  `aggregated_through`, the newest phase counted, are the **live window's
+  only**. A company day holds no turn and no per-call instant, so a named
+  window has neither. Per-turn spend over any window is
+  [`GET /turns?sort=-tokens`](#queries).
+- A seat is one row per derived agent id, named by the newest day's record: a
+  role renamed mid-window is one row under its current name.
+- All lists are sorted by `total_tokens` descending, ties on the name.
 - Every bucket also carries `cache_read_tokens` and `cache_write_tokens`:
   the share of `input_tokens` the providers' prompt caches served and
   stored. A **breakdown** of the input, never an addition to it —
   `input_tokens` already counts the cached prefix on every backend, so the
   cache's share of a bucket is `cache_read_tokens / input_tokens`, and
-  `total_tokens` stays input plus output. Both producers carry them: the
-  live window reads them off each phase record, and a stored window off
-  the columns the event store promotes them into (with `provider_key`, the
-  entry that served the call), so a window that crosses the live edge
-  reads the same share on both sides of it. A phase recorded by a build
-  that did not count the cache reads 0.
-- Every bucket — the totals, each row, and each nested `by_phase` entry —
-  also carries `cost_usd` and `priced_calls`. **Two numbers, because zero
-  dollars is two different facts**: only a subscription coding CLI reports
-  a price, so a `cost_usd` of 0 over `priced_calls: 0` means nobody said
-  what this cost, while 0 over 3 means three runs were billed nothing.
-  Rendering the first as `$0.00` states a price nobody quoted. Only a
-  POSITIVE price is summed — a negative one is a bad payload, not a
-  rebate, and summing it would silently reduce a company's reported spend.
-  The dashboard reads neither field: it measures spend in tokens and never
-  in money, since a price covering the few calls that quote one reads, on
-  a screen, as the company's spend
+  `total_tokens` stays input plus output. Both sources carry them, so a
+  window reads the same share whichever answered it. A phase recorded by a
+  build that did not count the cache reads 0.
+- Every live-window bucket also carries `cost_usd` and `priced_calls`. **Two
+  numbers, because zero dollars is two different facts**: only a subscription
+  coding CLI reports a price, so a `cost_usd` of 0 over `priced_calls: 0`
+  means nobody said what this cost, while 0 over 3 means three runs were billed
+  nothing. The usage domain does not carry a price, so a named window's are
+  zero over zero. The dashboard reads neither field: it measures spend in
+  tokens and never in money
   ([rule 19](dashboard-design.md#rules-a-change-has-to-keep)).
 
 ### `GET /tokens/series`
 
-The same spend with a **time axis**: one bucket per hour or per day over a
-window, each split into bands on one dimension.
+The same spend with a **time axis**: one bucket per company day or ISO week
+over a named window, each split into bands on one dimension. There is no live
+path — its buckets are company days, which only the usage domain holds.
 
-**Query parameters**
+**Query parameters** — the window parameters above, plus:
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `group` | `phase` | The dimension the bands are: `phase`, `model`, `seat`, `unit`, `worker` or `turn`. Anything else is refused naming the set. `unit` resolves through the org chart's DIRECT unit for each seat — not the chain, because a band per nesting level would count the same spend for the team and again for the department above it. A record carries no project and no work item at all; that attribution is the tracker's own per-item counters. |
-| `bucket` | `hour` | `hour` or `day`, in **UTC**. Two, deliberately: a chart with an arbitrary bucket width has an x axis nobody can label. |
-| `since` / `until` | (the `since_days` window) | RFC 3339 instants. The window is **half-open** — `[since, until)` — so two adjacent windows share their boundary instant without either losing it or counting it twice. `since` is floored at the store's 30-day retention, and the answer is labelled with the window it actually COVERED rather than the one asked for. An absent `until` runs to now, so a company quiet for six hours has six empty buckets rather than a chart that stops where the spending did. |
-| `previous` | `false` | Shift the window back by its own length, for compare-to-previous. Needs both edges — the window before an open-ended one has no length. Computed here rather than in the browser: a client subtracting in local time produces two windows of different lengths across a DST boundary, and the chart then reports a change nobody made. |
-| `groups` | `5` | How many bands before the rest fold into the residual. Capped at 20. Five is how many distinguishable hues the design system has. |
-| `agent_role` | (none) | Restrict to one seat. Accepts a handle or a role name. |
+| `group` | `phase` | The dimension the bands are: `phase`, `model`, `provider`, `seat`, `unit` or `worker`. Anything else — `turn` included — is **400** naming the set. `phase` is the **four bands** below; `seat` is keyed and labelled by handle; `unit` resolves through the org chart's DIRECT unit for each seat's handle — not the chain, because a band per nesting level would count the same spend for the team and again for the department above it. A usage row carries no project and no work item; that attribution is the tracker's own per-item counters. |
+| `bucket` | `day` | `day` (a company day) or `week` (the company's ISO week, from Monday midnight on its clock). Nothing finer: a day is the smallest thing every node's usage agrees on, and `hour` is **400**. |
+| `groups` | `4` | How many bands before the rest fold into the residual. Capped at 20. Four is how many data hues the design system has, and exactly the phase breakdown's band count — a phase grouping never folds. |
+
+**The four phase bands**, folded once in `tokens.PhaseBand`:
+
+| Band | Phases |
+|------|--------|
+| `execute` | `execute`, `sandbox` (a detached coding run is the executor's own work done elsewhere), and the retired `plan` |
+| `review` | `review` |
+| `workers` | `subagent` — the workers an executor delegated to |
+| `auxiliary` | `auxiliary`, `judge`, `onboarding`, and any phase this build does not know |
 
 **Response**
 
 ```json
 {
   "group": "phase",
-  "bucket": "hour",
-  "since": "2026-06-14T12:00:00Z",
-  "until": "2026-06-14T15:00:00Z",
+  "bucket": "week",
+  "since": "2026-06-09T15:00:00Z", "until": "2026-06-23T15:00:00Z",
+  "from": "2026-06-10", "to": "2026-06-23", "days": 14,
+  "horizon": { "days": 181, "floor": "2025-12-24" },
   "series": [
-    { "at": "2026-06-14T12:00:00Z",
-      "input_tokens": 60, "output_tokens": 20, "total_tokens": 80,
-      "calls": 1, "cost_usd": 0, "priced_calls": 0,
-      "groups": { "plan": { "total_tokens": 80, "calls": 1, ... } },
+    { "at": "2026-06-07T15:00:00Z", "window": "2026-W24", "days": 5,
+      "total_tokens": 80, "calls": 1, ...,
+      "groups": { "execute": { "total_tokens": 80, "calls": 1, ... } },
       "other":  { "total_tokens": 0, "calls": 0, ... } },
-    { "at": "2026-06-14T13:00:00Z", "total_tokens": 0, "calls": 0,
-      "groups": {}, "other": { "total_tokens": 0, ... }, ... },
+    { "at": "2026-06-14T15:00:00Z", "window": "2026-W25", "days": 7, ... },
     ...
   ],
   "by_group": [
-    { "group": "execute", "other": false, "folded": 0,
-      "total_tokens": 16000, "calls": 2, "cost_usd": 0.74, "priced_calls": 2 },
-    { "group": "", "other": true, "folded": 12,
-      "total_tokens": 300, "calls": 9, "cost_usd": 0, "priced_calls": 0 }
+    { "group": "execute", "other": false, "folded": 0, "total_tokens": 16000, "calls": 2, ... },
+    { "group": "review",  "other": false, "folded": 0, "total_tokens": 300,   "calls": 9, ... }
   ],
   "totals":  { "total_tokens": 20450, "calls": 6, ... },
-  "grouped": { "total_tokens": 16300, "calls": 5, ... }
+  "grouped": { "total_tokens": 20450, "calls": 6, ... }
 }
 ```
 
 Notes:
 
 - **Every bucket in the window is present, including the empty ones.** A
-  series with holes is a chart the client has to repair, and repairing it
-  in the browser is the copy of this bucketing the engine exists to have
-  written once. A quiet hour is a gap of full height, not a column the
-  chart squeezed out.
-- `by_group` is the **legend and the grid**: each band's total over the
-  whole window, biggest first, with the residual last. Which bands survive
-  the cap is decided over the WHOLE window, never per bucket — a per-bucket
-  decision would put a band in the chart for the hours it happened to lead
-  and in the residual for the rest, which reads as spend that stopped.
-- The residual carries an **empty `group` and `other: true`**, rather than
-  a reserved name: a phase, model or seat genuinely called `other` must not
-  be mistaken for the fold. `folded` is how many distinct groups it stands
-  for, so a legend can say "other (12)".
-- `totals` is every record in the window, **including the ones this
-  grouping places in no band at all** — grouping by `worker` leaves out
-  every phase that is not a worker's, and by `turn` every phase that
-  carried no turn id. `grouped` is what the bands do cover, so the gap is a
-  number rather than an inference a reader has to make by subtracting.
-- `at` is the bucket's **start**, never its middle or its end. A bucket
-  reaches from `at` to `at` plus one hour or one day.
-- A window longer than 1000 buckets keeps the **newest** of them and
-  reports `since` as what it drew: a cost explorer is read from its
-  right-hand edge, and dropping the oldest silently would put a year's
-  heading over a month of bars.
+  series with holes is a chart the client has to repair. A quiet day is a gap
+  of full height, not a column the chart squeezed out.
+- `at` is the bucket's **start** and `window` its label on the company
+  calendar (`2026-06-14`, `2026-W25`). A week's `at` can be before the
+  window's `since`: the first and last weeks can be partial, and `days` says
+  how many of the window's days each bucket holds.
+- `by_group` is the **legend and the grid**: each band's total over the whole
+  window, with the residual last. By `phase` the four bands are in the
+  stacking order above whatever their size; every other grouping is biggest
+  first. Which bands survive the cap is decided over the WHOLE window, never
+  per bucket — a per-bucket decision would put a band in the chart for the
+  days it happened to lead and in the residual for the rest.
+- A `unit` band carries `seats`, how many seats spent in it; a `seat` band
+  carries its `handle`.
+- The residual carries an **empty `group` and `other: true`**, rather than a
+  reserved name: a model or seat genuinely called `other` must not be mistaken
+  for the fold. `folded` is how many distinct groups it stands for, and it
+  sums every field of the bands it stands for, the cache counts included.
+- `totals` is every cell in the window, **including the ones this grouping
+  places in no band at all** — grouping by `worker` leaves out every phase
+  that is not a worker's. `grouped` is what the bands do cover, so the gap is
+  a number rather than an inference a reader has to make by subtracting.
 
 ---
 

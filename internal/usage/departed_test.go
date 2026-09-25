@@ -119,7 +119,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		rows, err := usage.Spend(t.Context(), n.db.Replicated(), day, day)
+		rows, err := usage.Spend(t.Context(), n.db.Replicated(), usage.SpendQuery{From: day, To: day})
 		if err != nil {
 			t.Fatalf("%s: read the spend: %v", n.id, err)
 		}

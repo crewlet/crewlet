@@ -517,7 +517,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/a2a` | **Agent-to-agent** | |
 | `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
 | `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
-| `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
+| `#/cost` | **Spend** — over time, then by phase, model, seat, and the costliest turns. The live 24 hours come from the projection; 7, 30 and 90 days are whole company days from the replicated usage domain, the same on every node (see [Budgets and spend](../guides/budgets-and-spend.md)) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
 | `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
@@ -573,7 +573,9 @@ vocabulary's order either way, so `1d` reads the same on every screen.
 pressed Back means the narrower one.
 
 The two edges reach the engine as the half-open `since`/`until` pair every
-windowed question takes. A chart's edges are rounded **up to the bucket it
+windowed question takes — except on Spend, whose named windows are whole
+company days the engine cuts on the company's clock, so the screen sends
+`days` and offers no interval of two instants. A chart's edges are rounded **up to the bucket it
 draws**, so the hour in progress is on the chart while it is still being spent
 and the query changes once per column rather than once per second; a list's are
 not. An interval never moves at all — it is the one window that is stable to
@@ -3073,8 +3075,9 @@ spend window the Overview and Spend screens are folded from. Until that read
 existed, every one of these screens started blank after a restart, a deploy or
 a node joining a fleet, which is the one empty state a reader has no way to
 question. What the seed cannot cover is a fleet peer's history, because the
-event store is per node; that is what the `events` and `tokens` queries are
-for, and what the window badge on Spend names.
+event store is per node; that is what the `events` query's fleet scatter and
+the `tokens` query's replicated company days are for, and what the window badge
+on Spend names.
 
 ---
 

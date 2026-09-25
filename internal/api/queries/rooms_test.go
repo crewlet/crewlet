@@ -86,7 +86,7 @@ func everySeam(t *testing.T) queries.Sources {
 	return queries.Sources{
 		State:    &livestate.LiveState{},
 		Events:   eventfan.Solo("node-a", &store.EventLog{}),
-		Spend:    &store.EventLog{},
+		Usage:    &store.DB{},
 		Health:   func(context.Context) any { return nil },
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
@@ -403,5 +403,33 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 		t.Errorf("the screen offers %q and the engine refuses it, so picking it "+
 			"draws no chart at all — a renamed group leaves exactly this behind",
 			leftover)
+	}
+}
+
+// AND THE CHART DRAWS EXACTLY THE ENGINE'S PHASE BANDS, IN ITS ORDER.
+//
+// `group=phase` answers four bands the engine folds every phase into ONCE
+// (tokens.PhaseBand), and the dashboard's `BANDS` gives each its hue and its
+// place in the stack. A band the engine answers and the table lacks is drawn in
+// no colour; a band the table carries and the engine dropped is a legend entry
+// for spend that can never appear; and a table in another ORDER stacks the
+// columns differently from the engine's own legend.
+func TestTheSpendChartDrawsExactlyTheEnginesPhaseBands(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal("../"+clientsource.Tree, "BANDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drawn := clientsource.Field(block, "value")
+	if len(drawn) == 0 {
+		t.Fatal("no bands were found at all, so this gate certifies nothing")
+	}
+	var folded []string
+	for _, band := range tokens.Bands {
+		folded = append(folded, string(band))
+	}
+	if !slices.Equal(drawn, folded) {
+		t.Errorf("the dashboard draws the bands %v and the engine folds into %v — "+
+			"one set, in one stacking order", drawn, folded)
 	}
 }

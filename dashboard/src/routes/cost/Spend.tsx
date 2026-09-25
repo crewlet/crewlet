@@ -3,8 +3,10 @@
  *
  * Two different facts share this screen and the previous one let them blur:
  *
- *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
- *    what the company's model calls consumed;
+ *  - the **spend rollup** is a WINDOW over what the company's model calls
+ *    consumed: the live 24 hours by default, or 7, 30 or 90 company days read
+ *    from the replicated usage domain — every node's days, so the figures are
+ *    the company's whichever node answers;
  *  - a **meter** is the fleet's shared counter as the budget gate enforces it:
  *    every node's spend in ONE calendar window — the one closest to its
  *    ceiling, or refusing — against that window's cap in the company revision.
@@ -60,20 +62,28 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
+import type { AgentSpendRow, TurnRow } from "~/protocol/types.ts";
 // OURS, AND THERE IS NO PEER FOR EITHER. `Charts` exports a line `TimeSeries`
 // and a `StackedBar`, and this axis is neither: it is a column per bucket,
 // STACKED into bands, with the previous period drawn behind it as a ghost.
 // `phaseColor` has no peer either — uilet publishes `--color-phase-*` but no
 // function that picks one. See the report.
 import { StackedTimeSeries, phaseColor } from "~/ui/charts.tsx";
-import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "~/lib/spend.ts";
+import { bandsOf, columnsOf, ghostHeights, spendDays, unbandedTokens } from "~/lib/spend.ts";
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
-import type { Offer, TimeRange } from "~/lib/range.ts";
+import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDate, fmtDateTime, fmtExact, relTime, tsKey } from "~/lib/format.ts";
+import {
+  eventHistoryLabel,
+  fmtCount,
+  fmtDate,
+  fmtDateTime,
+  fmtExact,
+  relTime,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -82,22 +92,20 @@ import { GROUPS } from "~/contract/spend.ts";
 /**
  * WHICH WINDOWS THIS SCREEN HAS.
  *
- * Days and up. A quarter of hourly bars is 2,160 columns and a spend chart has
- * nothing useful to say about fifteen minutes — one model call lands in one
- * bucket and the rest of the axis is empty. The live strip offers the short
- * end of the same vocabulary, so `1d` means the same thing on both.
+ * Whole company days, up to ninety. A named spend window is read from the
+ * replicated usage domain, whose smallest unit is a company day — so there is
+ * no custom interval of two instants to offer, and nothing finer than a day to
+ * draw: the engine refuses an hourly bucket rather than inventing one. Ninety
+ * is `tokens.MaxSpendRangeDays`, and the engine refuses a ninety-first.
  *
  * Declared ONCE and read by both the hook and the control, so the set the URL
  * is checked against cannot differ from the set a reader can see.
  */
 const SPEND_OFFER: Offer = {
   ranges: ["1d", "7d", "30d", "90d"],
-  custom: true,
+  custom: false,
   fallback: "1d",
-  // THE BUCKETS `token_series` ACCEPTS, which is two: a minute bucket over a
-  // week is ten thousand points nobody can read, and the engine refuses a
-  // third value rather than guessing which branch its switch should end on.
-  buckets: ["hour", "day"],
+  buckets: ["day"],
 };
 
 /**
@@ -109,17 +117,16 @@ const SPEND_OFFER: Offer = {
  * most the live window's records, so an axis folded here would be right for a
  * day and absent for every other range.
  */
-function SpendOverTime({ range }: { range: TimeRange }) {
+function SpendOverTime({ days }: { days: number }) {
   const [group, setGroup] = useParam("group", "phase", "section");
   const [compare, setCompare] = useParam("compare", "", "section");
-  const { bucket, since, until } = range;
 
-  const params = { group, bucket, since, until };
+  const params = { group, days, bucket: "day" };
   const series = useQuery("token_series", params);
   // The previous period is a SECOND query with the same shape, shifted by the
-  // engine: subtracting here would be a local-time subtraction, and across a
-  // DST boundary the two windows would be different lengths — a change the
-  // chart would report and nobody made.
+  // engine on the COMPANY's calendar: subtracting here would cut the two
+  // windows on this browser's clock, and a comparison of two different weeks
+  // reports a change nobody made.
   const prior = useQuery(
     "token_series",
     { ...params, previous: true },
@@ -134,10 +141,7 @@ function SpendOverTime({ range }: { range: TimeRange }) {
 
   return (
     <Card>
-      <Card.Header
-        icon={<TimelineGlyph size="sm" />}
-        subtitle={bucket === "day" ? "one column per day" : "one column per hour"}
-      >
+      <Card.Header icon={<TimelineGlyph size="sm" />} subtitle="one column per company day">
         <Card.Title>Over time</Card.Title>
       </Card.Header>
       <QueryState
@@ -187,13 +191,20 @@ function SpendOverTime({ range }: { range: TimeRange }) {
               bands={bands}
               ghost={compare === "previous" ? ghost : undefined}
               format={(n) => `${fmtCount(n)} tokens`}
-              label={(at) => (bucket === "day" ? fmtDate(at) : fmtDateTime(at))}
+              label={(at) => fmtDate(at)}
             />
             <div className="row wrap gap-2">
-              <span className="t-caption">{fmtDateTime(data.since)}</span>
+              <span className="t-caption">{data.from}</span>
               <span className="spacer" />
-              <span className="t-caption">{fmtDateTime(data.until)}</span>
+              <span className="t-caption">{data.to}</span>
             </div>
+            {/* THE FLOOR, SAID. A named window reaches back as far as the
+                usage domain keeps, and a window past it is refused rather than
+                drawn short — so the reader is told where the history ends. */}
+            <p className="t-caption">
+              Spend history reaches back to {data.horizon.floor} ({data.horizon.days} days), on
+              every node alike.
+            </p>
             <Legend
               items={bands.map((b) => ({ id: b.key || "other", label: b.label, color: b.color }))}
             />
@@ -220,27 +231,23 @@ export function Spend() {
   const orgBudget = useOrgBudget();
   const now = useNow();
   const range = useTimeRange(now, SPEND_OFFER);
+  const days = spendDays(range.window);
+  const { data: engine } = useEngineHealth();
 
   // The pushed rollup covers the live window. Any other window is a query,
   // and while it loads the pushed one stays on screen rather than blanking.
   //
-  // THE SAME TWO INSTANTS THE CHART BELOW ASKS FOR. The breakdown used to take
-  // a day count, which can only name a window ending now — so a reader who
-  // scrubbed to a week in March got a chart over March with figures above it
-  // from this afternoon, two facts on one screen that cannot be compared.
+  // THE SAME COMPANY DAYS THE CHART BELOW ASKS FOR, so the figures above the
+  // chart and the chart are one window read one way.
   const live = range.window === "1d";
-  const asked = useQuery(
-    "tokens",
-    { since: range.since, until: range.until, recent_turns: 100 },
-    { enabled: !live },
-  );
+  const asked = useQuery("tokens", { days }, { enabled: !live });
   // AND A FAILED READ IS NOT A WINDOW'S ANSWER. The fallback above covers the
   // moment BEFORE the first answer arrives; past a refusal there is no answer
   // coming, and the live rollup left standing under the chosen window's badge
   // is the March-chart-with-this-afternoon's-figures this query was built to
   // stop — reintroduced on the one path nobody looks at. A 90-day scan is
-  // exactly what times out, and `internal/api/queries` returns the store's own
-  // error unchanged. Nothing is invented in its place: every consumer below
+  // exactly what a reader past the history's floor gets, and
+  // `internal/api/queries` returns the engine's own sentence unchanged. Nothing is invented in its place: every consumer below
   // already draws an em dash or its own empty state for an absent rollup, and
   // the refusal above the tiles says which of the two this is.
   //
@@ -259,10 +266,12 @@ export function Spend() {
     () => (tokens?.by_agent ?? []).slice().sort((a, b) => b.total_tokens - a.total_tokens),
     [tokens],
   );
-  const turns = useMemo(
-    () => (tokens?.by_turn ?? []).slice().sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
-    [tokens],
-  );
+  // THE COSTLIEST TURNS, from the turn list rather than the rollup. A named
+  // window is company days, which hold no turn, so the per-turn view is the
+  // fleet's own turn list ranked by tokens — over the part of the window the
+  // event log still holds, which the caption below states.
+  const costliest = useQuery("turns", { days, sort: "-tokens", limit: 50 });
+  const turns = useMemo(() => costliest.data?.turns ?? [], [costliest.data]);
   // HOW MANY RUNS EACH TRIGGER GOT, over the rows this window holds — the
   // same count the Turns table takes, for the same reason. An empty work key
   // is the ABSENCE of an identity, so counting those together would report
@@ -383,25 +392,36 @@ export function Spend() {
           }
           sub="input includes any cached prefix, as the provider reports it"
         />
-        <StatCard
-          icon={<ScheduleGlyph size="xs" />}
-          label="Counted through"
-          value={
-            tokens?.aggregated_through ? (
-              relTime(tokens.aggregated_through, now)
-            ) : (
-              <EmptyValue label="Nothing has been counted yet" />
-            )
-          }
-          sub={
-            tokens?.aggregated_through
-              ? fmtDateTime(tokens.aggregated_through)
-              : "no high-water mark yet"
-          }
-        />
+        {/* THE WINDOW'S OWN EDGE. The live window counts through its newest
+            call; a named window is whole company days, which it names. */}
+        {tokens?.from && tokens.to ? (
+          <StatCard
+            icon={<ScheduleGlyph size="xs" />}
+            label="Company days"
+            value={`${tokens.from} – ${tokens.to}`}
+            sub={`${tokens.days ?? days} days on the company clock, every node's`}
+          />
+        ) : (
+          <StatCard
+            icon={<ScheduleGlyph size="xs" />}
+            label="Counted through"
+            value={
+              tokens?.aggregated_through ? (
+                relTime(tokens.aggregated_through, now)
+              ) : (
+                <EmptyValue label="Nothing has been counted yet" />
+              )
+            }
+            sub={
+              tokens?.aggregated_through
+                ? fmtDateTime(tokens.aggregated_through)
+                : "no high-water mark yet"
+            }
+          />
+        )}
       </StatGroup>
 
-      <SpendOverTime range={range} />
+      <SpendOverTime days={days} />
 
       {org && org.windows.length > 0 && (
         <Card>
@@ -535,6 +555,22 @@ export function Spend() {
               ),
             },
             {
+              key: "turns",
+              header: "Turns",
+              align: "right",
+              sortValue: (a) => a.turns ?? -1,
+              // ENDED TURNS, which a named window counts from each node's day
+              // and the live window cannot count at all: it holds phase
+              // records, not endings — so there it is a stated absence, never
+              // a zero.
+              cell: (a) =>
+                a.turns === undefined ? (
+                  <EmptyValue label="The live window does not count turns" />
+                ) : (
+                  <NumberCell value={a.turns} />
+                ),
+            },
+            {
               key: "calls",
               header: "Calls",
               align: "right",
@@ -567,20 +603,27 @@ export function Spend() {
       </Card>
 
       <Card padding="none">
-        <Card.Header icon={<LayersGlyph size="sm" />} count={turns.length}>
-          <Card.Title>Recent turns</Card.Title>
+        <Card.Header
+          icon={<LayersGlyph size="sm" />}
+          count={turns.length}
+          // WHICH PART OF THE WINDOW THIS COVERS, said: a turn lives in the
+          // event log, whose history is not the spend history's, so a ninety-day
+          // window's turns are the ones the log still holds.
+          subtitle={`the most tokens first — ${eventHistoryLabel(engine?.event_history_seconds)}`}
+        >
+          <Card.Title>Costliest turns</Card.Title>
         </Card.Header>
         <DataGrid
           name="turns"
           rows={turns}
           rowKey={(t) => t.turn_id}
-          defaultSort="-started"
+          defaultSort="-total"
           // THE TURN BESIDE THE SPEND, which is the whole reason a reader scans
           // this table: the expensive row is found by comparing it against the
           // ones above and below it, and navigating away to read one turn loses
           // the comparison that made it interesting.
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
-          onRowActivate={peekRow<TurnSpendRow>((t) => openPeek({ kind: "turn", id: t.turn_id }))}
+          onRowActivate={peekRow<TurnRow>((t) => openPeek({ kind: "turn", id: t.turn_id }))}
           empty={{ title: "No turns in this window" }}
           columns={[
             {
@@ -597,10 +640,10 @@ export function Spend() {
             {
               key: "seat",
               header: "Seat",
-              sortValue: (t) => t.role,
+              sortValue: (t) => t.role ?? "",
               // NOT `SeatCell` or the chip this drew: both are anchors and every
               // row here is one. The seat is a link again in the turn's own peek.
-              cell: (t) => <TextCell icon="memory">{t.role}</TextCell>,
+              cell: (t) => <TextCell icon="memory">{t.role ?? ""}</TextCell>,
             },
             {
               key: "total",
@@ -610,15 +653,14 @@ export function Spend() {
               cell: (t) => <TokenCell value={t.total_tokens} />,
             },
             {
-              key: "calls",
-              header: "Calls",
+              key: "phases",
+              header: "Phases",
               align: "right",
-              sortValue: (t) => t.calls,
-              // A BARE `{t.calls}` RENDERED AN ABSENT COUNT AS NOTHING AT ALL —
-              // an empty cell reads as a column that does not apply to this row,
-              // where the cell says "nothing recorded" and still spells a real
-              // zero as `0`.
-              cell: (t) => <NumberCell value={t.calls} />,
+              sortValue: (t) => t.phases,
+              // A BARE COUNT RENDERED AN ABSENT ONE AS NOTHING AT ALL — an empty
+              // cell reads as a column that does not apply to this row, where the
+              // cell says "nothing recorded" and still spells a real zero as `0`.
+              cell: (t) => <NumberCell value={t.phases} />,
             },
             {
               key: "turn",
