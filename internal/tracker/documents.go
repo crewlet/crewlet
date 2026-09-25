@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -141,7 +142,11 @@ func readPerson(ctx context.Context, tx *sql.Tx, handle string) (Person, bool, e
 	}
 	person.V, person.Handle = DocumentVersion, handle
 	person.Version = uint64(version)
-	person.SeenThrough.Seq = uint64(seenSeq)
+	// PACKED, like every durable position here: the generation rides in
+	// the high bits, and a row written as a bare sequence decodes as
+	// generation zero, which is exactly what it was.
+	person.SeenThrough.Generation = uint32(seenSeq / statelog.GenerationStride)
+	person.SeenThrough.Seq = uint64(seenSeq % statelog.GenerationStride)
 	if setAt != 0 {
 		// ZERO IS UNSET, not the epoch: the ordinary state is a
 		// person's own list, and decoding a zero into 1970 would put a

@@ -65,6 +65,28 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		spend.Workers = 2
 	case "TurnSpend.SentBack":
 		spend.SentBack = 1
+	case "Person.SeenThrough.Generation":
+		// A PERSON PAST A REANCHOR: the one record whose position carries
+		// a generation the older applier stored as the bare sequence.
+		body, err := json.Marshal(tracker.Person{
+			V: tracker.DocumentVersion, Handle: "suite-person",
+			SeenThrough: tracker.Position{
+				Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 2,
+			},
+			UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.PersonSubject("suite-person"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true},
+			},
+			Kind: tracker.ChangePersonUpdated, Mutation: body,
+			Actor: "suite-person", ActorKind: tracker.AuthorHuman,
+		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)

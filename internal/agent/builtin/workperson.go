@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -45,14 +46,19 @@ import (
 // nothing had ever been read.
 
 // PersonWriter is the tracker write side these tools need.
+//
+// GESTURES for the inbox and the pins, never the lists: each is resolved by
+// the tracker against the record its own decide reads, so a tool never sends
+// back a list it read — which is how one "mark this read" used to erase every
+// other mark. See [tracker.InboxGesture].
 type PersonWriter interface {
-	WriteInbox(ctx context.Context, opID, handle string,
-		read, unread, snoozed []tracker.InboxEntry, reasons []tracker.Reason,
-		seenThrough tracker.Position) (tracker.WriteResult, error)
+	MarkInbox(ctx context.Context, opID, handle string,
+		gesture tracker.InboxGesture) (tracker.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
-		pinnedViews []string, favorites []tracker.Favorite) (tracker.WriteResult, error)
+		gesture tracker.PinGesture) (tracker.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string,
-		priorities []string, authority tracker.PersonAuthority) (tracker.WriteResult, error)
+		priorities []string, ifMatch *uint64,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
 }
 
 // PersonReader is the read side.
@@ -128,7 +134,9 @@ func (t *setPriorities) Description() string {
 	return "Set the order somebody means to work in — your own, or somebody " +
 		"in your line. Setting another person's is recorded as yours on their " +
 		"record, so they can see who chose it; their own next change clears " +
-		"that. The list REPLACES the one it names."
+		"that. An order is a statement about every entry at once, so the " +
+		"list you send is the whole list — pass `if_match` with the version " +
+		"get_person answered and it is refused if the list changed since."
 }
 
 func (t *setPriorities) Parameters() map[string]any {
@@ -142,6 +150,14 @@ func (t *setPriorities) Parameters() map[string]any {
 			"items": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Work item ids or keys, most important first.",
+			},
+			"if_match": map[string]any{
+				"type": "integer",
+				"description": "The `version` get_person answered for this " +
+					"person. Given, the write is REFUSED if their record " +
+					"changed since you read it — a reorder made from an " +
+					"old screen would otherwise put back an order somebody " +
+					"has since replaced. Omitted, the list is written as sent.",
 			},
 		},
 		"required": []string{"items"},
@@ -220,8 +236,28 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		resolved = append(resolved, id)
 	}
+	var ifMatch *uint64
+	if _, given := args["if_match"]; given {
+		version := argInt(args, "if_match", -1)
+		if version < 0 {
+			return failed("`if_match` is the `version` get_person answered, " +
+				"a whole number of zero or more."), nil
+		}
+		expected := uint64(version)
+		ifMatch = &expected
+	}
 	result, err := writer.WritePriorities(ctx,
-		opIDFor(actor, "prio", handle), handle, resolved, authority)
+		opIDFor(actor, "prio", handle), handle, resolved, ifMatch, authority)
+	if errors.Is(err, tracker.ErrStaleVersion) {
+		// THE LIST MOVED, and the remedy names the read that shows it —
+		// the generic sentence sends a caller to get_work_item, which
+		// knows nothing about a person's queue.
+		return refused(tools.RefusalStaleVersion, fmt.Sprintf("%s was "+
+			"refused: %v. Nothing is wrong with your order — somebody "+
+			"changed this person's record after you read it. Call "+
+			"get_person again and decide from the list it shows now.",
+			tracker.SetPrioritiesTool, err)), nil
+	}
 	if err != nil {
 		return writeFailure(tracker.SetPrioritiesTool, err), nil
 	}
@@ -239,31 +275,44 @@ var _ tools.Callable = (*setPins)(nil)
 func (t *setPins) Name() string { return tracker.SetPinsTool }
 
 func (t *setPins) Description() string {
-	return "Set your own pinned views and starred things. A pin puts a view " +
-		"first in its container's strip, for you and nobody else. Both lists " +
-		"REPLACE what is there."
+	return "Change your own pinned views and starred things. A pin puts a " +
+		"view first in its container's strip, for you and nobody else. Each " +
+		"takes a change — `add` and `remove` against what is there now, or " +
+		"`set` for the whole list — so a star from one screen never drops a " +
+		"pin made from another."
 }
 
 func (t *setPins) Parameters() map[string]any {
+	favorite := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"kind": map[string]any{"type": "string", "description": "project, task or view."},
+			"id":   map[string]any{"type": "string"},
+		},
+		"required": []string{"kind", "id"},
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"views": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Saved view ids to pin.",
-			},
-			"favorites": map[string]any{
-				"type":        "array",
-				"description": "Things to star.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"kind": map[string]any{"type": "string", "description": "project, task or view."},
-						"id":   map[string]any{"type": "string"},
-					},
-					"required": []string{"kind", "id"},
-				},
-			},
+			"views": setChangeSchema(map[string]any{"type": "string"},
+				"Saved view ids: `add` pins, `remove` unpins, `set` is the "+
+					"whole strip in order."),
+			"favorites": setChangeSchema(favorite,
+				"Things to star: `add` stars, `remove` unstars, `set` is "+
+					"the whole list."),
+		},
+	}
+}
+
+// setChangeSchema is one [tracker.SetChange] as an argument: a delta, or the
+// whole set, and never both.
+func setChangeSchema(item map[string]any, description string) map[string]any {
+	list := map[string]any{"type": "array", "items": item}
+	return map[string]any{
+		"type":        "object",
+		"description": description + " State `set` or `add`/`remove`, not both.",
+		"properties": map[string]any{
+			"add": list, "remove": list, "set": list,
 		},
 	}
 }
@@ -279,7 +328,11 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	favorites, bad := personFavorites(args)
+	views, bad := viewChange(args)
+	if bad != "" {
+		return failed(bad), nil
+	}
+	favorites, bad := favoriteChange(args)
 	if bad != "" {
 		return failed(bad), nil
 	}
@@ -289,7 +342,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	whose := actor.Record()
 	result, err := writer.WritePins(ctx,
 		opIDFor(actor, "pins", whose), whose,
-		argStrings(args, "views"), favorites)
+		tracker.PinGesture{Views: views, Favorites: favorites})
 	if err != nil {
 		return writeFailure(tracker.SetPinsTool, err), nil
 	}
@@ -306,39 +359,53 @@ var _ tools.Callable = (*markInbox)(nil)
 func (t *markInbox) Name() string { return tracker.MarkInboxTool }
 
 func (t *markInbox) Description() string {
-	return "Move your own inbox on: what you have read, what is still unread, " +
-		"what is snoozed, how far you have read, and which wake reasons are " +
-		"yours to act on. Entries at or below the seen-through position are " +
-		"dropped, because nothing will render them again. Read it with " +
-		"get_person first — every list REPLACES the one it names, so an " +
-		"omitted one is CLEARED rather than left alone."
+	return "Move your own inbox by one gesture. Name notices by the " +
+		"`record_id` work_inbox gives them: `read` marks them done, " +
+		"`unread` brings them back, `snooze` puts them off until a time, " +
+		"`unsnooze` brings a snoozed one back now. `read_through` reads " +
+		"everything up to a log position — pass the newest notice you have " +
+		"seen, as `<stream>@<generation>:<sequence>` — and never moves your " +
+		"position backwards. Only what you name changes: every other mark, " +
+		"snooze and your read position stay exactly as they are."
 }
 
 func (t *markInbox) Parameters() map[string]any {
-	entry := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"record_id": map[string]any{"type": "string"},
-			"position":  map[string]any{"type": "number", "description": "The log position the entry was at."},
-			"until":     map[string]any{"type": "string", "description": "RFC3339; on a snooze, when it comes back."},
-		},
-		"required": []string{"record_id", "position"},
+	ids := func(description string) map[string]any {
+		return map[string]any{
+			"type": "array", "items": map[string]any{"type": "string"},
+			"description": description,
+		}
 	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"unread":  map[string]any{"type": "array", "items": entry},
-			"read":    map[string]any{"type": "array", "items": entry},
-			"snoozed": map[string]any{"type": "array", "items": entry},
-			"seen_through": map[string]any{
-				"type":        "number",
-				"description": "How far you have read, as a log position.",
+			"read":     ids("Record ids to mark read — done."),
+			"unread":   ids("Record ids to mark unread again."),
+			"unsnooze": ids("Record ids whose snooze to lift now."),
+			"snooze": map[string]any{
+				"type":        "array",
+				"description": "Notices to put off, each until an instant.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"record_id": map[string]any{"type": "string"},
+						"until": map[string]any{
+							"type": "string",
+							"description": fmt.Sprintf("RFC3339; when it "+
+								"comes back. In the future, and at most "+
+								"%d days away.", int(tracker.MaxSnoozeAhead.Hours()/24)),
+						},
+					},
+					"required": []string{"record_id", "until"},
+				},
 			},
-			"seen_through_stream": map[string]any{
+			"read_through": map[string]any{
 				"type": "string",
-				"description": "The stream that position is in. A position " +
-					"from a recreated stream compares as current, which is " +
-					"why this travels with it.",
+				"description": "Read everything at or before this log " +
+					"position, `<stream>@<generation>:<sequence>` — a " +
+					"notice's `log_stream`, `log_generation` and `log_seq`. " +
+					"A position at or behind the one you have read to " +
+					"changes nothing.",
 			},
 			"primary_reasons": map[string]any{
 				"type":  "array",
@@ -347,7 +414,8 @@ func (t *markInbox) Parameters() map[string]any {
 					"of `work_inbox`, the rest being context. One of: " +
 					reasonList() + ". An empty list takes the shipped " +
 					"default (" + defaultPrimaryList() + ") rather than " +
-					"making nothing primary.",
+					"making nothing primary; omit it to leave your choice " +
+					"as it is.",
 			},
 		},
 	}
@@ -374,38 +442,17 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read, bad := inboxEntries(args, "read")
+	gesture, bad := inboxGesture(args)
 	if bad != "" {
 		return failed(bad), nil
-	}
-	unread, bad := inboxEntries(args, "unread")
-	if bad != "" {
-		return failed(bad), nil
-	}
-	snoozed, bad := inboxEntries(args, "snoozed")
-	if bad != "" {
-		return failed(bad), nil
-	}
-	var reasons []tracker.Reason
-	for _, raw := range argStrings(args, "primary_reasons") {
-		reason := tracker.Reason(strings.TrimSpace(raw))
-		if !slices.Contains(tracker.Reasons, reason) {
-			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
-				"are: %s.", raw, reasonList())), nil
-		}
-		reasons = append(reasons, reason)
 	}
 	// THE PERSON'S OWN RECORD — see [setPins.CallForTurn] and the file
 	// head. An inbox is the one object in this tracker that must never be
 	// written on somebody else's behalf, and a founder's inbox is the
 	// founder's whichever credential their assistant holds.
 	whose := actor.Record()
-	result, err := writer.WriteInbox(ctx,
-		opIDFor(actor, "inbox", whose), whose,
-		read, unread, snoozed, reasons, tracker.Position{
-			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
-			Seq:    uint64(argFloat(args, "seen_through")),
-		})
+	result, err := writer.MarkInbox(ctx,
+		opIDFor(actor, "inbox", whose), whose, gesture)
 	if err != nil {
 		return writeFailure(tracker.MarkInboxTool, err), nil
 	}
@@ -438,55 +485,167 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 	return actor, d.PersonWriter(actor), nil
 }
 
-// inboxEntries reads one of the three lists.
-func inboxEntries(args map[string]any, key string) ([]tracker.InboxEntry, string) {
-	raw, held := args[key].([]any)
-	if !held {
-		return nil, ""
-	}
-	out := make([]tracker.InboxEntry, 0, len(raw))
-	for i, item := range raw {
-		fields, ok := item.(map[string]any)
+// inboxGesture reads mark_inbox's arguments, or the sentence refusing them.
+//
+// PRESENCE, NOT VALUE, decides `primary_reasons`: an empty list is a choice —
+// the shipped default — and an absent one leaves the person's choice alone,
+// which a nil slice could not tell apart.
+func inboxGesture(args map[string]any) (tracker.InboxGesture, string) {
+	var g tracker.InboxGesture
+	g.Read = argStrings(args, "read")
+	g.Unread = argStrings(args, "unread")
+	g.Unsnooze = argStrings(args, "unsnooze")
+	if raw, held := args["snooze"]; held {
+		items, ok := raw.([]any)
 		if !ok {
-			return nil, fmt.Sprintf("Entry %d of `%s` is not an object.", i+1, key)
+			return g, "`snooze` is a list of `{record_id, until}`."
 		}
-		entry := tracker.InboxEntry{
-			RecordID: strings.TrimSpace(argString(fields, "record_id")),
-			Position: uint64(argFloat(fields, "position")),
-		}
-		if raw := strings.TrimSpace(argString(fields, "until")); raw != "" {
-			at, err := time.Parse(time.RFC3339, raw)
-			if err != nil {
-				return nil, fmt.Sprintf("`until` on entry %d of `%s` is a date "+
-					"and time in RFC3339, like 2026-06-30T09:00:00Z — %q is "+
-					"not one.", i+1, key, clip(raw))
+		for i, item := range items {
+			fields, ok := item.(map[string]any)
+			if !ok {
+				return g, fmt.Sprintf("Entry %d of `snooze` is not an object "+
+					"with `record_id` and `until`.", i+1)
 			}
-			utc := at.UTC()
-			entry.Until = &utc
+			raw := strings.TrimSpace(argString(fields, "until"))
+			until, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				return g, fmt.Sprintf("`until` on entry %d of `snooze` is a "+
+					"date and time in RFC3339, like 2026-06-30T09:00:00Z — %q "+
+					"is not one.", i+1, clip(raw))
+			}
+			g.Snooze = append(g.Snooze, tracker.Snooze{
+				RecordID: strings.TrimSpace(argString(fields, "record_id")),
+				Until:    until.UTC(),
+			})
 		}
-		out = append(out, entry)
 	}
-	return out, ""
+	if raw := strings.TrimSpace(argString(args, "read_through")); raw != "" {
+		at, err := tracker.ParseLogPosition(raw)
+		if err != nil {
+			return g, err.Error()
+		}
+		g.ReadThrough = &at
+	}
+	if _, held := args["primary_reasons"]; held {
+		reasons := []tracker.Reason{}
+		for _, raw := range argStrings(args, "primary_reasons") {
+			reason := tracker.Reason(strings.TrimSpace(raw))
+			if !slices.Contains(tracker.Reasons, reason) {
+				return g, fmt.Sprintf("%q is not a wake reason. The reasons "+
+					"are: %s.", raw, reasonList())
+			}
+			reasons = append(reasons, reason)
+		}
+		g.PrimaryReasons = &reasons
+	}
+	if g.Empty() {
+		return g, "Name what to mark: `read`, `unread`, `snooze` or " +
+			"`unsnooze` with the notices' `record_id`s, `read_through` with " +
+			"a position, or `primary_reasons`."
+	}
+	return g, ""
 }
 
-// personFavorites reads the starred things.
-func personFavorites(args map[string]any) ([]tracker.Favorite, string) {
-	raw, held := args["favorites"].([]any)
-	if !held {
-		return nil, ""
+// changeOf reads one set_pins argument as its three lists, or the sentence
+// refusing it.
+func changeOf(args map[string]any, key string) (set, add, remove []any,
+	hasSet bool, bad string) {
+
+	raw, held := args[key]
+	if !held || raw == nil {
+		return nil, nil, nil, false, ""
 	}
-	out := make([]tracker.Favorite, 0, len(raw))
-	for i, item := range raw {
-		fields, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Sprintf("Favourite %d is not an object.", i+1)
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return nil, nil, nil, false, fmt.Sprintf("`%s` is a change, not a "+
+			"list: `{add: [...]}` or `{remove: [...]}` against what is there, "+
+			"or `{set: [...]}` for the whole list.", key)
+	}
+	list := func(name string) ([]any, bool, string) {
+		value, present := fields[name]
+		if !present || value == nil {
+			return nil, false, ""
 		}
-		out = append(out, tracker.Favorite{
-			Kind: strings.TrimSpace(argString(fields, "kind")),
-			ID:   strings.TrimSpace(argString(fields, "id")),
-		})
+		items, ok := value.([]any)
+		if !ok {
+			return nil, false, fmt.Sprintf("`%s.%s` is a list.", key, name)
+		}
+		return items, true, ""
 	}
-	return out, ""
+	set, hasSet, bad = list("set")
+	if bad != "" {
+		return nil, nil, nil, false, bad
+	}
+	if add, _, bad = list("add"); bad != "" {
+		return nil, nil, nil, false, bad
+	}
+	if remove, _, bad = list("remove"); bad != "" {
+		return nil, nil, nil, false, bad
+	}
+	return set, add, remove, hasSet, ""
+}
+
+// viewChange reads the pinned views' change.
+func viewChange(args map[string]any) (tracker.SetChange[string], string) {
+	set, add, remove, hasSet, bad := changeOf(args, "views")
+	if bad != "" {
+		return tracker.SetChange[string]{}, bad
+	}
+	strs := func(items []any) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if v, ok := item.(string); ok {
+				out = append(out, strings.TrimSpace(v))
+			} else {
+				out = append(out, "")
+			}
+		}
+		return out
+	}
+	change := tracker.SetChange[string]{Add: strs(add), Remove: strs(remove)}
+	if hasSet {
+		whole := strs(set)
+		change.Set = &whole
+	}
+	return change, ""
+}
+
+// favoriteChange reads the starred things' change.
+func favoriteChange(args map[string]any) (tracker.SetChange[tracker.Favorite], string) {
+	set, add, remove, hasSet, bad := changeOf(args, "favorites")
+	if bad != "" {
+		return tracker.SetChange[tracker.Favorite]{}, bad
+	}
+	favs := func(name string, items []any) ([]tracker.Favorite, string) {
+		out := make([]tracker.Favorite, 0, len(items))
+		for i, item := range items {
+			fields, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Sprintf("Favourite %d of `favorites.%s` is not "+
+					"an object with `kind` and `id`.", i+1, name)
+			}
+			out = append(out, tracker.Favorite{
+				Kind: strings.TrimSpace(argString(fields, "kind")),
+				ID:   strings.TrimSpace(argString(fields, "id")),
+			})
+		}
+		return out, ""
+	}
+	var change tracker.SetChange[tracker.Favorite]
+	if change.Add, bad = favs("add", add); bad != "" {
+		return change, bad
+	}
+	if change.Remove, bad = favs("remove", remove); bad != "" {
+		return change, bad
+	}
+	if hasSet {
+		whole, bad := favs("set", set)
+		if bad != "" {
+			return change, bad
+		}
+		change.Set = &whole
+	}
+	return change, ""
 }
 
 // InboxReader is the read side the inbox tool needs.

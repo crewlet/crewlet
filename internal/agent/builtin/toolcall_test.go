@@ -185,7 +185,7 @@ func offeredCalls(t *testing.T) map[string][]string {
 // topLevel blanks out everything nested inside an args object, so only the
 // object's OWN keys are read.
 //
-// `mark_inbox` fills `read: [{record_id: …, position: …}]`, and without this
+// `mark_inbox` fills `snooze: [{record_id: …, until: …}]`, and without this
 // the gate reports `record_id` as an argument `mark_inbox` does not take —
 // which it does not, because it is a key inside `read`. The limit is
 // stated rather than hidden: this gate checks the TOP-LEVEL arguments of each

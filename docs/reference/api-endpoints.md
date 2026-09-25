@@ -2276,6 +2276,16 @@ two people in the org chart, and a token nobody bound is in no chart — so
 without it an operator could not re-route the work they own, and with it the
 company's own credential is never locked out of its own tracker.
 
+The three person writes take **moves, not lists**, and each is resolved against
+the person's record as the write finds it — so two screens writing at once both
+land, and nothing a call does not name changes:
+
+| Tool | Arguments |
+|---|---|
+| `mark_inbox` | `read`, `unread`, `unsnooze` — lists of the `record_id`s `work_inbox` returns; `snooze` — `[{record_id, until}]`, `until` RFC3339, in the future and at most a year away; `read_through` — a log position, `<stream>@<generation>:<sequence>`, that only ever moves forward; `primary_reasons` — omitted leaves the choice, `[]` takes the default back. A notice named twice in one call is refused `invalid`; a list the call would leave past 256 entries is refused `inbox_full`. |
+| `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
+| `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
+
 Plus **ten no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,

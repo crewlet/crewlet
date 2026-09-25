@@ -17,7 +17,7 @@ import { describe, expect, test } from "vitest";
 import { callText, callsFor } from "./toolcall.ts";
 
 describe("what a notice offers", () => {
-  const calls = callsFor({ kind: "notice", id: "rec-7", version: 412 });
+  const calls = callsFor({ kind: "notice", id: "rec-7" });
 
   test("both marks, read first", () => {
     // Read is what a reader most often means; the snooze is the deliberate
@@ -26,26 +26,25 @@ describe("what a notice offers", () => {
     expect(calls.every((c) => c.tool === "mark_inbox")).toBe(true);
   });
 
-  test("the record and its position travel together", () => {
-    // A POSITION FROM A RECREATED STREAM COMPARES AS CURRENT, which is why
-    // `mark_inbox` takes both and why a call carrying only the id would be
-    // accepted and wrong.
-    for (const call of calls) {
-      const entries = (call.args.read ?? call.args.snoozed) as { position: number }[];
-      expect(entries[0]).toMatchObject({ record_id: "rec-7", position: 412 });
-    }
+  test("a mark names the notice and nothing else", () => {
+    // A GESTURE, NOT THE LISTS: the call this block used to offer sent a
+    // `read` list, and `mark_inbox` replaced every list it was given — so
+    // copying it erased every other mark. The engine now takes the record id
+    // alone and reads the notice's position itself.
+    expect(calls[0]?.args).toEqual({ read: ["rec-7"] });
+    expect(Object.keys(calls[1]?.args ?? {})).toEqual(["snooze"]);
   });
 
   test("a snooze names when it comes back", () => {
-    // `until` is what makes it a snooze rather than a second spelling of
-    // unread. It is a placeholder rather than a date this screen picked:
-    // when to come back is the person's decision.
-    const snooze = calls[1]?.args.snoozed as { until?: string }[];
+    // `until` is what makes it a snooze. It is a placeholder rather than a
+    // date this screen picked: when to come back is the person's decision.
+    const snooze = calls[1]?.args.snooze as { record_id?: string; until?: string }[];
+    expect(snooze[0]?.record_id).toBe("rec-7");
     expect(snooze[0]?.until).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   test("it copies as the assistant is asked for it", () => {
-    expect(callText(calls[0]!)).toBe('mark_inbox {"read":[{"record_id":"rec-7","position":412}]}');
+    expect(callText(calls[0]!)).toBe('mark_inbox {"read":["rec-7"]}');
   });
 });
 

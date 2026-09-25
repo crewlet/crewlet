@@ -45,8 +45,8 @@ var everyWriteCall = map[string]map[string]any{
 	tracker.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
 	tracker.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}, "fields": []any{}},
 	tracker.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
-	tracker.SetPinsTool:            {"views": []any{"v-1"}},
-	tracker.MarkInboxTool:          {"read": []any{map[string]any{"record_id": "r-1", "position": "CREWLET_TRACKER_LOG@1:3"}}},
+	tracker.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
+	tracker.MarkInboxTool:          {"read": []any{"r-1"}},
 	tracker.WriteProjectTool: {"project": "ENG",
 		"tags_add": []any{map[string]any{"slug": "ops", "label": "Ops"}}, "default_assignee": ""},
 	tracker.RemoveWorkItemTool:  {"item": "ENG-1"},
@@ -386,18 +386,18 @@ func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []tracker.Fie
 	return f.written(opID)
 }
 
-func (f *ledgerFake) WriteInbox(_ context.Context, opID, _ string, _, _, _ []tracker.InboxEntry,
-	_ []tracker.Reason, _ tracker.Position) (tracker.WriteResult, error) {
+func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
+	_ tracker.InboxGesture) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) WritePins(_ context.Context, opID, _ string, _ []string,
-	_ []tracker.Favorite) (tracker.WriteResult, error) {
+func (f *ledgerFake) WritePins(_ context.Context, opID, _ string,
+	_ tracker.PinGesture) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 

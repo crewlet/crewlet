@@ -238,7 +238,7 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 				priorities_set_at = excluded.priorities_set_at,
 				version = excluded.version
 			WHERE excluded.version > tracker_persons.version`,
-			key, person.Generation, int64(person.SeenThrough.Seq),
+			key, person.Generation, int64(person.SeenThrough.packed()),
 			person.SeenThrough.Stream, jsonOf(person.Read), jsonOf(person.Unread),
 			jsonOf(person.Snoozed), jsonOf(person.PrimaryReasons),
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),

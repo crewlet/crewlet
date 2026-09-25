@@ -337,8 +337,8 @@ func TestARequestKeySeedsTheOperationOutsideATurn(t *testing.T) {
 			args map[string]any
 		}{
 			{tracker.SetPrioritiesTool, map[string]any{"items": []any{"ENG-1"}}},
-			{tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}},
-			{tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}},
+			{tracker.SetPinsTool, map[string]any{"views": map[string]any{"add": []any{"v-1"}}}},
+			{tracker.MarkInboxTool, map[string]any{"read": []any{"r-1"}}},
 		} {
 			opID := func(key string) string {
 				person := &personSpy{}

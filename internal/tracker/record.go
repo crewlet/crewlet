@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The objects, and the two shapes a record carries them in.
@@ -1202,6 +1204,12 @@ type View struct {
 }
 
 // InboxEntry is one item in a person's inbox, with the position it was at.
+//
+// Position is PACKED, `(generation << 40) | seq`, the form every durable
+// position in this domain takes — so an entry from before a reanchor compares
+// below one after it instead of as a small number in the same space. It is
+// found by the writer from the notice's own history row rather than taken from
+// the caller; see [Writer.MarkInbox].
 type InboxEntry struct {
 	RecordID string     `json:"record_id"`
 	Position uint64     `json:"position"`
@@ -1271,10 +1279,28 @@ type Person struct {
 // THE TRIPLE, not a bare sequence: a recreated stream restarts sequences at
 // one, so a stored number from before it compares as current and an inbox
 // reads "nothing unread" for ever.
+//
+// # The generation is stored, and omitted when it is zero
+//
+// The row keeps it PACKED into `seen_through`, as every durable position in
+// this domain is kept: stored as the bare sequence, the generation was dropped
+// on apply, so after a reanchor a person's position read back as generation
+// zero and every notice in the new generation compared above it — an inbox
+// that could never be read past again. A zero generation is omitted from the
+// JSON because a build that stored the bare sequence has nowhere to put any
+// other one: a record carrying a non-zero generation is stamped at the version
+// that stores it (see versionedFields), and one carrying none stays readable by
+// every build.
 type Position struct {
 	Stream     string `json:"stream"`
-	Generation uint32 `json:"generation"`
+	Generation uint32 `json:"generation,omitempty"`
 	Seq        uint64 `json:"seq"`
+}
+
+// packed is the position as the one integer a column stores and a comparison
+// reads — [statelog.Position.Packed] over the same two numbers.
+func (p Position) packed() uint64 {
+	return uint64(statelog.Position{Generation: p.Generation, Seq: p.Seq}.Packed())
 }
 
 // MaxCommitBytes is the design maximum for one record, envelope included.

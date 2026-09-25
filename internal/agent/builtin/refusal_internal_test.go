@@ -33,6 +33,9 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		{"hand-offs", fmt.Errorf("x: %w", tracker.ErrReassignmentBudget),
 			tools.RefusalReassignmentBudget},
 		{"authority", fmt.Errorf("x: %w", tracker.ErrForbidden), tools.RefusalForbidden},
+		// A FULL INBOX LIST asks for a different gesture, not a smaller
+		// one — read_through — so it is not a content refusal either.
+		{"inbox full", fmt.Errorf("x: %w", tracker.ErrInboxFull), tools.RefusalInboxFull},
 		// A maintenance or sealed fleet has no publisher and an evicted,
 		// deferred or full-log node refuses the append: all of them
 		// arrive as a statelog refusal.

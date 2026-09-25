@@ -2073,6 +2073,8 @@ export interface WorkCatalogueAnswer {
 /** One entry in a person's inbox, with the log position it was at. */
 export interface WorkInboxEntry {
   record_id: string;
+  /** The notice's PACKED log position, `(generation << 40) | seq`, read by the
+   *  engine from the notice's own history row. */
   position: number;
   /** On a snooze, when it comes back. */
   until?: string;
@@ -2085,6 +2087,8 @@ export interface WorkInboxEntry {
  *  and no priorities, and the first write is what creates the record. */
 export interface WorkPersonState {
   handle: string;
+  /** EXCEPTIONS to `seen_through`: `unread` holds notices at or below it
+   *  marked unread again, `read` notices above it marked read out of order. */
   unread?: WorkInboxEntry[];
   read?: WorkInboxEntry[];
   snoozed?: WorkInboxEntry[];
@@ -2099,7 +2103,10 @@ export interface WorkPersonState {
    *  was theirs. Their own next change clears it. */
   priorities_set_by?: string;
   priorities_set_at?: string;
-  seen_through?: { stream: string; generation: number; seq: number };
+  /** How far this person has read. The generation is OMITTED when it is
+   *  zero — a record carrying one is stamped for the build that stores it. */
+  seen_through?: { stream: string; generation?: number; seq: number };
+  /** The record's version: what `set_priorities`' `if_match` states. */
   version: number;
   held: boolean;
   read_level?: ReadLevel;

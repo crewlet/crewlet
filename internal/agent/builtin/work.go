@@ -2675,6 +2675,12 @@ func writeFailure(name string, err error) tools.Result {
 			"refused: %v. Nothing is wrong with your edit — somebody "+
 			"changed the item after you read it. Call get_work_item again "+
 			"and decide from what it says now.", name, err))
+	case errors.Is(err, tracker.ErrInboxFull):
+		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
+		// `read_through`, which marks everything up to a notice in one move
+		// and is what empties the lists this refusal is about.
+		return refused(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
+			"%v.", name, err))
 	case errors.Is(err, tracker.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a

@@ -1272,12 +1272,55 @@ wake names the task now at the top of the list, and it is the one notification
 in this section that **asks for an answer** — take it up, or say why you
 cannot. Going silent on it looks exactly like a message that was lost.
 
-**An entry you have read past is pruned on the next write.** That is what keeps
-the record small without a cap that discards: an entry at or below your
-seen-through position is one no screen will ever render. The position is a
-*triple* — stream, generation and sequence — because a number from a recreated
-stream compares as current, and an inbox that read "nothing unread" for ever is
-not a bug anybody reports.
+**A mark is one move, and it moves nothing else.** `mark_inbox` takes what a
+person actually says about their inbox, naming each notice by the `record_id`
+`work_inbox` gave it:
+
+| Argument | What it does |
+|---|---|
+| `read` | Marks notices read — the inbox's *Done*. A snooze on one is lifted, because a notice you have dealt with is not one to bring back. |
+| `unread` | Marks notices unread again, including one you have already read past. |
+| `snooze` | `[{record_id, until}]` — puts notices off until an instant: in the future, and at most a year away, because a snooze past the horizon is a delete that does not say so. |
+| `unsnooze` | Brings snoozed notices back now. |
+| `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. |
+| `primary_reasons` | Which wake reasons are yours to act on — see below. Omitted, your choice stands; an empty list takes the default back. |
+
+Everything you do not name stays exactly as it was — every other mark, every
+snooze, and how far you have read. The engine applies the move to your record
+as the write finds it, so two screens marking two notices at the same moment
+both land; it used to take all three lists and replace them, and one "mark this
+read" from a tab opened an hour earlier erased every mark made since. It also
+reads where each notice sits from the notice's own record rather than asking
+you, which is why a mark names nothing but the notice.
+
+**Your read position is the rule, and the lists are the exceptions.** Everything
+at or below it reads as read and everything above it as unread, so your record
+only keeps what differs: notices *above* it you marked read out of order, and
+notices *at or below* it you marked unread again. Anything the position already
+answers is dropped on the next write, which is what keeps the record small
+without a cap that discards — and moving the position forward clears the
+unread exceptions, because "I have read everything up to here" is what that
+gesture says. A list that would pass 256 entries is refused `inbox_full`, naming
+`read_through`: the lists hold only what the position does not answer, so a
+full one is notices marked one at a time that one read-through would cover.
+
+The position is a *triple* — stream, generation and sequence — because a number
+from a recreated stream compares as current, and an inbox that read "nothing
+unread" for ever is not a bug anybody reports. The generation is kept on the
+record rather than just the sequence, so an inbox read past a reanchor stays
+read past it.
+
+**Pins are moves too.** `set_pins` takes `views` and `favorites` each as a
+change — `{add: [...]}` and `{remove: [...]}` against what is there now, or
+`{set: [...]}` for the whole list, never both — so starring a project from one
+screen never drops a view pinned from another. The caps (32 pinned views, 64
+starred things) are held against the list the move would leave.
+
+**A queue is the one list written whole**, because an order is a statement
+about every entry at once. `set_priorities` takes the whole list, and
+`if_match` — the `version` `get_person` answered — makes it conditional: a
+reorder made from a screen that read an older record is refused
+`stale_version` rather than putting back an order somebody has since replaced.
 
 **A due snooze is reported, never promoted.** Putting one back in the unread
 list is a write, and a read that performed one would change the fleet's state

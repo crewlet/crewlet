@@ -244,7 +244,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 
 	lead := r.writer.As("lead", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "alice",
-		[]string{task.ID}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 
 		t.Fatalf("write alice's priorities: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 
 	mine := r.writer.As("alice", tracker.AuthorAgent, tracker.Provenance{})
 	if _, err := mine.WritePriorities(t.Context(), "op-own", "alice",
-		[]string{task.ID}, tracker.PersonAuthority{}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("write my own priorities: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			writer := r.writer.As(tc.actor, tc.kind, tracker.Provenance{})
 			_, err := writer.WritePriorities(t.Context(), "op-"+tc.actor,
-				"alice", []string{task.ID}, tc.authority)
+				"alice", []string{task.ID}, nil, tc.authority)
 			switch {
 			case tc.allowed && err != nil:
 				t.Fatalf("%s could not write alice's priorities: %v", name, err)

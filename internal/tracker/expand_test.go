@@ -312,7 +312,7 @@ func TestThePersonalPresets(t *testing.T) {
 	// DELIBERATELY NOT ALPHABETICAL and not creation order, so an answer
 	// sorted by either is visibly wrong.
 	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
-		[]string{"c", "a"}, tracker.PersonAuthority{}); err != nil {
+		[]string{"c", "a"}, nil, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()

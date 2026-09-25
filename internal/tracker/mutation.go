@@ -38,8 +38,10 @@ import (
 // at that version and drop the field it was minted for.
 //
 // Version 2 is the turn record's spend split: [TurnSpend.Workers] and
-// [TurnSpend.SentBack].
-const RecordVersion = 2
+// [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
+// ([Position.Generation]), which a build reading 2 decoded and then stored as
+// the bare sequence.
+const RecordVersion = 3
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -52,7 +54,10 @@ const RecordVersion = 2
 // good, on tables a fleet compares byte for byte, and nothing ever reports
 // it. The row is what makes the writer stamp a version that build retains
 // instead. So a new field takes the next version above [RecordVersion] (the
-// constant moves with it), a row naming its JSON path from the record's root
+// constant moves with it) — NEVER a version a build already reads, which that
+// build would apply without the field; TestAClosedRecordVersionGainsNoField
+// lists every version with the fields it closed on and fails a row that joins
+// one — a row naming its JSON path from the record's root
 // — through `mutation` for a payload field — and a record in the domain's
 // statelogtest candidate that carries it, which is what certifies the path is
 // the one the encoder actually writes.
@@ -71,6 +76,17 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "spend", "workers"}},
 	{Name: "TurnSpend.SentBack", Since: 2, Op: string(OpTurn),
 		Path: []string{"mutation", "spend", "sent_back"}},
+	// A PERSON'S SEEN-THROUGH GENERATION, at version 3. It was always in
+	// the JSON, which is why this row is about the APPLIER rather than the
+	// decoder: a build reading 2 stores `seen_through` as the bare
+	// sequence, so a person record past a reanchor applied there reads
+	// back as generation zero and that node's copy of the person differs
+	// from every peer's for good. The zero generation is omitted from the
+	// JSON, so only a record that needs the newer applier is held back.
+	// Scoped to the patch op, which is the only op a person is written
+	// under; no task patch carries `seen_through`.
+	{Name: "Person.SeenThrough.Generation", Since: 3, Op: string(OpPatch),
+		Path: []string{"mutation", "seen_through", "generation"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

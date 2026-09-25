@@ -140,12 +140,12 @@ func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 
 	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "ana",
-		[]string{"t-1", "t-2"}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-1", "t-2"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()
 	if _, err := lead.WritePriorities(t.Context(), "op-prio-2", "ana",
-		[]string{"t-2", "t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-2", "t-1"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
 		t.Fatalf("WritePriorities again: %v", err)
 	}
 	r.drain()

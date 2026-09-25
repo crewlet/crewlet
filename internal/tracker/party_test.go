@@ -399,7 +399,7 @@ func TestThePersonRecordIsTheFirstIdentityThatHasOne(t *testing.T) {
 		OperatorID: "founder",
 	})
 	if _, err := token.WritePriorities(t.Context(), "op-prio", "founder",
-		[]string{"t-1"}, tracker.PersonAuthority{}); err != nil {
+		[]string{"t-1"}, nil, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()
@@ -436,7 +436,7 @@ func TestThePersonRecordIsTheFirstIdentityThatHasOne(t *testing.T) {
 	// then on it is the one this person is writing.
 	seat := r.writer.As("jane-founder", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := seat.WritePriorities(t.Context(), "op-prio-2", "jane-founder",
-		nil, tracker.PersonAuthority{}); err != nil {
+		nil, nil, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities as the seat: %v", err)
 	}
 	r.drain()
@@ -471,7 +471,7 @@ func TestTheViewStripCarriesEitherOfAPersonsIdentities(t *testing.T) {
 	}
 	r.drain()
 	if _, err := token.WritePins(t.Context(), "op-pins", "founder",
-		[]string{"v-mine"}, nil); err != nil {
+		tracker.PinGesture{Views: tracker.SetChange[string]{Add: []string{"v-mine"}}}); err != nil {
 		t.Fatalf("WritePins: %v", err)
 	}
 	r.drain()
@@ -572,7 +572,7 @@ func TestABoundCredentialWritesThePersonsOwnRecord(t *testing.T) {
 		OperatorID: "founder", Seat: "jane-founder",
 	})
 	if _, err := token.WritePins(t.Context(), "op-pins", "jane-founder",
-		[]string{"v-mine"}, nil); err != nil {
+		tracker.PinGesture{Views: tracker.SetChange[string]{Add: []string{"v-mine"}}}); err != nil {
 		t.Fatalf("WritePins: %v", err)
 	}
 	r.drain()
@@ -625,13 +625,13 @@ func TestABoundCredentialStillWritesNobodyElsesRecord(t *testing.T) {
 
 	for name, write := range map[string]func(handle string) error{
 		"the inbox": func(handle string) error {
-			_, err := token.WriteInbox(t.Context(), "op-inbox-"+handle, handle,
-				nil, nil, nil, nil, tracker.Position{})
+			_, err := token.MarkInbox(t.Context(), "op-inbox-"+handle, handle,
+				tracker.InboxGesture{PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention}})
 			return err
 		},
 		"the pins": func(handle string) error {
 			_, err := token.WritePins(t.Context(), "op-pins-"+handle, handle,
-				[]string{"v-1"}, nil)
+				tracker.PinGesture{Views: tracker.SetChange[string]{Add: []string{"v-1"}}})
 			return err
 		},
 	} {
@@ -667,7 +667,7 @@ func TestAnUnboundCredentialWritesItsOwnRecord(t *testing.T) {
 		OperatorID: "ci",
 	})
 	if _, err := token.WritePins(t.Context(), "op-pins", "ci",
-		[]string{"v-1"}, nil); err != nil {
+		tracker.PinGesture{Views: tracker.SetChange[string]{Add: []string{"v-1"}}}); err != nil {
 		t.Fatalf("WritePins: %v", err)
 	}
 	r.drain()
@@ -696,7 +696,7 @@ func TestThePrioritiesFilterAnswersForEitherIdentity(t *testing.T) {
 		OperatorID: "founder",
 	})
 	if _, err := token.WritePriorities(t.Context(), "op-prio", "founder",
-		[]string{"t-1"}, tracker.PersonAuthority{}); err != nil {
+		[]string{"t-1"}, nil, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()
