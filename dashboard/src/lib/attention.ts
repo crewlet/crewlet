@@ -103,21 +103,20 @@ export interface AttentionInput {
   /**
    * The live projection, which is what a seat is doing NOW.
    *
-   * It is the right source for that and the wrong one for anything that
-   * waits: the projection sweeps a sandbox entry at `sandboxEntryMaxAge` (12
-   * hours), so a run parked on a question leaves this list while still
-   * waiting — see `runs`.
+   * Nothing in it ages out: the engine reconciles this set against the
+   * durable run record every `ReconcileInterval` (thirty seconds), so a run
+   * parked on a question stays here for as long as it waits. It is read for a
+   * seat's run state, which is what it is current to the moment for.
    */
   sandboxes: SandboxEntry[];
   /**
    * The DURABLE coding-run rows, which is what is still waiting.
    *
-   * THE SWEEP IS THE WHOLE REASON THIS IS A SECOND INPUT. A run parked on a
-   * question is the longest-lived thing in this list by construction — it is
-   * waiting for a person, who is by definition not there — and it was read
-   * from the projection, which drops it after twelve hours. So the queue lost
-   * the item exactly when it had been ignored long enough to matter, and the
-   * dashboard reported a quiet company.
+   * A SECOND INPUT BECAUSE THE WAITING ROW NEEDS THE RECORD, not the live
+   * entry: how long a person has left to answer is the run's pause window
+   * (`pause_ttl_seconds`) counted from `paused_at`, and only the durable row
+   * carries the window. The live entry says a run is waiting; the record says
+   * for how much longer its box is held.
    */
   runs: SandboxRun[];
   budget: OrgBudget;

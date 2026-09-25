@@ -316,3 +316,41 @@ func TestAStoreRanksItsOwnCandidatesByTokens(t *testing.T) {
 		t.Fatalf("the costliest turn is %+v, want `costly`", page.Turns)
 	}
 }
+
+// THE SPEND A RESTARTED NODE SEEDS ITS ROLLUP FROM IS THE FLEET'S.
+//
+// Each phase is written to the store of the node that published it, so a
+// rollup seeded from one store showed a restarted node only its own share of
+// the company's day. The window is the asker's, and the cut is the newest
+// `limit` across every node rather than each node's own.
+//
+// Mutation: answer PhaseTokens from the local store alone and node-b's newer
+// phase is missing.
+func TestPhaseTokensAreEveryNodesSpendNewestFirst(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	b := newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	phaseOn(t, a, "pa-1", "t-1", at, 10, "m")
+	phaseOn(t, b, "pb-1", "t-2", at.Add(time.Minute), 20, "m")
+	phaseOn(t, a, "pa-2", "t-3", at.Add(2*time.Minute), 30, "m")
+	// Outside the window asked for: never answered, by anybody.
+	phaseOn(t, b, "pb-old", "t-4", at.Add(-48*time.Hour), 99, "m")
+
+	records, coverage, err := fanFrom(a, "node-a", "node-b").PhaseTokens(t.Context(),
+		store.PhaseTokenQuery{Since: at.Add(-time.Hour), Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(coverage.Nodes) != 2 {
+		t.Fatalf("coverage %+v, want both nodes", coverage)
+	}
+	var got []string
+	for _, r := range records {
+		got = append(got, r.EventID)
+	}
+	if !slices.Equal(got, []string{"pa-2", "pb-1"}) {
+		t.Fatalf("records %v, want the fleet's newest two, pa-2 then pb-1", got)
+	}
+}

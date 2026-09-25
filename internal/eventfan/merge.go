@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // THE MERGES, as pure functions over values.
@@ -113,6 +114,72 @@ func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more b
 		rows, more = rows[:limit], true
 	}
 	return rows, more
+}
+
+// MergeSpend merges several nodes' per-phase spend records into the fleet's
+// newest `limit` (every record when limit is not positive), newest first.
+//
+// EXACT FOR [MergeListing]'s REASON, and cut at the same place: a node whose
+// part is FULL holds older records nobody has seen, so nothing older than its
+// last record can be placed, and the merge stops at the newest point any full
+// part stopped at. The records are disjoint — each phase is written once, to
+// the store of the node that published it — so the union needs no dedupe to be
+// exact; it takes one by event id anyway, because a record is SUMMED and the
+// cost of a duplicate is a double count rather than a repeated row.
+func MergeSpend(parts []spendPart, limit int) []tokens.Record {
+	var all []tokens.Record
+	var horizon *tokens.Record
+	seen := map[string]bool{}
+	for _, p := range parts {
+		for _, r := range p.Records {
+			if r.EventID != "" {
+				if seen[r.EventID] {
+					continue
+				}
+				seen[r.EventID] = true
+			}
+			all = append(all, r)
+		}
+		if !p.Full || len(p.Records) == 0 {
+			continue
+		}
+		last := p.Records[len(p.Records)-1]
+		if horizon == nil || newestSpendFirst(last, *horizon) < 0 {
+			horizon = &last
+		}
+	}
+	slices.SortFunc(all, newestSpendFirst)
+	if horizon != nil {
+		cut := len(all)
+		for i, r := range all {
+			if newestSpendFirst(r, *horizon) > 0 {
+				cut = i
+				break
+			}
+		}
+		all = all[:cut]
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all
+}
+
+// newestSpendFirst orders spend records by instant, newest first, and by event
+// id within one instant — the store's own (event_time, event_id) order. The
+// stamps are PARSED, never compared as text: RFC3339Nano trims trailing zeros,
+// so two instants' strings do not sort as the instants do.
+func newestSpendFirst(a, b tokens.Record) int {
+	at, aerr := time.Parse(time.RFC3339Nano, a.Timestamp)
+	bt, berr := time.Parse(time.RFC3339Nano, b.Timestamp)
+	if aerr == nil && berr == nil {
+		if c := bt.Compare(at); c != 0 {
+			return c
+		}
+	} else if c := cmp.Compare(b.Timestamp, a.Timestamp); c != 0 {
+		return c
+	}
+	return cmp.Compare(b.EventID, a.EventID)
 }
 
 // MergeRelated folds a related-agent page's trace siblings into it, newest

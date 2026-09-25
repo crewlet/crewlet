@@ -52,12 +52,18 @@ const (
 	QuestionPhases     Question = "phases"
 	QuestionSeatPhases Question = "seat_phases"
 	QuestionTraceRows  Question = "trace_rows"
+	// QuestionPhaseTokens is the per-phase spend records of a window, the
+	// live projection's spend rollup's seed: without every node's, a
+	// restarted node's rollup described only the phases it had published
+	// itself.
+	QuestionPhaseTokens Question = "phase_tokens"
 )
 
 // Questions is the closed set.
 var Questions = []Question{
 	QuestionEvents, QuestionEvent, QuestionSeries, QuestionTrace, QuestionTurn,
 	QuestionTurns, QuestionPhases, QuestionSeatPhases, QuestionTraceRows,
+	QuestionPhaseTokens,
 }
 
 // Valid reports whether q is a question this build answers.
@@ -217,6 +223,23 @@ type phasesParams struct {
 	Before  *cursorWire `json:"before,omitempty"`
 }
 
+// phaseTokenParams names the window as the ASKER's two instants, so every node
+// cuts the same one rather than each counting back from its own clock.
+type phaseTokenParams struct {
+	Since     time.Time `json:"since"`
+	Until     time.Time `json:"until"`
+	AgentRole string    `json:"role,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+}
+
+func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
+	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit}
+}
+
+func (p phaseTokenParams) query() store.PhaseTokenQuery {
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit}
+}
+
 // ---- serving --------------------------------------------------------- //
 
 // Serve makes this node an answerer for the fleet's history questions, from
@@ -335,6 +358,12 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 			return nil, err
 		}
 		return listPart{Rows: rows, Full: len(rows) >= store.AgentPhaseLimit}, nil
+	case QuestionPhaseTokens:
+		var p phaseTokenParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return spendPartOf(ctx, log, p.query())
 	case QuestionTraceRows:
 		var p traceRowsParams
 		if err := decode(&p); err != nil {

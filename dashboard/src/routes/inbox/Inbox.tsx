@@ -136,9 +136,9 @@ export function Inbox() {
   const { connected, authRejected } = useConnection();
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
   // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
-  // this queue has by construction: it is waiting for a person. The live
-  // projection sweeps a sandbox entry after twelve hours, so reading it here
-  // dropped the row exactly when it had been ignored long enough to matter.
+  // this queue has by construction — it is waiting for a person — and what the
+  // row says about it is how long its box is still held, which is the pause
+  // window only the durable record carries.
   // Slow, like the runs board's own poll: a run's lifetime is minutes.
   const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
   // THE TWO THE PULSE STRIP NEEDS AND NOTHING ELSE ON THIS SCREEN DOES. Both
@@ -763,8 +763,8 @@ function usePulse(input: {
       return state === "working" || state === "awaiting_sandbox";
     }).length;
     // A RUN WAITING FOR A PERSON, which the attention queue already derived
-    // from the DURABLE rows: counting the live projection here would drop a
-    // run at twelve hours, which is the point at which it most needs counting.
+    // from the DURABLE rows: counting it a second way here would let the
+    // headline and the queue beneath it disagree about who is waiting.
     // THE SUBJECT, NOT THE ID'S SPELLING. This matched `id.startsWith("sandbox-")`,
     // so renaming that id would have taken a headline figure silently to zero —
     // the same drift one layer down from the sentence below it.

@@ -3,7 +3,12 @@ package livestate
 // The in-flight call: seeded when a phase opens, folded on every progress
 // round, frozen on failure, cleared on a clean completion.
 
-import "slices"
+import (
+	"maps"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+)
 
 // clone returns a deep-enough copy for a reader to hold.
 //
@@ -28,6 +33,9 @@ func (c *LiveCall) clone() *LiveCall {
 	dup.PromptMessages = append([]any(nil), c.PromptMessages...)
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
 	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
+	dup.Rounds = append([]any(nil), c.Rounds...)
+	dup.RunningCall = maps.Clone(c.RunningCall)
+	dup.WorkItem = cloneItem(c.WorkItem)
 	if c.PartialRound != nil {
 		dup.PartialRound = make(map[string]any, len(c.PartialRound))
 		for k, v := range c.PartialRound {
@@ -77,6 +85,9 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		PromptMessages: []any{},
 		ToolExecutions: []any{},
 		RoundNarration: []any{},
+		Rounds:         []any{},
+		WorkItem:       workItemOf(payload),
+		Node:           str(payload, "node"),
 		RoundNum:       openingRound,
 		InProgress:     true,
 		StartedAt:      env.Timestamp,
@@ -161,6 +172,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		agent.state = "working"
 		agent.afkReason = ""
 	}
+	s.touchTurn(agent, env, payload, StagePhase)
 	if phase != "" {
 		agent.currentPhase = phase
 	}
@@ -211,6 +223,19 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	if workKey == "" && cur != nil && cur.sameCall(turnID, phase, iteration) {
 		workKey = cur.WorkKey
 	}
+	// The item and the node are CARRIED for the same reason: a frame from
+	// a build that predates either names neither, and the call is rebuilt
+	// wholesale every round.
+	workItem := workItemOf(payload)
+	node := str(payload, "node")
+	if cur != nil && cur.sameCall(turnID, phase, iteration) {
+		if workItem == nil {
+			workItem = cur.WorkItem
+		}
+		if node == "" {
+			node = cur.Node
+		}
+	}
 
 	agent.liveCall = &LiveCall{
 		TurnID:         turnID,
@@ -229,10 +254,24 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		RoundNarration: list(payload, "round_narration"),
 		PartialRound:   mapping(payload, "partial_round"),
 		RoundNum:       roundNum,
-		Rounds:         roundNum + 1,
-		InProgress:     true,
-		StartedAt:      startedAt,
-		UpdatedAt:      env.Timestamp,
+		RoundsUsed:     roundNum + 1,
+		// NOT carried: each frame states the whole list and the whole
+		// cap, so an absent value is the frame saying there is none —
+		// a closed round, a call that returned — and carrying the
+		// previous one would leave a finished tool call on screen as
+		// running.
+		Rounds:           list(payload, "rounds"),
+		MaxRounds:        num(payload, "max_rounds"),
+		RoundCeiling:     num(payload, "round_ceiling"),
+		RoundStartedAt:   str(payload, "round_started_at"),
+		RunningCall:      mapping(payload, "running_call"),
+		CacheReadTokens:  num(payload, "cache_read_tokens"),
+		CacheWriteTokens: num(payload, "cache_write_tokens"),
+		WorkItem:         workItem,
+		Node:             node,
+		InProgress:       true,
+		StartedAt:        startedAt,
+		UpdatedAt:        env.Timestamp,
 	}
 	return role
 }
@@ -289,6 +328,11 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	// keeps rendering that round as streaming, with the running ring and a
 	// blinking caret, on a card that also says it failed.
 	call.PartialRound = nil
+	// And for the same reason neither is a call or a round in flight: the
+	// phase is over, and a frozen card still reading "running 2m" against
+	// a tool call that will never return is the streaming caret again.
+	call.RunningCall = nil
+	call.RoundStartedAt = ""
 }
 
 // finishLiveCall closes out the in-flight call when its phase completes.
@@ -319,4 +363,30 @@ func (s *LiveState) finishLiveCall(agent *agentLive, env Envelope, payload map[s
 	if agent.liveCall.sameCall(turnID, phase, iteration) {
 		agent.liveCall = nil
 	}
+}
+
+// workItemOf reads the `work_item` a payload names, or nil when it names none
+// or names one with no id — an item is identified by its backend and id, and a
+// key alone moves with the item.
+func workItemOf(payload map[string]any) *types.WorkItem {
+	m := mapping(payload, "work_item")
+	if m == nil || str(m, "id") == "" {
+		return nil
+	}
+	return &types.WorkItem{
+		Backend: types.WorkBackend(str(m, "backend")),
+		ID:      str(m, "id"),
+		Key:     str(m, "key"),
+		Project: str(m, "project"),
+	}
+}
+
+// cloneItem copies an item, so an overlay handed to a caller shares nothing the
+// projection holds.
+func cloneItem(w *types.WorkItem) *types.WorkItem {
+	if w == nil {
+		return nil
+	}
+	dup := *w
+	return &dup
 }

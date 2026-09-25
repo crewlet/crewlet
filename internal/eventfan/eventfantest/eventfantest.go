@@ -139,6 +139,31 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("the_spend_window_is_every_nodes_records", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, n := range nodes {
+			write(t, n, phase(fmt.Sprintf("s%d", i), fmt.Sprintf("t-%d", i),
+				at.Add(time.Duration(i)*time.Minute), 10*(i+1), "m"))
+		}
+		records, coverage, err := asker(nodes).PhaseTokens(t.Context(),
+			store.PhaseTokenQuery{Since: at.Add(-time.Minute), Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		var got []string
+		total := 0
+		for _, r := range records {
+			got = append(got, r.EventID)
+			total += r.TotalTokens
+		}
+		if !slices.Equal(got, []string{"s2", "s1", "s0"}) || total != 60 {
+			t.Fatalf("the fleet's spend is %v totalling %d, want s2, s1, s0 and 60", got, total)
+		}
+	})
+
 	t.Run("a_node_that_stops_answering_is_named", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)

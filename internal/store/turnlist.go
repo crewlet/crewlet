@@ -54,6 +54,16 @@ import (
 // own measurement, which is the time the turn spent working rather than the
 // time it spent waiting. A completion that predates the flag names no
 // `suspended` and folds as it always did: an end.
+//
+// # A lost run ends the turn that was waiting for it
+//
+// A parked turn resumes only when its run is collected, and a run that is LOST
+// — its box unreachable, its claim stranded, its conversation gone — is settled
+// like any other lost turn, announced by `sandbox_run_failed` and never
+// resumed. Read by the completions alone that turn was parked for good: the
+// failure is therefore an end, dated when it was announced, and the newest end
+// still decides — a run that failed while still launching is followed by its
+// turn's own completion, which is newer.
 
 // The two event types this fold is keyed on, taken from the payload types
 // themselves rather than spelled here: a literal would be the one place the
@@ -61,6 +71,7 @@ import (
 var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
+	runLost        = types.SandboxRunFailed{}.EventType()
 )
 
 // failedRow is the per-row predicate "this event reports a failure", and it is
@@ -612,7 +623,8 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
 		       SUM(cache_read_tokens), SUM(cache_write_tokens),
 		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
-		       MAX(CASE WHEN event_type = ? AND `+suspendedExpr+` = 0
+		       MAX(CASE WHEN (event_type = ? AND `+suspendedExpr+` = 0)
+		                  OR event_type = ?
 		                THEN event_time END),
 		       MAX(CASE WHEN event_type = ? AND `+suspendedExpr+` = 1
 		                THEN event_time END),
@@ -630,9 +642,10 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 		 LIMIT ?`,
 		// The SELECT list's own placeholders, in the order they appear
 		// in it: the phase count, then the failure predicate, then the
-		// five reads off the completion rows.
+		// five reads off the completion rows — the first of them, the
+		// newest end, also reading a lost run as one.
 		slices.Concat([]any{phaseCompleted}, failedArgs,
-			[]any{turnCompleted, turnCompleted, turnCompleted, turnCompleted,
+			[]any{turnCompleted, runLost, turnCompleted, turnCompleted, turnCompleted,
 				turnCompleted},
 			args)...)
 	if err != nil {

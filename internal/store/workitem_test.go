@@ -166,6 +166,40 @@ func TestAParkedTurnIsNotComplete(t *testing.T) {
 	}
 }
 
+// A LOST RUN ENDS THE TURN PARKED ON IT.
+//
+// Nothing resumes a turn whose coding run was lost: the run is settled like any
+// other lost turn and announced with sandbox_run_failed. Read by the
+// completions alone, the turn was parked for good — and a restarted node seeded
+// it back onto its seat as still waiting.
+//
+// Mutation: drop the lost run from the end column and the turn is parked again.
+func TestALostRunEndsItsParkedTurn(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	yes := true
+	base := time.Now().UTC().Add(-time.Hour)
+	completion(t, log, "c1", "run-1", base, 3000, &yes)
+	appendAsWritten(t, log, "lost", "sandbox_run_failed", base.Add(time.Minute),
+		map[string]any{"turn_id": "run-1", "reason": "collect_unreachable"})
+
+	turn := onlyTurn(t, log)
+	if !turn.Complete || turn.Parked || !turn.Failed {
+		t.Errorf("complete=%v parked=%v failed=%v, want an ended, failed turn",
+			turn.Complete, turn.Parked, turn.Failed)
+	}
+
+	// A RUN LOST WHILE LAUNCHING is followed by its turn's own completion,
+	// and the newest end still decides.
+	again := open(t).Events()
+	appendAsWritten(t, again, "lost", "sandbox_run_failed", base, map[string]any{"turn_id": "run-2"})
+	completion(t, again, "c1", "run-2", base.Add(time.Minute), 3000, &yes)
+	if turn := onlyTurn(t, again); turn.Complete || !turn.Parked {
+		t.Errorf("complete=%v parked=%v, want the later suspension to decide",
+			turn.Complete, turn.Parked)
+	}
+}
+
 // A SEGMENTED TURN SUMS ITS DURATIONS, and the newest segment says what it is.
 //
 // The duration was the first completion's alone, so a turn that parked after

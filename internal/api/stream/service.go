@@ -232,6 +232,15 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 }
 
+// ReconcileSandboxes lands a read of the durable run record on the projection
+// and pushes the sandbox set when it moved — which is what corrects every open
+// panel when an event that would have was lost.
+func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf time.Time) {
+	if change := s.state.ReconcileSandboxes(records, asOf); change.Sandboxes {
+		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), s.now()))
+	}
+}
+
 // Snapshot is the state a client receives the instant it connects.
 //
 // Built entirely from the in-memory projection — no database round trip on

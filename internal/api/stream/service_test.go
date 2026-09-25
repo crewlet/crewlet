@@ -207,6 +207,25 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 
 }
 
+// A RECONCILE THAT MOVED THE SET IS PUSHED, and one that did not is not: the
+// reconcile is what corrects an open panel after a lost event, and a push every
+// interval whether or not anything changed would redraw every panel for nothing.
+func TestAReconcilePushesTheSandboxSetOnlyWhenItMoved(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	record := livestate.SandboxRecord{Entry: livestate.SandboxEntry{
+		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxRunning,
+	}}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock)
+	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindSandboxes}) {
+		t.Fatalf("kinds = %v, want one sandboxes push", kinds)
+	}
+	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock.Add(time.Second))
+	if kinds := kindsOf(c); len(kinds) != 0 {
+		t.Errorf("kinds = %v, want nothing pushed for a reconcile that moved nothing", kinds)
+	}
+}
+
 func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	t.Parallel()
 	// The rollup is MARKED here and folded by the shared tick. Aggregating
