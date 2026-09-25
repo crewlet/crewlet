@@ -312,7 +312,15 @@ type Query struct {
 	HasParent       *bool
 	HasOpenAsks     *bool
 	AskedOf         string
-	AskedBy         string
+
+	// AskedBy is whose open questions to narrow to — the work a person is
+	// WAITING on. A [Party] rather than a handle, for the reason
+	// [Query.PriorityListOf] is one: an ask a founder put through their
+	// own credential is authored by the TOKEN, and one they put from the
+	// dashboard as themselves by their SEAT, so a filter on one name
+	// showed half of what they are waiting for. [ParseQuery] fills the
+	// handle and [Reader.ExpandedQuery] adds the viewer's alias.
+	AskedBy Party
 
 	LinkedPage string
 	References string
@@ -562,9 +570,11 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		// has no chart to resolve a second identity from. See
 		// [Query.PriorityListOf].
 		PriorityListOf: PartyOf(strings.TrimSpace(p.String("priorities"))),
-		AskedBy:        p.String("asked_by"),
-		Parent:         p.String("parent"),
-		Root:           p.String("root"),
+		// THE SEAT ALONE, for the reason `priorities=` above is: the
+		// alias is the viewer's, added by [Reader.ExpandedQuery].
+		AskedBy: PartyOf(strings.TrimSpace(p.String("asked_by"))),
+		Parent:  p.String("parent"),
+		Root:    p.String("root"),
 	}
 
 	if err := q.parseScope(p); err != nil {

@@ -42,7 +42,11 @@ beforeEach(() => {
   location.hash = "#/inbox";
 });
 
+/** Every question the screen put to the socket, in order, with its params. */
+let asked: { what: string; params?: Record<string, unknown> }[] = [];
+
 afterEach(() => {
+  asked = [];
   cleanup();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -84,7 +88,8 @@ function mount(answers: Record<string, unknown> = {}) {
     socket as unknown as {
       query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
     }
-  ).query = (what: string) => {
+  ).query = (what: string, params?: Record<string, unknown>) => {
+    asked.push({ what, params });
     if (what in answers) {
       const answer = answers[what];
       // A THUNK, so a case can answer with silence or a rejection. Building the
@@ -455,4 +460,55 @@ test("the quiet band names every subject the engine's queue watches", async () =
   for (const phrase of Object.values(SUBJECTS)) {
     expect(quiet?.textContent, phrase).toContain(phrase);
   }
+});
+
+// THE SNOOZED TAB ASKS FOR ONLY WHAT WAS PUT OFF.
+//
+// It asked `include_snoozed: true`, which the engine answered with EVERY notice
+// — the snoozed ones among them — so the tab listed the whole inbox. The scope
+// is three-valued now and the tab asks the one question it names; the default
+// asks for the inbox with the snoozes hidden.
+test("the Snoozed tab asks for only snoozed notices, and the default hides them", async () => {
+  location.hash = "#/inbox?state=snoozed";
+  mount();
+  await settle();
+  const snoozed = asked.filter((q) => q.what === "work_inbox").at(-1);
+  expect(snoozed?.params).toMatchObject({ snoozed: "only", unread: false });
+  expect(snoozed?.params).not.toHaveProperty("include_snoozed");
+
+  cleanup();
+  asked = [];
+  location.hash = "#/inbox";
+  mount();
+  await settle();
+  const unread = asked.filter((q) => q.what === "work_inbox").at(-1);
+  expect(unread?.params).toMatchObject({ snoozed: "exclude", unread: true });
+});
+
+// AN OPERATOR'S CHANGE IS DRAWN AS THE PERSON, NOT THE TOKEN.
+//
+// A founder's own writes are authored by their credential — `actor` is the
+// token's id, which is the audit trail — and the pane printed that id where
+// the person belonged. `actor_seat` is who the token is bound to.
+test("the detail pane names the person behind an operator's token", async () => {
+  location.hash = "#/inbox?row=r-assignee-1";
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [
+        {
+          ...notice("assignee", 1),
+          actor: "founder-token",
+          actor_kind: "operator",
+          actor_seat: "jane-founder",
+        },
+      ],
+      primary_reasons: ["assignee"],
+      unread: 1,
+      primary: 1,
+    },
+  });
+  await settle();
+  expect(screen.getByText(/jane-founder ·/)).toBeTruthy();
+  expect(screen.queryByText(/founder-token ·/)).toBeNull();
 });

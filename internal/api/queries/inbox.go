@@ -15,7 +15,7 @@ import (
 // THE READER HAS ALWAYS EXISTED — `tracker.Reader.Inbox`, written, tested and
 // swept on a 365-day retention — and nothing registered it as a question, so
 // the richest record this engine keeps about a person reached no screen. Each
-// notice names the ONE reason of nineteen under which it found them, whether it
+// notice names the ONE reason of eighteen under which it found them, whether it
 // ASKS something or merely informs, whether it arrived only because nobody
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
@@ -34,15 +34,23 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
 		// notices a founder's own assistant produced name the token,
 		// and an inbox asked about the seat alone showed none of them.
-		Who: who,
-		// A SNOOZE MEANS "NOT NOW", so the default hides them and the
-		// reader asks for them explicitly — the reader returns one whose
-		// time has come either way.
-		IncludeSnoozed: p.Bool("include_snoozed", false),
-		Unread:         p.Bool("unread", false),
-		PrimaryOnly:    p.Bool("primary_only", false),
-		Limit:          p.Int("limit", 0),
-		Cursor:         strings.TrimSpace(p.String("cursor")),
+		Who:         who,
+		Unread:      p.Bool("unread", false),
+		PrimaryOnly: p.Bool("primary_only", false),
+		Limit:       p.Int("limit", 0),
+		Cursor:      strings.TrimSpace(p.String("cursor")),
+	}
+	// A SNOOZE MEANS "NOT NOW", so the default hides them; `include` keeps
+	// them marked and `only` is the list of what was put off. A value this
+	// build does not know is refused naming the three rather than read as
+	// the default — `snoozed=ony` answering the whole inbox is the exact
+	// defect the scope replaced.
+	q.Snoozed = tracker.SnoozeExclude
+	if raw := strings.TrimSpace(p.String("snoozed")); raw != "" {
+		q.Snoozed = tracker.SnoozeScope(raw)
+		if !q.Snoozed.Valid() {
+			return nil, badParams("snoozed", raw, snoozeScopeNames())
+		}
 	}
 	// REASONS FILTER, they do not classify: the primary split is a
 	// classification of the same rows, and these narrow which rows are
@@ -86,7 +94,16 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// reasonNames is the nineteen, for a refusal that says what would have worked.
+// snoozeScopeNames is the three, for the same kind of refusal.
+func snoozeScopeNames() []string {
+	out := make([]string, 0, len(tracker.SnoozeScopes))
+	for _, scope := range tracker.SnoozeScopes {
+		out = append(out, string(scope))
+	}
+	return out
+}
+
+// reasonNames is the eighteen, for a refusal that says what would have worked.
 func reasonNames() []string {
 	out := make([]string, 0, len(tracker.Reasons))
 	for _, r := range tracker.Reasons {

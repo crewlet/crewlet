@@ -41,9 +41,10 @@ import (
 // [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
 // ([Position.Generation]), which a build reading 2 decoded and then stored as
 // the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
-// [Comment.Choice]. Version 5 is the cross-project move's marker on a task
-// patch: [TaskPatch.Moving].
-const RecordVersion = 5
+// [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
+// value — see [actorSeatVersion]. Version 6 is the cross-project move's
+// marker on a task patch: [TaskPatch.Moving].
+const RecordVersion = 6
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -58,6 +59,20 @@ const RecordVersion = 5
 // later version could add to it, and [MutationRecord.Encode] refuses either one
 // carrying a versioned field ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
+
+// actorSeatVersion is the record version from which the applier copies
+// [MutationRecord.ActorSeat] onto the history row.
+//
+// THE FIELD IS OLDER THAN THE COLUMN. Records have carried `actor_seat` for
+// the wake's actor exclusion since before the history row had anywhere to put
+// it, so a build reading 4 applies such a record and writes no seat. A build
+// that copied the seat from EVERY record would therefore disagree with that
+// build about every row an operator's write produced — permanently, on a table
+// the fleet compares byte for byte. So the seat is stamped at this version (the
+// row in [versionedFields], which makes the older build retain it) and copied
+// only from a record at this version or above: a record an older build wrote
+// yields the same empty column wherever it is applied.
+const actorSeatVersion = 5
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -113,7 +128,15 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "comment", "decision"}},
 	{Name: "Comment.Choice", Since: 4, Op: string(OpPatch),
 		Path: []string{"mutation", "comment", "choice"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 5. A build reading 4
+	// THE SEAT BEHIND AN OPERATOR'S WRITE, at version 5. Not a new key —
+	// the record has carried it for the wake's exclusion — but a new
+	// COLUMN: the history row stores it from this version, so a build
+	// reading 4 would apply the record and leave the column empty where
+	// every upgraded node fills it. Every op, because every op an
+	// operator makes writes a history row.
+	{Name: "MutationRecord.ActorSeat", Since: actorSeatVersion,
+		Path: []string{"actor_seat"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 6. A build reading 5
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -124,7 +147,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 5, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 6, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 
@@ -708,15 +731,18 @@ type MutationRecord struct {
 	OperatorID string     `json:"operator_id,omitempty"`
 
 	// ActorSeat is the chart seat the writing credential is BOUND to
-	// with `contact.crewlet_operator_id`, and it has exactly one reader:
-	// the wake's own actor exclusion. Empty for a token nobody bound and
-	// for every writer that already IS a seat.
+	// with `contact.crewlet_operator_id`, and it has two readers: the
+	// wake's own actor exclusion, and — from record version 5, through
+	// the history row's `actor_seat` — the screen that draws who made a
+	// change. Empty for a token nobody bound and for every writer that
+	// already IS a seat.
 	//
-	// IT IS NOT AN AUTHOR AND NOTHING RENDERS IT. [MutationRecord.Actor]
-	// stays the token and [MutationRecord.ActorKind] stays `operator`,
-	// because a tracker whose author field is chosen by the writer is not
-	// an audit trail — the history row, the activity feed and every
-	// screen read those two and never this.
+	// IT IS NOT AN AUTHOR. [MutationRecord.Actor] stays the token and
+	// [MutationRecord.ActorKind] stays `operator`, because a tracker whose
+	// author field is chosen by the writer is not an audit trail: every
+	// filter, every audit read and every refusal reads those two. What a
+	// card DRAWS for an operator's change is this — the person — beside
+	// the credential, never instead of it in the record.
 	//
 	// WITHOUT IT THE EXCLUSION CANNOT SEE THE PERSON. [Route] drops a
 	// candidate that is the actor, and a bound operator's own gestures

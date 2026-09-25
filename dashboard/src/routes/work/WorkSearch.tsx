@@ -3,7 +3,7 @@
  *
  * # The engine has always been able to do this
  *
- * `search_work` is a builtin every seat holds: BM25 over the engine's own
+ * `search_work_items` is a builtin every seat holds: BM25 over the engine's own
  * inverted list, which exists because Turso has no fts5 and the alternative
  * was refusing knowledge search on the only driver this build ships. An agent
  * looking for "the thing about the billing webhook" gets a ranked list; the
@@ -106,9 +106,9 @@ export function WorkSearch() {
   return (
     <>
       <PageNote>
-        The same ranking a seat gets from <code className="inline">search_work</code> — BM25 over
-        the engine&rsquo;s own index, not a substring match. The board&rsquo;s filters answer which
-        items are in a state; this answers which are most about a phrase.
+        The same ranking a seat gets from <code className="inline">search_work_items</code> — BM25
+        over the engine&rsquo;s own index, not a substring match. The board&rsquo;s filters answer
+        which items are in a state; this answers which are most about a phrase.
       </PageNote>
 
       <form

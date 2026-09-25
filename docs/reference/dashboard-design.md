@@ -535,7 +535,7 @@ has ever shipped a route from this tree, so there is nobody holding an old link;
 `NotFound` names the screen and offers the palette.
 
 **Three of those surfaces are the engine answering a question it has always
-been able to answer.** Search is the ranking a seat gets from `search_work` —
+been able to answer.** Search is the ranking a seat gets from `search_work_items` —
 BM25 over the engine's own index — which the operator reading the same company
 had no access to at all; the board's `q=` is an escaped substring over an
 excerpt and answers something else. The item's **Woke** tab is who one change
@@ -1232,9 +1232,11 @@ way back — and its count is an em dash before the first answer, for the same
 reason the pulse strip's figures are.
 
 **Unread, all and snoozed is a scope, not a facet.** Each is a different
-question put to `work_inbox` — `unread` and `include_snoozed` are its parameters
-— so the other two are pages this one does not hold and no count over the loaded
-rows could describe them. It is a three-option `Segmented` with exactly one
+question put to `work_inbox` — `unread` and `snoozed` (`exclude`, or `only`
+under Snoozed) are its parameters — so the other two are pages this one does not
+hold and no count over the loaded rows could describe them. The engine narrows
+the scan rather than the page, so an empty page is an empty scope: there is no
+"none on this page, but there are more" state to draw. It is a three-option `Segmented` with exactly one
 always chosen, and an unknown `state=` resolves to `unread` rather than leaving
 the control blank and the query wide.
 

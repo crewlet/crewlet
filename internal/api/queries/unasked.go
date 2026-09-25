@@ -1,7 +1,7 @@
 // Four readers that were written, tested, and asked by nothing.
 //
 // Each of these has existed for as long as the subsystem behind it: the item
-// search a seat calls with `search_work`, the conversation ledger that stops a
+// search a seat calls with `search_work_items`, the conversation ledger that stops a
 // seat replying twice in one thread, the counterparty profiles the learning
 // loop writes, and the per-recipient routing the tracker's applier records.
 // Every one of them is read by the engine itself and reaches no screen, which
@@ -179,7 +179,7 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 //
 // THE FACT NO OTHER TRACKER RECORDS. Every tracker can tell you that somebody
 // was notified; this one records, per change and per recipient, the ONE reason
-// of twenty it reached them under, whether it ASKS something of them, and
+// of eighteen it reached them under, whether it ASKS something of them, and
 // whether they were reached only because nobody better was found. The applier
 // has written exactly that set since the domain landed and its only trace on
 // any surface was a boolean — `work_activity.notified` — saying that somebody,

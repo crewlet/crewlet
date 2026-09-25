@@ -788,7 +788,7 @@ export function ItemBody({
             },
             // THE FACT NO OTHER TRACKER RECORDS. Every tracker can say a
             // change notified somebody; this one records, per change and
-            // per person, the ONE reason of twenty it reached them under
+            // per person, the ONE reason of eighteen it reached them under
             // and whether it ASKS anything of them.
             {
               value: "woke",
@@ -1083,7 +1083,7 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
                   is the mark My work has drawn for this all along. */}
               {r.addressed && <AsksTag />}
               {/* THE REASON IS THE ROW'S POINT, so it is a badge rather
-                  than a caption: it is the one of twenty that found them.
+                  than a caption: it is the one of eighteen that found them.
                   IN THE THIRD PERSON — this list is about colleagues, and
                   `reasonPhrase`'s "assigned to you" beside somebody else's
                   name is a sentence about the wrong person. */}

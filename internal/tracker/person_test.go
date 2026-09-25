@@ -48,7 +48,7 @@ func positionOf(n tracker.InboxNotice) *statelog.Position {
 func (r *roundTrip) marks(handle string, at time.Time) (read, snoozed map[string]bool) {
 	r.t.Helper()
 	answer, err := r.reader.Inbox(r.t.Context(), tracker.InboxQuery{
-		Who: tracker.PartyOf(handle), IncludeSnoozed: true, Level: statelog.ReadStale,
+		Who: tracker.PartyOf(handle), Snoozed: tracker.SnoozeInclude, Level: statelog.ReadStale,
 	}, at)
 	if err != nil {
 		r.t.Fatalf("Inbox: %v", err)
