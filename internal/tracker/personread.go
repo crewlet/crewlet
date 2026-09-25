@@ -54,6 +54,13 @@ type PersonState struct {
 	SeenThrough Position `json:"seen_through,omitzero"`
 	Version     uint64   `json:"version"`
 
+	// MaxSnoozeAhead is how far ahead a snooze may be set, in SECONDS —
+	// [MaxSnoozeAhead], served so a screen offers only the presets the
+	// write will accept. A preset past it is a button that is refused
+	// every time it is pressed, and the bound is the engine's to state
+	// rather than a number a client copies and lets drift.
+	MaxSnoozeAhead int64 `json:"max_snooze_ahead"`
+
 	// Held is false for a person nobody has written yet, which is an
 	// EMPTY state rather than a missing one — every other field is the
 	// zero value and a screen renders it as a clean inbox.
@@ -99,7 +106,10 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		return PersonState{}, fmt.Errorf("tracker: a person read names nobody")
 	}
 
-	out := PersonState{Handle: q.Who.Handle}
+	out := PersonState{
+		Handle:         q.Who.Handle,
+		MaxSnoozeAhead: int64(MaxSnoozeAhead / time.Second),
+	}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level:       q.Level,
 		Scope:       personScope(),

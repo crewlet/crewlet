@@ -248,13 +248,19 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, two kinds of record carry a later version. Version 2 is a
+In the tracker today, four kinds of record carry a later version. Version 2 is a
 turn's charge to its task when it counts delegated workers or reviews that sent
 the work back. Version 3 is a person's own record when their read position is
 in a generation after a reanchor — a build reading 2 stored that position as the
-bare sequence and lost the generation. An old node holds those back, with the
-task or the person they are about, and applies every other write as it
-arrives.
+bare sequence and lost the generation. Version 4 is a comment that asks for a
+decision or answers one with a choice. Version 5 is any change made through an
+operator token bound to a seat: the record has always named that seat, and a
+build reading 5 stores it on the history row as the person to draw — a build
+reading 4 would apply the change and leave that column empty on its copy. So
+the seat is stored only from records at version 5; a change an older build
+wrote names no seat on any node, whichever build applies it. An old node holds
+those records back, with the task or the person they are about, and applies
+every other write as it arrives.
 
 ### Values the engine computes are recomputed once
 

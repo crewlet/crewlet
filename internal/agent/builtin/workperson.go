@@ -696,14 +696,17 @@ func (t *workInbox) Parameters() map[string]any {
 			},
 			"unread": map[string]any{
 				"type": "boolean",
-				"description": "Drop what they have already read. Applied to " +
-					"the page, so use `since` for the cheap form.",
+				"description": "Only what they have not read. The page is " +
+					"still full: this narrows the scan, not the page.",
 			},
-			"include_snoozed": map[string]any{
-				"type": "boolean",
-				"description": "Keep what they snoozed. Off by default, " +
-					"because a snooze means `not now`. One whose time has " +
-					"come comes back either way.",
+			"snoozed": map[string]any{
+				"type": "string",
+				"enum": snoozeScopeNames(),
+				"description": "What to do with what they snoozed: `exclude` " +
+					"(the default — a snooze means `not now`), `include` to " +
+					"keep them marked, or `only` for just what they put off. " +
+					"One whose time has come is back in the inbox and is not " +
+					"`only`.",
 			},
 			"since": map[string]any{
 				"type": "string",
@@ -739,13 +742,20 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		// named, so a change that concerned a founder under the
 		// credential they filed something with is a row the seat alone
 		// never sees.
-		Who:            t.deps.partyOf(handle),
-		PrimaryOnly:    argBool(args, "primary_only"),
-		Unread:         argBool(args, "unread"),
-		IncludeSnoozed: argBool(args, "include_snoozed"),
-		Cursor:         strings.TrimSpace(argString(args, "cursor")),
-		Limit:          int(argFloat(args, "limit")),
-		Level:          seatReadLevel,
+		Who:         t.deps.partyOf(handle),
+		PrimaryOnly: argBool(args, "primary_only"),
+		Unread:      argBool(args, "unread"),
+		Snoozed:     tracker.SnoozeExclude,
+		Cursor:      strings.TrimSpace(argString(args, "cursor")),
+		Limit:       int(argFloat(args, "limit")),
+		Level:       seatReadLevel,
+	}
+	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {
+		q.Snoozed = tracker.SnoozeScope(raw)
+		if !q.Snoozed.Valid() {
+			return failed(fmt.Sprintf("%q is not a `snoozed` scope. The "+
+				"scopes are: %s.", raw, strings.Join(snoozeScopeNames(), ", "))), nil
+		}
 	}
 	for _, raw := range argStrings(args, "reasons") {
 		reason := tracker.Reason(strings.TrimSpace(raw))
@@ -767,6 +777,16 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		return readFailure(tracker.WorkInboxTool, err), nil
 	}
 	return jsonResult(answer)
+}
+
+// snoozeScopeNames is the three scopes, derived from the tracker's own list
+// for the reason [reasonList] is.
+func snoozeScopeNames() []string {
+	out := make([]string, 0, len(tracker.SnoozeScopes))
+	for _, scope := range tracker.SnoozeScopes {
+		out = append(out, string(scope))
+	}
+	return out
 }
 
 // reasonList is the wake reasons as one sentence, DERIVED rather than typed

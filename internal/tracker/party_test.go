@@ -749,7 +749,7 @@ func TestAnUnnamedPartyIsRefused(t *testing.T) {
 		t.Error("my_work with an alias and no seat answered")
 	}
 	if _, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
-		Who: alias, Level: statelog.ReadStale,
+		Who: alias, Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude,
 	}, wednesday); err == nil {
 		t.Error("an inbox read with an alias and no seat answered")
 	}
@@ -791,5 +791,103 @@ func TestAPartysIdentitiesAreOrderedUniqueAndNonEmpty(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// `asked_by` MATCHES EVERY IDENTITY OF THE PARTY.
+//
+// What a person is waiting on is the questions they put — and a founder puts
+// them under two names: through their own assistant, authored by the TOKEN,
+// and from the dashboard as themselves, by the SEAT. `asked_by` compared one
+// author, so "Asked by me" showed half of what they were waiting for, and
+// which half depended on where they had typed.
+func TestAskedByMatchesEveryIdentityOfTheParty(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "by-token", "ana")
+	assign(t, r, "by-seat", "ana")
+	assign(t, r, "by-other", "ana")
+	for task, author := range map[string]string{
+		"by-token": "founder", "by-seat": "jane-founder", "by-other": "cy",
+	} {
+		askOn(t, r, "op-"+task, task, tracker.Comment{
+			ID: "c-" + task, Task: task, Author: author,
+			AuthorKind: tracker.AuthorHuman, Body: "when?", Ask: "ana",
+			CreatedAt: wednesday,
+		})
+	}
+	board := func(viewer tracker.Viewer, params map[string]any) []string {
+		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, berlin)
+		if err != nil {
+			t.Fatalf("ExpandedQuery: %v", err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("Tasks: %v", err)
+		}
+		var ids []string
+		for _, row := range answer.Rows {
+			ids = append(ids, row.ID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	// THE SEAT ALONE FINDS ITS OWN HALF, which is the defect and what
+	// makes the assertion below mean something.
+	top := map[string]any{"asked_by": "jane-founder"}
+	if got := board(tracker.Viewer{Handle: "jane-founder"}, top); !slices.Equal(got,
+		[]string{"by-seat"}) {
+
+		t.Fatalf("asked_by with no alias answers %v, want the seat's own ask", got)
+	}
+	founder := tracker.Viewer{Handle: "jane-founder", OperatorID: "founder"}
+	if got := board(founder, top); !slices.Equal(got, []string{"by-seat", "by-token"}) {
+		t.Fatalf("asked_by=jane-founder for the viewer bound to `founder` "+
+			"answers %v, want both asks and never cy's", got)
+	}
+	// AND IN AN `any=` BRANCH, which is a predicate like the top level.
+	branch := map[string]any{
+		"any": `[{"asked_by":"jane-founder"},{"key":"NOPE-1"}]`,
+	}
+	if got := board(founder, branch); !slices.Equal(got, []string{"by-seat", "by-token"}) {
+		t.Fatalf("asked_by inside an any= branch answers %v, want both asks", got)
+	}
+}
+
+// A REASON FILTER KEEPS THE REASON THE CHANGE IS HEARD UNDER.
+//
+// A party of two holds one row per identity for a change, and the collapse
+// keeps the strongest. Filtering the rows by reason BEFORE that collapse —
+// which is what moving `primary_only` into the scan would do, naively — lets a
+// change heard as `assignee` come back under `reasons=reporter` as the weaker
+// row of the other identity: one change, two reasons, depending on the filter.
+// The filter keeps a row only when no sibling of it outranks it.
+func TestAReasonFilterKeepsTheReasonAChangeIsHeardUnder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := newTask("t-1")
+	task.Assignee = "jane-founder"
+	create(t, r, "1", task, nil)
+	commentNamingBoth(t, r, "op-c1", "t-1", "c-1")
+
+	if got := r.inbox(tracker.InboxQuery{
+		Who: founderParty, Reasons: []tracker.Reason{tracker.ReasonReporter},
+	}); len(got.Notices) != 0 {
+		t.Errorf("reasons=reporter answered %+v — the change is heard as "+
+			"assignee, which outranks reporter", got.Notices)
+	}
+	got := r.inbox(tracker.InboxQuery{
+		Who: founderParty, Reasons: []tracker.Reason{tracker.ReasonAssignee},
+	})
+	if len(got.Notices) != 1 || got.Notices[0].Reason != tracker.ReasonAssignee {
+		t.Errorf("reasons=assignee answered %+v, want the one change", got.Notices)
+	}
+	// AND `primary_only` IS THE SAME RULE: assignee is primary by default.
+	if got := r.inbox(tracker.InboxQuery{Who: founderParty, PrimaryOnly: true}); len(
+		got.Notices) != 1 || got.Notices[0].Reason != tracker.ReasonAssignee {
+
+		t.Errorf("primary_only answered %+v, want the change as assignee",
+			got.Notices)
 	}
 }

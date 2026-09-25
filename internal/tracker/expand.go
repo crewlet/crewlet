@@ -366,6 +366,24 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	if q.PriorityListOf.Named() && q.PriorityListOf.Handle == viewer.Handle {
 		q.PriorityListOf = viewer.Party()
 	}
+	// AND SO DOES THE ASKER, for the same reason and with the same limit:
+	// `asked_by=` names a person, the questions a founder put through
+	// their own credential are authored by the token, and the viewer is
+	// the one person this read knows both names of. "Asked by me" is the
+	// question that needs it — the dashboard asks it with the viewer's
+	// own seat.
+	//
+	// IN EVERY `any=` BRANCH TOO, since a branch is a predicate like the
+	// top level and "asked by me, or assigned to me" is a disjunction a
+	// person writes.
+	if q.AskedBy.Named() && q.AskedBy.Handle == viewer.Handle {
+		q.AskedBy = viewer.Party()
+	}
+	for i := range q.Any {
+		if q.Any[i].AskedBy.Named() && q.Any[i].AskedBy.Handle == viewer.Handle {
+			q.Any[i].AskedBy = viewer.Party()
+		}
+	}
 	return q, nil
 }
 

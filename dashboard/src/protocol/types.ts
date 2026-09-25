@@ -2108,6 +2108,9 @@ export interface WorkPersonState {
   seen_through?: { stream: string; generation?: number; seq: number };
   /** The record's version: what `set_priorities`' `if_match` states. */
   version: number;
+  /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
+   *  screen offers only the presets the write accepts. */
+  max_snooze_ahead: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2150,6 +2153,9 @@ export interface WorkChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
+  /** The person an operator token was bound to when it wrote this — who a
+   *  row DRAWS; `actor` stays the token, which is the audit trail. */
+  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   turn_id?: string;
@@ -3014,6 +3020,9 @@ export interface WorkActivityRecord {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
+  /** The person an operator token was bound to when it made this change —
+   *  who a row DRAWS; `actor` stays the token, which is the audit trail. */
+  actor_seat?: string;
   subject_kind: string;
   subject_id: string;
   subject_key?: string;
@@ -3023,6 +3032,8 @@ export interface WorkActivityRecord {
   comment_id?: string;
   batch_id?: string;
   turn_id?: string;
+  /** The question this commit asked or answered, as it stands NOW. */
+  ask?: WorkAskView;
   /** How a reader tells "nothing was announced" from "nothing happened" —
    *  which is the whole reason a quiet commit still writes a row. */
   notified: boolean;
@@ -3169,9 +3180,34 @@ export interface WorkInboxNotice {
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
+  /** The person an operator token was bound to when it made this change —
+   *  what a row draws in place of the token's id. */
+  actor_seat?: string;
+  /** The comment this change wrote and the agent turn that made it. */
+  comment_id?: string;
+  turn_id?: string;
+  /** The question this notice is about — the ask itself for `asked`, the ask
+   *  it answered for `answered` — read NOW, so an answered one reads closed. */
+  ask?: WorkAskView;
   read: boolean;
   snoozed?: boolean;
   snoozed_until?: string;
+}
+
+/** The ask a notice or a feed row is about, as it stands at the read. */
+export interface WorkAskView {
+  /** The ask's own comment id — what an answer names in `answers`. */
+  comment: string;
+  asked_of: string;
+  open: boolean;
+  /** Who closed it and when: the answer's author, or with `resolved` whoever
+   *  resolved it without an answer. Absent while open. */
+  answered_by?: string;
+  answered_at?: string;
+  resolved?: boolean;
+  /** The option the answer chose, by id. */
+  choice?: string;
+  decision?: WorkDecision;
 }
 
 /** A page of one person's inbox. */

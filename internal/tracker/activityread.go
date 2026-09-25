@@ -70,6 +70,17 @@ type ActivityRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
+	// ActorSeat is the chart seat an operator token was BOUND to when it
+	// made this change — the person behind the credential, which is who a
+	// screen draws. [ActivityRecord.Actor] stays the token, because a
+	// tracker whose author field is chosen by the writer is not an audit
+	// trail; this is the rendering the audit trail was missing.
+	//
+	// Empty for every writer that already IS a seat, for a token nobody
+	// bound, and for a change applied from a record older than version 5
+	// — see the history row's `actor_seat` in `apply_history.go`.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
 	SubjectKind ObjectKind `json:"subject_kind"`
 	SubjectID   string     `json:"subject_id"`
 
@@ -84,6 +95,11 @@ type ActivityRecord struct {
 	CommentID string           `json:"comment_id,omitempty"`
 	BatchID   string           `json:"batch_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`
+
+	// Ask is the question this commit asked or answered, as it stands now
+	// — see [AskView]. Absent for a commit that wrote no comment, or one
+	// that is an ordinary remark.
+	Ask *AskView `json:"ask,omitempty"`
 
 	// Notified says whether the commit carried a notification — whether
 	// this change was ANNOUNCED. It is how a reader tells "nothing was
@@ -392,7 +408,8 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	rows, err := tx.QueryContext(ctx, `
 		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
 		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
-		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
+		       h.operator_id, h.actor_seat, h.subject_kind, h.subject_id,
+		       h.project_key,
 		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
 		       h.notified, h.late,
 		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id)
@@ -423,7 +440,8 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var notified, late int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
-			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
+			&actorKind, &record.OperatorID, &record.ActorSeat, &subjectKind,
+			&record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
 			&batch, &record.TurnID, &notified, &late, &key); err != nil {
 			return nil, "", fmt.Errorf("tracker: scan an activity row: %w", err)
@@ -449,6 +467,21 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", fmt.Errorf("tracker: read the activity feed: %w", err)
+	}
+	// THE ASK EACH COMMIT IS ABOUT, in one read over the page — the same
+	// resolution the inbox makes, through the same function.
+	comments := make([]string, 0, len(out))
+	for _, record := range out {
+		if record.CommentID != "" {
+			comments = append(comments, record.CommentID)
+		}
+	}
+	asks, askErr := readAskViews(ctx, tx, comments)
+	if askErr != nil {
+		return nil, "", askErr
+	}
+	for i := range out {
+		out[i].Ask = asks[out[i].CommentID]
 	}
 	next := ""
 	if more && len(out) > 0 {

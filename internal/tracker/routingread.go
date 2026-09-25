@@ -16,7 +16,7 @@ import (
 // # The fact no other tracker records
 //
 // Every work tracker can tell you that somebody was notified. This one records,
-// per change and per recipient, the ONE reason of nineteen that reached them,
+// per change and per recipient, the ONE reason of eighteen that reached them,
 // whether it ASKS something of them, and whether they were reached only because
 // nobody better was found. The applier has written exactly that set since the
 // domain landed — it is what [Candidates] resolved — and its only trace on any

@@ -12,8 +12,8 @@ import (
 //
 // # Why this is a walk over the enum rather than a list of cases
 //
-// The router distinguishes twenty reasons and the prompt frames three, so
-// eighteen of them reach a default. That is deliberate — what a RECIPIENT
+// The router distinguishes eighteen reasons and the prompt frames three, so
+// most of them share a frame by default. That is deliberate — what a RECIPIENT
 // needs to be told collapses to "somebody is asking you", "this is your work"
 // and "this is activity you follow" — but it means a reason added later
 // silently takes the weakest frame, and the seat is told it is merely watching

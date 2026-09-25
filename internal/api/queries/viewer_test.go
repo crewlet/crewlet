@@ -287,19 +287,19 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	_, err := askAsOperator(t, viewerSources(t, work), "work_inbox", map[string]any{
-		"unread":          true,
-		"primary_only":    true,
-		"include_snoozed": true,
-		"reasons":         "mention,asked",
-		"limit":           7,
-		"cursor":          "c-9",
+		"unread":       true,
+		"primary_only": true,
+		"snoozed":      "only",
+		"reasons":      "mention,asked",
+		"limit":        7,
+		"cursor":       "c-9",
 	})
 	if err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || !q.IncludeSnoozed {
-		t.Errorf("the three flags reached the reader as %+v", q)
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != tracker.SnoozeOnly {
+		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
 		t.Errorf("limit/cursor reached the reader as %d/%q", q.Limit, q.Cursor)
@@ -322,6 +322,34 @@ func TestAnUnknownInboxReasonIsRefusedNamingTheSet(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mention") {
 		t.Errorf("the refusal %q does not name what would have worked", err)
+	}
+}
+
+// THE SNOOZED SCOPE DEFAULTS TO HIDING THEM, AND A SCOPE THIS BUILD DOES NOT
+// KNOW IS REFUSED. The reader refuses the zero value, so the surface is what
+// makes "my inbox" mean "not what I put off"; and a misspelt scope answered as
+// the default would be the very defect the scope replaced — a Snoozed tab
+// listing the whole inbox.
+func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{}
+	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+		map[string]any{}); err != nil {
+		t.Fatalf("work_inbox: %v", err)
+	}
+	if work.inboxQuery.Snoozed != tracker.SnoozeExclude {
+		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
+			work.inboxQuery.Snoozed, tracker.SnoozeExclude)
+	}
+	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
+		map[string]any{"snoozed": "bogus"})
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("snoozed=bogus = %v, want bad_params", err)
+	}
+	for _, scope := range []string{"exclude", "include", "only"} {
+		if !strings.Contains(err.Error(), scope) {
+			t.Errorf("the refusal %q does not name %q", err, scope)
+		}
 	}
 }
 

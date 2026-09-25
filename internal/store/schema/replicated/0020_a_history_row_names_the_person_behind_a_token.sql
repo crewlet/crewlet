@@ -1,0 +1,38 @@
+-- A history row names the seat an operator token was bound to when it wrote.
+--
+-- # What was missing
+--
+-- A person who runs the company writes through their own credential, and the
+-- record says so: the author is the TOKEN's name with author kind `operator`,
+-- never a seat handle, because a tracker whose author field is chosen by the
+-- writer is not an audit trail. The record ALSO carries `actor_seat` — the seat
+-- that token is bound to with `contact.crewlet_operator_id` — for exactly one
+-- reader, the wake's actor exclusion, which is how a founder stopped being
+-- woken by their own assistant's writes.
+--
+-- The history row kept the first two and dropped the third. So every notice
+-- and every feed row a person's own writes produced showed the token's id —
+-- `founder`, a credential name — where the screen needed the person, and no
+-- read could recover them: the history row's `document` is the mutation
+-- PAYLOAD, not the record, so the seat was never on the node at all.
+--
+-- # A record-carried value, not a derived one
+--
+-- This column is copied from the record, like `actor` and `operator_id` beside
+-- it — there is no rule to re-derive it by (migration 0018), and nothing on the
+-- node holds it for the rows applied before it existed, which keep the empty
+-- string: a card for those falls back to the actor, which is what it showed.
+--
+-- What keeps the fleet's copies identical across a rolling upgrade is the
+-- record version, not this file. A record carrying `actor_seat` is stamped at
+-- version 5 (`tracker.versionedFields`), so a build that has no column for it
+-- RETAINS the record rather than applying it without the value; and the
+-- applier stores it only from a record at version 5 or above, so a record an
+-- older build wrote — which every build applies — yields the same empty column
+-- on every node, whichever build applied it.
+--
+-- # No index
+--
+-- It is rendered, never filtered on: the audit feed selects on `actor_kind`
+-- and `actor` (0012), and "what did this person do" is asked of those.
+ALTER TABLE tracker_history ADD COLUMN actor_seat TEXT NOT NULL DEFAULT '';

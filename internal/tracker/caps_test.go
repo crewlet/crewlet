@@ -293,6 +293,14 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 				t.Errorf("the refusal does not name %q, so a caller cannot "+
 					"tell which value to shorten: %v", tc.field, err)
 			}
+			// AND IT NAMES A REMEDY THAT EXISTS. It used to offer "an
+			// attachment", which this tracker has no verb for — a model
+			// told to attach went looking for a tool that is not there.
+			// A page is, and a link is how a task points at one.
+			if !strings.Contains(err.Error(), "on a page and link it") ||
+				strings.Contains(err.Error(), "attachment") {
+				t.Errorf("the refusal's remedy is not page linking: %v", err)
+			}
 		})
 	}
 }

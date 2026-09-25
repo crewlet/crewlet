@@ -789,3 +789,38 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 		t.Error("a negative if_match was accepted")
 	}
 }
+
+// THE SNOOZED SCOPE REACHES THE READER, DEFAULTS TO HIDING, AND REFUSES A
+// SCOPE IT DOES NOT KNOW. The reader refuses the zero value, so the tool is
+// what makes "my inbox" mean "not what I put off" — and a misspelt scope read
+// as the default would answer "what did I put off" with the whole inbox.
+func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := personSurface(t, trk, &personSpy{}, unboundOperator, nil)
+
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if trk.inboxQuery.Snoozed != tracker.SnoozeExclude {
+		t.Errorf("no `snoozed` reached the reader as %q, want %q",
+			trk.inboxQuery.Snoozed, tracker.SnoozeExclude)
+	}
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice", "snoozed": "only",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if trk.inboxQuery.Snoozed != tracker.SnoozeOnly {
+		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
+	}
+	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "alice", "snoozed": "bogus",
+	})
+	if !bad.Failed || !strings.Contains(bad.Output, "include") {
+		t.Fatalf("snoozed=bogus answered %q, want a refusal naming the scopes",
+			bad.Output)
+	}
+}

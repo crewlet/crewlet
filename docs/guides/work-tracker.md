@@ -1144,7 +1144,11 @@ lands; the other is refused rather than posted beside it claiming to answer a
 question it did not close.
 
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
-seat, and the `has_open_asks` filter finds the items carrying any. Each row
+seat, and the `has_open_asks` filter finds the items carrying any. The board
+asks the other two ways round: `asked_of=` is whose answer an item's open ask
+is waiting on, and `asked_by=` is whose question it is — and for your own
+handle `asked_by` also matches the token bound to you, because the asks you put
+through your own assistant are authored by the token. Each row
 carries `answer_with`, the literal call that answers it, and `open`.
 
 ### Asking for a decision
@@ -1236,8 +1240,13 @@ person can write under, which matters for exactly one of them — a write you
 make through your own token is authored by the **token**, while the watch it
 leaves on the item is your **seat's**, so a founder filing work through their
 assistant would otherwise be woken by every item they filed and every comment
-they left. The record carries the seat beside the author for that one reader;
-nothing renders it, and the author field is untouched.
+they left. The record carries the seat beside the author for that reader, and
+the author field is untouched: an operator's change is still authored by the
+token, which is the audit trail. What a notice or a feed row *draws* is the
+seat — `actor_seat` beside `actor` — so a founder's own change reads as the
+founder rather than as a credential's id. It is stored on the history row from
+records at version 5; a change applied from an older record carries none, on
+every node alike, and a screen falls back to the author.
 
 The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
@@ -1379,6 +1388,18 @@ anybody was online, and a person who has marked nothing still has an inbox.
 snoozed, how far you have got. Neither is derived from the other, which is why
 an inbox entry carries a record id and a position and no content at all.
 
+**What a page narrows, it narrows in the scan.** `work_inbox` takes `unread`,
+`primary_only`, `reasons` and `snoozed` — `exclude` by default, `include` to
+keep what you put off, `only` for just that — and every one of them is a
+predicate on the rows the engine reads, not a filter over the page it read.
+So a page holds fifty notices whenever the scope does: a person whose newest
+fifty notices are all snoozed sees the fifty after them, not an empty page with
+a cursor behind it. A snooze whose time has come counts as awake under every
+scope. Each notice also carries what it is *about*: the comment and the turn
+the change came from, and — for an `asked` or `answered` notice — the ask
+itself as it stands now, with its decision, whether it is still open, and who
+answered it with which option.
+
 **The primary half is yours to declare.** `mark_inbox` takes `primary_reasons`
 — which wake reasons are yours to act on — and `work_inbox` labels every notice
 with it, returning the rest as context rather than hiding it. Saying nothing
@@ -1390,7 +1411,7 @@ whose primary half is blank.
 
 **A person reads theirs at `#/inbox`**, which is the dashboard's landing
 screen: the notices `work_inbox` returns, each labelled with the one reason of
-twenty that routed it, beside what is waiting on a decision. Which person is
+eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
 alphabetically first seat's — and `#/me` is that same person's own work: seven

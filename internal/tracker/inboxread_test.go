@@ -22,6 +22,12 @@ func (r *roundTrip) inbox(q tracker.InboxQuery) tracker.InboxAnswer {
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
 	}
+	if q.Snoozed == "" {
+		// WHAT EVERY SURFACE DEFAULTS TO — the reader itself refuses the
+		// zero value, so a harness that did not state one would be
+		// testing a question no caller can ask.
+		q.Snoozed = tracker.SnoozeExclude
+	}
 	answer, err := r.reader.Inbox(r.t.Context(), q, wednesday)
 	if err != nil {
 		r.t.Fatalf("Inbox(%+v): %v", q, err)
@@ -302,9 +308,10 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	if got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}); len(got.Notices) != 0 {
 		t.Fatalf("a snoozed notice is still in the inbox: %+v", got.Notices)
 	}
-	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), IncludeSnoozed: true})
+	got := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"),
+		Snoozed: tracker.SnoozeInclude})
 	if len(got.Notices) != 1 || !got.Notices[0].Snoozed {
-		t.Fatalf("include_snoozed did not return the snoozed notice: %+v",
+		t.Fatalf("snoozed=include did not return the snoozed notice: %+v",
 			got.Notices)
 	}
 
@@ -312,6 +319,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	// the same rows, read after the instant.
 	back, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
 		Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+		Snoozed: tracker.SnoozeExclude,
 	}, asleep.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("Inbox: %v", err)
@@ -369,10 +377,17 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 	}
 
 	for name, q := range map[string]tracker.InboxQuery{
-		"no handle": {Level: statelog.ReadStale},
-		"no level":  {Who: tracker.PartyOf("bob")},
+		"no handle": {Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude},
+		"no level":  {Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude},
 		"an unknown reason": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+			Snoozed: tracker.SnoozeExclude,
 			Reasons: []tracker.Reason{"because-i-said-so"}},
+		// THE ZERO SCOPE IS REFUSED, not read as one of the three: each
+		// is some caller's right default, so a reader that picked one
+		// would answer the other two's question wrong without saying so.
+		"no snoozed scope": {Who: tracker.PartyOf("bob"), Level: statelog.ReadStale},
+		"an unknown snoozed scope": {Who: tracker.PartyOf("bob"),
+			Level: statelog.ReadStale, Snoozed: "sometimes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := r.reader.Inbox(t.Context(), q, wednesday); err == nil {

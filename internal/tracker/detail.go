@@ -248,9 +248,15 @@ type HistoryEntry struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-	CommentID  string     `json:"comment_id,omitempty"`
-	Excerpt    string     `json:"excerpt,omitempty"`
-	TurnID     string     `json:"turn_id,omitempty"`
+
+	// ActorSeat is the person an operator token was bound to when it
+	// wrote this — see [ActivityRecord.ActorSeat], which this is the same
+	// column of.
+	ActorSeat string `json:"actor_seat,omitempty"`
+
+	CommentID string `json:"comment_id,omitempty"`
+	Excerpt   string `json:"excerpt,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
 
 	// Fields is what changed, as the notification snapshot recorded it.
 	Fields map[string]any `json:"fields,omitempty"`
@@ -651,8 +657,9 @@ func cursorID(cursor string) string {
 // readHistory is the activity feed, NEWEST FIRST and capped.
 func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, kind, actor, actor_kind, operator_id, comment_id, excerpt,
-		       fields_json, turn_id, notified, effective_at, log_seq
+		SELECT id, kind, actor, actor_kind, operator_id, actor_seat,
+		       comment_id, excerpt, fields_json, turn_id, notified,
+		       effective_at, log_seq
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
@@ -676,7 +683,7 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		var notified int
 		var effective, seq int64
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Actor, &actorKind, &e.OperatorID,
-			&e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
+			&e.ActorSeat, &e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
 			&effective, &seq); err != nil {
 			return nil, err
 		}

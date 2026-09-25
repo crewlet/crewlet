@@ -11,11 +11,12 @@ import (
 
 // THE BOUND SEAT RIDES BESIDE THE AUTHOR, AND IT IS NOT ONE.
 //
-// `actor_seat` exists for exactly one reader — the wake's actor exclusion,
-// which cannot see the person behind a credential without it. Everything that
-// renders a writer reads `actor` and `actor_kind`, and this case asserts both
-// halves in one place: the field survives the wire, and the two that ARE the
-// audit trail are untouched by its arrival.
+// `actor_seat` is read by the wake's actor exclusion, which cannot see the
+// person behind a credential without it, and is drawn beside the author on a
+// notice or a feed row. Everything that FILTERS or AUDITS a writer reads
+// `actor` and `actor_kind`, and this case asserts both halves in one place:
+// the field survives the wire, and the two that ARE the audit trail are
+// untouched by its arrival.
 func TestTheActorSeatRidesBesideTheAuthor(t *testing.T) {
 	t.Parallel()
 	record := tracker.MutationRecord{

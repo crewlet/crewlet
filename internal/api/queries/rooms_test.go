@@ -309,7 +309,7 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
 //
-// The applier records, per change and per recipient, the ONE reason of twenty
+// The applier records, per change and per recipient, the ONE reason of eighteen
 // under which that person heard about it — the fact no commercial tracker
 // keeps. It reaches a screen through `work_inbox`, and a reason the client has
 // no phrase for renders as its own snake_case value: a log line where a

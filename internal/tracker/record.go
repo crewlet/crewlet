@@ -184,8 +184,7 @@ func checkTextCaps(id string, title, body, comment *string) error {
 		return invalid("tracker: the %s on task %s is %d bytes and the "+
 			"maximum is %d — it is refused rather than cut, because a value "+
 			"silently truncated is one somebody will look for later; shorten "+
-			"it, or put the long form where it belongs (a page, or an "+
-			"attachment) and reference it here",
+			"it, or put the long form on a page and link it here",
 			c.field, id, len(*c.value), c.limit)
 	}
 	return nil
@@ -1239,12 +1238,13 @@ type Favorite struct {
 // line, which is the one authority here that reaches across people. See
 // person.go for why that is three verbs rather than one.
 //
-// A LEAD'S PRIORITY WRITE IS STAMPED rather than notified. Every [Notify] this
-// domain carries is task-shaped — its [Snapshot] is a key, a project and a
-// title — so a person record has no card to render and a notification attached
-// to one would reach nobody. What makes the authority visible instead is
-// [Person.PrioritiesSetBy]: a person who starts the day on work they did not
-// choose can see who chose it.
+// A LEAD'S PRIORITY WRITE WAKES ITS PERSON with the `prioritised` reason, and
+// the wake names the task now at the TOP of the list — see
+// [Writer.prioritisedWake] — because every [Notify] this domain carries is
+// task-shaped and "your list changed" with no task on it is a card with
+// nothing to act on. The record also says who set the list:
+// [Person.PrioritiesSetBy], so a person who starts the day on work they did
+// not choose can see who chose it.
 type Person struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`

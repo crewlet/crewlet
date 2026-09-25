@@ -478,7 +478,7 @@ func Register(r *Registry, s Sources) {
 		// been registered ungated, so this is what already ships rather
 		// than a new posture.
 		r.Register("work_my_work", s.workMyWork)
-		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
+		// THE READER HAS ALWAYS EXISTED and nothing asked it: eighteen
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
@@ -522,7 +522,7 @@ func Register(r *Registry, s Sources) {
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
 		// gated on its own index rather than on the tracker: the ranked
-		// reader is what `search_work` gives a seat, and the operator
+		// reader is what `search_work_items` gives a seat, and the operator
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days.
 		r.Register("work_search", s.workSearch)

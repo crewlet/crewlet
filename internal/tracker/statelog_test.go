@@ -115,6 +115,24 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeComment, Mutation: body,
 			Actor: "dev", ActorKind: tracker.AuthorAgent,
 		}.Encode()
+	case "MutationRecord.ActorSeat":
+		// AN OPERATOR'S WRITE THROUGH A BOUND TOKEN: the author stays the
+		// credential and the seat rides beside it, which is the value the
+		// history row now stores.
+		body, err := json.Marshal(tracker.TaskPatch{Title: new("suite, renamed")})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFields, Mutation: body,
+			Actor: "founder", ActorKind: tracker.AuthorOperator,
+			OperatorID: "founder", ActorSeat: "jane-founder",
+		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)

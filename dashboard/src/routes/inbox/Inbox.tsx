@@ -109,7 +109,7 @@ import { Pulse, PULSE_GLYPHS, type PulseFact } from "./Pulse.tsx";
  * The three scopes the notices band can ask for.
  *
  * QUESTIONS PUT TO THE ENGINE, not facets of the page on screen: `unread` and
- * `include_snoozed` are `work_inbox` parameters, so each is a different page of
+ * `snoozed` are `work_inbox` parameters, so each is a different page of
  * notices rather than a narrowing of the loaded one. Two of the three therefore
  * name rows this page does not hold, which is why the control carries no counts
  * and why it is a `Segmented` rather than a `FacetRail` — the same control the
@@ -166,7 +166,10 @@ export function Inbox() {
           handle: viewer.handle,
           limit: 50,
           unread: state === "unread",
-          include_snoozed: state === "snoozed",
+          // `only` IS WHAT WAS PUT OFF, and nothing else — the flag this
+          // replaced returned the whole inbox with the snoozed notices among
+          // it, so this tab listed everything.
+          snoozed: state === "snoozed" ? "only" : "exclude",
         }
       : undefined,
     { enabled: viewer.handle !== "", pollMs: 30_000 },
@@ -428,8 +431,14 @@ export function Inbox() {
  * read it. The answer already in hand cannot flicker.
  *
  * THE BRANCHES MIRROR THE QUERY'S OWN PREDICATES (`unread: state === "unread"`,
- * `include_snoozed: state === "snoozed"`), because a sentence that disagrees
- * with the question that was asked is this same defect one layer down.
+ * `snoozed: "only"` under Snoozed), because a sentence that disagrees with the
+ * question that was asked is this same defect one layer down.
+ *
+ * AN EMPTY PAGE IS AN EMPTY SCOPE. Every narrowing is in the engine's scan
+ * (`tracker.inboxFilter`), so a page holds 50 notices whenever the scope does
+ * and no rows never comes with a cursor — which is why there is no "none on
+ * this page, there are more" sentence: it described a short page the engine
+ * no longer returns.
  */
 export function noticeQuiet(input: {
   answer: WorkInboxAnswer | null;
@@ -460,18 +469,6 @@ export function noticeQuiet(input: {
     return {
       title: "Nothing on this page carries that reason",
       hint: `The page holds ${held} notice${held === 1 ? "" : "s"} under other reasons. Press the chip again for all of them.`,
-    };
-  }
-
-  // A PAGE WHOSE EVERY ROW WAS DROPPED AFTER IT WAS READ. `unread` and the
-  // snooze filter are applied to the page rather than to the scan
-  // (`tracker.InboxQuery.Unread`), while the cursor is computed from the
-  // unfiltered page — so no rows and more pages is an ordinary answer, and "you
-  // are caught up" over it is a claim about rows nobody looked at.
-  if (answer.next_cursor) {
-    return {
-      title: "None on this page",
-      hint: "The engine answers 50 notices at a time and every one on this page was filtered out here. There are more beyond it.",
     };
   }
 
@@ -717,7 +714,9 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
         </div>
       )}
       <p className="t-caption">
-        {notice.actor ? `${notice.actor} · ` : ""}
+        {/* THE PERSON, not the credential: an operator's change is authored by
+            their token, and `actor_seat` is who that token is bound to. */}
+        {(notice.actor_seat ?? notice.actor) ? `${notice.actor_seat ?? notice.actor} · ` : ""}
         {fmtDateTime(notice.at)} · {relTime(notice.at, now)}
       </p>
       {/* THE CALL THAT WOULD MARK IT, rather than a control that pretends to.

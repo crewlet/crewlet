@@ -648,10 +648,12 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			"AND m.ask = ? AND m.resolved = 0 AND m.answered_by IS NULL "+
 			"AND m.removed = 0)", q.AskedOf)
 	}
-	if q.AskedBy != "" {
+	if q.AskedBy.Named() {
+		// EVERY NAME THE ASKER WRITES UNDER — see [Query.AskedBy].
 		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
-			"AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
-			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
+			"AND m.ask <> '' AND m.author IN ("+
+			placeholders(len(q.AskedBy.Handles()))+") AND m.resolved = 0 "+
+			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy.args()...)
 	}
 	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
 	// is holding something up" reads the dependency table by BLOCKER_ID
