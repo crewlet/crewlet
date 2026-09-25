@@ -2236,8 +2236,9 @@ func (t *updateWorkItem) Name() string { return UpdateWorkItemTool }
 
 func (t *updateWorkItem) Description() string {
 	return "Change a work item: its status, assignee, priority, title, " +
-		"description, labels, or whether you watch it. Only the fields you " +
-		"pass are changed. Say WHY you closed something with " +
+		"description, labels, checklists, or whether you watch it. Only the " +
+		"fields you pass are changed. An assignment can carry a `reason` the " +
+		"new assignee reads. Say WHY you closed something with " +
 		"comment_on_work_item — an item that went to `cancelled` with no " +
 		"word is one somebody has to reconstruct. Closing as a duplicate " +
 		"also names the item that survives, in `duplicate_of`."
@@ -2253,9 +2254,18 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"status":   map[string]any{"type": "string", "description": "One of: " + statusList() + "."},
 			"assignee": map[string]any{"type": "string", "description": "A seat's handle, or \"\" to unassign."},
-			"priority": map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
-			"title":    map[string]any{"type": "string"},
-			"body":     map[string]any{"type": "string", "description": "Replaces the description."},
+			"reason": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Only with `assignee`: one line "+
+					"saying why the work is theirs now, at most %d "+
+					"characters. It is what the new assignee is woken with "+
+					"and what the item's history shows beside the hand-off.",
+					MaxAssignmentReason),
+			},
+			"checklist": checklistSchema(),
+			"priority":  map[string]any{"type": "string", "description": "One of: " + priorityList() + "."},
+			"title":     map[string]any{"type": "string"},
+			"body":      map[string]any{"type": "string", "description": "Replaces the description."},
 			"labels": map[string]any{
 				"type": "array",
 				"description": "REPLACES the item's labels. Each must be a " +
@@ -2373,6 +2383,27 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
 	if refusal != "" {
 		return failed(refusal), nil
+	}
+	// ONE OPERATION PER DISTINCT CALL, keyed on what was sent — see
+	// [opIDFor]: a turn that set the status and then assigned the item, or
+	// ticked two checklist items, is two operations, and a retry sends the
+	// same arguments and is still the same one. Derived HERE, before the
+	// patch is built, because a checklist gesture mints the ids of the lists
+	// and items it adds from it.
+	opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
+	reason, refusal := assignmentReason(args)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	checklist, refusal := t.deps.checklistIntent(args, opID)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	if checklist != nil {
+		patch.Checklist = checklist
+		if kind == tracker.ChangeFields {
+			kind = tracker.ChangeChecklist
+		}
 	}
 	// IF-MATCH IS THE MODEL'S OWN PRECONDITION, passed through rather than
 	// derived: omitted it merges, which is what a model naming two fields
@@ -2501,7 +2532,6 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// this item would put a `fields` commit in the feed that changed no
 	// fields.
 	if !patch.Empty() {
-		opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
 		got, err := writer.UpdateTask(ctx, opID, before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
 			tracker.Wake{
@@ -2509,6 +2539,11 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Before: before.Task,
 				After:  patched(before.Task, patch),
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
+				// THE REASON IS THE CHANGE'S EXCERPT, which is the one line
+				// both the history row and the wake already carry — so the
+				// new assignee is woken with it and the item's history
+				// shows it beside the hand-off, with no field of its own.
+				Excerpt: reason,
 			}.Notify(t.deps.Leads))
 		if err != nil {
 			return writeFailure(actor, UpdateWorkItemTool, err), nil
@@ -2909,12 +2944,6 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	return patch, kind, ""
 }
 
-// patched is the task as the write will leave it, for the wake's snapshot.
-//
-// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
-// state this change produces and the change has not landed yet — a read after
-// the write would race every other writer, and on a lagging node would return
-// the state before it.
 // remove is a handle set minus one handle, order preserved.
 func remove(all []string, handle string) []string {
 	out := make([]string, 0, len(all))
@@ -2934,6 +2963,12 @@ func appendMissing(all []string, handle string, add bool) []string {
 	return append(all, handle)
 }
 
+// patched is the task as the write will leave it, for the wake's snapshot.
+//
+// APPLIED HERE RATHER THAN READ BACK, because the snapshot has to describe the
+// state this change produces and the change has not landed yet — a read after
+// the write would race every other writer, and on a lagging node would return
+// the state before it.
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
 	// reimplementation, so every field added to [tracker.TaskPatch] had to
@@ -2957,6 +2992,17 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 			patch.Watch.Handle, patch.Watch.Watch)
 		task.Muted = appendMissing(remove(task.Muted, patch.Watch.Handle),
 			patch.Watch.Handle, !patch.Watch.Watch)
+	}
+	if patch.Checklist != nil {
+		// THE GESTURE THROUGH THE WRITER'S OWN FUNCTION, over the snapshot
+		// this tool read — so the wake's checklist delta and the people
+		// whose items it touched are computed from what the gesture does,
+		// as they are for a watch. A gesture this read cannot resolve (an
+		// item added since) leaves the snapshot as read: the decide is the
+		// authority and resolves it against the task as it lands.
+		if lists, err := tracker.ApplyChecklist(task.Checklists, *patch.Checklist); err == nil {
+			task.Checklists = lists
+		}
 	}
 	return task
 }

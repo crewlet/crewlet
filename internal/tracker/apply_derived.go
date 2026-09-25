@@ -14,7 +14,7 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Three today, and the rule all follow is [statelog.Deriver]'s: maintained
+// Four today, and the rule all follow is [statelog.Deriver]'s: maintained
 // INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] the first
 // time a build whose rules differ from the checkpoint's boots — in this Go,
 // never a second copy in a migration's SQL.
@@ -28,17 +28,21 @@ import (
 //   - A project's `active_count`, maintained beside the three status buckets
 //     by [Applier.maintainProjectCounts] and recounted from the task rows by
 //     [rederiveActiveCounts].
+//   - A task history row's `reassignments`, the hand-off count that commit
+//     left, carried forward in log order as each row is written and walked
+//     again by [rederiveHandOffs] — see apply_handoffs.go.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
 // 1 is `reopens`. 2 is a person's positions stored PACKED, generation in the
 // high bits: `seen_through` had been written as the bare sequence and every
 // inbox entry's position was whatever the caller sent. 3 is a project's
-// `active_count`, the part of its open work somebody has started. Bumped by ANY change to
+// `active_count`, the part of its open work somebody has started. 4 is a task
+// history row's `reassignments`, the hand-off count that commit left. Bumped by ANY change to
 // what a derived column holds, the first one a column adds included — the bump
 // is what fills a new column on a node upgrading onto rows its predecessor
 // wrote without it.
-const DerivationVersion = 3
+const DerivationVersion = 4
 
 var _ statelog.Deriver = (*Applier)(nil)
 
@@ -90,8 +94,8 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 }
 
 // Rederive implements [statelog.Deriver]: every derived column recomputed from
-// the rows this transaction holds — a task's `reopens`, a person's positions
-// and a project's `active_count`.
+// the rows this transaction holds — a task's `reopens`, a person's positions,
+// a project's `active_count` and each task history row's hand-off count.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	reopens, err := rederiveReopens(ctx, tx)
 	if err != nil {
@@ -105,7 +109,11 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + persons + active, nil
+	handOffs, err := rederiveHandOffs(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return reopens + persons + active + handOffs, nil
 }
 
 // rederiveActiveCounts is every project's `active_count` recounted from its

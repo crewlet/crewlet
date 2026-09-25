@@ -55,6 +55,7 @@ const task = (over: Partial<WorkItem> = {}): WorkItem => ({
 
 const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
   task: task(),
+  reassignment_budget: 8,
   complete: true,
   ...over,
 });
@@ -234,16 +235,38 @@ test("the project row falls back to the key alone", () => {
 
 // A HAND-OFF COUNT IS A BUDGET, not trivia: an item handed on too many times
 // has stopped being work and started being a hot potato, and the engine
-// refuses the next hand-off rather than letting it circle.
-test("a task near its hand-off cap is flagged", () => {
-  const { container } = render(
+// refuses the next hand-off rather than letting it circle. The limit is the
+// one the ENGINE serves — this rail once warned at a six of its own against a
+// budget of eight — so the warning appears exactly where the refusals start.
+test("the hand-off warning is at the engine's budget", () => {
+  const { container, rerender } = render(
     <ItemProps
-      detail={detail({ task: task({ reassignments: 7 }) })}
+      detail={detail({ task: task({ reassignments: 7 }), reassignment_budget: 8 })}
       chrome={{}}
       project={project()}
     />,
   );
-  expect(screen.getByText("Hand-offs")).toBeTruthy();
+  expect(screen.getByText("Hand-offs").nextElementSibling!.textContent).toBe("7 of 8");
+  expect(container.querySelector("dd svg")).toBeNull();
+
+  rerender(
+    <ItemProps
+      detail={detail({ task: task({ reassignments: 8 }), reassignment_budget: 8 })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  expect(screen.getByText("Hand-offs").nextElementSibling!.textContent).toBe("8 of 8");
+  expect(container.querySelector("dd svg")).toBeTruthy();
+
+  // A DIFFERENT BUDGET MOVES THE WARNING WITH IT: the figure is read, never held.
+  rerender(
+    <ItemProps
+      detail={detail({ task: task({ reassignments: 3 }), reassignment_budget: 3 })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
   expect(container.querySelector("dd svg")).toBeTruthy();
 });
 

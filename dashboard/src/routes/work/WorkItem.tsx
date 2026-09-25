@@ -1451,13 +1451,18 @@ export function ItemProps({
           // THE REASSIGNMENT COUNT IS A BUDGET, not trivia: an item handed on
           // too many times has stopped being work and started being a hot
           // potato, and the engine refuses the next hand-off rather than
-          // letting it circle.
+          // letting it circle. The limit is the ENGINE'S, served beside the
+          // count — this rail used to warn at a six of its own against a
+          // budget of eight — and the warning is where the engine starts
+          // refusing.
           {
             label: "Hand-offs",
             value: (
               <span className="row gap-1">
-                {item.reassignments ?? 0}
-                {(item.reassignments ?? 0) >= 6 && <WarningGlyph size="xs" />}
+                {`${item.reassignments ?? 0} of ${detail.reassignment_budget}`}
+                {(item.reassignments ?? 0) >= detail.reassignment_budget && (
+                  <WarningGlyph size="xs" />
+                )}
               </span>
             ),
           },

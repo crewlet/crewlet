@@ -711,6 +711,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				// step of a promotion re-runnable.
 				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
+			charged, err = settleChecklist(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			if charged.Fields != nil {
 				// THE COERCION TABLE, and the required-field half that
 				// only ever ran on a create. A patch reaching here
@@ -899,10 +903,13 @@ func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
 	}
 	intent := *patch.Promote
 	switch {
-	case patch.Checklists != nil:
+	case patch.Checklists != nil || patch.Checklist != nil:
+		// A WHOLE SET OR ANOTHER GESTURE ([TaskPatch.Checklist]) beside the
+		// mark is refused rather than resolved in some order: each is a
+		// complete statement of what the checklists become.
 		return patch, "", invalid("tracker: this patch carries both a "+
-			"promotion of item %s and a whole checklist set — a caller states "+
-			"one or the other", intent.Item)
+			"promotion of item %s and another change to the checklists — a "+
+			"caller states one or the other", intent.Item)
 	case intent.Item == "" || intent.Subtask == "":
 		return patch, "", invalid("tracker: a promotion mark names item %q "+
 			"and subtask %q, and needs both", intent.Item, intent.Subtask)
