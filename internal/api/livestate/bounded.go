@@ -55,3 +55,16 @@ func (b *boundedSet[V]) has(key string) bool {
 }
 
 func (b *boundedSet[V]) len() int { return len(b.items) }
+
+// retain keeps only the keys keep accepts, in their order.
+func (b *boundedSet[V]) retain(keep func(key string) bool) {
+	kept := b.order[:0:0]
+	for _, key := range b.order {
+		if keep(key) {
+			kept = append(kept, key)
+			continue
+		}
+		delete(b.items, key)
+	}
+	b.order = kept
+}

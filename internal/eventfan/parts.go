@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var logger = logging.Get("eventfan")
@@ -242,4 +243,28 @@ func idsOf(parts ...[]store.TurnPartial) []string {
 		}
 	}
 	return out
+}
+
+// spendPart is one node's per-phase spend records of a window, newest first.
+type spendPart struct {
+	Records []tokens.Record `json:"records"`
+
+	// Full says the node holds more records past the last one here: its
+	// read stopped at the limit, or its reply was cut to fit the
+	// transport. See [MergeSpend].
+	Full bool `json:"full"`
+}
+
+func (p spendPart) rows() int { return len(p.Records) }
+
+func (p spendPart) keep(n int) any {
+	return spendPart{Records: p.Records[:n], Full: true}
+}
+
+func spendPartOf(ctx context.Context, log *store.EventLog, q store.PhaseTokenQuery) (spendPart, error) {
+	records, err := log.PhaseTokens(ctx, q)
+	if err != nil {
+		return spendPart{}, err
+	}
+	return spendPart{Records: records, Full: q.Limit > 0 && len(records) >= q.Limit}, nil
 }

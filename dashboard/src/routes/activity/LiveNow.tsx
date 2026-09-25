@@ -127,10 +127,10 @@ export function LiveNow() {
   const tokens = useTokens();
   const budget = useOrgBudget();
   const now = useNow();
-  // THE DURABLE CODING RUNS, the same source the Inbox reads for the same
-  // reason: the live projection sweeps a parked run after twelve hours, and
-  // two screens computing one queue from two sources would disagree about
-  // whether anybody is waiting.
+  // THE DURABLE CODING RUNS, the same source the Inbox reads: the attention
+  // queue counts down a parked run's pause window, which only the durable row
+  // carries, and two screens computing one queue from two sources would
+  // disagree about whether anybody is waiting.
   const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
   // NOT ALIGNED to a bucket: the strip's cell is its own, finer than either of
   // the engine's, and its newest cell is the minute in progress.
@@ -158,10 +158,10 @@ export function LiveNow() {
    * arrive: a settled run's record is deleted, and the projection drops its
    * entry on completion, so both sources carry only live runs.
    *
-   * Both sources, because neither alone is "right now": the projection sweeps
-   * a parked run after twelve hours and has no row for one whose box was
-   * reclaimed, and the store is a poll behind a box that came up two seconds
-   * ago. Counting only the projection is what made the tile below disagree
+   * Both sources, because neither alone is "right now": the projection is
+   * reconciled against the durable record only every thirty seconds, so a run
+   * the events never announced reaches it a reconcile late, and the store is a
+   * poll behind a box that came up two seconds ago. Counting only the projection is what made the tile below disagree
    * with the Inbox about whether anything was waiting.
    */
   const inFlight = useMemo(() => mergeRuns(runs?.runs ?? [], sandboxes), [runs, sandboxes]);

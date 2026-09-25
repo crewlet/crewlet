@@ -75,11 +75,10 @@ describe("what it surfaces", () => {
   // `reseed` — so the condition it was guarding never fired on a real run and
   // the test passed against a fixture no engine produces.
   //
-  // AND FROM THE DURABLE ROW, not the projection. The live push sweeps a
-  // sandbox entry after twelve hours, so a run parked on a question — the
-  // longest-lived item this list can hold, since it is waiting for a person —
-  // used to leave the queue exactly when it had been ignored long enough to
-  // matter, and the dashboard reported a quiet company.
+  // AND FROM THE DURABLE ROW, not the projection: the row carries the pause
+  // window the detail counts down, which the live entry does not. A run parked
+  // on a question is the longest-lived item this list can hold, since it is
+  // waiting for a person, and it has to stay here for as long as it waits.
   const parked = (status: string, over: Record<string, unknown> = {}) =>
     ({
       turn_id: "t1",
@@ -214,7 +213,7 @@ describe("what it surfaces", () => {
         total_tokens: 0,
         tool_executions: null,
         round_num: 3,
-        rounds: 3,
+        rounds_used: 3,
         in_progress: true,
         updated_at: updated,
       },
@@ -239,7 +238,7 @@ describe("what it surfaces", () => {
             live_call: {
               ...call(new Date(now - 900_000).toISOString()).live_call,
               round_num: -1,
-              rounds: 0,
+              rounds_used: 0,
             },
           },
         ],

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // pageOf is one node's keyset page over its own rows, exactly as the store
@@ -275,5 +276,36 @@ func TestARelatedPageWithMoreKeepsNoSiblingPastItsLastDirectRow(t *testing.T) {
 	got = ids(MergeRelated(direct, siblings, 5, false))
 	if !slices.Equal(got, []string{"d10", "s9", "d8", "s1"}) {
 		t.Fatalf("the last page merged to %v, want every sibling", got)
+	}
+}
+
+// A SPEND MERGE STOPS WHERE A FULL PART STOPPED, for MergeListing's reason: a
+// node whose reply was cut to fit the transport holds older records nobody has
+// seen, so a record older than its last one cannot be placed — another node's
+// record there would be summed while the cut node's beside it was not.
+//
+// Mutation: drop the horizon cut and pb-3 is kept.
+func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
+	t.Parallel()
+	at := func(minute int) string {
+		return time.Date(2026, 6, 14, 12, minute, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	}
+	cut := spendPart{Full: true, Records: []tokens.Record{
+		{EventID: "pa-10", Timestamp: at(10)}, {EventID: "pa-9", Timestamp: at(9)},
+	}}
+	whole := spendPart{Records: []tokens.Record{
+		{EventID: "pb-12", Timestamp: at(12)}, {EventID: "pb-3", Timestamp: at(3)},
+		// The same record twice is one record: a record is SUMMED.
+		{EventID: "pa-10", Timestamp: at(10)},
+	}}
+	var got []string
+	for _, r := range MergeSpend([]spendPart{cut, whole}, 10) {
+		got = append(got, r.EventID)
+	}
+	if !slices.Equal(got, []string{"pb-12", "pa-10", "pa-9"}) {
+		t.Fatalf("merged %v, want pb-12, pa-10, pa-9 and nothing past the cut", got)
+	}
+	if n := len(MergeSpend([]spendPart{whole}, 1)); n != 1 {
+		t.Errorf("a merge cut at one kept %d", n)
 	}
 }

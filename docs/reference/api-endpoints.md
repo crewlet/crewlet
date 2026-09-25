@@ -1377,22 +1377,33 @@ implementation of the aggregation in the browser. What a seat has spent
 is that rollup's per-agent row: the projection keeps no second total of
 its own.
 
-**The projection is seeded from the event store when the process starts**,
-after the broadcast subscription is attached and before the HTTP listener
-binds. Two bounded reads, each bound the projection's own: the newest 400
-persisted events for the feed, and the newest 8 000 phase records inside the
-24-hour spend window. Without it every one of these surfaces started at this
-process's boot, so a restart, a deploy or a node joining a fleet showed an
-operator a company that had apparently done nothing beside a store that
-said otherwise. An event that arrives both ways is recognised by its id and
-listed and counted once, in either order: the stream can deliver it before
-the read, and the read can find a row the publishing node wrote inline before
-the stream delivered it. History is ordered behind the live rows it predates.
-On a fleet the seed is what
-**this node** published (the event store is per node), while everything
-after the boot is the whole company's. A read that fails is logged as
-`live_projection_not_seeded` and costs the history, never the start-up:
-`GET /events` and the `tokens` query still read the store directly.
+**The projection is seeded from the fleet's event stores when the process
+starts**, after the broadcast subscription is attached and before the HTTP
+listener binds. The seed makes three bounded reads, side by side, and each read is bounded by the projection's own limit:
+
+- the newest 400 persisted events, for the feed;
+- the newest 8 000 phase records inside the 24-hour spend window;
+- the newest three turns of every agent seat, for the seat's `last_turn` and for a turn it left parked.
+
+Each read goes to **every live node**, through the same scatter the history
+queries use (see [Reading the fleet's history](#reading-the-fleets-history-coverage)).
+Each node's store holds only what that node published, so a seed that read
+this node's store alone showed a restarted node only its own share of the
+company. Without any seed, every one of these surfaces started at this
+process's boot: a restart, a deploy or a node joining a fleet showed an
+operator a company that had apparently done nothing, beside a store that
+said otherwise. The projection records which nodes answered, as a `coverage`,
+and a read that failed makes that coverage incomplete. An event that arrives
+both ways is recognised by its id and is listed and counted once, whichever
+arrives first. The stream can deliver it before the read, and the read can find a row that the
+publishing node wrote inline before the stream delivered it. History is
+ordered behind the live rows it predates, and a seat's turn that the stream has
+already moved is left as the stream left it. A read that fails is logged as
+`live_projection_not_seeded` and costs that history, never the start-up. The
+reads run side by side, so a slow read does not use up the time budget of the others.
+
+**The running coding runs are reconciled against the durable run record**. The record is read once before the listener binds and then every 30 seconds. The stream is lossy and in memory, so it cannot say which runs exist, and the record can. See [the running-runs panel](../concepts/code-sandbox.md)
+for which of the two wins when they disagree. A reconcile that changed the set pushes it as `sandboxes`, and a reconcile that changed nothing pushes nothing.
 
 ### `GET /stream/snapshot`
 
@@ -1411,10 +1422,15 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "agents":    [ { /* /agents row: live state + budget meter + live_call (the
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
-                      seat, or null) */ }, ... ],
+                      seat, or null) + turn (the turn the seat is on,
+                      or null) + last_turn (the newest turn it ended,
+                      or null) */ }, ... ],
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
-  "sandboxes": [ { /* in-flight detached coding run */ }, ... ],
+  "sandboxes": [ { /* in-flight detached coding run: turn_id, role,
+                      agent_handle, agent_id, coding_agent, sandbox_id,
+                      task, status (the run record's own word), started_at,
+                      question, audience, work_item, owner, paused_at */ }, ... ],
   "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
@@ -1536,8 +1552,8 @@ set of eight values, and which event type lands under which is in
 
 Every node's event store holds what that node published and nothing else, so
 the history questions — `events`, `event`, `event_series`, `trace`, `turn`,
-`turns`, `phases`, a seat's `llm_history` on `agent`, and the delivery counts
-on `integrations` — are answered by **every live node at query time**: the
+`turns`, `phases`, a seat's `llm_history` on `agent`, the delivery counts
+on `integrations`, and the live projection's boot seed — are answered by **every live node at query time**: the
 node you asked reads its own store and scatters the same question to its
 peers, merges the answers, and says which nodes it heard from. Each of those
 answers carries one shape:
@@ -1755,8 +1771,20 @@ counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
-tool_executions, round_narration, partial_round, rounds, in_progress }` while an
-LLM call is under way.  A call whose phase failed keeps `in_progress: false`
+tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
+max_rounds, round_ceiling, round_started_at, running_call, cache_read_tokens,
+cache_write_tokens, work_item, node, in_progress }` while an LLM call is under
+way. The fields are these:
+
+- `rounds_used` is how many rounds have come back, counted from one. A finished phase record carries the same count under the same name.
+- `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
+- `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.
+- `round_ceiling` is the highest value any extension may raise `max_rounds` to.
+- `round_started_at` is when the round in flight made its provider call.
+- `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
+- `node` is the node running the call.
+
+Beside `live_call`, each seat carries `turn` and `last_turn`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, and the newest turn it ended. See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
 phase is over and nothing is still arriving.
@@ -1801,7 +1829,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
-| `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
+| `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
@@ -1829,7 +1857,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `events` | `{limit, type, source, category, trace_id, actor, agent, turn_id, work_key, work_item, since, until, before_id, before_time}` | `GET /events`. `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, a coding run it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0031`), whose backfill gives the rows already stored their item from the payload; their stored `tags` are not rewritten, so the column, not `tags.work_item`, is what answers for history. Rows written before migration `0029` carry the work key in `turn_id`, and that migration backfills it into the COLUMN, so history answers both. Every row answers with its own `work_key` read off that column rather than out of its `tags`, which is the one promoted value that is not a copy of a tag: the backfill deliberately does not rewrite a stored tags blob, since those record what the writer extracted from an event whose JSON carried no such field |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, actor, turn_id, work_key, work_item}` | `GET /events/series`. THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one |
-| `turns` | `{days, role, agent_id, model, work_key, work_item, failed, sort, before, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the work item come from the completion record's own payload, read from the one row per turn that carries it. `work_item` is `{backend, id, key, project}` — the one item the turn was charged to (see [which work a turn is on](../concepts/turn-engine.md#which-work-a-turn-is-on)) — and ABSENT for a turn on nothing, including one still running, since a sole write names its item only at the end. `work_item=` narrows to the turns on one item, by the same `<backend>:<id>` identity `/events` takes (and the same **400** for anything else); it selects TURNS rather than rows, so a turn is listed whole — every phase and every segment folded — when any of its records names the item. There is no `task_id` on a row: the key it read was declared on the completion and never set, and `task_id` elsewhere means a delegated worker's task or a schedule fire's run, never a tracker item. A turn that launched a detached coding run PARKS: the segment that launched it publishes a completion with `suspended: true`, and the same turn completes again when the run is collected — so one turn can hold several completion records and "a completion exists" is not "the turn ended". The NEWEST completion decides: `complete` is true when it is not a suspension, and `parked` when it is, so the two are never both true; a turn with neither is running or died mid-flight. A completion from a build that predates the flag names no `suspended` and reads as an end. `duration_ms` is the turn's OWN measurement — the SUM of every segment's, so the wait for the coding run between them is not counted — which is not the span of its events either: the span covers the reflection pass that publishes afterwards. `cache_read_tokens` and `cache_write_tokens` are the turn's phases' prompt-cache counts (migration `0030`), a breakdown of `input_tokens` rather than an addition to `total_tokens`. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list — and a turn counts as failed when ANY of its events carried a failure OR was a failure BY ITS TYPE (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`), which is the same rule `/events` applies to a row. The second half is what a turn the engine killed BETWEEN phases leaves behind — a refused charge, an exhausted chain, a breached guard — so reading the failure flag alone reported those as clean turns with no completion record, which is indistinguishable from a turn still running. The cursor is on the turn's START, which is what the listing is ordered by; a keyset on any one event pages a turn twice. `sort` is `-started` (the default, newest first) or `-tokens` (the most total tokens first, the spend screen's drill-down per turn) — anything else is **400** naming both. Read from EVERY node and merged, with a `coverage` — see [Reading the fleet's history](#reading-the-fleets-history-coverage) |
+| `turns` | `{days, role, agent_id, model, work_key, work_item, failed, sort, before, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the work item come from the completion record's own payload, read from the one row per turn that carries it. `work_item` is `{backend, id, key, project}` — the one item the turn was charged to (see [which work a turn is on](../concepts/turn-engine.md#which-work-a-turn-is-on)) — and ABSENT for a turn on nothing, including one still running, since a sole write names its item only at the end. `work_item=` narrows to the turns on one item, by the same `<backend>:<id>` identity `/events` takes (and the same **400** for anything else); it selects TURNS rather than rows, so a turn is listed whole — every phase and every segment folded — when any of its records names the item. There is no `task_id` on a row: the key it read was declared on the completion and never set, and `task_id` elsewhere means a delegated worker's task or a schedule fire's run, never a tracker item. A turn that launched a detached coding run PARKS: the segment that launched it publishes a completion with `suspended: true`, and the same turn completes again when the run is collected — so one turn can hold several completion records and "a completion exists" is not "the turn ended". The NEWEST completion decides: `complete` is true when it is not a suspension, and `parked` when it is, so the two are never both true; a turn with neither is running or died mid-flight. A `sandbox_run_failed` also counts as an end. It is a coding run that was LOST, and nothing resumes the turn that was parked on it, so a list reading completions alone called that turn parked for good. The newest end still decides: a run lost while it was still launching is followed by its turn's own completion. A completion from a build that predates the flag names no `suspended` and reads as an end. `duration_ms` is the turn's OWN measurement — the SUM of every segment's, so the wait for the coding run between them is not counted — which is not the span of its events either: the span covers the reflection pass that publishes afterwards. `cache_read_tokens` and `cache_write_tokens` are the turn's phases' prompt-cache counts (migration `0030`), a breakdown of `input_tokens` rather than an addition to `total_tokens`. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list — and a turn counts as failed when ANY of its events carried a failure OR was a failure BY ITS TYPE (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`), which is the same rule `/events` applies to a row. The second half is what a turn the engine killed BETWEEN phases leaves behind — a refused charge, an exhausted chain, a breached guard — so reading the failure flag alone reported those as clean turns with no completion record, which is indistinguishable from a turn still running. The cursor is on the turn's START, which is what the listing is ordered by; a keyset on any one event pages a turn twice. `sort` is `-started` (the default, newest first) or `-tokens` (the most total tokens first, the spend screen's drill-down per turn) — anything else is **400** naming both. Read from EVERY node and merged, with a `coverage` — see [Reading the fleet's history](#reading-the-fleets-history-coverage) |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, so a turn between eight and thirty days old names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
@@ -2830,14 +2858,13 @@ started it is still unwinding, so the suspended conversation a resume
 re-enters is not on the row yet; it is listed but never polled, because a
 row nobody lists is a box nobody reclaims.
 
-Read from the durable row rather than from the live projection, which is
-the wrong source for this question twice over: it is in-memory, so it
-starts empty after a restart, and it sweeps an entry after twelve hours
-while a run parked on a question can legitimately wait days for a person
-to answer. The states that most need somebody were therefore the ones
-least likely to be on screen, and a `reseed` run (pause expired, box
-reclaimed, work preserved on a pushed branch) had no surface at all — it
-looked exactly like work that had finished.
+This query reads the durable row directly. The live projection's panel is
+reconciled against the same record every 30 seconds, but it carries only what
+a running-runs panel draws. This board needs the row's own facts: the branch,
+the placement, the pause TTL, whether a box still exists, and the bridge's
+call log. It also lists `resumed` runs, which the panel drops because their
+turn has already taken back the result. A `reseed` run (pause expired, box
+reclaimed, work preserved on a pushed branch) is listed on both.
 
 ```json
 {

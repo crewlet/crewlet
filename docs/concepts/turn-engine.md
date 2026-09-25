@@ -721,13 +721,17 @@ One `turn_id` moves through four stages, and the records say which it is in:
 | **context** | `agent_turn_started` published, no phase open yet — the prefetch is reading its thread and knowledge |
 | **phases** | an `agent_phase_started` open, `agent_turn_progress` frames streaming |
 | **parked** | the newest `agent_turn_completed` / `turn_completed` carries `suspended: true` — the segment ended on a detached coding run, and the same `turn_id` completes again when the run is collected |
-| **done** | a completion **without** `suspended` |
+| **done** | a completion **without** `suspended`, or a `sandbox_run_failed` for the run a parked turn was waiting on: nothing resumes a turn whose run was lost |
 
 A reader that took any completion for the end listed a parked turn as finished,
 with its first segment's duration. The turns list (`GET /turns`) reads the
-stages this way: the newest completion makes a turn `complete` or `parked`,
-never both, and its `duration_ms` is the sum of every segment's own measurement
-— the time the turn worked, not the time its coding run took between segments.
+stages this way. The newest end makes a turn `complete` or `parked`, never
+both. An end is a completion or a lost run, and a lost run used to leave its
+turn parked for good. The turn's `duration_ms` is the sum of every segment's own
+measurement, which is the time the turn worked and not the time its coding run
+took between segments. The live projection reads the same four stages onto each
+seat's `turn`, from `context` to `parked`, so a seat whose turn is parked says
+so rather than saying it is idle (see [Agent States](agent-runtime.md#agent-states)).
 
 ### Finding everything on one item
 

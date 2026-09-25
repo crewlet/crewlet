@@ -53,7 +53,7 @@ const running = (phase: string, roundNum = 0): AgentRow =>
       phase,
       in_progress: true,
       round_num: roundNum,
-      rounds: Math.max(roundNum + 1, 0),
+      rounds_used: Math.max(roundNum + 1, 0),
       updated_at: new Date().toISOString(),
     } as LiveCall,
   }) as AgentRow;

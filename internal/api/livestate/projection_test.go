@@ -205,7 +205,7 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 	}
 }
 
-func TestAClarificationFlipsARunToAwaitingInput(t *testing.T) {
+func TestAClarificationFlipsARunToAwaitingAPerson(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
 	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
@@ -217,8 +217,12 @@ func TestAClarificationFlipsARunToAwaitingInput(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runs))
 	}
-	if runs[0].Status != "awaiting_input" {
-		t.Errorf("status = %q, want awaiting_input", runs[0].Status)
+	// THE RUN RECORD'S OWN WORD, which is the one the dashboard asks
+	// "is a person needed?" in. This projection used to write
+	// `awaiting_input`, which the record cannot, so the answer was never
+	// yes for a live run.
+	if runs[0].Status != livestate.SandboxAwaiting {
+		t.Errorf("status = %q, want %q", runs[0].Status, livestate.SandboxAwaiting)
 	}
 	if runs[0].Question != "which branch?" || runs[0].Audience != "author" {
 		t.Errorf("entry = %+v", runs[0])
@@ -239,8 +243,8 @@ func TestAClarificationWithNoPriorStartSynthesizesAnEntry(t *testing.T) {
 		"turn_id": "tn-1", "role": "Coder", "question": "which branch?",
 	}))
 	runs := s.ActiveSandboxes()
-	if len(runs) != 1 || runs[0].Status != "awaiting_input" {
-		t.Fatalf("runs = %+v, want one awaiting-input entry", runs)
+	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting {
+		t.Fatalf("runs = %+v, want one entry awaiting a person", runs)
 	}
 	if runs[0].Role != "Coder" {
 		t.Errorf("role = %q", runs[0].Role)
@@ -273,46 +277,205 @@ func TestASandboxEventWithNoTurnIDIsIgnored(t *testing.T) {
 	}
 }
 
-func TestARunWhoseCompletionNeverArrivedIsEventuallyDropped(t *testing.T) {
+func TestAParkedRunOlderThanADayIsStillShown(t *testing.T) {
 	t.Parallel()
-	// The set is cleared by a completion, and an event stream that can
-	// miss a start can miss a completion too. A ghost entry is a false
-	// report of work in flight that no operator can clear.
-	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	// A run parked on a question can rightly wait days for a person, and
+	// that is the state this panel most needs to show. It used to be aged
+	// out at twelve hours, so the runs that most needed somebody were the
+	// ones least likely to be on screen.
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
 	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1"),
 		at("2026-06-14T12:00:00Z")))
+	s.Apply(env("sandbox_clarification_requested", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "question": "which branch?",
+	}, at("2026-06-14T12:10:00Z")))
 
+	runs := s.ActiveSandboxes()
+	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting {
+		t.Fatalf("runs = %+v, want the three-day-old parked run still shown", runs)
+	}
+	if runs[0].PausedAt != "2026-06-14T12:10:00Z" {
+		t.Errorf("paused at %q, want the instant it stopped to ask", runs[0].PausedAt)
+	}
+}
+
+func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
+	t.Parallel()
+	// A run lost to an unreachable box or a stranded claim announces it with
+	// sandbox_run_failed, which this projection read nothing of: the run
+	// stayed on the panel as running until an age-out took it.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	change := s.Apply(env("sandbox_run_failed", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "reason": "collect_unreachable",
+	}, id("e-failed")))
+
+	if !change.Sandboxes {
+		t.Error("a lost run did not move the sandbox set")
+	}
 	if runs := s.ActiveSandboxes(); len(runs) != 0 {
-		t.Errorf("runs = %+v, want the day-old entry swept", runs)
+		t.Errorf("runs = %+v, want the lost run gone", runs)
 	}
 }
 
-func TestALongRunningJobIsNotSweptFromUnderAnOperator(t *testing.T) {
+func TestAStartedRunNamesItsItemAndItsOwner(t *testing.T) {
 	t.Parallel()
-	// The counterfactual. A detached coding run can legitimately take
-	// hours, and a sweep that took them out would be the same false report
-	// in the other direction.
-	now := time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC)
-	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1"),
-		at("2026-06-14T12:00:00Z")))
-
-	if runs := s.ActiveSandboxes(); len(runs) != 1 {
-		t.Errorf("runs = %+v, want an eight-hour job kept", runs)
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", with(sandboxPayload("tn-1"), map[string]any{
+		"node":      "core-1",
+		"work_item": map[string]any{"backend": "native", "id": "t-9", "key": "ENG-9", "project": "p-1"},
+	})))
+	runs := s.ActiveSandboxes()
+	if len(runs) != 1 {
+		t.Fatalf("runs = %+v, want one", runs)
+	}
+	if runs[0].Owner != "core-1" {
+		t.Errorf("owner = %q, want the node that announced the start", runs[0].Owner)
+	}
+	if runs[0].WorkItem == nil || runs[0].WorkItem.Key != "ENG-9" || runs[0].WorkItem.ID != "t-9" {
+		t.Errorf("work item = %+v, want ENG-9", runs[0].WorkItem)
 	}
 }
 
-func TestAnEntryWithNoTimestampIsKeptRatherThanGuessedAt(t *testing.T) {
-	t.Parallel()
-	// It cannot be aged out on time, and dropping it on that basis would
-	// be arbitrary.
-	now := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1"), at("")))
+// record is one durable run as the reconcile is handed it.
+func record(turnID string, status livestate.SandboxStatus, launch string, written time.Time) livestate.SandboxRecord {
+	return livestate.SandboxRecord{
+		Entry: livestate.SandboxEntry{
+			TurnID: turnID, Role: "Coder", AgentHandle: "coder", Status: status,
+			StartedAt: "2026-06-14T11:00:00Z", Owner: "core-2", Task: "from the record",
+		},
+		LaunchID: launch, WrittenAt: written,
+	}
+}
 
+func TestReconcileRemovesARunTheStoreNoLongerHolds(t *testing.T) {
+	t.Parallel()
+	// The event that would have cleared it never arrived: a completion is
+	// as lossy as a start. The durable record no longer holds the run, and
+	// the record is the truth about which runs exist.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-ghost")))
+
+	change := s.ReconcileSandboxes(nil, fixtureNow.Add(time.Second))
+	if !change.Sandboxes {
+		t.Error("dropping a ghost did not move the sandbox set")
+	}
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the run the record no longer holds gone", runs)
+	}
+}
+
+func TestReconcileKeepsARunStartedWhileTheRecordWasRead(t *testing.T) {
+	t.Parallel()
+	// The listing began before the run's record was written, so it cannot
+	// hold it — and the start event this process learned of after the read
+	// began is the newer truth.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-new")))
+
+	s.ReconcileSandboxes(nil, fixtureNow.Add(-time.Second))
 	if runs := s.ActiveSandboxes(); len(runs) != 1 {
-		t.Errorf("runs = %+v, want the undateable entry kept", runs)
+		t.Errorf("runs = %+v, want the run started during the read kept", runs)
+	}
+}
+
+func TestReconcileSeedsWhatTheEventsNeverSaid(t *testing.T) {
+	t.Parallel()
+	// A process that came up while runs were in flight — parked on a
+	// question for days, or still coding — saw none of their starts.
+	s := sandboxState(t)
+	change := s.ReconcileSandboxes([]livestate.SandboxRecord{
+		record("tn-parked", livestate.SandboxAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
+		record("tn-running", livestate.SandboxRunning, "l-2", fixtureNow.Add(-time.Minute)),
+		// A run whose turn has taken its result back is over.
+		record("tn-resumed", livestate.SandboxStatus("resumed"), "l-3", fixtureNow),
+	}, fixtureNow)
+
+	if !change.Sandboxes {
+		t.Error("seeding from the record did not move the sandbox set")
+	}
+	runs := s.ActiveSandboxes()
+	var got []string
+	for _, r := range runs {
+		got = append(got, r.TurnID+"="+string(r.Status))
+	}
+	slices.Sort(got)
+	want := []string{"tn-parked=awaiting_clarification", "tn-running=running"}
+	if !slices.Equal(got, want) {
+		t.Errorf("runs = %v, want %v", got, want)
+	}
+	if again := s.ReconcileSandboxes([]livestate.SandboxRecord{
+		record("tn-parked", livestate.SandboxAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
+		record("tn-running", livestate.SandboxRunning, "l-2", fixtureNow.Add(-time.Minute)),
+	}, fixtureNow.Add(time.Second)); again.Sandboxes {
+		t.Error("a reconcile that found nothing new reported a move, which pushes the panel for nothing")
+	}
+}
+
+func TestReconcileDoesNotResurrectARunWhoseCompletionLanded(t *testing.T) {
+	t.Parallel()
+	// The record lags its run's end by the collection the end starts: the
+	// completion is announced while the record still says running. Put
+	// back, the finished job would be drawn as running until the next read.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1", "launch_id": "l-1"}))
+
+	s.ReconcileSandboxes([]livestate.SandboxRecord{
+		record("tn-1", livestate.SandboxRunning, "l-1", fixtureNow),
+	}, fixtureNow.Add(time.Second))
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the completed job kept off the panel", runs)
+	}
+
+	// A RELAUNCH in the same turn is another job, and it is shown.
+	s.ReconcileSandboxes([]livestate.SandboxRecord{
+		record("tn-1", livestate.SandboxRunning, "l-2", fixtureNow.Add(time.Minute)),
+	}, fixtureNow.Add(2*time.Second))
+	if runs := s.ActiveSandboxes(); len(runs) != 1 {
+		t.Errorf("runs = %+v, want the relaunched job shown", runs)
+	}
+}
+
+func TestReconcileDoesNotResurrectAFailedRun(t *testing.T) {
+	t.Parallel()
+	// A failure names no job, so the record's own last write decides: one
+	// not written since the failure is the failed run's.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	s.Apply(env("sandbox_run_failed", map[string]any{"turn_id": "tn-1"},
+		at("2026-06-14T12:10:00Z")))
+
+	stale := time.Date(2026, 6, 14, 12, 9, 0, 0, time.UTC)
+	s.ReconcileSandboxes([]livestate.SandboxRecord{
+		record("tn-1", livestate.SandboxRunning, "l-1", stale),
+	}, fixtureNow)
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the failed run kept off the panel", runs)
+	}
+}
+
+func TestReconcileTakesTheRecordsWordOverAnOlderEvent(t *testing.T) {
+	t.Parallel()
+	// The event said running; the record, read later, says the run stopped
+	// to ask a question whose announcement was lost.
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	parked := record("tn-1", livestate.SandboxAwaiting, "l-1", fixtureNow)
+	parked.Entry.Question = "which branch?"
+	parked.Entry.PausedAt = "2026-06-14T12:20:00Z"
+
+	s.ReconcileSandboxes([]livestate.SandboxRecord{parked}, fixtureNow.Add(time.Second))
+	runs := s.ActiveSandboxes()
+	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting ||
+		runs[0].Question != "which branch?" || runs[0].Owner != "core-2" {
+		t.Fatalf("runs = %+v, want the record's parked run", runs)
+	}
+	// What only the announcement carried survives: its one-line task and
+	// the instant the run was announced.
+	if runs[0].Task != "fix the build" || runs[0].StartedAt != defaultTS {
+		t.Errorf("task %q started %q, want the announcement's", runs[0].Task, runs[0].StartedAt)
 	}
 }
 

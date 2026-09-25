@@ -195,6 +195,58 @@ export interface RoundNarration {
   content?: string;
 }
 
+/** One round of a phase's tool loop, as the engine timed it (`types.PhaseRound`). */
+export interface PhaseRound {
+  /** One-based, on the scale `tool_executions[].round` shares. */
+  round: number;
+  started_at: string;
+  duration_ms: number;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  tool_calls: number;
+}
+
+/** The tool call a phase is running right now (`types.RunningCall`). */
+export interface RunningCall {
+  round: number;
+  name: string;
+  arguments: string;
+  started_at: string;
+}
+
+/** The one work item a turn is charged to (`types.WorkItem`). */
+export interface WorkItemRef {
+  backend: string;
+  id: string;
+  key: string;
+  project: string;
+}
+
+/** Where in a turn a seat is (`livestate.Stage`). */
+export type TurnStage = "context" | "phase" | "parked";
+
+/** The turn a seat is on — running, or parked on a detached coding run. */
+export interface LiveTurn {
+  turn_id: string;
+  work_item?: WorkItemRef | null;
+  work_item_basis?: string;
+  /** When the turn began; a resumed segment keeps the turn's first start. */
+  started_at: string;
+  stage: TurnStage;
+  node?: string;
+}
+
+/** The newest turn a seat ended (`livestate.LastTurn`). */
+export interface LastTurn {
+  turn_id: string;
+  /** The turn's newest event: its completion, or the reflection after it. */
+  ended_at: string;
+  outcome: "completed" | "failed";
+}
+
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
 export interface LiveCall {
   /**
@@ -236,7 +288,30 @@ export interface LiveCall {
   /** The round being written right now; absent when no round is open. */
   partial_round?: PartialRound | null;
   round_num: number;
-  rounds: number;
+  /**
+   * Rounds that have come back, ONE-BASED — the same name and quantity a
+   * finished phase record carries as `rounds_used`, so a running phase and a
+   * settled one are read from one field.
+   */
+  rounds_used: number;
+  /** Each round's own timing and tokens, as the loop recorded it. */
+  rounds?: PhaseRound[] | null;
+  /** The round cap currently GRANTED, which an extension raises mid-phase. */
+  max_rounds?: number;
+  /** The most any extension may raise that cap to. */
+  round_ceiling?: number;
+  /** When the round in flight began its provider call; absent when none is open. */
+  round_started_at?: string;
+  /** The tool call running RIGHT NOW; absent between calls. */
+  running_call?: RunningCall | null;
+  /** The share of `input_tokens` the prompt cache served and stored — a
+   *  breakdown of it, never an addition to it. */
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  /** The item the turn is charged to, when it is on one. */
+  work_item?: WorkItemRef | null;
+  /** The node running the call. */
+  node?: string;
   in_progress: boolean;
   failed?: boolean;
   error?: ErrorInfo | null;
@@ -293,6 +368,11 @@ export interface Overlay {
   budget?: BudgetMeter | null;
   /** Always present, even empty: an omitted key would read as "still AFK". */
   afk_reason?: string;
+  /** The turn the seat is on, or null when it is on none. Always present, for
+   *  `afk_reason`'s reason. */
+  turn?: LiveTurn | null;
+  /** The newest turn the seat ended, or null while none is known. */
+  last_turn?: LastTurn | null;
 }
 
 /** A seat row: static config identity, plus whatever overlay has been merged. */
@@ -314,10 +394,18 @@ export interface SandboxEntry {
   coding_agent: string;
   sandbox_id: string;
   task: string;
+  /** The run record's own word: `launching`, `running`,
+   *  `awaiting_clarification` or `reseed`. */
   status: string;
   started_at: string;
   question?: string;
   audience?: string;
+  /** The item the launching turn is charged to, when it is on one. */
+  work_item?: WorkItemRef | null;
+  /** The node driving the run. */
+  owner?: string;
+  /** When the run's box began being held paused while it waits on a person. */
+  paused_at?: string;
 }
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */

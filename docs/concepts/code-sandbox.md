@@ -478,7 +478,20 @@ The receiver **accepts and drops** when no upstream is configured: the engine's 
 
 **A run keeps the work item its turn is on.** The launch writes the turn's `work_item` onto the run's record and onto `sandbox_run_started`, and a question the run parks on carries it on `sandbox_clarification_requested`. The record is where the resumed turn reads its item from — the event that resumes it, a box's completion or a person's chat answer, names none — so the second half of the turn is charged to the same work as the first, under the basis `resume` (see [Which work a turn is on](turn-engine.md#which-work-a-turn-is-on)). What the turn had written before it detached travels on its suspended conversation for the same reason. **A record keeps every key it cannot read**: each status flip, claim and release rewrites the whole record, and a node running an older build writes back the keys a newer one added rather than dropping them, so a rolling upgrade cannot strip the item, or anything added after it, off a parked run.
 
-**Dashboard.** The live-state projection maintains an active-sandboxes set from the `SandboxRunStarted` / `SandboxClarificationRequested` / `SandboxRunCompleted` lifecycle events, and the dashboard's **Coding runs** screen shows every one — agent, coding agent, task, elapsed, status — merged with the DURABLE record, so a run whose box has already been reclaimed is still there.
+**Dashboard.** The live-state projection keeps the set of runs in flight, and it builds that set from two sources, because neither is enough alone.
+
+- **The lifecycle events keep the set current.** `sandbox_run_started` adds a run. `sandbox_clarification_requested` moves the run to `awaiting_clarification`. `sandbox_run_completed` or `sandbox_run_failed` removes it. A failure used to be read by nothing, so a lost run stayed on the panel as running.
+- **The durable run record decides which runs exist.** The record is read once when the node starts, before the listener binds, and then every 30 seconds (`livestate.ReconcileInterval`). What the record holds replaces what the events built. A process that starts while runs are in flight never saw their starts, and a completion that never arrived would otherwise leave a finished run on the panel with nothing to remove it. Two cases keep the event's version. A run whose event arrived after the read began is newer than the read. A run whose end the events already reported is not put back, because the record lags the end by the collection the end starts. A completion names the job it finished, and a failure is compared with the record's last write.
+
+This replaced a twelve-hour age-out, which was wrong in both directions. A finished run whose completion was lost stayed on the panel as running for twelve hours. A run parked on a question for longer than twelve hours disappeared from the panel, and a run waiting on a person is the one the panel most needs to show.
+
+Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, sandbox_id, task, status, started_at, question, audience, work_item, owner, paused_at}`.
+
+- `status` uses the record's own vocabulary: `launching`, `running`, `awaiting_clarification` or `reseed`. A `resumed` run is over, because its turn has already taken back the result, so it is not listed. The panel used to write `awaiting_input`, a status the record cannot hold, so the dashboard never saw a live run as waiting on a person.
+- `owner` is the node driving the run.
+- `paused_at` is the pause reaper's own reading of when the box began being held.
+
+Every node reads the same fleet-wide record, so every node's panel shows the fleet's runs. The dashboard's **Coding runs** screen reads the record directly (`sandbox_runs`). A run whose box has already been reclaimed is therefore still listed there, with the row's own facts that the panel does not carry.
 
 ---
 

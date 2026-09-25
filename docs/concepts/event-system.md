@@ -445,7 +445,11 @@ Each node's event store holds what **that node** published and nothing else
 company's history. A read of turn-level detail — `events`, `event`,
 `event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
 and the integrations' delivery counts — is answered by **every live node at
-query time** (`internal/eventfan`, ADR-0021):
+query time** (`internal/eventfan`, ADR-0021). The same scatter seeds the live
+projection when a node starts: its feed, its 24-hour spend window (the
+`phase_tokens` question, cut to the asker's window so every node answers the
+same one) and each seat's last turn, so a restarted node's screens show the
+company rather than the part of it this node published:
 
 ```mermaid
 sequenceDiagram

@@ -108,7 +108,7 @@ export interface PhaseRecord {
   totalTokens: number;
   /**
    * Rounds that have come back: ONE-BASED, 0 when none has, and the same
-   * quantity from both constructors — `live_call.rounds` on a running phase,
+   * quantity from both constructors — `live_call.rounds_used` on a running phase,
    * `rounds_used` on a settled one.
    *
    * It is the ONLY round figure a record carries. `roundNum` used to sit beside
@@ -397,7 +397,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     inputTokens: call.input_tokens,
     outputTokens: call.output_tokens,
     totalTokens: call.total_tokens,
-    roundsUsed: call.rounds,
+    roundsUsed: call.rounds_used,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
     rescueFired: false,

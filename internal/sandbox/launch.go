@@ -226,7 +226,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
-		Task:            summarise(req.Brief),
+		Task:            Summarise(req.Brief),
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -327,7 +327,12 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 // the wire. Sized to a readable row on a narrow column.
 const briefSummaryLimit = 120
 
-func summarise(brief string) string {
+// Summarise is a brief's first line, cut to [briefSummaryLimit]: the label a
+// running-runs panel draws for a run. Exported because the live projection
+// labels a run it learned of from the durable record — a process that came up
+// mid-run never saw the announcement that carried the label — with the same
+// cut, rather than a second one.
+func Summarise(brief string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
 	if len(line) <= briefSummaryLimit {
 		return line

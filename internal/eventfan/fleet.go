@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // FleetReadBudget is how long a history read waits for the other nodes.
@@ -578,6 +579,27 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	}
 	f.report(QuestionTurns, coverage, started)
 	return page, coverage, nil
+}
+
+// PhaseTokens answers the per-phase spend records of a window from every node,
+// newest first, cut to the query's limit — what the live projection's spend
+// rollup is seeded from.
+//
+// THE WINDOW IS PINNED to this node's clock before anybody is asked, for
+// [Fleet.Histogram]'s reason: a peer counting "a day back" from its own clock
+// would answer a window its neighbours did not.
+func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
+	started := time.Now()
+	q.Since, q.Until = q.Window(time.Now().UTC())
+	q.SinceDays = 0
+	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q), nil,
+		func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, q) })
+	if err != nil {
+		return nil, Coverage{}, err
+	}
+	records := MergeSpend(g.parts(), q.Limit)
+	f.report(QuestionPhaseTokens, g.coverage, started)
+	return records, g.coverage, nil
 }
 
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no

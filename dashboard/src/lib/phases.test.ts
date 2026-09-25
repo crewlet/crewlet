@@ -44,7 +44,7 @@ function liveCall(over: Partial<LiveCall> = {}): LiveCall {
     total_tokens: 0,
     tool_executions: null,
     round_num: 0,
-    rounds: 0,
+    rounds_used: 0,
     in_progress: true,
     updated_at: "2026-01-01T00:00:05Z",
     ...over,

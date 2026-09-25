@@ -2,8 +2,11 @@
 // is doing right now.
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
-// reads — and maintains, per agent role: the seat's live state, its current
-// task, phase and iteration, its live token meter, and the IN-FLIGHT LLM call.
+// reads — and maintains, per agent role: the seat's live state, the TURN it is
+// on and the stage of it (context, a phase, or parked on a coding run), the
+// last turn it ended, its current phase and iteration, its live token meter,
+// and the IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in
+// flight, reconciled against their durable record (sandbox.go).
 // What a seat has SPENT is not held per seat: it is the per-agent row of the
 // spend rollup, folded from the same records by internal/tokens, so a seat
 // card and the Spend screen cannot disagree about one seat.
@@ -36,17 +39,13 @@
 package livestate
 
 import (
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/logging"
 )
-
-var log = logging.Get("api.livestate")
 
 const (
 	// EventFeedLimit is how many persisted-category events the projection
@@ -85,25 +84,6 @@ const (
 	// store: a record past the cap would be dropped on arrival, so reading
 	// it costs the seed's time budget and buys nothing.
 	SpendRecordLimit = 8000
-
-	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
-	// without a completion.
-	//
-	// Every other structure here is explicitly bounded and this one was
-	// not, while its input stream is lossy in both directions — the
-	// insert already accounts for a MISSED start, and a missed completion
-	// has the mirror-image effect with nothing to compensate it. The cost
-	// is not the memory: it is a ghost entry in the Running Sandboxes
-	// panel, a false report of work in flight that no operator can clear
-	// and no restart of the engine fixes.
-	//
-	// Twelve hours, against a detached run whose own ceiling is the turn's
-	// token budget plus a buffer, and a clarification pause bounded by its
-	// own TTL. Long enough that a genuinely long job is never swept from
-	// under an operator watching it; short enough that a lost run does not
-	// outlive the working day it started in. Eviction is a display
-	// correction, never a control action.
-	sandboxEntryMaxAge = 12 * time.Hour
 )
 
 // eventState maps an event type to the coarse seat state it implies.
@@ -143,11 +123,12 @@ var afkEvents = map[string]struct{}{
 }
 
 // sandboxEvents feed the running-sandboxes panel: started → tracked;
-// clarification → awaiting input; completed → dropped.
+// clarification → awaiting a person; completed or failed → dropped.
 var sandboxEvents = map[string]struct{}{
 	"sandbox_run_started":             {},
 	"sandbox_clarification_requested": {},
 	"sandbox_run_completed":           {},
+	"sandbox_run_failed":              {},
 }
 
 // agentLive is the incrementally-maintained state of one seat.
@@ -167,6 +148,17 @@ type agentLive struct {
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
 	stateTS stamp
+
+	// turn is the turn the seat is on, and turnAt the instant of the
+	// event that last moved it — the turn's own reorder guard, apart from
+	// stateTS because a turn's events are ordered against each other and
+	// not against a meter report or an AFK hold. See turn.go.
+	turn   *LiveTurn
+	turnAt stamp
+
+	// lastTurn is the newest turn the seat ended, and lastTurnAt when.
+	lastTurn   *LastTurn
+	lastTurnAt stamp
 }
 
 func (a *agentLive) overlay() Overlay {
@@ -179,6 +171,8 @@ func (a *agentLive) overlay() Overlay {
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
 		AFKReason:        a.afkReason,
+		Turn:             a.turn.clone(),
+		LastTurn:         a.lastTurn.clone(),
 	}
 }
 
@@ -198,7 +192,20 @@ type LiveState struct {
 	agents map[string]*agentLive
 
 	// sandboxes are in-flight detached jobs, keyed by kick-off turn id.
-	sandboxes map[string]*SandboxEntry
+	sandboxes map[string]*heldSandbox
+
+	// endedRuns remembers how each run the events ended did, so a
+	// reconcile that read the durable record before it caught up does not
+	// put the run back. Pruned by every reconcile to the runs the record
+	// still holds; bounded besides, for a process that never reconciles.
+	endedRuns *boundedSet[runEnd]
+
+	// endedTurns maps a turn that ENDED to the instant it did, so a
+	// straggler from it — a phase or a progress round that lost a
+	// cross-topic race to the completion — cannot put it back on its seat.
+	// Bounded like finishedCalls, and for its reason: the window it covers
+	// is seconds.
+	endedTurns *boundedSet[stamp]
 
 	// feed is a chronological ring of persisted-category events.
 	feed      []FeedRow
@@ -252,8 +259,12 @@ type LiveState struct {
 	// delayed report from another node. Internal, never re-emitted.
 	budgetAt stamp
 
-	// now is injectable so a test can pin the clock the sandbox sweep
-	// reads. Nil takes the wall clock.
+	// seededFrom is which nodes the startup seed read, nil until a seed
+	// ran. See [LiveState.SeededFrom].
+	seededFrom *eventfan.Coverage
+
+	// now is injectable so a test can pin the clock the spend window and
+	// the sandbox reconcile read. Nil takes the wall clock.
 	now func() time.Time
 }
 
@@ -261,7 +272,9 @@ type LiveState struct {
 func New(opts ...Option) *LiveState {
 	s := &LiveState{
 		agents:        map[string]*agentLive{},
-		sandboxes:     map[string]*SandboxEntry{},
+		sandboxes:     map[string]*heldSandbox{},
+		endedRuns:     newBoundedSet[runEnd](dedupeLimit),
+		endedTurns:    newBoundedSet[stamp](dedupeLimit),
 		feedLimit:     EventFeedLimit,
 		feedIDs:       map[string]struct{}{},
 		spendIDs:      map[string]struct{}{},
@@ -285,7 +298,7 @@ func WithFeedLimit(n int) Option {
 	}
 }
 
-// WithClock pins the clock the sandbox sweep reads.
+// WithClock pins the clock the spend window and the sandbox reconcile read.
 func WithClock(now func() time.Time) Option {
 	return func(s *LiveState) { s.now = now }
 }
@@ -391,55 +404,6 @@ func (s *LiveState) RecentEvents(limit int) []FeedRow {
 	return out
 }
 
-// ActiveSandboxes returns in-flight detached jobs, oldest-first.
-//
-// Oldest-first so the longest-running job — the one most likely to need
-// attention, such as one blocked on a clarification — sorts to the top of the
-// panel.
-//
-// Entries past sandboxEntryMaxAge are dropped on the way out. The set is
-// cleared by a completion event, and an event stream that can miss a start can
-// miss a completion too. Swept on READ rather than on a timer because this is a
-// display projection: the correction is only ever observed here, and a
-// projection does not need a loop of its own to stop lying.
-func (s *LiveState) ActiveSandboxes() []SandboxEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sweepStaleSandboxes()
-
-	out := make([]SandboxEntry, 0, len(s.sandboxes))
-	for _, entry := range s.sandboxes {
-		out = append(out, *entry)
-	}
-	slices.SortFunc(out, func(a, b SandboxEntry) int {
-		return strings.Compare(a.StartedAt, b.StartedAt)
-	})
-	return out
-}
-
-func (s *LiveState) sweepStaleSandboxes() {
-	if len(s.sandboxes) == 0 {
-		return
-	}
-	now := s.clock()
-	var stale []string
-	for turnID, entry := range s.sandboxes {
-		if newStamp(entry.StartedAt).olderThan(now, sandboxEntryMaxAge) {
-			stale = append(stale, turnID)
-		}
-	}
-	for _, turnID := range stale {
-		delete(s.sandboxes, turnID)
-	}
-	if len(stale) > 0 {
-		log.Info("sandbox_projection_entries_expired",
-			"count", len(stale),
-			"max_age", sandboxEntryMaxAge,
-			"hint", "no sandbox_run_completed arrived for these runs; the "+
-				"dashboard was showing them as still in flight")
-	}
-}
-
 // Budget returns the org-wide meter. Zero-valued when none is reporting.
 func (s *LiveState) Budget() OrgBudget {
 	s.mu.Lock()
@@ -508,10 +472,14 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	}
 
 	// Detached sandbox lifecycle, then stop: these do not drive the seat
-	// state machine below.
+	// state machine below. A LOST run is the one exception that reaches a
+	// seat: it settles the parked turn that was waiting for it.
 	if _, ok := sandboxEvents[env.Type]; ok {
 		s.applySandbox(*env, payload)
 		change.Sandboxes = true
+		if env.Type == "sandbox_run_failed" && s.endLostRun(*env, payload) {
+			change.agentMoved(str(payload, "role", "agent_role"))
+		}
 		return change
 	}
 
@@ -528,10 +496,57 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		agent.runtimeID = id
 	}
 
+	// THE TURN FIRST, and on its own guards: an event the state machine
+	// below discards as older than the seat's newest (a completion that
+	// lost a race to the next turn's first phase) still ended its turn.
+	if s.applyTurnEvent(agent, *env, payload) {
+		change.agentMoved(role)
+	}
 	if s.applyState(agent, *env, payload) {
 		change.agentMoved(role)
 	}
 	return change
+}
+
+// applyTurnEvent moves the seat's turn for one event, reporting whether it did.
+func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[string]any) bool {
+	if env.Type == "agent_turn_started" {
+		return s.applyTurnStarted(agent, env, payload)
+	}
+	before := agent.overlay()
+	turnID := str(payload, "turn_id")
+	switch env.Type {
+	case "agent_phase_started", "agent_phase_completed":
+		s.touchTurn(agent, env, payload, StagePhase)
+	case "agent_turn_completed":
+		if flag(payload, "suspended") {
+			// A SUSPENSION IS NOT AN END. The segment parked on a
+			// detached coding run and the same turn completes again
+			// when the run is collected.
+			s.touchTurn(agent, env, payload, StageParked)
+		} else {
+			s.endTurnRecord(agent, env, turnID, env.Failed)
+		}
+	case "reflection_completed":
+		s.extendLastTurn(agent, env, turnID)
+	case "agent_spawned", "agent_terminated":
+		// A NEW INSTANCE, or none: a turn the old one was running died
+		// with it. A PARKED turn outlives both — it is a record in the
+		// coordination store and a box, not a goroutine — and a spawn
+		// older than the turn's newest event is the spawn that turn ran
+		// under.
+		at := newStamp(env.Timestamp)
+		if agent.turn != nil && agent.turn.Stage != StageParked &&
+			(env.Type == "agent_terminated" || agent.turnAt.empty() || at.empty() ||
+				!at.before(agent.turnAt)) {
+			agent.turn = nil
+		}
+	default:
+		if env.Failed && agent.turn != nil && turnID != "" && agent.turn.TurnID == turnID {
+			agent.turn.failed = true
+		}
+	}
+	return !sameTurnOverlay(before, agent.overlay())
 }
 
 // applyState applies a state-affecting event, gated on the reorder guard, and

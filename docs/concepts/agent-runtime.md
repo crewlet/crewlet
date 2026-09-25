@@ -40,16 +40,23 @@ The engine keeps no per-seat state machine. What a seat is doing is derived from
 stateDiagram-v2
     [*] --> Offline
     Offline --> Idle: this node holds the seat
-    Idle --> Working: agent_phase_started
+    Idle --> Working: agent_turn_started
     Working --> Idle: agent_turn_completed
     Working --> Afk: llm_unavailable, turn.guard_breach, budget_exhausted
-    Afk --> Working: the next phase starts
+    Afk --> Working: the next turn or phase starts
 ```
 
 - **Offline**: no node this API can see is serving the seat. The roster marks a seat idle only when this node holds its lease, so on a fleet a seat a peer is running reads as offline here; the fleet view answers who holds what.
 - **Idle**: the seat is held, its mailbox is attached, and no turn is running.
-- **Working**: a phase has started and the turn has not completed.
+- **Working**: a turn has started and has not completed. That begins at `agent_turn_started`, which every turn publishes before it assembles its context, so the prefetch counts as work. Before, the seat read as idle until its first phase started, with a wake already in hand.
 - **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again. A seat whose budget ran out is also [parked](#the-budget-park): its mail waits for the window to turn over.
+
+Beside the state, the projection holds **the turn the seat is on** and **the last turn it ended**. Both are on every seat row of the `agents` push:
+
+- `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
+- `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
+
+Both keys are always present, and each is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn on the card. After a restart, both are seeded from the fleet's turn list. Each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
 The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
 

@@ -22,4 +22,6 @@ func mergeOverlay(row map[string]any, o Overlay) {
 	row["last_error"] = o.LastError
 	row["budget"] = o.Budget
 	row["afk_reason"] = o.AFKReason
+	row["turn"] = o.Turn
+	row["last_turn"] = o.LastTurn
 }

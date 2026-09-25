@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -1306,6 +1307,7 @@ type httpSurface struct {
 	app       *api.App
 	server    *http.Server
 	projector *observe.Projector
+	runs      *observe.SandboxReconciler
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1331,6 +1333,8 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if s.projector != nil {
 		s.projector.Stop(grace)
 	}
+	// Nil-safe, and nil on a bridge-only node: it has no panel to keep.
+	s.runs.Stop()
 	if s.app != nil {
 		s.app.Stop()
 	}
@@ -1357,6 +1361,22 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // alternative — a listener held open for a build — is the thing the grace
 // exists to stop.
 const apiShutdownGrace = 5 * time.Second
+
+// agentRoles is the name of every seat the engine runs a turn for — every role
+// in the company, in a unit or at the root, bar the human ones, which have no
+// turn. Nil with no active revision.
+func agentRoles(company *config.Company) []string {
+	if company == nil {
+		return nil
+	}
+	var out []string
+	for role := range company.EachRole() {
+		if role.Name != "" && role.Kind != org.KindHuman {
+			out = append(out, role.Name)
+		}
+	}
+	return out
+}
 
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
@@ -1642,11 +1662,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				}
 				return states
 			},
-			// The DURABLE record of detached coding runs. Read rather
-			// than projected: a run parked on a person's question can
-			// wait days, and the live projection sweeps long before
-			// that — so the states that most need somebody were the
-			// ones least likely to be on screen.
+			// The DURABLE record of detached coding runs, whole: the
+			// board needs the row's own facts (the branch, the pause
+			// TTL, the bridge's call log) that the live panel, which
+			// is reconciled against this same record, does not carry.
 			//
 			// The FLEET's record, so the screen shows every node's
 			// runs rather than this one's. A run is recovered by
@@ -1781,24 +1800,43 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// that arrives both ways once. Before the bind, so the first socket to
 	// open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
+	//
+	// THE FLEET'S HISTORY, read from every live node's store through the
+	// engine's history reader: each node's store holds what that node
+	// published, so a seed read from this one alone showed a restarted node
+	// only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	err = observe.Seed(seedCtx, e.Backends().Store.Events(), app.Stream().State())
-	cancelSeed()
+	err = observe.Seed(seedCtx, e.History(), agentRoles(companyConfig(e)), app.Stream().State())
 	if err != nil {
 		// NOT FATAL, and said out loud rather than swallowed: what a
-		// failed seed costs is a feed and a spend window that start now,
-		// which is invisible on the screen itself.
+		// failed seed costs is a feed, a spend window and a seat's last
+		// turn that start now, which is invisible on the screen itself.
 		log.WarnContext(ctx, "live_projection_not_seeded", "error", err,
-			"hint", "the activity feed and the spend rollup start at this "+
-				"process's boot; older history is still answered by the "+
-				"events and tokens queries, which read the store directly")
+			"hint", "the activity feed, the spend rollup and each seat's last "+
+				"turn start at this process's boot; older history is still "+
+				"answered by the events, turns and tokens queries")
 	}
+	// AND THE RUNNING CODING RUNS, from the durable record every node
+	// opens, before the bind for the seed's reason: a run parked on a
+	// question for days is exactly the one the events of this process's
+	// lifetime will never mention. Then every interval, which is what
+	// corrects a panel whose completion event never arrived.
+	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
+	if err = runs.Reconcile(seedCtx); err != nil {
+		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
+			"hint", "the running-runs panel starts from what this process "+
+				"hears; the durable run record is read again every "+
+				livestate.ReconcileInterval.String())
+	}
+	cancelSeed()
+	runs.Start(ctx)
 
 	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
 		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
 		// already running, on a broadcast subscription to the engine's
 		// queue, and nothing else holds it once this returns.
+		runs.Stop()
 		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
 		return nil, err
@@ -1839,7 +1877,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
 	})
 
-	return &httpSurface{app: app, server: server, projector: projector}, nil
+	return &httpSurface{app: app, server: server, projector: projector, runs: runs}, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
@@ -1918,16 +1956,21 @@ func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
 
-// projectionSeedBudget bounds the store read that seeds the live projection.
+// projectionSeedBudget bounds the fleet reads that seed the live projection and
+// the first read of the durable run record.
 //
-// The read is two indexed range scans of this node's own file, each stopping at
-// the projection's own bound: the newest 400 event rows without their payloads,
-// and the newest 8 000 phase records of one day from promoted columns. Both are
-// milliseconds on a healthy node, so five seconds is three orders of magnitude
-// of headroom and is a ceiling on the one case that matters: a store that will
-// not answer must not hold the listener shut, since nothing else can accept a
-// webhook while the bind is waiting. A seed that times out costs history on a
-// screen, never a delivery.
+// The reads run side by side, so the budget is the slowest of them rather than
+// their sum. On a healthy fleet each is milliseconds: indexed range scans of
+// every node's own file, stopping at the projection's own bounds (the newest
+// 400 event rows without their payloads, the newest 8 000 phase records of one
+// day, three turns a seat), plus one listing of the run record. What sizes the
+// budget is a peer that does NOT answer, which every scatter waits
+// [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
+// five seconds is those two and a second of headroom. It stays a ceiling on
+// the one case that matters: a fleet that will not answer must not hold the
+// listener shut, since nothing else can accept a webhook while the bind is
+// waiting. A seed that times out costs history on a screen, never a delivery,
+// and the warning it logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between

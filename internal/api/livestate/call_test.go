@@ -82,8 +82,8 @@ func TestAProgressRoundFillsInTheCall(t *testing.T) {
 	if call.Model != "claude-sonnet-5" || call.Response != "thinking" {
 		t.Errorf("call = %+v", call)
 	}
-	if call.RoundNum != 2 || call.Rounds != 3 {
-		t.Errorf("round = %d, rounds = %d, want 2 and 3", call.RoundNum, call.Rounds)
+	if call.RoundNum != 2 || call.RoundsUsed != 3 {
+		t.Errorf("round = %d, rounds used = %d, want 2 and 3", call.RoundNum, call.RoundsUsed)
 	}
 	if call.TotalTokens != 14 {
 		t.Errorf("total tokens = %d, want 14", call.TotalTokens)
@@ -580,5 +580,72 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 	// And it rolled NOTHING back.
 	if call.RoundNum != 2 || call.Response != "already going" || call.TotalTokens != 90 {
 		t.Errorf("the late opening frame overwrote the round it arrived after: %+v", call)
+	}
+}
+
+func TestTheRunningCallAppearsAndClears(t *testing.T) {
+	t.Parallel()
+	// The frame before a tool call names it; the frame after it returns
+	// does not. Carrying the previous frame's value forward, like the
+	// prompt is carried, would leave a call that returned drawn as running.
+	s := livestate.New()
+	base := with(planCall(), map[string]any{"node": "core-1",
+		"work_item": map[string]any{"backend": "native", "id": "t-1", "key": "ENG-1"}})
+	s.Apply(env("agent_turn_progress", with(base, map[string]any{
+		"round_num": 0, "max_rounds": 8, "round_ceiling": 24,
+		"round_started_at":  "2026-06-14T12:00:01Z",
+		"cache_read_tokens": 900, "cache_write_tokens": 40,
+		"rounds": []any{map[string]any{"round": 1, "duration_ms": 1200, "tool_calls": 1}},
+		"running_call": map[string]any{
+			"round": 1, "name": "search_knowledge", "started_at": "2026-06-14T12:00:02Z",
+		},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.RunningCall == nil || call.RunningCall["name"] != "search_knowledge" {
+		t.Fatalf("running call = %+v, want search_knowledge in flight", call.RunningCall)
+	}
+	if call.MaxRounds != 8 || call.RoundCeiling != 24 || call.RoundStartedAt != "2026-06-14T12:00:01Z" ||
+		call.CacheReadTokens != 900 || call.CacheWriteTokens != 40 || len(call.Rounds) != 1 ||
+		call.Node != "core-1" || call.WorkItem == nil || call.WorkItem.Key != "ENG-1" ||
+		call.RoundsUsed != 1 {
+		t.Errorf("call = %+v, want every field the frame stated", call)
+	}
+
+	// The call returned: the next frame names none, and names no item or
+	// node either, as a frame from an older build would not.
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
+	}), streamOnly, at("2026-06-14T12:00:03Z")))
+	call = liveCallOf(t, s, "Lead")
+	if call.RunningCall != nil {
+		t.Errorf("running call = %+v, want it cleared once the frame stopped naming it", call.RunningCall)
+	}
+	if call.Node != "core-1" || call.WorkItem == nil {
+		t.Errorf("node %q item %+v, want both carried from the frame that named them",
+			call.Node, call.WorkItem)
+	}
+}
+
+func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
+	t.Parallel()
+	// The phase is over, and a failed card still reading "running" against
+	// a tool call that will never return is the streaming caret again.
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num":        0,
+		"round_started_at": "2026-06-14T12:00:01Z",
+		"running_call":     map[string]any{"name": "run_sandbox"},
+	}), streamOnly, at("2026-06-14T12:00:02Z")))
+	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
+		"failed": true, "error": "boom",
+	}), at("2026-06-14T12:00:03Z")))
+
+	call := liveCallOf(t, s, "Lead")
+	if !call.Failed {
+		t.Fatalf("call = %+v, want it frozen as failed", call)
+	}
+	if call.RunningCall != nil || call.RoundStartedAt != "" {
+		t.Errorf("frozen call keeps %+v in flight since %q", call.RunningCall, call.RoundStartedAt)
 	}
 }
