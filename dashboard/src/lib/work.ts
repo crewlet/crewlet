@@ -40,6 +40,7 @@ import type {
   WorkStatus,
   WorkStatusDef,
   WorkSummary,
+  WorkTaskCounts,
   WorkTypeDef,
   WorkView,
 } from "~/protocol/index.ts";
@@ -1933,3 +1934,34 @@ export function bucketByDay(rows: WorkSummary[]): Map<string, WorkSummary[]> {
 
 /** How many chips a calendar cell draws before it folds the rest into a count. */
 export const CALENDAR_CELL_CHIPS = 3;
+
+/**
+ * Every item in a project not yet finished: waiting and started together.
+ *
+ * THE ONE SUM, because the engine no longer sends it. The census used to carry
+ * `open`, which folded the two into one number; it now carries `todo` and
+ * `active` separately, and a surface that wants the old question — how much is
+ * left — adds them here rather than each spelling the addition itself.
+ */
+export function unfinished(counts: WorkTaskCounts): number {
+  return counts.todo + counts.active;
+}
+
+/**
+ * A project's target day, `2026-12-18`, as `18 Dec 2026` in the reader's own
+ * locale.
+ *
+ * A DAY, NOT AN INSTANT — the engine stores the target as the calendar date on
+ * the company's clock — so it is built with `new Date(y, m - 1, d)` for
+ * [dayLabel]'s reason: read through [fmtDate] as UTC midnight, it renders as the
+ * 17th anywhere west of Greenwich.
+ */
+export function targetLabel(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  if (!y || !m || !d) return day;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}

@@ -76,6 +76,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { plainText } from "~/lib/markdown.ts";
+import { unfinished } from "~/lib/work.ts";
 import {
   useAgents,
   useConnection,
@@ -764,7 +765,7 @@ function usePulse(input: {
     // so renaming that id would have taken a headline figure silently to zero —
     // the same drift one layer down from the sentence below it.
     const parked = attention.filter((a) => a.subject === "run").length;
-    const open = projects ? projects.reduce((n, p) => n + p.task_counts.open, 0) : null;
+    const open = projects ? projects.reduce((n, p) => n + unfinished(p.task_counts), 0) : null;
     const overdue = workload ? workload.reduce((n, r) => n + r.overdue, 0) : null;
     const blocked = workload ? workload.reduce((n, r) => n + r.blocked, 0) : null;
     const critical = attention.filter((a) => a.severity === "critical").length;

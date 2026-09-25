@@ -77,10 +77,12 @@ export const PROJECT_SORT_KEYS = [
   "key",
   "name",
   "unit",
-  "open",
+  "todo",
+  "active",
   "done",
   "closed",
   "last_change",
+  "target",
 ] as const;
 
 /**

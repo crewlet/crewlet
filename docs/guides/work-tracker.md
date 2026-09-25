@@ -50,7 +50,7 @@ from the work filed into it — so a directory of projects answers "how much" an
 
 | | What it is |
 |---|---|
-| **task counts** | `open`, `done` and `closed`: how many of the project's tasks are in each status **group**. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. |
+| **task counts** | `todo`, `active`, `done` and `closed`: how many of the project's tasks are in each of the four status **groups** — `todo` is work nobody has started, `active` work somebody has. They are two numbers because they are two situations: forty items waiting is a queue to triage, forty in progress is a team at full stretch. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. A surface wanting every unfinished item adds the first two. |
 | **last change** | when the project's work last changed and **who** changed it — a handle and which of the four author kinds it is (`agent`, `human`, `operator`, `system`), so a seat's write and a person's read differently. |
 
 Both are **maintained, never counted on the fly**: they are written by the same
@@ -117,6 +117,25 @@ here" is the answer, and a made-up date would make an untouched project look
 freshly active. A company upgrading to this gets both columns filled from the
 change history it already holds, so no project reads as untouched because of
 when the engine was updated.
+
+### A project's target date
+
+A project may carry a **target date**: the day its lead means it to be
+finished. It is a **date, not an instant** — `2026-12-18`, a day on the
+company's own clock (`timezone`) — because a target is a day somebody named in
+a planning meeting, and an instant would have to invent the hour and the zone
+that day ends in.
+
+- It is the **lead's**, set with `write_project(target_date: "2026-12-18")` by
+  the project's lead or a person acting through their own credential, and
+  refused for any other seat. It is not chart-owned: a config apply that
+  renames the project carries the target through untouched.
+- Given an **instant** instead, the write stores the day that instant falls on
+  on the company's clock and says so in the answer's `warnings`. Anything that
+  is neither is refused, naming both spellings.
+- `null` or `""` clears it; a project with none reports no `target_date`, and
+  `sort=target` puts it last in both directions — "no target" is not the
+  earliest one.
 
 ### Which team an item belongs to
 
@@ -400,7 +419,7 @@ task's every later edit on every node.
 |---|---|---|
 | `number`, `progress`, `rollup` | a number, or a string that is one | text that is not a number, and anything outside `min`/`max` or carrying more decimals than `precision` |
 | `checkbox` | `true` or `false` | a string — every rule for reading one disagrees about `"false"` |
-| `date` | a date; a timestamp when the field holds no time, **truncated with a warning** | a value that is not a date, and a bare date on a field that holds a time |
+| `date` | a date; a timestamp when the field holds no time, **truncated with a warning** to the day it falls on **on the company's clock** (`timezone`) — the evening of the 4th in Los Angeles is the 4th, not the UTC 5th | a value that is not a date, and a bare date on a field that holds a time |
 | `dropdown`, `labels` | the option's slug, name or id — stored as the **id** | an option the field does not declare |
 | `relationship` | a key, a former key or an id — stored as the **id** | an item that does not exist |
 | `people` | anything that resolves to exactly **one** colleague | a spelling that names nobody, or more than one |
@@ -803,9 +822,9 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A subtask in the trash stays under the duplicate, where a restore finds it — a removed item is frozen. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running; a duplicate that is itself in the trash waits for its restore. A merge that would re-parent subtasks onto an item in **another project** is refused before it starts — a subtask under an item in another project is drawn under it on neither board — so move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false` |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. The item's project **lead's or a person's own**, as `routing_unit` is. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each with an optional leading `-`), so `-open` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
+| `list_projects` | every project work is filed into, with how much work each holds — `task_counts` is `{todo, active, done, closed}`, so waiting work and started work are two numbers — when its work last changed and who changed it, its `target_date`, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each with an optional leading `-`), so `-todo` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
@@ -933,8 +952,8 @@ answer if there was no way to look them up first.
 `write_project` is the one project **write** a seat holds, and it holds it for
 one facet: declaring a tag. A project's name, purpose and owning unit are
 **chart-owned** — written by the epoch apply from the org chart and by nothing
-else — so nothing writes them here at all; its field declarations and its
-default assignee are the **lead's**, and archiving the project
+else — so nothing writes them here at all; its field declarations, its
+default assignee and its target date are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 

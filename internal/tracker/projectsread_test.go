@@ -66,24 +66,33 @@ func seedProject(t *testing.T, r *roundTrip, p tracker.Project) {
 // THE PROJECT COUNTS ARE READ, NOT AGGREGATED — and until this reader existed
 // nothing read them at all.
 //
-// `tracker_projects.open_count/done_count/closed_count` are maintained by the
-// task apply on every status-group change and on every arrival and departure,
-// precisely so a sixty-second dashboard poll is three column reads rather than
-// an aggregate over every task in the company. They were maintained and read
-// by nothing: the whole point of the column was unrealised.
+// `tracker_projects.open_count/active_count/done_count/closed_count` are
+// maintained by the task apply on every status-group change and on every
+// arrival and departure, precisely so a sixty-second dashboard poll is four
+// column reads rather than an aggregate over every task in the company. They
+// were maintained and read by nothing: the whole point of the column was
+// unrealised.
+//
+// AND THE OPEN WORK IS SPLIT: one waiting, one started. A census that said
+// "two open" could not tell a queue from a team at full stretch.
 func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	filedTask(t, r, "open-1")
-	filedTask(t, r, "open-2")
+	filedTask(t, r, "waiting")
+	filedTask(t, r, "started")
 	filedTask(t, r, "shipped")
 
-	done := tracker.StatusDone
-	if _, err := r.writer.UpdateTask(t.Context(), "op-ship", "shipped", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
-		t.Fatalf("finish a task: %v", err)
+	for id, status := range map[string]tracker.Status{
+		"started": tracker.StatusInProgress, "shipped": tracker.StatusDone,
+	} {
+		to := status
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Status: &to}, tracker.ChangeStatus,
+			nil); err != nil {
+			t.Fatalf("move %s to %s: %v", id, to, err)
+		}
+		r.drain()
 	}
-	r.drain()
 
 	listing := r.projects(tracker.ProjectQuery{Archived: tracker.ArchivedExclude})
 	if len(listing.Projects) != 1 {
@@ -94,10 +103,10 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	if got.Key != "ENG" || got.Name != "Engineering" {
 		t.Fatalf("the row is %s/%q, want ENG/Engineering", got.Key, got.Name)
 	}
-	if got.Counts.Open != 2 || got.Counts.Done != 1 {
-		t.Fatalf("task_counts is %+v, want 2 open and 1 done — these are the "+
-			"MAINTAINED columns, and a reader that aggregated instead would "+
-			"cost O(all tasks) on every poll", got.Counts)
+	if want := (tracker.TaskCounts{Todo: 1, Active: 1, Done: 1}); got.Counts != want {
+		t.Fatalf("task_counts is %+v, want %+v — these are the MAINTAINED "+
+			"columns, and a reader that aggregated instead would cost O(all "+
+			"tasks) on every poll", got.Counts, want)
 	}
 	if listing.Total != 1 || listing.Truncated {
 		t.Fatalf("total=%d truncated=%v, want 1 and false",
@@ -295,8 +304,8 @@ func TestAProjectListingFilters(t *testing.T) {
 //
 // The ordering is the ENGINE's because the listing is a PAGE: an ordering
 // applied after the cap orders the rows that survived the key order, so
-// `-open` answered "the most open work among the projects whose keys sort
-// first". Seeding past the cap is unnecessary to prove that — what the cap
+// `-todo` would answer "the most waiting work among the projects whose keys
+// sort first". Seeding past the cap is unnecessary to prove that — what the cap
 // takes is a PREFIX of this ordering, so an ordering that is right over the
 // whole set is right over the page, and an ordering that is not is wrong here
 // too.
@@ -307,12 +316,23 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 	seedProject(t, r, tracker.Project{Key: "OPS", Name: "operations",
 		Unit: "zebra"})
 	seedProject(t, r, tracker.Project{Key: "AAA", Name: "Zulu", Unit: "alpha"})
-	// TWO OPEN ON OPS AND ONE ON AAA, so the count columns and the key
+	// TWO WAITING ON OPS AND ONE ON AAA, so the count columns and the key
 	// order disagree — an ordering that quietly fell back to the key would
-	// otherwise pass every case here.
+	// otherwise pass every case here. And AAA's one is STARTED, so `todo`
+	// and `active` order the three differently from each other.
 	filedInto(t, r, "OPS", "ops-1")
 	filedInto(t, r, "OPS", "ops-2")
+	filedInto(t, r, "OPS", "ops-3")
 	filedInto(t, r, "AAA", "aaa-1")
+	started := tracker.StatusInProgress
+	for id, project := range map[string]string{"ops-3": "OPS", "aaa-1": "AAA"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-start-"+id, id, project,
+			tracker.NoIfMatch, tracker.TaskPatch{Status: &started}, tracker.ChangeStatus,
+			nil); err != nil {
+			t.Fatalf("start %s: %v", id, err)
+		}
+		r.drain()
+	}
 
 	for _, c := range []struct {
 		name       string
@@ -325,8 +345,12 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 		// LOWERED, so `Zulu` does not sort before `operations` the way
 		// this store's BINARY collation would have it.
 		{"name", tracker.ProjectSortName, false, []string{"ENG", "OPS", "AAA"}},
-		{"-open", tracker.ProjectSortOpen, true, []string{"OPS", "AAA", "ENG"}},
-		{"open", tracker.ProjectSortOpen, false, []string{"ENG", "AAA", "OPS"}},
+		// OPS waits on two, AAA and ENG on none — the key breaks that tie.
+		{"-todo", tracker.ProjectSortTodo, true, []string{"OPS", "AAA", "ENG"}},
+		{"todo", tracker.ProjectSortTodo, false, []string{"AAA", "ENG", "OPS"}},
+		// One started on each of OPS and AAA, none on ENG.
+		{"-active", tracker.ProjectSortActive, true, []string{"AAA", "OPS", "ENG"}},
+		{"active", tracker.ProjectSortActive, false, []string{"ENG", "AAA", "OPS"}},
 		// ENG NAMES NO UNIT, and an empty string is a value here: it
 		// sorts first ascending rather than being dropped.
 		{"unit", tracker.ProjectSortUnit, false, []string{"ENG", "AAA", "OPS"}},
@@ -446,7 +470,7 @@ func TestParseProjectQuery(t *testing.T) {
 	}
 
 	q, err = tracker.ParseProjectQuery(tracker.MapParams{
-		"archived": "only", "sort": "-open", "q": " lights ", "unit": " ops ",
+		"archived": "only", "sort": "-active", "q": " lights ", "unit": " ops ",
 		"limit": 7,
 	})
 	if err != nil {
@@ -455,8 +479,8 @@ func TestParseProjectQuery(t *testing.T) {
 	if q.Archived != tracker.ArchivedOnly {
 		t.Errorf("archived=only parses to %q", q.Archived)
 	}
-	if q.Sort != tracker.ProjectSortOpen || !q.Descending {
-		t.Errorf("sort=-open parses to %q/%v, want open descending — the `-` "+
+	if q.Sort != tracker.ProjectSortActive || !q.Descending {
+		t.Errorf("sort=-active parses to %q/%v, want active descending — the `-` "+
 			"grammar is the one every grid in the dashboard writes",
 			q.Sort, q.Descending)
 	}
@@ -558,9 +582,9 @@ func TestDescribingAProjectCarriesTheVocabulary(t *testing.T) {
 	}
 	// AND THE MAINTAINED COUNTS, because a lead reading this is asking how
 	// much is in the project as well as what its vocabulary is.
-	if detail.Counts.Open != 1 {
-		t.Fatalf("the description counts %d open, want the one filed into it",
-			detail.Counts.Open)
+	if detail.Counts.Todo != 1 || detail.Counts.Active != 0 {
+		t.Fatalf("the description counts %+v, want the one waiting item filed "+
+			"into it", detail.Counts)
 	}
 }
 

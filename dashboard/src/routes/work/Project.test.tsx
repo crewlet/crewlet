@@ -54,7 +54,7 @@ const detail = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   purpose: "Build and ship the product",
   unit: { key: "platform", name: "Platform", resolved: true },
   lead: { handle: "ada", kind: "agent" },
-  task_counts: { open: 12, done: 40, closed: 3 },
+  task_counts: { todo: 9, active: 3, done: 40, closed: 3 },
   version: 1,
   statuses: [],
   types: [],
@@ -123,7 +123,10 @@ test("the purpose is the sentence under the name, above the census", async () =>
 // when nothing has been filed.
 test("a project with no purpose says whose it is, and whether anything is in it", async () => {
   serving({
-    work_project: detail({ purpose: undefined, task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({
+      purpose: undefined,
+      task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
+    }),
     work_items: { items: [], groups: [], complete: true },
   });
   const { container } = mount();
@@ -151,7 +154,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
 // whose own "Nothing matches" is a claim about filters nobody set.
 test("an empty project says so instead of running the list", async () => {
   const query = serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_items: { items: [], groups: [], complete: true },
   });
   mount();
@@ -173,7 +176,7 @@ test("an empty project says so instead of running the list", async () => {
 test("a project whose work was all removed still opens its trash", async () => {
   location.hash = "#/work/ENG?removed=true";
   const query = serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_items: { items: [], groups: [], complete: true },
     work_activity: { records: [], complete: true },
   });
@@ -183,10 +186,10 @@ test("a project whose work was all removed still opens its trash", async () => {
 });
 
 // THE LENS SAYS HOW MUCH IS BEHIND IT, from the count the header already
-// holds. Overview is a description rather than a collection and History is
-// paged, so neither takes one — a count of a loaded page would read as a count
-// of the lens.
-test("the Items lens carries the open count, and the other two carry none", async () => {
+// holds — waiting and started together, 9 + 3. Overview is a description
+// rather than a collection and History is paged, so neither takes one — a
+// count of a loaded page would read as a count of the lens.
+test("the Items lens carries the unfinished count, and the other two carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
   // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
@@ -210,7 +213,7 @@ test("the census is a bar with its legend, and only where there is work", async 
   cleanup();
 
   serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_items: { items: [], groups: [], complete: true },
   });
   const fresh = mount();
@@ -346,7 +349,7 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
 // rail has no lens under it to carry the sentence.
 test("the rail says an empty project is empty, where the page's list does", async () => {
   serving({
-    work_project: detail({ task_counts: { open: 0, done: 0, closed: 0 } }),
+    work_project: detail({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } }),
     work_activity: { records: [], complete: true },
   });
   const { container } = render(

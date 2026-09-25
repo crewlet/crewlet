@@ -43,9 +43,10 @@ import (
 // the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
 // [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
 // value — see [actorSeatVersion]. Version 6 is a create that carries the
-// question its task was filed as: [TaskCreate.Comment]. Version 7 is the
+// question its task was filed as: [TaskCreate.Comment]. Version 7 is a
+// project's lead-owned target date: [Project.TargetDate]. Version 8 is the
 // cross-project move's marker on a task patch: [TaskPatch.Moving].
-const RecordVersion = 7
+const RecordVersion = 8
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -145,7 +146,16 @@ var versionedFields = statelog.RecordFields{
 	// format.
 	{Name: "TaskCreate.Comment", Since: 6, Op: string(OpCreate),
 		Path: []string{"mutation", "comment"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 7. A build reading 6
+	// A PROJECT'S TARGET DATE, at version 7. A build reading 6 decodes the
+	// project document around it: its `tracker_projects.target_date` stays
+	// NULL where every upgraded node holds the day, and its copy of the
+	// document drops the key — for good, on a table the fleet compares byte
+	// for byte. EVERY OP, because a project document is written whole by
+	// both a lead's edit and the chart apply that carries the date through,
+	// and no other record's payload has a `target_date` to collide with.
+	{Name: "Project.TargetDate", Since: 7,
+		Path: []string{"mutation", "target_date"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 8. A build reading 7
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -156,7 +166,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 7, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 8, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 

@@ -538,7 +538,7 @@ test("an empty scope says why, and only a filter says nothing matched", async ()
           name: "Engineering",
           unit: { resolved: true },
           lead: {},
-          task_counts: { open: 0, done: 0, closed: 0 },
+          task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
           version: 1,
         },
       ],
@@ -675,7 +675,7 @@ test("a saved view's grouping heads the list's columns by name", async () => {
           name: "Engineering",
           unit: { resolved: true },
           lead: {},
-          task_counts: { open: 3, done: 0, closed: 0 },
+          task_counts: { todo: 3, active: 0, done: 0, closed: 0 },
           version: 1,
         },
       ],
@@ -699,7 +699,7 @@ const oneProject = {
       name: "Engineering",
       unit: { resolved: true },
       lead: {},
-      task_counts: { open: 1, done: 0, closed: 0 },
+      task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
       version: 1,
     },
   ],
@@ -1408,7 +1408,7 @@ test("the shape is a key beside the view rather than the same one", async () => 
 // ---------------------------------------------------------------------------
 
 /** A project row, for the one fact these cases need from the directory. */
-const listedProject = (counts = { open: 0, done: 0, closed: 0 }): WorkProjectRow => ({
+const listedProject = (counts = { todo: 0, active: 0, done: 0, closed: 0 }): WorkProjectRow => ({
   key: "ENG",
   name: "Engineering",
   unit: { resolved: true },

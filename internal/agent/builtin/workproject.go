@@ -74,8 +74,8 @@ func (t *writeProject) Description() string {
 	return "Change a project's own settings. `tags` is the one part any seat " +
 		"may add to — declare a label before filing work under it, because " +
 		"create_work_item refuses one this project does not have. Renaming or " +
-		"archiving a tag, declaring project fields and setting the default " +
-		"assignee are the project lead's; archiving " +
+		"archiving a tag, declaring project fields, setting the default " +
+		"assignee and setting the target date are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
 		"owning unit come from the org chart and are not writable here."
 }
@@ -139,6 +139,13 @@ func (t *writeProject) Parameters() map[string]any {
 				"description": "Who unassigned work lands on. Empty means " +
 					"triage. The project lead's.",
 			},
+			"target_date": map[string]any{
+				"type": []string{"string", "null"},
+				"description": "When the project is meant to be finished: " +
+					"a date (2026-12-18), or an instant, which is stored as " +
+					"the day it falls on on the company's clock. Empty or " +
+					"null clears it. The project lead's.",
+			},
 			"archived": map[string]any{
 				"type": "boolean",
 				"description": "Stops the project taking new work. Takes a " +
@@ -201,7 +208,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if tagEdit.Empty() && edit.Empty() {
 		return failed("This call changes nothing. Send `tags_add`, " +
 			"`tags_rename`, `tags_archive`, `fields`, " +
-			"`default_assignee` or `archived`."), nil
+			"`default_assignee`, `target_date` or `archived`."), nil
 	}
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
 	// holds both facets cannot land the tag half and then be refused the
@@ -285,9 +292,17 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		t.deps.settle(ctx, result.Position)
 		call.add(result.Result)
-		out["policy"] = map[string]any{
+		policy := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
+		// THE TARGET DATE'S TRUNCATION IS SAID, as the tags half's
+		// near-matches are: an instant stored as a day is the writer's
+		// value changed, and a caller told `applied` alone reads it as
+		// stored verbatim.
+		if len(result.Warnings) > 0 {
+			policy["warnings"] = result.Warnings
+		}
+		out["policy"] = policy
 	}
 	call.stamp(out)
 	return jsonResult(out)
@@ -329,7 +344,7 @@ func projectTagEdit(args map[string]any) (tracker.TagEdit, string) {
 	return edit, ""
 }
 
-// projectPolicyEdit reads the three policy facets a caller sent.
+// projectPolicyEdit reads the four policy facets a caller sent.
 //
 // PRESENCE DECIDES, never the value: `default_assignee: ""` means triage and
 // omitting it means leave it alone, and a reader that could not tell them apart
@@ -346,6 +361,21 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 	if _, held := args["default_assignee"]; held {
 		who := strings.TrimSpace(argString(args, "default_assignee"))
 		edit.DefaultAssignee = &who
+	}
+	// NULL AND THE EMPTY STRING BOTH CLEAR the target, which the schema
+	// admits: "no target" is a setting, and the tracker coerces whatever
+	// else was sent — or refuses it naming both spellings.
+	if raw, held := args["target_date"]; held {
+		target := ""
+		if raw != nil {
+			text, ok := raw.(string)
+			if !ok {
+				return tracker.ProjectEdit{}, "`target_date` is a date as a " +
+					"string, 2026-12-18 — or null to clear it."
+			}
+			target = strings.TrimSpace(text)
+		}
+		edit.TargetDate = &target
 	}
 	if _, held := args["archived"]; held {
 		archived := argBool(args, "archived")

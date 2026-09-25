@@ -23,6 +23,7 @@ import { Router } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
+import { targetLabel } from "~/lib/work.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -59,7 +60,7 @@ const project = (over: Partial<WorkProjectRow> = {}): WorkProjectRow => ({
   name: "Engineering",
   unit: { key: "platform", name: "Platform", resolved: true },
   lead: { handle: "ada", kind: "agent" },
-  task_counts: { open: 3, done: 1, closed: 0 },
+  task_counts: { todo: 3, active: 0, done: 1, closed: 0 },
   version: 1,
   ...over,
 });
@@ -99,7 +100,11 @@ test("the workspace totals are one line over the rows", async () => {
     work_projects: {
       projects: [
         project(),
-        project({ key: "PROD", name: "Product", task_counts: { open: 2, done: 5, closed: 1 } }),
+        project({
+          key: "PROD",
+          name: "Product",
+          task_counts: { todo: 2, active: 0, done: 5, closed: 1 },
+        }),
       ],
       total: 2,
       complete: true,
@@ -107,7 +112,7 @@ test("the workspace totals are one line over the rows", async () => {
   });
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
-  expect(screen.getByText(/5 open · 6 done · 1 closed/)).toBeTruthy();
+  expect(screen.getByText(/5 to do · 0 active · 6 done · 1 closed/)).toBeTruthy();
 });
 
 // THE COUNT IS THE COMPANY'S, NOT THE PAGE'S. The answer carries `total` and
@@ -179,7 +184,7 @@ test("a plain click peeks beside the list rather than leaving it", async () => {
 test("closed work is a column of the grid, not a hidden one", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { open: 3, done: 1, closed: 7 } })],
+      projects: [project({ task_counts: { todo: 3, active: 0, done: 1, closed: 7 } })],
       total: 1,
       complete: true,
     },
@@ -190,7 +195,18 @@ test("closed work is a column of the grid, not a hidden one", async () => {
   await waitFor(() =>
     expect(
       [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
-    ).toEqual(["Key", "Project", "Lead", "Open", "Done", "Closed", "Progress", "Last change"]),
+    ).toEqual([
+      "Key",
+      "Project",
+      "Lead",
+      "To do",
+      "Active",
+      "Done",
+      "Closed",
+      "Progress",
+      "Last change",
+      "Target",
+    ]),
   );
   expect(within(rowFor("ENG")).getByText("7")).toBeTruthy();
 });
@@ -217,7 +233,8 @@ test("the unit column is off until cols asks for it", async () => {
 
   // `cols=` CARRIES THE ORDER AS WELL AS THE SELECTION, so an address that
   // wants Unit names the whole set it wants.
-  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
+  location.hash =
+    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const withUnit = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
@@ -228,11 +245,13 @@ test("the unit column is off until cols asks for it", async () => {
     "Project",
     "Lead",
     "Unit",
-    "Open",
+    "To do",
+    "Active",
     "Done",
     "Closed",
     "Progress",
     "Last change",
+    "Target",
   ]);
   expect(screen.getByText("Platform")).toBeTruthy();
 });
@@ -242,7 +261,7 @@ test("the unit column is off until cols asks for it", async () => {
 //
 // The column shipped `optional` with no chooser anywhere on this screen — no
 // popover, no reset — so it could be turned off in the source and never on by
-// anybody, and `sort=unit`, one of the engine's seven orderings, was an
+// anybody, and `sort=unit`, one of the engine's nine orderings, was an
 // ordering no head here could reach. "Expose or collapse, deliberately": the
 // column earns exposure because a seat-owned project's unit genuinely differs
 // from its name.
@@ -260,11 +279,13 @@ test("the columns control turns Unit on and writes the key", async () => {
     "Project",
     "Lead",
     "Unit",
-    "Open",
+    "To do",
+    "Active",
     "Done",
     "Closed",
     "Progress",
     "Last change",
+    "Target",
   ]);
   // AN EMPTY `cols=` IS THE DEFAULT SET, so every box but the optional one is
   // ticked before anybody touches it.
@@ -278,7 +299,7 @@ test("the columns control turns Unit on and writes the key", async () => {
   // IT WRITES THE KEY, so the arrangement survives a reload and a link.
   await waitFor(() => expect(location.hash).toContain("cols="));
   expect(new URLSearchParams(location.hash.split("?")[1]).get("cols")).toBe(
-    "key,name,lead,unit,open,done,closed,progress,last_change",
+    "key,name,lead,unit,todo,active,done,closed,progress,last_change,target",
   );
   // AND THE GRID DRAWS IT — the control and the grid read one key.
   expect(
@@ -302,7 +323,8 @@ test("a unit the chart no longer has is marked rather than printed plainly", asy
   // WITH THE COLUMN ASKED FOR, since Unit is `optional`: this is a case about
   // what the CELL claims, and the company that turns the column on is exactly
   // the one whose units and project names can disagree.
-  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
+  location.hash =
+    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({
     work_projects: {
       projects: [project({ unit: { key: "gone", resolved: false } })],
@@ -326,8 +348,16 @@ test("when work last changed is the engine's own fact, and its absence says whic
           key: "ENG",
           last_change: { at: "2031-04-16T09:00:00Z", actor: "ada", actor_kind: "agent" },
         }),
-        project({ key: "NEW", name: "New", task_counts: { open: 0, done: 0, closed: 0 } }),
-        project({ key: "OLD", name: "Old", task_counts: { open: 4, done: 0, closed: 0 } }),
+        project({
+          key: "NEW",
+          name: "New",
+          task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
+        }),
+        project({
+          key: "OLD",
+          name: "Old",
+          task_counts: { todo: 4, active: 0, done: 0, closed: 0 },
+        }),
       ],
       total: 3,
       complete: true,
@@ -386,7 +416,7 @@ test("an operator's write is marked as one", async () => {
 test("a project with nothing filed draws no meter", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { open: 0, done: 0, closed: 0 } })],
+      projects: [project({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } })],
       total: 1,
       complete: true,
     },
@@ -411,7 +441,7 @@ function drawn(container: HTMLElement): { color: string; width: string }[] {
 test("a project with nothing done fills nothing", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { open: 1, done: 0, closed: 0 } })],
+      projects: [project({ task_counts: { todo: 1, active: 0, done: 0, closed: 0 } })],
       total: 1,
       complete: true,
     },
@@ -423,12 +453,12 @@ test("a project with nothing done fills nothing", async () => {
 });
 
 // AND THE FILL IS DONE AGAINST EVERYTHING FILED. Three of ten done is three
-// tenths of the track, with closed work muted beside it and open work left as
+// tenths of the track, with closed work muted beside it and unfinished work left as
 // the track — not a third of a bar over done + closed.
 test("done fills against everything filed, closed beside it", async () => {
   serving({
     work_projects: {
-      projects: [project({ task_counts: { open: 6, done: 3, closed: 1 } })],
+      projects: [project({ task_counts: { todo: 6, active: 0, done: 3, closed: 1 } })],
       total: 1,
       complete: true,
     },
@@ -517,8 +547,8 @@ test("the archived segment draws every row the engine answered with", async () =
 });
 
 // THE ORDER IS THE ENGINE'S, because the answer is a PAGE. A sort applied here
-// orders the rows that survived the key order, so `-open` meant "the most open
-// work among the projects whose keys sort first".
+// orders the rows that survived the key order, so `-todo` would mean "the most
+// waiting work among the projects whose keys sort first".
 test("the ordering is sent to the engine and not applied to the page", async () => {
   location.hash = "#/work/projects";
   const query = serving({
@@ -527,7 +557,7 @@ test("the ordering is sent to the engine and not applied to the page", async () 
   mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   // WHERE THE PILE IS, which is what this directory opens on.
-  expect(asked(query).sort).toBe("-open");
+  expect(asked(query).sort).toBe("-todo");
   cleanup();
 
   location.hash = "#/work/projects?sort=last_change";
@@ -549,7 +579,7 @@ test("the ordering is sent to the engine and not applied to the page", async () 
   });
   mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  expect(asked(stale).sort).toBe("-open");
+  expect(asked(stale).sort).toBe("-todo");
 });
 
 // THE ROWS ARE NOT RE-SORTED HERE. `serverSorted` is what says so, and without
@@ -557,15 +587,19 @@ test("the ordering is sent to the engine and not applied to the page", async () 
 // column — which on a truncated answer is the same page-ordering bug one layer
 // down.
 test("the grid draws the engine's order rather than re-sorting it", async () => {
-  location.hash = "#/work/projects?sort=-open";
+  location.hash = "#/work/projects?sort=-todo";
   serving({
     work_projects: {
-      // THE ENGINE'S ORDER, deliberately NOT what `-open` would produce
+      // THE ENGINE'S ORDER, deliberately NOT what `-todo` would produce
       // on the client: 1 before 9. A grid that re-sorted would put ENG
       // first and the assertion below would catch it.
       projects: [
-        project({ key: "PROD", name: "Product", task_counts: { open: 1, done: 0, closed: 0 } }),
-        project({ key: "ENG", task_counts: { open: 9, done: 0, closed: 0 } }),
+        project({
+          key: "PROD",
+          name: "Product",
+          task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
+        }),
+        project({ key: "ENG", task_counts: { todo: 9, active: 0, done: 0, closed: 0 } }),
       ],
       total: 2,
       complete: true,
@@ -590,19 +624,30 @@ test("the grid draws the engine's order rather than re-sorting it", async () => 
 // (`internal/tracker/client_gate_test.go`).
 test("the sortable heads are exactly the orderings the engine takes", async () => {
   // THE WHOLE COLUMN SET, because Unit is `optional` and off by default: the
-  // pairing this holds is between the engine's seven keys and the heads the
+  // pairing this holds is between the engine's nine keys and the heads the
   // screen CAN draw, and a head the reader has to ask for is still a head.
   // Read against the default set alone, the gate would report `sort=unit` as
   // an ordering nobody can reach — which is the opposite of true, since the
   // address that turns the column on is the address that sorts by it.
-  location.hash = "#/work/projects?cols=key,name,lead,unit,open,done,closed,progress,last_change";
+  location.hash =
+    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   const clickable = [...container.querySelectorAll(".grid-head button.grid-th")].map(
     (h) => h.textContent,
   );
-  expect(clickable).toEqual(["Key", "Project", "Unit", "Open", "Done", "Closed", "Last change"]);
+  expect(clickable).toEqual([
+    "Key",
+    "Project",
+    "Unit",
+    "To do",
+    "Active",
+    "Done",
+    "Closed",
+    "Last change",
+    "Target",
+  ]);
   // AND THE TWO THAT ARE NOT: a project's Lead is resolved against the org
   // chart at read time and the tracker holds no chart, so there is no column
   // to order by; Progress is a proportion, and one over four tasks and one
@@ -753,4 +798,21 @@ test("the segments carry no counts until the census arrives", async () => {
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(container.querySelectorAll(".segmented .count-chip")).toHaveLength(0);
+});
+
+// THE LEAD'S TARGET IS A DAY, drawn as that day — and a project with none says
+// so rather than drawing a blank, since "nobody has set one" is the finding a
+// reader planning against it needs.
+test("a project's target day is a column, and its absence is said", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ target_date: "2026-12-18" }), project({ key: "PROD", name: "Product" })],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(within(rowFor("ENG")).getByText(targetLabel("2026-12-18"))).toBeTruthy();
+  expect(within(rowFor("PROD")).getByText("No target set")).toBeTruthy();
 });

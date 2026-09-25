@@ -17,12 +17,13 @@ import (
 //
 // # The counts are READ, never aggregated
 //
-// `task_counts` is `tracker_projects.open_count/done_count/closed_count`,
-// maintained by the task apply whenever a task's status group changes or it
-// enters, leaves or is removed from a project. The alternative — an aggregate
-// over every task in every project — ran on every sixty-second dashboard poll
-// and was O(all tasks) for a number that changes on a handful of commits an
-// hour.
+// `task_counts` is `tracker_projects.open_count/active_count/done_count/
+// closed_count`, maintained by the task apply whenever a task's status group
+// changes or it enters, leaves or is removed from a project — `todo` being the
+// open work nobody has started, `open_count - active_count`. The alternative —
+// an aggregate over every task in every project — ran on every sixty-second
+// dashboard poll and was O(all tasks) for a number that changes on a handful of
+// commits an hour.
 //
 // `last_change` is the same bargain on the same row: the newest task commit's
 // instant and actor, written by the apply that writes the project's history
@@ -45,12 +46,28 @@ import (
 // project's tasks is not tractable and a narrower term would certify an answer
 // complete that a deferred task record was holding.
 
-// TaskCounts is a project's maintained task census.
+// TaskCounts is a project's maintained task census, one number per status
+// group.
+//
+// FOUR, NOT THREE. The census used to say `open`, which folded the work
+// nobody has started into the work somebody is doing — and those are the two
+// states a reader acts on oppositely: forty items waiting is a queue to
+// triage, forty in progress is a team at full stretch. The status groups
+// already draw the line, so the census follows them and there is no `open`:
+// a surface wanting every unfinished item adds `todo` and `active`, which is
+// one addition rather than a fifth number that could disagree with the two.
 type TaskCounts struct {
-	Open   int `json:"open"`
+	// Todo is the work in the `not_started` group.
+	Todo int `json:"todo"`
+	// Active is the work in the `active` group — somebody has started it.
+	Active int `json:"active"`
 	Done   int `json:"done"`
 	Closed int `json:"closed"`
 }
+
+// censusColumns is how the four are read off a project row: the maintained
+// open bucket less its active part, then the three columns themselves.
+const censusColumns = `open_count - active_count, active_count, done_count, closed_count`
 
 // LastChange is when a project's work last changed and who changed it.
 //
@@ -90,8 +107,14 @@ type ProjectRow struct {
 	Unit UnitRef `json:"unit"`
 	Lead LeadRef `json:"lead"`
 
-	DefaultAssignee string     `json:"default_assignee,omitempty"`
-	Counts          TaskCounts `json:"task_counts"`
+	DefaultAssignee string `json:"default_assignee,omitempty"`
+
+	// TargetDate is when the lead means the project to be finished, a day
+	// on the company's clock (`YYYY-MM-DD`), absent for no target — see
+	// [Project.TargetDate].
+	TargetDate string `json:"target_date,omitempty"`
+
+	Counts TaskCounts `json:"task_counts"`
 
 	// LastChange is nil for a project no work has ever been filed into —
 	// see [LastChange].
@@ -214,7 +237,7 @@ const MaxProjectsPerToolAnswer = 50
 // A CLOSED SET OVER `tracker_projects`' OWN COLUMNS, because the ordering has
 // to be the ENGINE's. The listing is bounded at [MaxProjectsPerAnswer] and an
 // ordering applied AFTER that bound orders the page rather than the company:
-// `sort=-open` over a key-ordered first two hundred answers "the most open
+// `sort=-todo` over a key-ordered first two hundred answers "the most waiting
 // work among the projects whose keys sort first", which is not a question
 // anybody asked and reads exactly like the answer to the one they did.
 //
@@ -224,22 +247,27 @@ const MaxProjectsPerToolAnswer = 50
 // claiming an ordering it cannot produce.
 type ProjectSort string
 
-// The seven orderings. Each reads a column the project row already carries, so
-// every one of them orders the whole asked set rather than a page of it.
+// The nine orderings. Each reads a column the project row already carries, so
+// every one of them orders the whole asked set rather than a page of it — and
+// the four census keys are the four numbers `task_counts` carries, so a
+// directory can order by exactly what it draws.
 const (
 	ProjectSortKey        ProjectSort = "key"
 	ProjectSortName       ProjectSort = "name"
 	ProjectSortUnit       ProjectSort = "unit"
-	ProjectSortOpen       ProjectSort = "open"
+	ProjectSortTodo       ProjectSort = "todo"
+	ProjectSortActive     ProjectSort = "active"
 	ProjectSortDone       ProjectSort = "done"
 	ProjectSortClosed     ProjectSort = "closed"
 	ProjectSortLastChange ProjectSort = "last_change"
+	ProjectSortTarget     ProjectSort = "target"
 )
 
 // ProjectSorts is every ordering, in the order a refusal names them.
 var ProjectSorts = []ProjectSort{
 	ProjectSortKey, ProjectSortName, ProjectSortUnit,
-	ProjectSortOpen, ProjectSortDone, ProjectSortClosed, ProjectSortLastChange,
+	ProjectSortTodo, ProjectSortActive, ProjectSortDone, ProjectSortClosed,
+	ProjectSortLastChange, ProjectSortTarget,
 }
 
 // ProjectSortNames is the same list as wire strings, for the surfaces that
@@ -253,7 +281,7 @@ func ProjectSortNames() []string {
 	return out
 }
 
-// Valid reports whether this is one of the seven orderings.
+// Valid reports whether this is one of the nine orderings.
 //
 // THE ZERO VALUE IS NOT ONE, and unlike [ArchivedMode]'s it is still a
 // meaningful field value — see [ProjectQuery.Sort]. The difference is what the
@@ -269,7 +297,8 @@ func (k ProjectSort) Valid() bool { return slices.Contains(ProjectSorts, k) }
 // [ProjectSort] can index is what says no caller's text ever reaches it.
 var projectSortColumns = map[ProjectSort]string{
 	ProjectSortKey:    "p.key",
-	ProjectSortOpen:   "p.open_count",
+	ProjectSortTodo:   "p.open_count - p.active_count",
+	ProjectSortActive: "p.active_count",
 	ProjectSortDone:   "p.done_count",
 	ProjectSortClosed: "p.closed_count",
 
@@ -285,6 +314,10 @@ var projectSortColumns = map[ProjectSort]string{
 	ProjectSortUnit: "lower(p.unit)",
 
 	ProjectSortLastChange: "p.last_change_at",
+
+	// THE TEXT OF THE DAY, which sorts in calendar order because it is
+	// `YYYY-MM-DD` — the one spelling [coerceDay] ever stores.
+	ProjectSortTarget: "p.target_date",
 }
 
 // ProjectQuery asks for a company's projects.
@@ -532,8 +565,8 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.key, p.name, p.purpose, p.unit, p.default_assignee,
-		       p.open_count, p.done_count,
-		       p.closed_count, p.last_change_at, p.last_change_actor,
+		       p.target_date, p.open_count - p.active_count, p.active_count,
+		       p.done_count, p.closed_count, p.last_change_at, p.last_change_actor,
 		       p.last_change_actor_kind, p.archived, p.version
 		FROM tracker_projects p`+clause+`
 		ORDER BY `+projectOrderBy(q)+`
@@ -558,14 +591,16 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 		var unit string
 		var archived int
 		var change lastChangeColumns
+		var target sql.NullString
 		if err := rows.Scan(&row.Key, &row.Name, &row.Purpose, &unit,
-			&row.DefaultAssignee, &row.Counts.Open,
+			&row.DefaultAssignee, &target, &row.Counts.Todo, &row.Counts.Active,
 			&row.Counts.Done, &row.Counts.Closed, &change.At,
 			&change.Actor, &change.ActorKind, &archived,
 			&row.Version); err != nil {
 			return nil, ProjectCensus{}, fmt.Errorf("tracker: scan a project: %w", err)
 		}
 		row.Archived = archived != 0
+		row.TargetDate = target.String
 		row.LastChange = change.value()
 		row.Unit, row.Lead = resolveUnit(q.Units, unit)
 		out = append(out, row)
@@ -641,14 +676,15 @@ func projectOrderBy(q ProjectQuery) string {
 		direction = " DESC"
 	}
 	clause := column + direction
-	if q.Sort == ProjectSortLastChange {
-		// AN ABSENT INSTANT SORTS LAST IN BOTH DIRECTIONS. SQLite orders
+	if q.Sort == ProjectSortLastChange || q.Sort == ProjectSortTarget {
+		// AN ABSENT VALUE SORTS LAST IN BOTH DIRECTIONS. SQLite orders
 		// NULL first ascending and last descending, so the default would
 		// open a newest-first directory with every project nothing has
-		// been filed into — and "nothing recorded" is not the smallest
-		// value, it is not a value. It is the rule the grid drawing
-		// these rows already states for the same column.
-		clause = "p.last_change_at IS NULL, " + clause
+		// been filed into, and a soonest-first one with every project
+		// nobody gave a target — and "nothing recorded" is not the
+		// smallest value, it is not a value. It is the rule the grid
+		// drawing these rows already states for the same columns.
+		clause = column + " IS NULL, " + clause
 	}
 	if q.Sort == ProjectSortKey {
 		return clause
@@ -837,6 +873,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	out.Name = project.Name
 	out.Purpose = project.Purpose
 	out.DefaultAssignee = project.DefaultAssignee
+	out.TargetDate = project.TargetDate
 	out.Archived = project.Archived
 	out.Version = project.Version
 	out.Unit, out.Lead = resolveUnit(q.Units, project.Unit)
@@ -849,11 +886,11 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	var change lastChangeColumns
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
-		SELECT open_count, done_count, closed_count, last_change_at,
+		SELECT `+censusColumns+`, last_change_at,
 		       last_change_actor, last_change_actor_kind
 		FROM tracker_projects
-		WHERE key = ?`, key).Scan(&out.Counts.Open, &out.Counts.Done,
-		&out.Counts.Closed, &change.At, &change.Actor,
+		WHERE key = ?`, key).Scan(&out.Counts.Todo, &out.Counts.Active,
+		&out.Counts.Done, &out.Counts.Closed, &change.At, &change.Actor,
 		&change.ActorKind); err != nil {
 		return fmt.Errorf("tracker: read the task counts of %s: %w", key, err)
 	}

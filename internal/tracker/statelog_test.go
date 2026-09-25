@@ -166,6 +166,25 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Actor: "founder", ActorKind: tracker.AuthorOperator,
 			OperatorID: "founder", ActorSeat: "jane-founder",
 		}.Encode()
+	case "Project.TargetDate":
+		// A LEAD SETTING THE PROJECT'S TARGET: the whole document, as
+		// both the lead's edit and a chart apply carrying it through write.
+		body, err := json.Marshal(tracker.Project{
+			V: tracker.DocumentVersion, Key: "SUITE", Name: "Suite",
+			TargetDate: "2026-12-18", CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.ProjectSubject("SUITE"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeProjectUpdated, Mutation: body,
+			Actor: "lead", ActorKind: tracker.AuthorAgent,
+		}.Encode()
 	case "TaskPatch.Moving":
 		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
 		// the mark its walk is still running under.
