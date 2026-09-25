@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1618,8 +1619,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// useless without it: "somebody is waiting on a tool" is
 			// satisfied by any tool at all, so a founder's Mattermost DM
 			// was closed out by a row in the tracker.
-			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n.Addressed {
-				owed = turn.ToolReply(n.NotificationSource)
+			//
+			// UNLESS THE WAKE OWES ANOTHER SURFACE. The answer to a
+			// decision whose asker said it would report the outcome in a
+			// channel arrives from the TRACKER, and on the source alone a
+			// comment on the item would close the turn: the person who
+			// answered was told the outcome would be posted, and it never
+			// was. [types.ExternalNotification.Owes] names the chat
+			// surface instead, and an owed wake is awaited whether or not
+			// its source reads it as addressed — the promise is the
+			// obligation.
+			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok &&
+				(n.Addressed || n.Owes != "") {
+				owed = turn.ToolReply(cmp.Or(n.Owes, n.NotificationSource))
 			}
 
 			// types.A2AMessageType is deliberately absent: that hop wakes

@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -198,10 +199,14 @@ type Evidence struct {
 
 // Inform is the chat channel the asker will report the decision in.
 //
-// STRUCTURAL HERE AND NOTHING MORE: a surface is one of the two chat
-// integrations and a channel is a name. Whether that surface is configured,
-// whether the channel is one the chart declares, and that the asker actually
-// posts there are decided where the chart and the turn are known.
+// A PROMISE THE ENGINE KEEPS, in three places and no fourth. Here, over values:
+// a surface is one of the two chat integrations, a channel is a name, and only
+// an agent seat's ask may carry one ([checkCommentShape]) — the promise is kept
+// by holding the asker's turn, and a person has none. At the tool, against the
+// chart: the surface is one the asking seat can post on and the channel is one
+// a unit declares. And at the answer: the asker's `answered` wake OWES that
+// surface ([Owes]), so the turn it wakes is sent back until a tool on it has
+// run — a comment on the item does not discharge it.
 type Inform struct {
 	Surface InformSurface `json:"surface"`
 	Channel string        `json:"channel"`
@@ -434,6 +439,19 @@ func checkCommentShape(task string, c *Comment) error {
 		}
 		if err := c.Decision.Validate(); err != nil {
 			return err
+		}
+		// AN INFORM IS A PROMISE A TURN KEEPS, so only an asker that HAS
+		// turns may make one: the engine enforces it by holding the
+		// asker's answered turn open until a tool on the named surface has
+		// run ([Owes]). A person — at the dashboard, through an assistant,
+		// or as a human seat — has no turn to hold, so an inform they
+		// asked for is a line on a card that nothing would ever keep.
+		if c.Decision.Inform != nil && c.AuthorKind != AuthorAgent {
+			return invalid("tracker: comment %s on task %s asks the engine to "+
+				"report the outcome in %s, and only an agent seat's ask may — "+
+				"a %s author has no turn the engine can hold to it; post it "+
+				"yourself once it is decided", c.ID, task,
+				c.Decision.Inform.Channel, cmp.Or(string(c.AuthorKind), "nameless"))
 		}
 	}
 	if c.Choice != "" && (c.Answers == nil || *c.Answers == "") {

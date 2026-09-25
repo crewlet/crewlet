@@ -89,13 +89,62 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
-// PartitionKey implements [notify.Prompt]: the task is the conversation.
+// Owes is the chat surface a wake OBLIGES its seat to post on, or "".
+//
+// ONE WAKE AND ONE ONLY: the answer to a decision whose asker said it would
+// report the outcome somewhere ([Decision.Inform]), reaching that asker under
+// `answered`. Every other copy of the same record — a watcher's, the item's
+// assignee's — carries the inform in its metadata too, and owes nothing,
+// because the promise was the asker's.
+//
+// A SURFACE, never a channel: the engine enforces the obligation by holding
+// the turn open until a tool on that surface has delivered
+// ([turn.DeliveredTo]), and a tool reports the surface it reached rather than
+// the channel it posted in — so the channel is the prompt's to name and the
+// asker's to honour. Read from the metadata the parser stamped, so the parser
+// ([Parser.Parse]) and the partition key below answer from one rule.
+func Owes(metadata map[string]string) string {
+	if Reason(metadata[MetaVia]) != ReasonAnswered {
+		return ""
+	}
+	var inform Inform
+	if raw := metadata[MetaInform]; raw == "" ||
+		json.Unmarshal([]byte(raw), &inform) != nil || !inform.Surface.Valid() {
+		return ""
+	}
+	return string(inform.Surface)
+}
+
+// owedPartition is the separator between a conversation and the surface a
+// partition of it owes. Neither a task key nor an object id carries it.
+const owedPartition = "#owes:"
+
+// PartitionKey implements [notify.Prompt]: the task is the conversation, and
+// a wake that owes a chat surface is a finer cut of it.
+//
+// THE FINER CUT IS WHAT KEEPS AN OBLIGATION WHOLE THROUGH A MERGE. A turn owes
+// at most ONE surface ([turn.Reply] names one), and a coalesced trigger is one
+// turn: two answers on one item informing two different surfaces, merged,
+// would have had to drop one of the two promises. Partitioned apart, every
+// partition owes one surface or none, and the merge carries it
+// ([notify.Coalesce]).
+func (p Prompt) PartitionKey(metadata map[string]string, subject string) string {
+	key := p.ConversationIdentity(metadata, subject)
+	if surface := Owes(metadata); surface != "" && key != "" {
+		return key + owedPartition + surface
+	}
+	return key
+}
+
+// ConversationIdentity implements [notify.Prompt]: the task is the
+// conversation.
 //
 // THE KEY rather than the uuid, because the key is what a person pastes into
 // chat and what a seat writes in a commit message — so a chat thread about
 // ENG-42 and the tracker activity on it land in one ledger, which is the whole
-// point of a conversation key.
-func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
+// point of a conversation key. The partition key above is this, or a finer
+// cut of it — the invariant [notify.Prompt.ConversationIdentity] requires.
+func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if key := metadata[MetaTaskKey]; key != "" {
 		return key
 	}
@@ -107,17 +156,6 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 		return metadata[MetaObject] + ":" + id
 	}
 	return ""
-}
-
-// ConversationIdentity implements [notify.Prompt]: the same task key.
-//
-// The two coincide because a task (or the object a non-task wake names) is
-// one object that is both the merge unit and the durable thread. The
-// alignment the key above is chosen for is a CONVERSATION-side claim — a chat
-// thread about ENG-42 and the tracker activity on it land in one ledger — and
-// it survives only as long as this delegation does.
-func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
-	return p.PartitionKey(metadata, subject)
 }
 
 // WorkItem is the task a wake is about, which is the item the turn it wakes
@@ -427,7 +465,8 @@ func promptAnsweredDecision(b *strings.Builder, meta map[string]string) {
 	if informs {
 		b.WriteString("**You said you would report the outcome in** " +
 			inform.Channel + " on " + string(inform.Surface) + " — post it " +
-			"there in this turn.\n")
+			"there in this turn. The turn is not finished until you have: " +
+			"the person who answered was told you would.\n")
 	}
 	b.WriteString("\nCarry on from this answer: it unblocks the branch you " +
 		"stopped on when you asked.\n")

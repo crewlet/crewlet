@@ -442,3 +442,25 @@ func TestMissingTimestampsDoNotBreakTheMerge(t *testing.T) {
 		t.Fatalf("the delivered order was not preserved: %+v", merged.Messages)
 	}
 }
+
+// A MERGE CARRIES THE SURFACE A CONSTITUENT OWES. The flat fields mirror the
+// latest constituent, and an answer that promised a post followed by a remark
+// in the same partition must not lose the promise to the remark.
+func TestOwesSurvivesAMergeWithTrafficThatOwesNothing(t *testing.T) {
+	owes := func(n *types.ExternalNotification) { n.Owes = "slack" }
+	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "chose hold", "comment", owes),
+		note("bo", "noted", "comment"),
+	}, at(0, 1))
+	if merged.Owes != "slack" {
+		t.Fatalf("the merge owes %q — the promised post was laundered by a later "+
+			"remark", merged.Owes)
+	}
+	merged, _ = notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "first", "comment"),
+		note("bo", "latest", "comment"),
+	}, at(0, 1))
+	if merged.Owes != "" {
+		t.Fatalf("a merge of events owing nothing owes %q", merged.Owes)
+	}
+}

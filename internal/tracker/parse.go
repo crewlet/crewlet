@@ -155,6 +155,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	for _, c := range routed {
 		inbound := base
 		inbound.Metadata = withVia(base.Metadata, string(c.Reason))
+		// PER RECIPIENT, because the promise was the asker's alone: the
+		// same answer reaches the item's watchers under their own reasons
+		// and obliges none of them to post anywhere.
+		inbound.Owes = Owes(inbound.Metadata)
 		out = append(out, notify.Routed{
 			Inbound: inbound,
 			To:      notify.Recipient{Handle: c.Handle},

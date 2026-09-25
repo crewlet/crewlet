@@ -1168,7 +1168,7 @@ may say why in its body.
 | `rationale` | optional, at most 1,500 bytes |
 | `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title — a company with no native knowledge base cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
-| `inform` | optional `{surface, channel}`: the chat channel (`mattermost` or `slack`) the asker will report the outcome in |
+| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost` or `slack`, and must be one the company runs **and** the asking seat holds a bot on; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
 
 What the engine enforces is deliberately small: that a decision is well formed,
 that it rides only the comment that **asks** (a remark cannot carry one, and it
@@ -1206,6 +1206,21 @@ item, the ask's comment id and a `choice` — so a seat edits one value and send
 it rather than reading the thread to find the ids. The asker is woken with the
 question, the option chosen by its label, and — when the decision named an
 `inform` channel — where it said it would report the outcome.
+
+**An inform is enforced.** The asker's `answered` wake **owes** the chat
+surface its decision named: the notification carries `owes` (`slack` or
+`mattermost`), and the turn it wakes is held to a delivery on that surface
+rather than on the tracker the wake came from. A round that only comments on
+the item is sent back with a correction naming the surface, and the turn ends
+once a tool there has posted — because the person who answered was told the
+outcome would be posted, and a note on the item is not that. Only the asker's
+copy owes it; a watcher woken by the same answer owes nothing. An answer that
+owes a surface is its own inbox partition of the item's conversation (the
+conversation key is unchanged), so two answers promising two different
+surfaces are never merged into one turn that could keep only one of them. If
+the seat has since lost every tool on that surface, there is nothing it could
+post with and the obligation falls back to any delivery, like every other
+surface the seat cannot reach.
 
 A record carrying a decision or a choice on a comment is **record version 4**,
 and a create carrying the question it was filed as is **version 6**: a node

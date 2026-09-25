@@ -59,7 +59,30 @@ func Coalesce(prompts Prompts, evs []types.ExternalNotification, at []time.Time)
 	merged.Addressed = slices.ContainsFunc(ordered, func(c constituent) bool {
 		return c.event.Addressed
 	})
+	merged.Owes = mergedOwes(ordered)
 	return merged, true
+}
+
+// mergedOwes is the chat surface a merged trigger owes: the LATEST
+// constituent's that owes one.
+//
+// CARRIED THROUGH THE MERGE for the reason Addressed is: the flat fields
+// mirror the latest constituent, and an answer that promised a post, followed
+// in the same partition by a watcher's remark, would otherwise lose the
+// promise to whichever event the broker delivered last.
+//
+// ONE SURFACE, because a turn owes one ([turn.Reply] names one). That is not a
+// choice this makes between two promises: a source whose wakes can owe
+// different surfaces partitions them apart (the tracker cuts its key by the
+// surface owed), so every constituent here owes the same surface or none, and
+// latest-wins only ever picks among equals.
+func mergedOwes(ordered []constituent) string {
+	for i := len(ordered) - 1; i >= 0; i-- {
+		if owes := ordered[i].event.Owes; owes != "" {
+			return owes
+		}
+	}
+	return ""
 }
 
 // constituent is one event with the timestamp it is ordered by.

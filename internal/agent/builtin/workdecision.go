@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/pages"
@@ -117,7 +118,10 @@ func decisionSchema() map[string]any {
 			"inform": map[string]any{
 				"type": "object",
 				"description": "The chat channel you will report the outcome in " +
-					"once it is decided.",
+					"once it is decided: a surface you hold a bot on, and a " +
+					"channel a team in the org chart declares. The person " +
+					"answering is told you will post it there, and your turn " +
+					"woken by their answer is not finished until you have.",
 				"properties": map[string]any{
 					"surface": map[string]any{
 						"type": "string",
@@ -143,8 +147,8 @@ func decisionSchema() map[string]any {
 // evidence names is resolved to its id and a page must exist
 // ([tracker.ValidateDecision]). A lookup that FAILS is the node's condition,
 // and is answered as one.
-func (d WorkDeps) readDecision(ctx context.Context, tool string, raw any,
-	pageReader PageReader) (*tracker.Decision, *tools.Result) {
+func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
+	raw any, pageReader PageReader) (*tracker.Decision, *tools.Result) {
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -170,7 +174,100 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, raw any,
 	case err != nil:
 		return nil, refusalOf(readFailure(tool, err))
 	}
+	if checked.Inform != nil {
+		inform, refusal := d.checkInform(tool, actor, *checked.Inform)
+		if refusal != nil {
+			return nil, refusal
+		}
+		checked.Inform = &inform
+	}
 	return &checked, nil
+}
+
+// ChannelDirectory is the chart's answer to WHERE an asker may promise to
+// report a decision — declared here, by the one caller that asks, and
+// implemented by the engine over the epoch current when the tool runs.
+type ChannelDirectory interface {
+	// ChatSurfaces is the chat surfaces the seat `handle` can post on:
+	// the ones this company runs AND that seat holds a bot on. Both,
+	// because a promise to post where the seat has no identity is one it
+	// can never keep, and the engine would hold its turn open for a post
+	// no tool of its can make.
+	ChatSurfaces(handle string) []tracker.InformSurface
+
+	// UnitChannels is every channel a unit of the chart declares, as the
+	// chart spells it.
+	UnitChannels() []string
+}
+
+// checkInform is where an asker's promise to report the outcome is checked
+// against the world, and returns the inform as it is to be stored.
+//
+// # An agent seat's alone
+//
+// THE ENGINE ENFORCES AN INFORM: the asker's answered turn is held open until
+// a tool on the named surface has run ([tracker.Owes]). A person — a bound
+// operator at the dashboard, an assistant on their credential — has no turn
+// to hold, so an inform they asked for would put "posts it to #channel" on the
+// answering person's card as a promise nothing keeps. That is refused as
+// FORBIDDEN rather than invalid: no spelling of the argument makes it right
+// for this caller.
+//
+// # A surface the seat can post on, a channel the chart declares
+//
+// The channel is one a UNIT declares because that is the set the chart owns
+// and every seat's prompt already names — an arbitrary name would be a
+// channel nobody checked the seat's bot is in. A leading `#` is accepted and
+// the chart's own spelling is stored, so the card and the prompt render the
+// name the company uses.
+func (d WorkDeps) checkInform(tool string, actor Actor, inform tracker.Inform) (tracker.Inform, *tools.Result) {
+	if actor.Kind != tracker.AuthorAgent {
+		return tracker.Inform{}, refusalOf(refused(tools.RefusalForbidden,
+			fmt.Sprintf("%s: `decision.inform` asks the engine to hold the "+
+				"asker's turn until the outcome is posted in %s, and only an "+
+				"agent seat has a turn to hold. Ask without `inform`, and post "+
+				"the outcome yourself once it is decided. Nothing was posted.",
+				tool, clip(inform.Channel))))
+	}
+	if d.Channels == nil {
+		return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: this "+
+			"surface has no chart to check `decision.inform` against, so it "+
+			"cannot promise a post. Ask without `inform`. Nothing was posted.",
+			tool)))
+	}
+	surfaces := d.Channels.ChatSurfaces(actor.Handle)
+	if !slices.Contains(surfaces, inform.Surface) {
+		held := "none"
+		if len(surfaces) > 0 {
+			names := make([]string, len(surfaces))
+			for i, surface := range surfaces {
+				names[i] = string(surface)
+			}
+			held = strings.Join(names, ", ")
+		}
+		return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+			"`decision.inform.surface` is %q, which you cannot post on — the "+
+			"chat surfaces you hold a bot on here are: %s. Name one of them, "+
+			"or ask without `inform`. Nothing was posted.", tool,
+			string(inform.Surface), held)))
+	}
+	declared := d.Channels.UnitChannels()
+	want := strings.TrimPrefix(strings.TrimSpace(inform.Channel), "#")
+	for _, channel := range declared {
+		if strings.TrimPrefix(channel, "#") == want {
+			inform.Channel = channel
+			return inform, nil
+		}
+	}
+	listed := "none"
+	if len(declared) > 0 {
+		listed = strings.Join(declared, ", ")
+	}
+	return tracker.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+		"`decision.inform.channel` is %q, which no team in the org chart "+
+		"declares — the channels it does are: %s. Name one of them, or ask "+
+		"without `inform`. Nothing was posted.", tool, clip(inform.Channel),
+		listed)))
 }
 
 // evidenceLookup is the world a decision's evidence is checked against: this

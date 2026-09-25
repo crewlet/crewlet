@@ -1,11 +1,13 @@
 package builtin_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -217,5 +219,140 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 	}
 	if len(plain.asks) != 0 || len(plain.created) != 1 {
 		t.Errorf("a plain create carried an ask: %+v", plain.asks)
+	}
+}
+
+// fakeChannels is a chart with chat surfaces per seat and declared unit
+// channels.
+type fakeChannels struct {
+	surfaces map[string][]tracker.InformSurface
+	channels []string
+}
+
+func (f fakeChannels) ChatSurfaces(handle string) []tracker.InformSurface {
+	return f.surfaces[handle]
+}
+
+func (f fakeChannels) UnitChannels() []string { return f.channels }
+
+// informRegistry is the seat surface with a chart to check an inform against,
+// and an actor seam when the caller is not the turn's seat.
+func informRegistry(t *testing.T, trk *fakeTracker,
+	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error)) *tools.Registry {
+
+	t.Helper()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{
+		Work: builtin.WorkDeps{
+			Reader: trk, Writer: trk.as, Actor: actor,
+			Channels: fakeChannels{
+				surfaces: map[string][]tracker.InformSurface{
+					"eng": {tracker.InformSlack},
+				},
+				channels: []string{"releases", "product"},
+			},
+		},
+		Pages: builtin.PageDeps{Reader: newFakeKB()},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	return reg
+}
+
+// informedDecision is a decision promising to report its outcome.
+func informedDecision(surface, channel string) map[string]any {
+	d := decisionArg()
+	delete(d, "evidence")
+	d["inform"] = map[string]any{"surface": surface, "channel": channel}
+	return d
+}
+
+// AN OPERATOR CANNOT ASK THE ENGINE TO INFORM.
+//
+// The engine keeps an inform by holding the ASKER'S answered turn open until a
+// tool on the surface has posted, and a person acting through a token has no
+// turn to hold — so their inform would be a line on the answering person's
+// card that nothing keeps. Refused as FORBIDDEN, on both tools, before
+// anything is written; the same decision without the inform is accepted.
+func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
+	t.Parallel()
+	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator, OperatorID: "ops"}, nil
+	}
+	trk := newFakeTracker()
+	reg := informRegistry(t, trk, operator)
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "?",
+			"ask": "pm", "decision": informedDecision("slack", "releases")}},
+		{builtin.CreateWorkItemTool, map[string]any{"title": "Ship Friday?",
+			"project": "ENG", "ask": "pm", "decision": informedDecision("slack", "releases")}},
+	} {
+		got := callWork(t, reg, c.tool, c.args)
+		if !got.Failed || got.Refusal != tools.RefusalForbidden ||
+			!strings.Contains(got.Output, "agent seat") {
+			t.Errorf("%s: an operator's inform gave %+v", c.tool, got)
+		}
+	}
+	if len(trk.patched) != 0 || len(trk.created) != 0 {
+		t.Errorf("a refused inform was written: %d patches, %d creates",
+			len(trk.patched), len(trk.created))
+	}
+	plain := decisionArg()
+	delete(plain, "evidence")
+	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+		"item": "ENG-1", "body": "?", "ask": "pm", "decision": plain,
+	}); got.Failed {
+		t.Errorf("an operator's decision without an inform was refused: %s", got.Output)
+	}
+}
+
+// AN INFORM CHANNEL MUST BE ONE THE CHART DECLARES, on a surface the asking
+// seat holds a bot on — each half alone admits a promise nobody can keep. A
+// leading `#` is accepted and the chart's spelling is stored.
+func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		surface, channel string
+		refusal          string
+	}{
+		"an undeclared channel": {"slack", "random", "releases, product"},
+		"a surface not held":    {"mattermost", "releases", "slack"},
+	} {
+		trk := newFakeTracker()
+		got := callWork(t, informRegistry(t, trk, nil), builtin.CommentOnWorkTool,
+			map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+				"decision": informedDecision(c.surface, c.channel)})
+		if !got.Failed || got.Refusal != tools.RefusalInvalid ||
+			!strings.Contains(got.Output, c.refusal) {
+			t.Errorf("%s: gave %+v — want invalid, listing %q", name, got, c.refusal)
+		}
+		if len(trk.patched) != 0 {
+			t.Errorf("%s: the refused inform was written", name)
+		}
+	}
+
+	trk := newFakeTracker()
+	got := callWork(t, informRegistry(t, trk, nil), builtin.CommentOnWorkTool,
+		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+			"decision": informedDecision("slack", "#releases")})
+	if got.Failed {
+		t.Fatalf("a declared channel on a held surface was refused: %s", got.Output)
+	}
+	inform := trk.patched[0].Comment.Decision.Inform
+	if inform == nil || inform.Surface != tracker.InformSlack || inform.Channel != "releases" {
+		t.Errorf("the inform is stored as %+v, want slack/releases as the chart spells it",
+			inform)
+	}
+
+	// A SURFACE WITH NO CHART refuses rather than promising unchecked.
+	bare := newFakeTracker()
+	got = callWork(t, decisionRegistry(t, bare, newFakeKB()), builtin.CommentOnWorkTool,
+		map[string]any{"item": "ENG-1", "body": "?", "ask": "pm",
+			"decision": informedDecision("slack", "releases")})
+	if !got.Failed || len(bare.patched) != 0 {
+		t.Errorf("an inform nothing could check was accepted: %+v", got)
 	}
 }

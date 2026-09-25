@@ -266,6 +266,13 @@ type WorkDeps struct {
 	// every concurrent request.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 
+	// Channels is where an asker may promise to report a decision — the
+	// chat surfaces a seat posts on and the channels the chart declares.
+	// Read per call, for the reason [WorkDeps.Seats] is. Nil refuses
+	// `decision.inform`, which is the honest answer for a surface with no
+	// chart to check it against.
+	Channels ChannelDirectory
+
 	// Leads resolves the two fallbacks a wake may need — a project's lead
 	// and a unit's. Nil carries neither, which degrades to a change that
 	// reaches the people already on the task and nobody else.
@@ -1369,7 +1376,7 @@ func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.T
 	}
 	if decided {
 		decision, refusal := t.deps.readDecision(ctx, CreateWorkItemTool,
-			rawDecision, t.pages)
+			actor, rawDecision, t.pages)
 		if refusal != nil {
 			return nil, refusal
 		}
@@ -2551,7 +2558,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if decided {
 		decision, refusal := t.deps.readDecision(ctx, CommentOnWorkTool,
-			rawDecision, t.pages)
+			actor, rawDecision, t.pages)
 		if refusal != nil {
 			return *refusal, nil
 		}

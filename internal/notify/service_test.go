@@ -833,3 +833,33 @@ func TestAnUnsetWakeIDIsStillUnique(t *testing.T) {
 		t.Error("a wake with no derived id got the nil uuid")
 	}
 }
+
+// A WAKE CARRIES THE SURFACE ITS RECIPIENT OWES, and only its recipient's.
+//
+// The parser decides per recipient which copy of one change carries a promise
+// — an asker who said it would report a decision's outcome in a chat channel —
+// and the turn engine can hold the turn open only on what the published event
+// says. A copy the parser did not mark owes nothing.
+func TestTheWakeCarriesTheSurfaceItsRecipientOwes(t *testing.T) {
+	h := newService(t, nil)
+	owed := to(notify.Recipient{Handle: "engineering-lead"}, "hold")
+	owed.Owes = "slack"
+	h.parser.out = []notify.Routed{owed, to(notify.Recipient{Handle: "backend-engineer"}, "hold")}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	for handle, want := range map[string]string{"engineering-lead": "slack", "backend-engineer": ""} {
+		woken := h.inbox(t, handle)
+		if len(woken) != 1 {
+			t.Fatalf("%s was woken %d times", handle, len(woken))
+		}
+		n, ok := events.DataAs[*types.ExternalNotification](woken[0])
+		if !ok {
+			t.Fatalf("the wake carries %T", woken[0].Data)
+		}
+		if n.Owes != want {
+			t.Errorf("%s's wake owes %q, want %q", handle, n.Owes, want)
+		}
+	}
+}

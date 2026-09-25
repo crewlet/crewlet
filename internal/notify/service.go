@@ -523,6 +523,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		Metadata:             meta,
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
 		Addressed:            prompt.Addressed(r.Inbound),
+		Owes:                 r.Owes,
 	}
 	// BOTH KEYS ride on the event: the partition key so the inbox coalescer
 	// can group without re-deriving a third-party app's rule, and the

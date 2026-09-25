@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1196,7 +1197,12 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// clone, and a captured map would route a change by the org chart
 		// that has since moved.
 		Leads: liveLeads{engine: e},
-		Now:   func() time.Time { return time.Now().UTC() },
+		// AND WHERE AN ASKER MAY PROMISE TO REPORT A DECISION, read per
+		// call for the chart seams' reason: a captured chart would admit
+		// a channel a unit stopped declaring and a surface the company
+		// turned off.
+		Channels: liveChannels{engine: e},
+		Now:      func() time.Time { return time.Now().UTC() },
 		// THE COMPANY'S CLOCK AS THIS EPOCH SETS IT (ADR-0018), and
 		// deliberately not read per call like the chart seams above: a
 		// turn pins its epoch, and a turn that resolved "due friday" on
@@ -1310,6 +1316,60 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 		return "", false
 	}
 	return found[0].Seat.Handle, true
+}
+
+// liveChannels is the chart's chat surfaces and unit channels, against the
+// CURRENT epoch — the [builtin.ChannelDirectory] a decision's inform is
+// checked through.
+type liveChannels struct{ engine *Engine }
+
+var _ builtin.ChannelDirectory = liveChannels{}
+
+// ChatSurfaces is the chat surfaces a seat can post on.
+//
+// BOTH HALVES, and each alone admits a promise nobody can keep: a company
+// surface the seat holds no bot on is one whose tools the seat never gets,
+// and a seat's bot on a surface the company turned off is a credential no
+// transport or tool server is started for. Mattermost's company block is
+// switched by `enabled`; Slack's is on by being declared — the rule
+// [Engine.startNotifications] starts each transport by.
+func (c liveChannels) ChatSurfaces(handle string) []tracker.InformSurface {
+	company := c.engine.Company()
+	if company == nil || company.Org == nil || company.Config == nil {
+		return nil
+	}
+	seat := company.Org.SeatByHandle(handle)
+	if seat == nil {
+		return nil
+	}
+	var out []tracker.InformSurface
+	if mm := company.Config.Integrations.Mattermost; mm != nil && mm.Enabled &&
+		seat.Mattermost.BotToken != "" {
+		out = append(out, tracker.InformMattermost)
+	}
+	if company.Config.Integrations.Slack != nil && seat.Slack.BotToken != "" {
+		out = append(out, tracker.InformSlack)
+	}
+	return out
+}
+
+// UnitChannels is every channel a unit DECLARES, once each, in chart order.
+//
+// DECLARED rather than effective: an inherited channel is its ancestor's
+// declaration, so the set is the same and the walk never lists one twice.
+func (c liveChannels) UnitChannels() []string {
+	company := c.engine.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	var out []string
+	for unit := range company.Org.AllUnits() {
+		channel := strings.TrimSpace(unit.DeclaredChannel)
+		if channel != "" && !slices.Contains(out, channel) {
+			out = append(out, channel)
+		}
+	}
+	return out
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.
