@@ -342,20 +342,32 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 // would let a dashboard reader read, through that seat's account, material
 // their own account may not have — which is the exact confusion the seam's
 // "unscoped is not unbounded" rule exists to prevent.
+//
+// THE MODE IS THE ASKER'S, and the answer says what was served: `served_mode`,
+// the `modes` this backend can serve as asked, `degraded` when those differ,
+// and the `coverage` of the fleet the search was divided across — see
+// [knowledge.Outcome]. A mode this build does not know is refused rather than
+// run as the default, because that would answer a different question.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
 		text = p.String("text")
 	}
+	mode, err := knowledge.ParseMode(p.String("mode"))
+	if err != nil {
+		return nil, badParams("mode", p.String("mode"), modeNames())
+	}
 	organization := s.organization()
 	out := map[string]any{
 		"backend":   "",
 		"query":     text,
+		"mode":      string(mode),
 		"hits":      []any{},
 		"available": true,
 		"reason":    string(KnowledgeRan),
 		"note":      "",
 	}
+	outcome(out, knowledge.Outcome{})
 	unavailable := func(reason KnowledgeReason, note string) (any, error) {
 		out["available"] = false
 		out["reason"] = string(reason)
@@ -401,13 +413,15 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if text == "" {
 		return out, nil
 	}
-	hits := searcher.Search(ctx, knowledge.Query{
+	result := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
+		Mode:  mode,
 	})
-	rows := make([]map[string]any, 0, len(hits))
-	for _, hit := range hits {
+	outcome(out, result.Outcome)
+	rows := make([]map[string]any, 0, len(result.Hits))
+	for _, hit := range result.Hits {
 		rows = append(rows, map[string]any{
 			"id":        hit.PageID,
 			"title":     hit.Title,
@@ -422,6 +436,37 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	out["hits"] = rows
 	return out, nil
+}
+
+// outcome writes what a ranked search did onto its answer: the four fields
+// `knowledge` and `work_search` share, so one screen control reads both.
+//
+// NEVER NULL: an absent outcome — a search that did not run — is an empty
+// mode list, no served mode and a coverage of no nodes, not complete. A
+// screen that has to guard each field is a screen that renders `null` the
+// first time it forgets one.
+func outcome(out map[string]any, o knowledge.Outcome) {
+	modes := make([]string, 0, len(o.Modes))
+	for _, m := range o.Modes {
+		modes = append(modes, string(m))
+	}
+	coverage := o.Coverage
+	if coverage.Nodes == nil {
+		coverage.Nodes = []knowledge.NodeCoverage{}
+	}
+	out["served_mode"] = string(o.ServedMode)
+	out["modes"] = modes
+	out["coverage"] = coverage
+	out["degraded"] = string(o.Degraded)
+}
+
+// modeNames is the search modes as a refusal names them.
+func modeNames() []string {
+	out := make([]string, 0, len(knowledge.Modes))
+	for _, m := range knowledge.Modes {
+		out = append(out, string(m))
+	}
+	return out
 }
 
 // KnowledgeReason says WHY a knowledge search did not run, as a stable value

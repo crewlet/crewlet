@@ -30,6 +30,55 @@ tells it one: it holds every bucket and reads every bucket.
 
 ---
 
+## Three modes, and what an answer says it served
+
+Every ranked search — the knowledge search and the tracker's own item search
+alike — takes one of three modes, with one vocabulary on every surface:
+
+| Mode | Ranks by | Label on a screen |
+|---|---|---|
+| `hybrid` (the default) | both halves, fused by reciprocal rank fusion | Hybrid |
+| `keyword` | the words the query used — BM25 alone | Keyword |
+| `semantic` | what the query means — the vector scan alone | Meaning |
+
+A semantic ranking needs the **query** in the same embedding space as the
+documents. The asking node computes that vector once through the company's
+embeddings provider — the same model and width the corpus is embedded at — and
+sends it with the request, so no participant makes a provider call of its own.
+It caches the result: **1 024 query vectors per node** (about 12 MiB at 3 072
+dimensions), least recently used first out, emptied the moment
+`providers.embeddings.model` changes so a vector from the retired model is
+never ranked against rows the refill is replacing. A phrase the ⌘K palette
+embedded is a cache hit for the same phrase searched as knowledge, and for the
+turn-start prefetch. Computing a query's vector is bounded at **two seconds** —
+twice the one-second budget of the scan itself — so a slow provider costs a
+search its meaning half rather than holding the person who asked.
+
+**A mode asked for is not always a mode served, and every answer says which.**
+It carries `served_mode` (the ranking the hits actually came from), `modes`
+(what this backend can serve as asked, right now), `degraded` (why those differ
+from what was asked) and `coverage` (below):
+
+| `degraded` | What happened | Hybrid serves | Semantic serves |
+|---|---|---|---|
+| `no_embeddings` | No embeddings provider, or `knowledge.vectors: false`. | its keyword half | nothing |
+| `embedding_failed` | The provider did not produce the query's vector in time. Nothing to configure; the next search asks again, and a failure is never cached. | its keyword half | nothing |
+| `semantic_partial` | Part of the fleet ran without its vector scan. | both, with meaning over less of the corpus | meaning over less of the corpus |
+| `unsupported` | The backend has no such ranker — Confluence, whose own CQL search is keyword. | the keyword answer | nothing |
+
+**Semantic never falls back to keyword.** Somebody asking for meaning is asking
+for the pages that share no word with the query, and a keyword ranking is the
+one ranking guaranteed not to find them — so it answers no hits and says why,
+rather than a keyword answer labelled as meaning. Hybrid does fall back: the
+words are half of what was asked for.
+
+A keyword search sends no vector at all, so a participant runs no vector scan
+for it; the rankers a query needs travel with it, and the asking node fuses
+only the ones it asked for even from a participant on an older build that ran
+both.
+
+---
+
 ## When a fleet divides the scan
 
 Above **10 000 documents**, a company running more than one node divides the
@@ -120,23 +169,30 @@ answer under complete coverage. It clears itself when that node finishes its
 first lap, and it applies to the asking node too: a freshly booted node reports
 its own range missing rather than reporting an empty corpus.
 
-Either way the answer is **labelled partial** and names what it missed: how many
-buckets were answered, how many were not, and which nodes did not cover theirs.
-The `search_scoped` alarm reports the fraction of searches answered that way;
-see [Alarms](../reference/alarms.md).
+Either way the answer is **labelled partial**, in the answer itself rather than
+in a log line on the asking node: every answer carries
+`coverage{nodes:[{id,answered,error}], complete, buckets_missing}` — every
+participant, whether it covered its range and, if not, why (silent inside the
+budget, still building its index, or the fleet could not be asked). A seat's
+own `search_knowledge` and `search_work_items` answers say so in words, because a seat reading five
+results out of what should have been eight otherwise concludes the other three
+do not exist. The `search_scoped` alarm reports the fraction of searches
+answered that way; see [Alarms](../reference/alarms.md).
 
 The three search alarms are kept apart because they cost different things:
 
 | Alarm | What happened | What the answer lost |
 |---|---|---|
 | `search_scoped` | A node did not cover its assignment — it was silent, or its own lexical index has not finished its first lap. | A range of the corpus went unscanned. |
-| `search_degraded` | A semantic scan was asked for and did not run. | Over the range it *did* scan, only what shares words with the query was found. |
+| `search_degraded` | A semantic ranking was asked for and did not run — a node's vector scan failed, or the provider could not compute the query's vector. | Over the range it *did* scan, only what shares words with the query was found. |
 | `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
 
-**A company with no embeddings provider is not degraded.** `search_degraded`
-counts semantic scans that were asked for and failed, never searches that asked
-for one half by design — an alarm red for the life of a deployment is one
-nobody reads.
+**A company with no embeddings provider is not degraded** as far as the alarm
+is concerned. `search_degraded` counts semantic rankings that were asked for and
+failed, never a keyword search and never a company that has nothing to rank by
+meaning with — an alarm red for the life of a deployment is one nobody reads.
+The answer itself still says `no_embeddings`, because the person reading it is
+the one who can configure a provider.
 
 **The asking node always scans its own range itself**, never through the
 broker. A search that returned nothing because the broker hiccupped would be a

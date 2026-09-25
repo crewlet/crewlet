@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -29,7 +30,7 @@ import (
 // index is this node's own and the rows are the fleet's, which the searcher
 // already reconciles.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
 }
 
 // Conversations is the seat's own thread ledger, as this surface needs it.
@@ -65,30 +66,46 @@ const DefaultSearchLimit = 25
 // Reported as an empty result with a reason, exactly as `knowledge` reports
 // its own four unavailable states, so a screen says "try again in a moment"
 // instead of "nothing matches" — which a reader acts on by filing a duplicate.
+//
+// THE SAME THREE MODES AS `knowledge`, and the same four outcome fields —
+// `served_mode`, `modes`, `coverage`, `degraded` — so one screen control
+// drives both searches and says the same thing about each.
 func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
 		return nil, badParams("q", "", nil)
 	}
-	hits, err := s.WorkSearch.Search(ctx, text, p.Int("limit", DefaultSearchLimit))
+	mode, err := knowledge.ParseMode(p.String("mode"))
+	if err != nil {
+		return nil, badParams("mode", p.String("mode"), modeNames())
+	}
+	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
+		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
+	})
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
-		return map[string]any{
+		out := map[string]any{
 			"hits":      []tracker.Ranked{},
+			"mode":      string(mode),
 			"available": false,
 			"reason":    "building",
 			"note": "this node joined recently and is still indexing the company's work — " +
 				"items that exist are simply not findable from here yet",
-		}, nil
+		}
+		outcome(out, knowledge.Outcome{})
+		return out, nil
 	case err != nil:
 		return nil, err
 	}
+	hits := answer.Hits
 	if hits == nil {
 		// An EMPTY SLICE, never null: a client that renders `hits.length`
 		// on the answer should not have to guard the field as well.
 		hits = []tracker.Ranked{}
 	}
-	return map[string]any{"hits": hits, "available": true}, nil
+	out := map[string]any{"hits": hits, "mode": string(mode), "available": true}
+	outcome(out, answer.Outcome)
+	return out, nil
 }
 
 // The conversation page, and its ceiling.

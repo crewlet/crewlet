@@ -84,6 +84,13 @@ type SearcherOptions struct {
 	// so scans in flight can be counted. Nil counts nothing.
 	Enter func() func()
 
+	// Vectors computes a query's embedding for the semantic ranking. NIL
+	// IS A SEARCH WITH NO MEANING HALF — every hybrid answer then says it
+	// served keyword, and every semantic one says why it served nothing.
+	// Shared with the item search on the same node, so a string either
+	// one embedded is a cache hit for the other.
+	Vectors *search.QueryVectors
+
 	// SkillsContainer names the reserved tool-skills container, excluded
 	// from every result. A FUNCTION because the value is live config; nil,
 	// or one returning empty, excludes nothing — which is the company that
@@ -96,13 +103,14 @@ func NewSearcher(opts SearcherOptions) *Searcher {
 	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer}
 	if opts.Index != nil {
 		s.fan = &search.FanOut{
-			Self:   cmp.Or(opts.Node, soloNode),
-			Local:  search.NodeScanner{Index: opts.Index},
-			Peers:  opts.Peers,
-			Roster: opts.Roster,
-			Corpus: opts.Index.Corpus,
-			Report: opts.Report,
-			Enter:  opts.Enter,
+			Self:    cmp.Or(opts.Node, soloNode),
+			Local:   search.NodeScanner{Index: opts.Index},
+			Peers:   opts.Peers,
+			Roster:  opts.Roster,
+			Corpus:  opts.Index.Corpus,
+			Report:  opts.Report,
+			Enter:   opts.Enter,
+			Vectors: opts.Vectors,
 		}
 	}
 	return s
@@ -150,17 +158,27 @@ func (s *Searcher) Building(_ context.Context) bool {
 	return s.index != nil && !s.index.Ready()
 }
 
-// Search returns up to Limit ranked hits. Best effort: every failure path is
-// an empty result.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+// Search returns up to Limit ranked hits, and what the search did. Best
+// effort: every failure path is an empty result — and an outcome that says so.
+//
+// WHAT IT COVERED RIDES IN THE ANSWER. It used to be a log line and nothing
+// else, so a caller holding a result over two thirds of the corpus had no way
+// to say so and a screen drew it as the company's whole answer. Every caller
+// now holds [knowledge.Outcome.Coverage] and decides what to say; the log line
+// went with the reason for it.
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
-		return nil
+		return knowledge.Result{Outcome: knowledge.Outcome{
+			Modes:    s.fan.Modes(),
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+		}}
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
 	answer, err := s.fan.Search(ctx, search.FanQuery{
 		Text:       q.Text,
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
+		Mode:       q.Mode,
 		// OVER-FETCHED, because the exclusions below drop hits after
 		// ranking: asking for exactly the limit and then removing three
 		// skill pages would return five results where eight were
@@ -171,25 +189,13 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the knowledge block degrades to empty; a turn must not "+
 				"die because an index was slow")
-		return nil
-	}
-	if answer.Partial() {
-		// LOGGED, NEVER REFUSED. The block is best effort by contract,
-		// and an answer over part of the corpus is better than none —
-		// but a short result set is indistinguishable from a short
-		// corpus, so the one place that knows says so.
-		log.WarnContext(ctx, "pages_search_scoped",
-			"buckets_answered", answer.BucketsAnswered,
-			"buckets_missing", answer.BucketsMissing,
-			"absent", strings.Join(answer.Absent, ","),
-			"detail", "the answer was complete for what was searched and "+
-				"silent about what was not")
+		return s.failed(err)
 	}
 	hits, err := s.index.Hydrate(ctx, answer.Hits, q.Text)
 	if err != nil {
 		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
 			"detail", "the fused answer could not be read back")
-		return nil
+		return s.failed(err)
 	}
 
 	out := make([]knowledge.Hit, 0, q.Hits())
@@ -208,7 +214,22 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 			break
 		}
 	}
-	return out
+	return knowledge.Result{Hits: out, Outcome: answer.Outcome()}
+}
+
+// failed is the answer to a search this node could not run at all: no hits,
+// nothing served, and THIS node named as the participant that did not cover
+// its range — the coordinator always scans, so a failure here is its own.
+func (s *Searcher) failed(err error) knowledge.Result {
+	return knowledge.Result{Outcome: knowledge.Outcome{
+		Modes: s.fan.Modes(),
+		Coverage: knowledge.Coverage{
+			Nodes: []knowledge.NodeCoverage{{
+				ID: s.fan.Self, Error: "the search could not run here: " + err.Error(),
+			}},
+			BucketsMissing: search.SearchShards,
+		},
+	}}
 }
 
 // searchOverfetch is how many times the limit is asked for before exclusions.

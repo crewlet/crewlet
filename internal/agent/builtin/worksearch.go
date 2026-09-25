@@ -40,7 +40,7 @@ import (
 // not been wired — and the tool is then OMITTED rather than refusing at the
 // call, on [Register]'s own rule.
 type WorkSearcher interface {
-	Search(ctx context.Context, text string, limit int) ([]tracker.Ranked, error)
+	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
 }
 
 // ---- search_work_items --------------------------------------------------- //
@@ -98,7 +98,12 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_work_items needs `text` — what the work is " +
 			"about, in plain words."), nil
 	}
-	hits, err := t.deps.Search.Search(ctx, text, argInt(args, "limit", 0))
+	// HYBRID, the default, and not a parameter: a seat searching for work
+	// wants whatever finds it, and a mode is a choice a person makes while
+	// looking at the answers — which the dashboard's search offers.
+	answer, err := t.deps.Search.Search(ctx, tracker.SearchQuery{
+		Text: text, Limit: argInt(args, "limit", 0),
+	})
 	switch {
 	case errors.Is(err, tracker.ErrIndexBuilding):
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
@@ -111,7 +116,18 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return readFailure(tracker.SearchWorkItemsTool, err), nil
 	}
-	return jsonAnswer(map[string]any{
-		"query": text, "matches": hits, "count": len(hits),
-	}, "Ask for fewer with `limit`.")
+	hits := answer.Hits
+	if hits == nil {
+		hits = []tracker.Ranked{}
+	}
+	out := map[string]any{"query": text, "matches": hits, "count": len(hits)}
+	if !answer.Coverage.Complete && answer.Coverage.BucketsMissing > 0 {
+		// SAID IN THE ANSWER, because the model is what decides what
+		// "no match" means, and a ranking over part of the corpus reads
+		// exactly like one over all of it.
+		out["partial"] = "this search covered only part of the company's " +
+			"work — some of the fleet did not answer in time — so an item " +
+			"not listed here may still exist"
+	}
+	return jsonAnswer(out, "Ask for fewer with `limit`.")
 }

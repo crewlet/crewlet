@@ -168,6 +168,11 @@ type Query struct {
 	// a caller deliberately search drafts and a caller who passed nothing
 	// get the safe behaviour.
 	ExcludeAncestors []string
+
+	// Mode is how to rank. The zero value is [ModeHybrid]. A backend that
+	// cannot serve it says so in the [Result]'s [Outcome] rather than
+	// quietly ranking another way.
+	Mode Mode
 }
 
 // Excluded is the ancestor exclusion this query asks for, applying the
@@ -203,12 +208,15 @@ type Searcher interface {
 	// own to answer would cost more than it saves.
 	CanSearch(seat *org.Role, o *org.Organization) bool
 
-	// Search returns up to Limit ranked hits.
+	// Search returns up to Limit ranked hits, and what the search
+	// actually did — see [Outcome].
 	//
 	// BEST EFFORT: it never reports an error. Every failure path is an
 	// empty result, and the prefetch degrades to an empty block rather
-	// than failing a turn because a wiki was slow.
-	Search(ctx context.Context, q Query) []Hit
+	// than failing a turn because a wiki was slow. What it does NOT do is
+	// fail silently: a search that could not cover the whole corpus, or
+	// could not rank the way it was asked to, says so in the outcome.
+	Search(ctx context.Context, q Query) Result
 }
 
 // Scope normalises an org-wide read scope: trimmed, uppercased, deduped,

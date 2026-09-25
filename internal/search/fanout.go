@@ -5,6 +5,8 @@ import (
 	"context"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/knowledge"
 )
 
 // THE SEARCH FAN-OUT: how a company's corpus scan is divided across the nodes
@@ -139,12 +141,34 @@ type FanQuery struct {
 	// Vector is the query embedding, packed as [SemanticQuery.Vector].
 	// Empty runs the lexical half alone, which is what a company with no
 	// embeddings provider gets.
+	//
+	// A COORDINATOR NEVER NEEDS TO SET IT: [FanOut.Search] computes it
+	// from [FanOut.Vectors] when the mode ranks by meaning. It is here
+	// because it is what travels to a participant, and so a caller that
+	// already holds a vector (the eval harness) can pass one.
 	Vector []byte
 	Model  string
 	Dim    int
 
+	// Mode is the ranking asked for. The zero value is hybrid. The
+	// coordinator resolves it into [FanQuery.Methods] and a vector before
+	// anything is scattered, so a participant never reads it.
+	Mode knowledge.Mode
+
+	// Methods are the rankers a participant runs. EMPTY IS BOTH, which is
+	// what a coordinator on a build that predates modes sends and what
+	// the zero value has always meant — so the field is additive on the
+	// wire in both directions: an older participant that ignores it runs
+	// both, and the coordinator fuses only the ones it asked for.
+	Methods []Method
+
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
 	Limit int
+}
+
+// runs reports whether this query asks a participant to run method m.
+func (q FanQuery) runs(m Method) bool {
+	return len(q.Methods) == 0 || slices.Contains(q.Methods, m)
 }
 
 // Scanner answers one bucket range out of the corpus this process holds.
@@ -212,6 +236,13 @@ type FanOut struct {
 	// [FanOutFloor] decision. Nil never fans out.
 	Corpus func(ctx context.Context) (int, error)
 
+	// Vectors computes the query's embedding when the mode ranks by
+	// meaning. NIL IS A NODE WITH NO SEMANTIC SEARCH — a company with no
+	// embeddings provider, an embedded engine, most tests — and every
+	// answer then says so rather than ranking by the words alone and
+	// calling it hybrid.
+	Vectors *QueryVectors
+
 	// Budget bounds the wait for the peers' assignments. Zero takes
 	// [SemanticScanBudget], which is the ceiling one search already has.
 	Budget time.Duration
@@ -264,10 +295,97 @@ type Answer struct {
 	// SemanticSkipped says at least one answering participant ran without
 	// its semantic half.
 	SemanticSkipped bool
+
+	// Nodes is every participant in the assignment table, sorted by id,
+	// and whether each covered its range — the per-node half of
+	// [Answer.Coverage]. Absent is the same fact, narrowed to the ones
+	// that did not.
+	Nodes []knowledge.NodeCoverage
+
+	// Served, Modes and Degraded are what the search actually ranked by,
+	// what this node could have ranked by, and why the two differ from
+	// what was asked — see [knowledge.Outcome].
+	Served   knowledge.Mode
+	Modes    []knowledge.Mode
+	Degraded knowledge.Degradation
 }
 
 // Partial reports whether part of the corpus went unscanned.
 func (a Answer) Partial() bool { return a.BucketsMissing > 0 }
+
+// Coverage is this answer's division as every fleet answer reports one.
+func (a Answer) Coverage() knowledge.Coverage {
+	nodes := a.Nodes
+	if nodes == nil {
+		nodes = []knowledge.NodeCoverage{}
+	}
+	return knowledge.Coverage{
+		Nodes:          nodes,
+		Complete:       !a.Partial(),
+		BucketsMissing: a.BucketsMissing,
+	}
+}
+
+// Outcome is what this answer did, as a backend reports it.
+func (a Answer) Outcome() knowledge.Outcome {
+	return knowledge.Outcome{
+		ServedMode: a.Served,
+		Modes:      slices.Clone(a.Modes),
+		Coverage:   a.Coverage(),
+		Degraded:   a.Degraded,
+	}
+}
+
+// Modes is what a node with this fan-out can serve as asked, with no I/O.
+//
+// ALL THREE WHEN A QUERY VECTOR COULD BE COMPUTED, and only keyword when not:
+// hybrid on a node with no semantic ranking is served as its keyword half and
+// said so, which is a degraded answer and therefore not a mode on offer.
+func (f *FanOut) Modes() []knowledge.Mode {
+	if f != nil && f.Vectors.Available() {
+		return slices.Clone(knowledge.Modes)
+	}
+	return []knowledge.Mode{knowledge.ModeKeyword}
+}
+
+// resolve turns the asked mode into the rankers to run and the vector they
+// need, and says what will be served.
+//
+// THE ONE PLACE A MODE BECOMES A PLAN, so the knowledge search and the item
+// search degrade identically: hybrid without a vector serves its keyword half;
+// semantic without one runs nothing at all, because the keyword ranking is
+// the one ranking guaranteed not to find what somebody asking for meaning is
+// looking for.
+func (f *FanOut) resolve(ctx context.Context, q FanQuery) (FanQuery, knowledge.Mode, knowledge.Degradation) {
+	mode := q.Mode.Resolved()
+	var degraded knowledge.Degradation
+	if mode.Semantic() && len(q.Vector) == 0 {
+		var vector QueryVector
+		vector, degraded = f.Vectors.Vector(ctx, q.Text)
+		q.Vector, q.Model, q.Dim = vector.Vector, vector.Model, vector.Dim
+	}
+	semantic := mode.Semantic() && len(q.Vector) > 0 && q.Model != "" && q.Dim > 0
+	if !semantic {
+		// NO VECTOR TRAVELS WITH A QUERY THAT WILL NOT RANK BY MEANING,
+		// so a keyword search costs a participant no vector scan.
+		q.Vector, q.Model, q.Dim = nil, "", 0
+	}
+	served := mode
+	switch {
+	case mode == knowledge.ModeHybrid && !semantic:
+		served = knowledge.ModeKeyword
+	case mode == knowledge.ModeSemantic && !semantic:
+		served = ""
+	}
+	q.Methods = nil
+	if served.Lexical() && served != "" {
+		q.Methods = append(q.Methods, MethodLexical)
+	}
+	if semantic {
+		q.Methods = append(q.Methods, MethodSemantic)
+	}
+	return q, served, degraded
+}
 
 // Search runs one query across the fleet and fuses what comes back.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
@@ -276,6 +394,24 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		// BEFORE THE PLAN, because the plan is a coordination read and
 		// a search waiting on one is a search this node is running.
 		defer f.Enter()()
+	}
+	q, served, degraded := f.resolve(ctx, q)
+	if served == "" {
+		// NOTHING TO RUN: a semantic search with no vector. Not an
+		// error and not a scan over nothing — an answer that says what
+		// it could not do, and covered no node because it asked none.
+		//
+		// STILL REPORTED, because it is an answer somebody was given:
+		// a semantic search whose query vector the provider failed is
+		// the purest case of `search_degraded` there is, and an early
+		// return past the hook left it out of the fraction entirely —
+		// counting only the hybrid searches that failed the same way.
+		answer := Answer{Modes: f.Modes(), Degraded: degraded,
+			Nodes: []knowledge.NodeCoverage{}}
+		if f.Report != nil {
+			f.Report(answer, time.Since(started))
+		}
+		return answer, nil
 	}
 	table, err := f.plan(ctx)
 	if err != nil {
@@ -327,13 +463,21 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 	local.Node, local.Shards = f.Self, mine
 
 	answers := []Slice{local}
+	var scatterErr error
 	if replies != nil {
 		got := <-replies
 		if got.err == nil {
 			answers = append(answers, got.slices...)
+		} else {
+			scatterErr = got.err
 		}
 	}
-	answer := fuseSlices(answers, table, q.Limit)
+	answer := fuseSlices(answers, table, q, scatterErr)
+	answer.Served, answer.Modes, answer.Degraded = served, f.Modes(), degraded
+	if answer.Degraded == knowledge.NotDegraded && answer.SemanticSkipped &&
+		served.Semantic() {
+		answer.Degraded = knowledge.DegradedSemanticPartial
+	}
 	if f.Report != nil {
 		f.Report(answer, time.Since(started))
 	}
@@ -452,11 +596,21 @@ func Divide(nodes []string) []Assigned {
 // here. For the same reason a slice from a node the table does not name is
 // DROPPED WHOLE — its range overlaps somebody's, so its documents would be
 // merged against themselves and ranked above where they belong.
-func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
+//
+// ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
+// back: a peer on a build that predates [FanQuery.Methods] runs both, and
+// fusing the half nobody asked for would turn a keyword search into a hybrid
+// one on whichever buckets that peer happened to hold.
+//
+// scatterErr is why the peers could not be asked at all, which becomes every
+// unanswered peer's own reason rather than a generic silence.
+func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error) Answer {
+	limit := q.Limit
 	assigned := make(map[string]Assignment, len(table))
 	for _, a := range table {
 		assigned[a.Node] = a.Shards
 	}
+	building := make(map[string]bool)
 
 	lexical := make([][]Scored, 0, len(answers))
 	semantic := make([][]Scored, 0, len(answers))
@@ -478,22 +632,35 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 			// range cannot be both scanned and unscanned, and half of
 			// one merged under "complete" is how the coverage number
 			// stops meaning anything.
+			building[a.Node] = true
 			continue
 		}
 		answered[a.Node] = true
-		lexical = append(lexical, a.Lexical)
-		semantic = append(semantic, a.Semantic)
-		out.SemanticSkipped = out.SemanticSkipped || a.SemanticSkipped
+		if q.runs(MethodLexical) {
+			lexical = append(lexical, a.Lexical)
+		}
+		if q.runs(MethodSemantic) {
+			semantic = append(semantic, a.Semantic)
+			out.SemanticSkipped = out.SemanticSkipped || a.SemanticSkipped
+		}
 	}
+	out.Nodes = make([]knowledge.NodeCoverage, 0, len(table))
 	for _, a := range table {
 		if answered[a.Node] {
 			out.BucketsAnswered += a.Shards.Width()
+			out.Nodes = append(out.Nodes, knowledge.NodeCoverage{ID: a.Node, Answered: true})
 			continue
 		}
 		out.BucketsMissing += a.Shards.Width()
 		out.Absent = append(out.Absent, a.Node)
+		out.Nodes = append(out.Nodes, knowledge.NodeCoverage{
+			ID: a.Node, Error: absentReason(building[a.Node], scatterErr),
+		})
 	}
 	slices.Sort(out.Absent)
+	slices.SortFunc(out.Nodes, func(a, b knowledge.NodeCoverage) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 
 	keys := func(s []Scored) []string {
 		ids := make([]string, 0, len(s))
@@ -514,6 +681,19 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 	}
 	out.Hits = fused
 	return out
+}
+
+// absentReason is why one participant's range went unscanned, in words an
+// operator can act on.
+func absentReason(building bool, scatterErr error) string {
+	switch {
+	case building:
+		return "its search index is still building its first pass, so it " +
+			"covered none of its range"
+	case scatterErr != nil:
+		return "the fleet could not be asked: " + scatterErr.Error()
+	}
+	return "no answer arrived inside the search budget"
 }
 
 // MergeByScore merges per-slice candidate lists into one global list.

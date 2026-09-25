@@ -35,6 +35,11 @@ type slicePayload struct {
 	Model      string   `json:"model,omitempty"`
 	Dim        int      `json:"dim,omitempty"`
 
+	// Methods are the rankers the asker wants run — see
+	// [FanQuery.Methods]. Absent is both, which is what every build that
+	// predates modes sends and means.
+	Methods []Method `json:"methods,omitempty"`
+
 	// Table is the whole assignment, so a node reads its OWN row and
 	// answers only for that. Sent whole rather than per node because a
 	// scatter reaches every node on one subject, and a node not named here
@@ -75,7 +80,8 @@ func (b Broker) Scatter(ctx context.Context, q FanQuery, table []Assigned) ([]Sl
 		Version: sliceProtocol,
 		Text:    q.Text, Containers: q.Containers, Sources: q.Sources,
 		Vector: q.Vector, Model: q.Model, Dim: q.Dim,
-		Table: table,
+		Methods: q.Methods,
+		Table:   table,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search: encode a slice request: %w", err)
@@ -136,6 +142,7 @@ func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scan
 		slice, err := scan.Scan(ctx, FanQuery{
 			Text: req.Text, Containers: req.Containers, Sources: req.Sources,
 			Vector: req.Vector, Model: req.Model, Dim: req.Dim,
+			Methods: req.Methods,
 		}, mine)
 		if err != nil {
 			return nil, err
