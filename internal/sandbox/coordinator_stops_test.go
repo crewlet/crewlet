@@ -176,6 +176,24 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"AnswerByTurn": {
+		{
+			name: "a person's answer naming the run by its turn",
+			call: answersByTurn,
+		},
+		{
+			name:    "an answer by turn whose resume fails",
+			arrange: func(_ *testing.T, rig *coordRig) { rig.resumer.failWith(errors.New("the node lost the seat")) },
+			call:    answersByTurn,
+		},
+		{
+			name: "an answer by turn whose resume broke after writing outside the engine",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.resumer.failWith(fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned))
+			},
+			call: answersByTurn,
+		},
+	},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
@@ -402,6 +420,20 @@ func completesUnreadable(t *testing.T, rig *coordRig) {
 		inner: rig.coordinator.pending, refuse: []string{"Get"},
 	}
 	completes(t, rig)
+}
+
+// answersByTurn hands the coordinator the answer an operator gave by naming
+// the run, as the dispatcher does off the seat's inbox.
+func answersByTurn(t *testing.T, rig *coordRig) {
+	t.Helper()
+	given := types.SandboxAnswerGiven{
+		TurnID: "t1", AgentHandle: "swe", Answer: "the release branch",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+	}
+	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
+		events.New(given, events.TraceContext{})); err != nil {
+		t.Logf("AnswerByTurn: %v", err)
+	}
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.

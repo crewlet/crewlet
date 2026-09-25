@@ -1012,9 +1012,13 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
-		Turn:       sandboxTurnRef(ctx, t, seat.Name),
-		Brief:      brief,
-		Task:       t.Task,
+		Turn:  sandboxTurnRef(ctx, t, seat.Name),
+		Brief: brief,
+		Task:  t.Task,
+		// HOW TO ASK A PERSON, with the names the chart gives this seat —
+		// without it the coding agent was never told the ask shim its box
+		// carries exists, so no run could park on a question at all.
+		Ask:        askBrief(company.Org, seat),
 		Setup:      setup,
 		Spec:       spec,
 		LLM:        agentLLM,
@@ -1083,6 +1087,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// AND THE ITEM, for the same reason: the resumed turn is charged
 		// to what this one was on, and has no trigger to resolve it from.
 		WorkItem: t.WorkItem,
+		// AND WHO ASKED, which the park resolves a question addressed to
+		// "the requester" against — see [sandbox.PendingRun.Requester].
+		Requester: t.Requester,
 	}
 }
 
@@ -1353,6 +1360,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// Who a parked question is put to, resolved against the live
+		// chart at the park — see audience.go.
+		Audience: audienceResolver{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -1437,6 +1447,25 @@ func (e *Engine) answerParkedRun(ctx context.Context, handle string,
 		return sandbox.AnswerNotMine, nil
 	}
 	return rt.coordinator.TryResumeFromAnswer(ctx, handle, conv, answer, trigger)
+}
+
+// answerRunByTurn hands a person's answer BY TURN to the parked coding run it
+// names, through the runtime current when it arrives.
+//
+// LIVE, for the reason [Engine.answerParkedRun] is: bound to the coordinator
+// when the dispatcher was built, a node whose sandbox arrived by apply had no
+// route for an answer by turn for the life of the process. With no runtime the
+// answer is DEFERRED rather than not-mine — this node cannot resume a run, and
+// the delivery is the seat's next holder's to spend, never this node's to drop.
+func (e *Engine) answerRunByTurn(ctx context.Context, given types.SandboxAnswerGiven,
+	trigger *events.Event) (sandbox.AnswerDisposition, error) {
+
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return sandbox.AnswerDeferred, fmt.Errorf("engine: this node runs no sandbox "+
+			"coordinator to resume run %s with the answer it was given", given.TurnID)
+	}
+	return rt.coordinator.AnswerByTurn(ctx, given, trigger)
 }
 
 // sandboxAccountant charges collected runs, or nil where nothing counts them.

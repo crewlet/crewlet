@@ -1127,6 +1127,12 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// parked run for the life of the process.
 		d.Answer = e.answerParkedRun
 	}
+	if d.AnswerByTurn == nil {
+		// The other way an answer reaches a parked run: named by its turn,
+		// from any node, onto this seat's inbox. See [Dispatcher.routeAnswers].
+		// LIVE for the reason Answer is — see [Engine.answerRunByTurn].
+		d.AnswerByTurn = e.answerRunByTurn
+	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}

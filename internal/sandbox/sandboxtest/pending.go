@@ -40,6 +40,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		fn   func(*testing.T, sandbox.PendingStore)
 	}{
 		{"WorkItemSurvivesParkAndResume", testWorkItemSurvivesParkAndResume},
+		{"AParkedRunRecordsWhoItsAudienceIs", testAParkedRunRecordsWhoItsAudienceIs},
+		{"ARequesterSurvivesTheLaunchThatRecordsIt", testARequesterSurvivesTheLaunchThatRecordsIt},
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -1656,6 +1658,61 @@ func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
+func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore) {
+	// THE PARK WRITES WHOM THE QUESTION IS PUT TO, in the same write as the
+	// question — the label alone ("manager") answered nobody's "what is
+	// waiting on me" — and a new job opened on the row takes it away with
+	// the question, because a question that is gone waits on nobody.
+	mustBeginLaunch(t, s, run("t1"))
+	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
+		t.Fatalf("suspend: %v %v", ok, err)
+	}
+	mustClaim(t, s, "t1")
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question: "which base branch?", Audience: "manager",
+		Answerers: sandbox.Audience{Handles: []string{"founder", "cto"}, Fallback: true},
+	}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Audience != "manager" || len(got.AudienceHandles) != 2 ||
+		got.AudienceHandles[0] != "founder" || got.AudienceHandles[1] != "cto" ||
+		!got.AudienceFallback {
+		t.Fatalf("the park recorded audience %q handles %v fallback %v, want "+
+			"manager, [founder cto], true", got.Audience, got.AudienceHandles, got.AudienceFallback)
+	}
+
+	mustBeginLaunch(t, s, run("t1"))
+	again := mustGet(t, s, "t1")
+	if len(again.AudienceHandles) != 0 || again.AudienceFallback {
+		t.Errorf("a new job kept the last question's audience %v (fallback %v) — "+
+			"the run would read as waiting on people nobody is asking",
+			again.AudienceHandles, again.AudienceFallback)
+	}
+}
+
+func testARequesterSurvivesTheLaunchThatRecordsIt(t *testing.T, s sandbox.PendingStore) {
+	// WHO WOKE THE TURN is written by the launch and read by the park,
+	// which runs when the job finishes — so every write between the two
+	// has to hand it on.
+	r := run("t1")
+	r.Requester = "ada"
+	mustBeginLaunch(t, s, r)
+	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
+		t.Fatalf("suspend: %v %v", ok, err)
+	}
+	claimed := mustClaim(t, s, "t1")
+	if claimed.Requester != "ada" {
+		t.Fatalf("the claim read requester %q, want ada", claimed.Requester)
+	}
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q"}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Requester != "ada" {
+		t.Errorf("the park left requester %q, want ada", got.Requester)
+	}
+}
+
 // audienceQuorum is a key no build has declared: the stand-in for whatever a
 // newer build adds to the row next.
 const audienceQuorum = "audience_quorum"
@@ -1723,7 +1780,13 @@ func testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem(
 	mustRelease(t, s, claimed)
 	check("the release")
 	mustClaim(t, s, "t1")
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q"}); err != nil {
+	// THE PARK IS THE WRITE THAT OWNS THE AUDIENCE, so it states the same
+	// resolution the newer build parked with; what it must not drop is the
+	// key it has never heard of, and the item.
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question:  "q",
+		Answerers: sandbox.Audience{Handles: []string{"ada", "grace"}, Fallback: true},
+	}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	check("the park")

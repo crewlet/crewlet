@@ -233,6 +233,12 @@ agent_spawned, agent_terminated
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
 sandbox_run_completed, sandbox_run_failed
+sandbox_run_answered       # what an answer to a parked run's question became
+                           # (resumed | not_awaiting | gone), by which route
+                           # (chat | operator) and from whom. The operator
+                           # route travels as an inbox wake
+                           # (sandbox_answer_given), which is not stored and
+                           # is never a turn
 scheduled_task_fired
 
 # a2a: one ask, one answer, then closed. The ask and the answer also travel

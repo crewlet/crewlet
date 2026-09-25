@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -341,4 +342,76 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
 		t.Fatalf("delegation_chain = %#v", row["delegation_chain"])
 	}
+}
+
+// ONE PERSON'S PARKED QUESTIONS, out of the whole board: `audience=` narrows
+// to the runs whose question the park put to that person, and every row says
+// whom it was put to and whether that was a fallback. A run nothing resolved an
+// audience for is nobody's — nothing recorded whom it asked.
+func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "to-ana", AgentHandle: "swe", CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "to-cy", AgentHandle: "swe", CreatedAt: runBase.Add(time.Minute)},
+		sandbox.PendingRun{TurnID: "to-nobody", AgentHandle: "swe", CreatedAt: runBase.Add(2 * time.Minute)},
+	)
+	for turnID, answerers := range map[string]sandbox.Audience{
+		"to-ana":    {Handles: []string{"bo", "ana"}},
+		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
+		"to-nobody": {},
+	} {
+		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
+			Question: "which branch?", Audience: "team", Answerers: answerers,
+		}); err != nil {
+			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
+		}
+	}
+	cfg, err := config.ParseCompany([]byte(partyCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: store, Company: func() *config.Company { return cfg }})
+	ask := func(params map[string]any) map[string]map[string]any {
+		t.Helper()
+		got, err := r.Answer(t.Context(), "sandbox_runs", params, "")
+		if err != nil {
+			t.Fatalf("sandbox_runs %v: %v", params, err)
+		}
+		out := map[string]map[string]any{}
+		for _, row := range got.(map[string]any)["runs"].([]any) {
+			m := row.(map[string]any)
+			out[m["turn_id"].(string)] = m
+		}
+		return out
+	}
+
+	mine := ask(map[string]any{"audience": "ana"})
+	if len(mine) != 1 || mine["to-ana"] == nil {
+		t.Fatalf("audience=ana answered %v, want only the run put to ana", keysOf(mine))
+	}
+	if got := mine["to-ana"]["audience_handles"]; !slices.Equal(got.([]string), []string{"bo", "ana"}) {
+		t.Errorf("audience_handles = %v, want [bo ana]", got)
+	}
+
+	all := ask(nil)
+	if len(all) != 3 {
+		t.Fatalf("the unfiltered board answered %v, want all three", keysOf(all))
+	}
+	if all["to-cy"]["audience_fallback"] != true || all["to-ana"]["audience_fallback"] != false {
+		t.Errorf("audience_fallback is not carried: cy=%v ana=%v",
+			all["to-cy"]["audience_fallback"], all["to-ana"]["audience_fallback"])
+	}
+	if got, ok := all["to-nobody"]["audience_handles"].([]string); !ok || len(got) != 0 {
+		t.Errorf("an unresolved run's audience_handles = %#v, want an empty list", all["to-nobody"]["audience_handles"])
+	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }

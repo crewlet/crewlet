@@ -185,6 +185,14 @@ type Turn struct {
 	Task  string
 	Reply string
 
+	// Requester is the seat whose message, notice or ask woke this turn,
+	// and empty when no seat did — a schedule, a sender the chart does not
+	// know. Carried for the reason Task and Reply are: a coding run this
+	// turn detaches can stop to ask "the requester" a question days later,
+	// on another node, and the launch is the only frame that can put who
+	// that is on the run's row.
+	Requester string
+
 	// Phase is the phase session this value was bound for, and empty on
 	// the Turn the engine built for the whole turn. Set only through
 	// [Turn.InPhase], by the frame that builds a phase's tool surface, so
@@ -318,10 +326,11 @@ const MaxWritten = 64
 // Written is the set of work items a turn's writes committed to, in the order
 // each was first written.
 //
-// IT IS THE ONE MUTABLE THING A [Turn] POINTS AT, and the exception is exactly
-// as wide as it has to be. A Turn is immutable because a tool that could
-// rewrite what it runs as would make every authorization downstream a
-// suggestion; this set authorizes nothing and is only ever added to. It has to
+// IT IS ONE OF THE TWO MUTABLE THINGS A [Turn] POINTS AT ([Turn.Calls] is the
+// other), and the exception is exactly as wide as it has to be. A Turn is
+// immutable because a tool that could rewrite what it runs as would make
+// every authorization downstream a suggestion; this set authorizes nothing
+// and is only ever added to. It has to
 // be shared rather than copied because the writes it records happen in tool
 // calls and delegate workers that run concurrently under one turn, and what it
 // answers — "did this turn write to exactly one item" — is a question about all

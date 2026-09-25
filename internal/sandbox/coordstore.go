@@ -133,6 +133,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
+		// And whom it was put to: the audience is the question's, and a
+		// question that is gone waits on nobody.
+		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// AND ITS COST: a parked job's tokens are paid by the resume its
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
@@ -222,6 +225,8 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Status = StatusAwaiting
 		run.Question = q.Question
 		run.Audience = q.Audience
+		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
+		run.AudienceFallback = q.Answerers.Fallback
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens

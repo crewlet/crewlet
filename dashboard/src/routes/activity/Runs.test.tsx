@@ -34,6 +34,8 @@ function run(extra: Partial<SandboxRun> = {}): SandboxRun {
     task_description: "Ship it",
     question: "",
     audience: "",
+    audience_handles: [],
+    audience_fallback: false,
     branch: "",
     trace_id: "",
     owner: "node-0",

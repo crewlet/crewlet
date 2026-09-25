@@ -90,6 +90,8 @@ describe("what it surfaces", () => {
       task_description: "",
       question: "Which branch should I target?",
       audience: "",
+      audience_handles: [],
+      audience_fallback: false,
       branch: "",
       trace_id: "",
       owner: "",

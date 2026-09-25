@@ -416,3 +416,26 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 			ctx.WorkItem, ctx.WorkItemBasis)
 	}
 }
+
+// WHO WOKE THE TURN REACHES THE TURN CONTEXT, which is the one frame a coding
+// run it detaches copies onto its row — and a resumed turn keeps the one the
+// row recorded rather than whoever answered it.
+func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	company := e.Company()
+	ask := events.New(types.A2ARequest{ChannelID: "c1", Requester: "ceo", Content: "why?"},
+		events.TraceContext{})
+	tel := e.describeTurn(t.Context(), company, Request{
+		RunID: "run-1", Handle: "swe", Events: []*events.Event{ask},
+	})
+	if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
+		t.Errorf("the turn context's requester = %q, want the asking seat", got)
+	}
+	resumed := e.describeResume(t.Context(), company, resumeInput{
+		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"},
+	})
+	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
+		t.Errorf("a resumed turn's requester = %q, want the one its row recorded", got)
+	}
+}
