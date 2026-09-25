@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -176,6 +177,23 @@ type Config struct {
 	// every seat on an API provider has and what a cli-agent entry in
 	// text mode has. See agentrun.go.
 	AgentRun AgentLauncher
+
+	// Steer is the turn's box of notes from a person (internal/agent/steer),
+	// drained at the top of every round of the EXECUTOR and the REVIEWER —
+	// the two phases that are the turn's own conversation. Never a worker's
+	// (a leaf its parent directs), the onboarding pass's (orientation, not
+	// the work) or the extension judge's (a question about the phase, not
+	// part of it): a note left in the box by one of those is read by the
+	// next round of the turn's own.
+	//
+	// A note read once is carried into every later phase of the turn, as
+	// the same message, so a correction made to the executor binds the
+	// reviewer that judges the work and every executor iteration after it.
+	// See [Runner.steered].
+	//
+	// Nil is a turn nobody can steer, which is every test and every runner
+	// driven directly. The engine opens one box per turn.
+	Steer *steer.Box
 }
 
 // Resume is a suspended Execute conversation plus the answer that unblocks it.
@@ -263,6 +281,21 @@ type Runner struct {
 	// onboardedThisTurn suppresses the executor prompt's onboarding hint for a
 	// seat that has just been through the pass. See [Runner.Onboard].
 	onboardedThisTurn bool
+
+	// steered is every person's note this turn has read, rendered, in the
+	// order it was read — opened into every LATER phase's conversation
+	// after its opening messages.
+	//
+	// A phase is a fresh conversation (a reviewer, a self-iterated
+	// executor), so a note read in one phase is gone from the next unless
+	// it is carried: the reviewer would judge the work against the task the
+	// person corrected, and the next executor iteration would undo the
+	// correction. Carried as the SAME message rather than summarised,
+	// because the note's words are the person's and a paraphrase is the
+	// engine's. Guarded by mu: the loop that reads a note and the suspend
+	// that persists the list are on one goroutine, but the engine reads the
+	// suspension after the turn returns.
+	steered []string
 }
 
 var _ turn.Phases = (*Runner)(nil)
@@ -341,7 +374,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
 		iteration: round, terminateAfter: []string{SubmitWorkTool},
-		allowSuspend: true,
+		allowSuspend: true, steerable: true,
 	})
 	if err != nil {
 		// THE RECORD SURVIVES THE FAILURE. A phase that broke halfway
@@ -529,6 +562,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
+		steerable: true,
 		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
 		// no catalogue at all, so "call a tool" and "submit the review" are
 		// the same instruction here — which is what makes forcing it safe
@@ -700,6 +734,11 @@ type phaseRun struct {
 	// silently abandon a turn.
 	allowSuspend bool
 
+	// steerable is whether a person's notes are drained into this phase's
+	// rounds — the executor and the reviewer, and nothing else. See
+	// [Config.Steer].
+	steerable bool
+
 	// intent is what the turn set out to do, for the extension judge.
 	//
 	// Empty for the executor, which is the phase that decides it as it
@@ -861,6 +900,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			{Role: llm.RoleSystem, Content: system},
 			{Role: llm.RoleUser, Content: user},
 		}
+		// EVERY NOTE THE TURN HAS ALREADY READ, after the opening and in
+		// the order it was read, so a new phase starts from the turn as
+		// the person corrected it. A seeded phase is re-entering a
+		// conversation that already holds its own. See [Runner.steered].
+		for _, note := range r.carriedSteers() {
+			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: note})
+		}
 	}
 	budget := in.rounds
 	for {
@@ -886,6 +932,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// that asks which round it is in hears the PHASE's number — the
 		// same number the records below are renumbered onto.
 		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
+		var steering toolloop.Steerer
+		if in.steerable && r.cfg.Steer != nil {
+			steering = phaseSteer{r: r, ctx: ctx, ph: ph, iteration: iteration, offset: prior.Rounds}
+		}
 		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			// The chain's head, standing in until a completion names the
@@ -908,6 +958,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// The live view is the only reason to stream, so it is on
 			// exactly when something is listening.
 			StreamPartials: true,
+			// A person's notes, into the executor's and the reviewer's
+			// rounds only.
+			Steer: steering,
 			OnProgress: func(live toolloop.Result) {
 				folded := foldOnto(prior, live)
 				emit.progress(ctx, ph, iteration, folded, capsOf(policy, folded.MaxRounds))
@@ -982,6 +1035,14 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		timed[i] = r
 	}
 	res.Rounds = timed
+	// A note's round too, or a note read in extension round 1 is drawn
+	// beside the phase's first round.
+	steers := make([]toolloop.SteerMark, len(res.Steers))
+	for i, m := range res.Steers {
+		m.Round += prior
+		steers[i] = m
+	}
+	res.Steers = steers
 	// The call in flight is on the same scale, or a live row names a call
 	// in round 1 of a phase that is twenty rounds in.
 	if res.Running != nil {
@@ -1123,6 +1184,8 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Narration(nil), done.Result.Narration...), res.Narration...)
 	res.Rounds = append(
 		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
+	res.Steers = append(
+		append([]toolloop.SteerMark(nil), done.Result.Steers...), res.Steers...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	// The cap the PHASE is under: every round already behind it plus what
 	// this invocation was granted — which is exactly how an extension
@@ -1517,3 +1580,57 @@ func reviewArtifact(w turn.Work) string {
 // Caps returns the runner's round budgets, so an assembler can assert on what
 // it actually wired rather than on what it meant to.
 func (r *Runner) Caps() Caps { return r.cfg.Caps }
+
+// phaseSteer is the turn's note box as one phase's loop reads it: each note
+// rendered as the message the model reads, recorded as read, carried into the
+// turn's later phases and announced as delivered at the round that read it.
+type phaseSteer struct {
+	r         *Runner
+	ctx       context.Context
+	ph        phase.Phase
+	iteration int
+	// offset is the rounds this phase ran before the loop invocation
+	// draining, so the round a note is announced at is on the PHASE's
+	// scale — the scale every record of the phase uses.
+	offset int
+}
+
+func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
+	notes := s.r.cfg.Steer.Drain()
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]toolloop.SteerNote, 0, len(notes))
+	emit := s.r.emitter()
+	for _, n := range notes {
+		msg := prompts.SteerMessage(n.Sender(), n.Text)
+		s.r.carrySteer(msg)
+		emit.steered(s.ctx, s.ph, s.iteration, s.offset+round, n)
+		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})
+	}
+	return out
+}
+
+// carrySteer records a note the turn has read, for its later phases.
+func (r *Runner) carrySteer(msg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.steered = append(r.steered, msg)
+}
+
+// carriedSteers is every note the turn has read so far, in order.
+func (r *Runner) carriedSteers() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.steered...)
+}
+
+// SteerExpired records the notes a turn took and never read: it ended or
+// parked before its next round. The engine calls it with what closing the
+// turn's box returned.
+func (r *Runner) SteerExpired(ctx context.Context, notes []steer.Note) {
+	emit := r.emitter()
+	for _, n := range notes {
+		emit.steerExpired(ctx, n)
+	}
+}

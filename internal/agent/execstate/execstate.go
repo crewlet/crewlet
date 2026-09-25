@@ -208,6 +208,22 @@ type State struct {
 	// A false value is what every earlier row decodes to and is exactly
 	// right for them: they are all native suspensions.
 	AgentRun bool `json:"agent_run,omitempty"`
+
+	// Steered is every person's note the turn had read when it suspended,
+	// rendered exactly as the model read it, in order; Steers the rounds of
+	// THIS phase that read them.
+	//
+	// HERE because a note binds the rest of the turn, and the rest of the
+	// turn is often in another process. The suspended conversation carries
+	// the notes this phase read — the resumed executor re-enters it — but
+	// the reviewer and any later executor iteration open fresh
+	// conversations, and without this they would be handed the task the
+	// person had corrected. See internal/agent/steer.
+	//
+	// Additive within v2: a row written before these existed decodes to
+	// none, which is what that build's turn carried.
+	Steered []string           `json:"steered,omitempty"`
+	Steers  []types.PhaseSteer `json:"steers,omitempty"`
 }
 
 // Uncharged is spend carried across a park, in the counters a work item's

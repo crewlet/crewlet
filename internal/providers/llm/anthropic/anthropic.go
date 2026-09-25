@@ -435,8 +435,7 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 				// different message entirely.
 				content = emptyToolResultContent
 			}
-			out = append(out, sdk.NewUserMessage(
-				sdk.NewToolResultBlock(m.ToolCallID, content, false)))
+			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, false))
 
 		case len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0:
 			blocks := make([]sdk.ContentBlockParamUnion, 0,
@@ -487,10 +486,40 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 			out = append(out, sdk.NewAssistantMessage(sdk.NewTextBlock(m.Content)))
 
 		default:
-			out = append(out, sdk.NewUserMessage(sdk.NewTextBlock(m.Content)))
+			out = appendUser(out, sdk.NewTextBlock(m.Content))
 		}
 	}
 	return out, nil
+}
+
+// appendUser adds user-side blocks to the conversation, JOINING the previous
+// turn when it is also the user's.
+//
+// Anthropic's conversation alternates: every tool_use an assistant turn makes
+// is answered by a tool_result block in the ONE user turn that follows, and
+// those blocks come first in it. The engine's messages do not alternate — each
+// tool result is a message of its own, and a person's note to a running turn
+// (internal/agent/steer) is a user message sent straight after the results it
+// follows. Sent one message each, the API merges consecutive user turns
+// server-side, which is a courtesy rather than a contract — so the merge is
+// made HERE, where its order is ours: the results in call order, then the
+// note.
+//
+// NEVER A RESULT AFTER TEXT: a tool_result joins a user turn only when that turn
+// is made of results so far, because the API requires them first. A result
+// that would follow text opens a turn of its own instead, which is the shape
+// the conversation had before this merge existed.
+func appendUser(out []sdk.MessageParam, block sdk.ContentBlockParamUnion) []sdk.MessageParam {
+	n := len(out)
+	if n == 0 || out[n-1].Role != sdk.MessageParamRoleUser {
+		return append(out, sdk.NewUserMessage(block))
+	}
+	if prev := out[n-1].Content; block.OfToolResult != nil && len(prev) > 0 &&
+		prev[len(prev)-1].OfToolResult == nil {
+		return append(out, sdk.NewUserMessage(block))
+	}
+	out[n-1].Content = append(out[n-1].Content, block)
+	return out
 }
 
 // formatTools renders the tool array, with a cache breakpoint on the last

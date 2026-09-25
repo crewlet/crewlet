@@ -118,8 +118,17 @@ export const TURN_STOP: ReadonlySet<string> = new Set([
   "llm_unavailable",
 ]);
 
-/** What the turn's prompt was assembled from, before the first phase ran. */
-export const GIVEN: ReadonlySet<string> = new Set(["prefetch_summary", "prompt.size"]);
+/**
+ * What the turn was given to work from: what its prompt was assembled from
+ * before the first phase ran, and a person's note it was handed mid-turn —
+ * `agent_turn_steered`, which says whether the turn read the note or ended
+ * before its next round.
+ */
+export const GIVEN: ReadonlySet<string> = new Set([
+  "prefetch_summary",
+  "prompt.size",
+  "agent_turn_steered",
+]);
 
 /**
  * What the turn changed about the company, after its last phase.

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -267,6 +268,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// the turn — and there is one helper behind both call sites, so
 		// a turn cannot change runtime by being resumed.
 		AgentRun: in.AgentRun,
+		// The turn's note box, opened by the caller because the caller is
+		// what files it where a person's note can find it.
+		Steer: in.Steer,
 	})
 }
 
@@ -347,6 +351,13 @@ type RunnerInput struct {
 	// Resume makes this runner's turn a RE-ENTRY into a suspended Execute
 	// conversation rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
+
+	// Steer is the turn's box of notes from a person, opened by
+	// [steerBox] from the SAME launcher as AgentRun above — a turn whose
+	// executor is a coding CLI's own loop answers every note
+	// `unsupported`. Nil is a turn nobody can steer: every test that
+	// drives a runner directly.
+	Steer *steer.Box
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

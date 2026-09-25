@@ -125,6 +125,19 @@ const (
 	// ObserveRead is where one history question is scattered. Every node
 	// serves it and answers from its own store; the asker merges.
 	ObserveRead = ObservePrefix + "read"
+
+	// SteerPrefix prefixes the subjects a person's note to a running turn
+	// crosses (internal/agent/steer).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a note is the ephemeral
+	// request and reply of [queue.EventQueue.Ask]. It is only worth
+	// anything to a turn running now, and a durable copy would outlive
+	// that turn with nobody to discard it. What became of the note is
+	// recorded as an event — by the node that ran the turn, once it knows.
+	SteerPrefix = "crewlet.steer."
+	// SeatSteer is where one note is scattered. Every node serves it and
+	// only the node running the named turn answers.
+	SeatSteer = SteerPrefix + "note"
 )
 
 // AgentInbox returns the inbox subject for the seat with this handle.

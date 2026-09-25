@@ -1175,3 +1175,46 @@ func TestModelAndStringIdentity(t *testing.T) {
 		t.Fatalf("String() = %q", p.String())
 	}
 }
+
+// A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn, sent
+// straight after the round's results (internal/agent/steer) — is ONE user
+// turn: every tool_result first, in call order, then the note as text. The
+// API requires a tool_use's results in the user turn that follows it and first
+// within it; sending the note as a turn of its own leaves that to a merge the
+// server performs as a courtesy.
+func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "first"}, {ID: "b", Name: "second"},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "first", Content: "one"},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "second", Content: "two"},
+		{Role: llm.RoleUser, Content: "a note from the founder"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages := api.seen()[0].body["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("sent %d messages, want the opening, the calls, and ONE user turn "+
+			"answering them: %v", len(messages), messages)
+	}
+	turn := messages[2].(map[string]any)
+	blocks := turn["content"].([]any)
+	if turn["role"] != "user" || len(blocks) != 3 {
+		t.Fatalf("the answering turn is %v", turn)
+	}
+	for i, id := range []string{"a", "b"} {
+		b := blocks[i].(map[string]any)
+		if b["type"] != "tool_result" || b["tool_use_id"] != id {
+			t.Errorf("block %d is %v, want the result for %s", i, b, id)
+		}
+	}
+	if note := blocks[2].(map[string]any); note["type"] != "text" || note["text"] != "a note from the founder" {
+		t.Errorf("the note is %v, want it last, as text", note)
+	}
+}

@@ -34,6 +34,12 @@
 //     CALLS, because a round is one model turn but many calls and the calls
 //     are what reach outside the engine. A node whose lease moved stops there
 //     rather than running the rest of the turn beside the seat's new owner.
+//   - A PERSON'S NOTE ENTERS AT THE ROUND BOUNDARY AND NOWHERE ELSE —
+//     immediately after the fence, when every call the previous round made
+//     has its answer, as a user message. Anywhere later it could sit
+//     between a call and its result, which a provider rejects and a model
+//     reads as the tool's output; before the fence it would be read by a
+//     turn that is about to end. See internal/agent/steer.
 //   - A FORCED TOOL CALL IS ENFORCED, NOT REQUESTED. Some endpoints ignore
 //     tool_choice and some models think-then-stop without emitting the call,
 //     which silently defeats a round the caller required to end in a tool. A
@@ -256,6 +262,36 @@ type RunningCall struct {
 	StartedAt time.Time
 }
 
+// Steerer is a running turn's notes, as the loop reads them.
+//
+// An interface rather than the box itself because the loop must not know who
+// sent a note or how it is worded to a model: the caller renders each one and
+// records its delivery, and the loop's whole part is WHERE it lands — see
+// [Config.Steer].
+type Steerer interface {
+	// Drain takes every note waiting, rendered as the user message the
+	// model reads, for the round about to run — one-based, on this
+	// invocation's scale.
+	Drain(round int) []SteerNote
+}
+
+// SteerNote is one note, rendered.
+type SteerNote struct {
+	// ID is the note's identity, carried onto the round's [SteerMark].
+	ID string
+	// Message is the user message the model reads.
+	Message string
+}
+
+// SteerMark records that a note entered the conversation, and at which round:
+// the round whose provider call was the first to read it.
+type SteerMark struct {
+	// Round is on the same one-based scale as [Execution.Round], so a
+	// reader puts the note beside the round it changed.
+	Round int
+	ID    string
+}
+
 // roundKey carries the round a tool call runs in on the context the surface is
 // handed; see [CallRound].
 type roundKey struct{}
@@ -416,6 +452,7 @@ type Progress struct {
 	maxRounds    int
 	model        string
 	providerKey  string
+	steers       []SteerMark
 }
 
 // Snapshot freezes the partial state into a Result.
@@ -440,6 +477,7 @@ func (p *Progress) Snapshot() Result {
 		Model:        p.model,
 		ProviderKey:  p.providerKey,
 		Messages:     append([]llm.Message(nil), p.messages...),
+		Steers:       append([]SteerMark(nil), p.steers...),
 	}
 }
 
@@ -457,6 +495,7 @@ func (p *Progress) record(res Result) {
 	p.cacheRead, p.cacheWrite = res.CacheRead, res.CacheWrite
 	p.roundsUsed, p.maxRounds, p.model = res.RoundsUsed, res.MaxRounds, res.Model
 	p.providerKey = res.ProviderKey
+	p.steers = append([]SteerMark(nil), res.Steers...)
 }
 
 // Result is one loop invocation's outcome.
@@ -524,6 +563,11 @@ type Result struct {
 	// Messages is the conversation as the loop left it, including
 	// everything it appended.
 	Messages []llm.Message
+
+	// Steers is every person's note this invocation delivered, in order,
+	// each with the round that first read it. The note itself is in
+	// Messages; this is what says which round it changed.
+	Steers []SteerMark
 
 	// ExhaustedRounds means the loop hit MaxRounds with the model still
 	// asking for tools. Distinct from a clean finish, because the caller
@@ -667,6 +711,21 @@ type Config struct {
 	// partial state on the error path, which is a choice rather than a
 	// default: every phase in the engine passes one.
 	Progress *Progress
+
+	// Steer is the running turn's notes from a person, drained at the top
+	// of every round IMMEDIATELY AFTER THE FENCE and appended as user
+	// messages before the provider call.
+	//
+	// That point and no other. It is the one place in a round where the
+	// conversation is complete — the previous round's calls all have
+	// their answers — so a note can never land between a call and its
+	// result; and it is after the fence, so a turn that is about to end
+	// is not handed an instruction it will never act on.
+	//
+	// Nil is a loop nobody can steer: every sub-agent worker, the
+	// extension judge and the onboarding pass. A worker is a leaf its
+	// parent directs, and a note meant for the turn is read by the turn.
+	Steer Steerer
 }
 
 func (c Config) validate() error {
@@ -701,6 +760,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var rounds []Round
 	var inTokens, outTokens, cacheRead, cacheWrite int
 	var model, providerKey string
+	var steers []SteerMark
 	// The latest round's start, for the live view; see Result.RoundStartedAt.
 	var roundStarted time.Time
 	// served distinguishes the model a COMPLETION named from the configured
@@ -733,6 +793,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			Model:        model,
 			ProviderKey:  providerKey,
 			Messages:     append([]llm.Message(nil), msgs...),
+			Steers:       append([]SteerMark(nil), steers...),
 		}
 	}
 	// publish hands the live view the state, with the call in flight when
@@ -763,6 +824,24 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if cfg.Fence != nil {
 			if err := cfg.Fence(); err != nil {
 				return nil, err
+			}
+		}
+
+		// A PERSON'S NOTES, straight after the fence and before anything
+		// is spent: the round about to run is the first to read them. See
+		// [Config.Steer] for why here and nowhere else.
+		if cfg.Steer != nil {
+			notes := cfg.Steer.Drain(roundsUsed)
+			for _, note := range notes {
+				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: note.Message})
+				steers = append(steers, SteerMark{Round: roundsUsed, ID: note.ID})
+			}
+			// Published at once, so the live view shows the note taken
+			// while the model is still reading it, and a round whose
+			// provider call then fails still has the note on the record
+			// the caller publishes for it.
+			if len(notes) > 0 {
+				publish(roundsUsed, nil)
 			}
 		}
 

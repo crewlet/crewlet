@@ -64,6 +64,12 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	}
 	state := r.cfg.Resume.State
 	answer := r.cfg.Resume.Answer
+	// THE NOTES THE TURN READ BEFORE IT PARKED, so the phases after this
+	// one open with them as the phases before it did. The re-entered
+	// conversation already holds the ones this phase read.
+	r.mu.Lock()
+	r.steered = append([]string(nil), state.Steered...)
+	r.mu.Unlock()
 
 	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
 	// is the same run in a fresh process, so a count it derives must see
@@ -225,6 +231,9 @@ func priorRounds(state execstate.State) toolloop.Result {
 		CacheRead:    state.CacheReadTokens,
 		CacheWrite:   state.CacheWriteTokens,
 	}
+	for _, m := range state.Steers {
+		out.Steers = append(out.Steers, toolloop.SteerMark{Round: m.Round, ID: m.NoteID})
+	}
 	for _, r := range state.Rounds {
 		out.Rounds = append(out.Rounds, toolloop.Round{
 			Round: r.Round, StartedAt: r.StartedAt,
@@ -347,6 +356,11 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		// transcript it was re-entering — and every required tool it had
 		// unlocked before the suspend was refused again.
 		LoadedSkills: r.loadedSkills(),
+		// EVERY NOTE THE TURN HAD READ, for the later phases of the turn
+		// the resume continues, and this phase's own marks, for its
+		// record. See [execstate.State.Steered].
+		Steered: r.carriedSteers(),
+		Steers:  phaseSteers(res.Steers),
 	}
 	if err := state.Validate(); err != nil {
 		log.Error("execute_suspension_invalid", "round", round, "error", err.Error())

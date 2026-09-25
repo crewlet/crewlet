@@ -62,6 +62,15 @@ const (
 	// dashboard said it was paused. Every live node has to advertise it,
 	// because any of them may be the next to hold the seat.
 	FeatureSeatPause Feature = "seat_pause"
+
+	// FeatureSteer — the node answers a note scattered to the turns it runs
+	// (internal/agent/steer) and hands it to the turn's next round. An
+	// older build serves no such subject, so a note to a turn it runs is
+	// answered by nobody and the person is told `unknown` — try again —
+	// about a gesture that can never succeed there. Every live node has to
+	// advertise it, because the note names a turn, and which node runs that
+	// turn is not known until one answers.
+	FeatureSteer Feature = "steer"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -71,7 +80,7 @@ const (
 // is a claim a peer acts on — a gesture it gates is accepted the moment every
 // node carries the name — so a name listed ahead of its implementation is a
 // fleet told it can do something it cannot.
-var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause}
+var Features = []Feature{FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer}
 
 // Valid reports whether this build knows the feature.
 func (f Feature) Valid() bool { return slices.Contains(Features, f) }
