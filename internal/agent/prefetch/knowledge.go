@@ -156,7 +156,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
-	})
+	}).Hits
 	if len(hits) == 0 {
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}

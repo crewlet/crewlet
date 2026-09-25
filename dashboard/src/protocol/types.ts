@@ -1606,7 +1606,45 @@ export type KnowledgeReason =
   | "building"
   | (string & {});
 
-export interface KnowledgeAnswer {
+/**
+ * How a search ranks — ONE vocabulary for `knowledge` and `work_search`
+ * (`knowledge.Mode` in the engine). The label for `semantic` is "Meaning"; the
+ * wire value is never that word, and the engine refuses it.
+ */
+export type SearchMode = "hybrid" | "keyword" | "semantic";
+
+/**
+ * Why a ranked search served less than it was asked for; `""` when it served
+ * what was asked. `no_embeddings` is configuration (no provider, or
+ * `knowledge.vectors` off); `embedding_failed` is transient (the query's own
+ * vector could not be computed this time); `semantic_partial` is part of the
+ * fleet losing its meaning half; `unsupported` is a backend with no such
+ * ranker (Confluence). Widened for a reason a newer engine adds.
+ */
+export type SearchDegradation =
+  "" | "no_embeddings" | "embedding_failed" | "semantic_partial" | "unsupported" | (string & {});
+
+/**
+ * What a ranked search actually did, carried whole on both `knowledge` and
+ * `work_search` so one mode control reads either answer.
+ */
+export interface SearchOutcome {
+  /** The mode asked for, resolved (an absent one is `hybrid`). */
+  mode: SearchMode;
+  /** The ranking the hits came from; `""` when nothing ran — a semantic
+   *  search with nothing to rank by meaning answers no hits rather than a
+   *  keyword ranking passed off as one. */
+  served_mode: SearchMode | "";
+  /** The modes this backend can serve AS ASKED right now. A mode missing
+   *  from it would be answered degraded. */
+  modes: SearchMode[];
+  degraded: SearchDegradation;
+  /** The fleet the search was divided across, plus how many of the corpus's
+   *  buckets no answer covered. Not complete before a search has run. */
+  coverage: Coverage & { buckets_missing: number };
+}
+
+export interface KnowledgeAnswer extends SearchOutcome {
   backend: string;
   query: string;
   hits: KnowledgeHit[];
@@ -3315,7 +3353,7 @@ export interface WorkRanked {
  *  from here yet. It is reported rather than returned as an error because
  *  nothing is wrong, and a screen that drew "nothing matches" would have a
  *  reader file the duplicate. */
-export interface WorkSearchAnswer {
+export interface WorkSearchAnswer extends SearchOutcome {
   hits: WorkRanked[];
   available: boolean;
   reason?: string;

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,9 +54,13 @@ type fakeTracker struct {
 	searched  []string
 	ranked    []tracker.Ranked
 	searchErr error
-	patched   []tracker.TaskPatch
-	ifMatch   []uint64
-	notified  []*tracker.Notify
+	// searchModes is every mode a search asked for, and partialSearch
+	// makes the fake answer over part of the corpus.
+	searchModes   []knowledge.Mode
+	partialSearch bool
+	patched       []tracker.TaskPatch
+	ifMatch       []uint64
+	notified      []*tracker.Notify
 
 	// kinds is what each write said it WAS, which is a different fact
 	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
@@ -297,17 +302,25 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 
 // Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
 // the one read here that is a RANKING rather than a filter.
-func (f *fakeTracker) Search(_ context.Context, text string,
-	limit int) ([]tracker.Ranked, error) {
+func (f *fakeTracker) Search(_ context.Context,
+	q tracker.SearchQuery) (tracker.SearchAnswer, error) {
 
-	f.searched = append(f.searched, text)
+	f.searched = append(f.searched, q.Text)
+	f.searchModes = append(f.searchModes, q.Mode)
 	if f.searchErr != nil {
-		return nil, f.searchErr
+		return tracker.SearchAnswer{}, f.searchErr
 	}
-	if limit <= 0 || limit > len(f.ranked) {
-		return f.ranked, nil
+	answer := tracker.SearchAnswer{}
+	answer.Coverage.Complete = true
+	if f.partialSearch {
+		answer.Coverage = knowledge.Coverage{BucketsMissing: 21}
 	}
-	return f.ranked[:limit], nil
+	if q.Limit <= 0 || q.Limit > len(f.ranked) {
+		answer.Hits = f.ranked
+		return answer, nil
+	}
+	answer.Hits = f.ranked[:q.Limit]
+	return answer, nil
 }
 
 // merges is its fourth, for the second sequence.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -68,14 +69,43 @@ type RankedDoc struct {
 	Snippet string
 }
 
+// SearchQuery is one ranked item search.
+type SearchQuery struct {
+	// Text is plain language.
+	Text string
+
+	// Limit caps the answer. Zero takes [SearchLimit]; past
+	// [MaxSearchLimit] is served the ceiling.
+	Limit int
+
+	// Mode is how to rank, in the knowledge search's own vocabulary —
+	// one set of three modes for both of the engine's ranked searches.
+	// The zero value is hybrid.
+	Mode knowledge.Mode
+}
+
+// SearchAnswer is a ranked item search's hits and what the search did — the
+// mode it served, what it covered, why it served less than was asked.
+type SearchAnswer struct {
+	Hits []Ranked
+	knowledge.Outcome
+}
+
+// RankedDocs is the index's answer: the hits in rank order and the outcome.
+type RankedDocs struct {
+	Docs []RankedDoc
+	knowledge.Outcome
+}
+
 // Ranker is the index seam, declared here because this is the caller.
 //
 // THE INDEX IS THIS NODE'S OWN and the rows are the fleet's, which is why the
 // two halves of this search are two reads rather than a join — the same estate
 // boundary every other reader here crosses the same way.
 type Ranker interface {
-	// RankItems returns work-item ids in rank order, best first.
-	RankItems(ctx context.Context, text string, limit int) ([]RankedDoc, error)
+	// RankItems returns work-item ids in rank order, best first, and
+	// what the ranking did.
+	RankItems(ctx context.Context, q SearchQuery) (RankedDocs, error)
 
 	// Building reports an index that has not caught up with this node's
 	// own rows, so a caller can tell "nothing matched" from "not indexed
@@ -114,32 +144,45 @@ func NewSearcher(db *store.DB, rank Ranker) *Searcher {
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
 // Search ranks the company's work items against plain text.
-func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked, error) {
+func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
 	switch {
 	case s == nil || s.rank == nil || s.db == nil:
-		return nil, fmt.Errorf("tracker: this node has no search index")
-	case limit <= 0:
-		limit = SearchLimit
-	case limit > MaxSearchLimit:
-		limit = MaxSearchLimit
+		return SearchAnswer{}, fmt.Errorf("tracker: this node has no search index")
+	case !q.Mode.Valid():
+		return SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
+			"the modes are hybrid, keyword and semantic", q.Mode)
+	case q.Limit <= 0:
+		q.Limit = SearchLimit
+	case q.Limit > MaxSearchLimit:
+		q.Limit = MaxSearchLimit
 	}
-	docs, err := s.rank.RankItems(ctx, text, limit)
+	ranked, err := s.rank.RankItems(ctx, q)
 	if err != nil {
-		return nil, err
+		return SearchAnswer{}, err
 	}
+	answer := SearchAnswer{Outcome: ranked.Outcome}
+	docs := ranked.Docs
 	if len(docs) == 0 {
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
 		// only answer it changes: a search that found something has
 		// found it whether or not the index is still catching up, and
 		// asking every time would put one indexed count on every call.
-		if s.rank.Building(ctx) {
-			return nil, ErrIndexBuilding
+		//
+		// AND ONLY WHEN THE WORDS WERE RANKED. The gate is the LEXICAL
+		// index's state; a semantic search never read that index, and
+		// one that ran nothing at all (no provider, a failed query
+		// vector) already carries the degradation that explains its
+		// empty answer — which "still building" would throw away,
+		// telling the reader to wait for something that will not
+		// change what they were told.
+		if lexicalRan(ranked.ServedMode) && s.rank.Building(ctx) {
+			return SearchAnswer{}, ErrIndexBuilding
 		}
-		return nil, nil
+		return answer, nil
 	}
 	rows, err := s.itemsByID(ctx, docs)
 	if err != nil {
-		return nil, err
+		return SearchAnswer{}, err
 	}
 	// IN THE INDEX'S ORDER, not the database's. The rank is the whole
 	// answer here, and a SQL read returns rows in whatever order suits it.
@@ -159,7 +202,15 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
-	return out, nil
+	answer.Hits = out
+	return answer, nil
+}
+
+// lexicalRan reports whether an answer served in this mode read the lexical
+// index. The EMPTY mode is a search that ranked nothing, so it read nothing —
+// which [knowledge.Mode.Resolved] alone would call hybrid.
+func lexicalRan(served knowledge.Mode) bool {
+	return served != "" && served.Lexical()
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of ids.

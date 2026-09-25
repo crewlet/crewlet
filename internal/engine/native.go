@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -272,19 +273,26 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// BEFORE the block, because the searcher built there takes it.
 	n.indexer = search.NewIndexerOver(e.backends.Store,
 		lexicalSources(runTracker, wiki))
+	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES on this node, so a phrase
+	// the palette embedded for the work search is a hit when the same
+	// phrase is searched as knowledge. Read through [Engine.queryModel]
+	// per query, because an apply replaces the provider and can turn
+	// `knowledge.vectors` off.
+	vectors := search.NewQueryVectors(e.queryModel)
 	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
 	// than the knowledge searcher's: each verb's corpus filter is its own,
 	// and neither can widen into the other's.
 	n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
 		index: n.indexer,
 		fan: &search.FanOut{
-			Self:   nodeID,
-			Local:  search.NodeScanner{Index: n.indexer},
-			Peers:  e.searchPeers(),
-			Roster: e.liveNodes,
-			Corpus: n.indexer.Corpus,
-			Report: e.reportSearch,
-			Enter:  e.enterSearch,
+			Self:    nodeID,
+			Local:   search.NodeScanner{Index: n.indexer},
+			Peers:   e.searchPeers(),
+			Roster:  e.liveNodes,
+			Corpus:  n.indexer.Corpus,
+			Report:  e.reportSearch,
+			Enter:   e.enterSearch,
+			Vectors: vectors,
 		},
 	})
 	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
@@ -330,11 +338,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// work items.
 		n.searcher = pages.NewSearcher(pages.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
-			Node:   nodeID,
-			Peers:  e.searchPeers(),
-			Roster: e.liveNodes,
-			Report: e.reportSearch,
-			Enter:  e.enterSearch,
+			Node:    nodeID,
+			Peers:   e.searchPeers(),
+			Roster:  e.liveNodes,
+			Report:  e.reportSearch,
+			Enter:   e.enterSearch,
+			Vectors: vectors,
 		})
 	}
 
@@ -1685,17 +1694,48 @@ func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 		return
 	}
 	e.metrics.Observe(metrics.TrackerSearchScanDuration, took,
-		metrics.Attrs{"path": "interactive", "rung": "hybrid"})
+		metrics.Attrs{"path": "interactive", "rung": searchRung(answer)})
 	coverage := "complete"
 	if answer.Partial() {
 		coverage = "scoped"
 	}
-	semantic := "full"
-	if answer.SemanticSkipped {
-		semantic = "skipped"
-	}
 	e.metrics.Add(metrics.TrackerSearchAnswers, 1,
-		metrics.Attrs{"coverage": coverage, "semantic": semantic})
+		metrics.Attrs{"coverage": coverage, "semantic": semanticState(answer)})
+}
+
+// searchRung is the ranking a scan actually ran, for the duration histogram.
+//
+// THE SERVED MODE, never a constant: every scan used to be recorded as
+// `hybrid` whatever it ran, so the histogram the interactive target is read
+// from mixed keyword-only scans — a fraction of the cost — into the figure for
+// the fused ones, and a slow semantic half hid under a fast lexical majority.
+func searchRung(answer search.Answer) string {
+	if answer.Served == "" {
+		return "none"
+	}
+	return string(answer.Served)
+}
+
+// semanticState is whether the meaning half ran, as the degraded-search alarm
+// counts it.
+//
+// THREE VALUES, because two of them are the alarm and one must never be. The
+// half that was ASKED FOR and did not run — a participant's vector scan that
+// failed, or a query vector the provider could not compute — is `skipped`,
+// the numerator of `search_degraded`. A half nobody asked for — a keyword
+// search, or a company with no embeddings provider — is `off`: counting that
+// as skipped fires the alarm on every search such a company ever runs, which
+// is an alarm red for the life of the deployment.
+func semanticState(answer search.Answer) string {
+	switch {
+	case answer.SemanticSkipped,
+		answer.Degraded == knowledge.DegradedEmbeddingFailed,
+		answer.Degraded == knowledge.DegradedSemanticPartial:
+		return "skipped"
+	case !answer.Served.Semantic() || answer.Served == "":
+		return "off"
+	}
+	return "full"
 }
 
 // enterSearch counts one scan in, and its return counts it out.

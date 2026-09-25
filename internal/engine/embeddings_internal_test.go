@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -186,5 +188,87 @@ func TestAStoredEmbedderIsHandedOutAsItsEmbedMethod(t *testing.T) {
 	}
 	if len(v) != 4 {
 		t.Fatalf("vector width = %d, want the embedder's 4", len(v))
+	}
+}
+
+// `knowledge.vectors: false` IS READ, and by every consumer of the corpus's
+// embedding space at once.
+//
+// The switch was declared, validated and documented — "an explicit false keeps
+// the search purely lexical" — and nothing read it: the duty went on embedding
+// every document, billed, and the coverage gauge went on measuring it. It is
+// now the one function the duty, the gauge and a search's query vector all
+// read, so turning it off stops the three together.
+func TestTurningVectorsOffStopsTheDutyTheGaugeAndTheQueryVector(t *testing.T) {
+	t.Parallel()
+	var fake embeddings.Embedder = embeddings.NewFake(8)
+	company := func(vectors *bool) *Company {
+		return &Company{Config: &config.Company{
+			Name: "Acme",
+			Providers: config.Providers{Embeddings: &config.EmbeddingProvider{
+				Model: "text-embedding-3-small", Dimensions: 8,
+			}},
+			Knowledge: config.Knowledge{Vectors: vectors},
+		}}
+	}
+	off, on := false, true
+	for _, tc := range []struct {
+		name    string
+		vectors *bool
+		want    bool
+	}{
+		{"unset derives from the provider", nil, true},
+		{"explicitly on", &on, true},
+		{"explicitly off", &off, false},
+	} {
+		e := &Engine{}
+		e.embeddings.Store(&fake)
+		e.epoch.current.Store(company(tc.vectors))
+		if _, _, got := e.embedModel(); got != tc.want {
+			t.Errorf("%s: the duty and the gauge read configured=%v", tc.name, got)
+		}
+		if _, _, got := e.queryModel(); got != tc.want {
+			t.Errorf("%s: a search's query vector reads configured=%v", tc.name, got)
+		}
+	}
+}
+
+// A QUERY VECTOR THE PROVIDER COULD NOT COMPUTE IS A DEGRADED SEARCH, and a
+// company with no provider is not one.
+//
+// `search_degraded` is a fraction of the answers. The half a search ASKED for
+// and did not get counts toward it, whichever node lost it; the half nobody
+// asked for — a keyword search, a company with no embeddings — must not, or
+// the alarm is red for the life of such a deployment.
+func TestAFailedQueryVectorCountsAsDegradedAndNoProviderDoesNot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		answer search.Answer
+		want   string
+	}{
+		{search.Answer{Served: knowledge.ModeHybrid}, "full"},
+		{search.Answer{Served: knowledge.ModeSemantic}, "full"},
+		{search.Answer{Served: knowledge.ModeKeyword}, "off"},
+		{search.Answer{Served: knowledge.ModeKeyword,
+			Degraded: knowledge.DegradedNoEmbeddings}, "off"},
+		{search.Answer{Degraded: knowledge.DegradedNoEmbeddings}, "off"},
+		{search.Answer{Served: knowledge.ModeKeyword,
+			Degraded: knowledge.DegradedEmbeddingFailed}, "skipped"},
+		// A SEMANTIC SEARCH THAT RAN NOTHING: the half it asked for is
+		// the only half, and losing it to the provider is the alarm;
+		// having no provider is not.
+		{search.Answer{Degraded: knowledge.DegradedEmbeddingFailed}, "skipped"},
+		{search.Answer{Served: knowledge.ModeHybrid, SemanticSkipped: true,
+			Degraded: knowledge.DegradedSemanticPartial}, "skipped"},
+	} {
+		if got := semanticState(tc.answer); got != tc.want {
+			t.Errorf("served %q degraded %q skipped %v: semantic=%s, want %s",
+				tc.answer.Served, tc.answer.Degraded, tc.answer.SemanticSkipped,
+				got, tc.want)
+		}
+	}
+	if searchRung(search.Answer{Served: knowledge.ModeKeyword}) != "keyword" ||
+		searchRung(search.Answer{}) != "none" {
+		t.Error("the scan histogram's rung is not the mode that was served")
 	}
 }

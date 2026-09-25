@@ -23,39 +23,32 @@ type itemRanker struct {
 }
 
 // RankItems implements [tracker.Ranker].
-func (r itemRanker) RankItems(ctx context.Context, text string,
-	limit int) ([]tracker.RankedDoc, error) {
-
+//
+// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives: an
+// answer over part of the corpus beats none. It is not swallowed either — the
+// coverage rides in the answer's outcome to whichever surface asked, which is
+// where a person or a seat can act on it. It used to be a log line, which
+// nobody asking could see.
+func (r itemRanker) RankItems(ctx context.Context, q tracker.SearchQuery) (tracker.RankedDocs, error) {
 	if r.fan == nil || r.index == nil {
-		return nil, nil
+		return tracker.RankedDocs{}, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
-		Text:    text,
+		Text:    q.Text,
 		Sources: []string{string(search.SourceTask)},
-		Limit:   limit,
+		Mode:    q.Mode,
+		Limit:   q.Limit,
 	})
 	if err != nil {
-		return nil, err
+		return tracker.RankedDocs{}, err
 	}
-	// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives:
-	// an answer over part of the corpus beats none. What differs here is
-	// that the caller is a TOOL rather than a prompt block, so the fact
-	// travels in the log rather than being swallowed — a short result set
-	// is indistinguishable from a short corpus.
-	if answer.Partial() {
-		log.WarnContext(ctx, "work_search_scoped",
-			"buckets_answered", answer.BucketsAnswered,
-			"buckets_missing", answer.BucketsMissing,
-			"detail", "the ranking was complete for what was searched and "+
-				"silent about what was not")
-	}
-	hits, err := r.index.Hydrate(ctx, answer.Hits, text)
+	hits, err := r.index.Hydrate(ctx, answer.Hits, q.Text)
 	if err != nil {
-		return nil, err
+		return tracker.RankedDocs{}, err
 	}
-	out := make([]tracker.RankedDoc, 0, len(hits))
+	out := tracker.RankedDocs{Outcome: answer.Outcome()}
 	for _, hit := range hits {
-		out = append(out, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
+		out.Docs = append(out.Docs, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
 	}
 	return out, nil
 }

@@ -78,6 +78,26 @@ all buy the compression; none of them buys the speed.
 **The score you see is always the exact one.** A sign code decides which
 documents are looked at and never how they are ordered.
 
+#### Three modes, and the query's own vector
+
+Every ranked search takes a **mode**: `hybrid` (the default — both halves,
+fused), `keyword` (BM25 alone) or `semantic` (meaning alone; a screen labels it
+"Meaning"). One vocabulary covers the knowledge search and the tracker's own
+item search, on the `knowledge` and `work_search` queries alike.
+
+A semantic ranking needs the **query** in the documents' embedding space, so
+the asking node embeds it once through `providers.embeddings` — at the model
+and width the corpus is embedded at — and sends the vector with the request.
+It keeps the last **1 024** query vectors per node, emptied when the model
+changes, and bounds one query embedding at two seconds.
+
+The answer says what it actually served. With nothing to rank by meaning —
+no provider, `knowledge.vectors: false`, or a provider that did not answer in
+time — a hybrid search serves its keyword half and says `served_mode:
+keyword`; a semantic search serves **nothing** and says why, because a keyword
+ranking is exactly the one that cannot find a page sharing no word with the
+question. The full table of reasons is in the [search guide](../guides/search.md#three-modes-and-what-an-answer-says-it-served).
+
 #### What the quality of this can and cannot be promised
 
 A sign code keeps only each vector's orthant, and how much an orthant says
@@ -289,9 +309,11 @@ type Searcher interface {
     // CanSearch is the cheap, no-I/O pre-gate.
     CanSearch(seat *org.Role, o *org.Organization) bool
 
-    // Search returns up to Query.Limit ranked hits. It never reports an
-    // error: every failure path is an empty result.
-    Search(ctx context.Context, q Query) []Hit
+    // Search returns up to Query.Limit ranked hits, and what the search
+    // did: the mode it served, the modes this backend can serve, what part
+    // of the fleet it covered, and why it served less than was asked. It
+    // never reports an error: every failure path is an empty result.
+    Search(ctx context.Context, q Query) Result
 }
 ```
 
@@ -300,7 +322,8 @@ Contract semantics every backend honors:
 - **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
-- **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
+- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty. What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}` and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
+- **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 
 **Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
@@ -313,7 +336,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 `internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
-> **The semantic half is computed and stored, and not yet queried.** Every piece of it exists — the embedding duty fills a vector per document, the state-log domain replicates them, and `Quantize` / `TwoStage` / `Fuse` are the arithmetic a fused answer would use — but no caller computes a QUERY embedding: the two production callers of the fan-out pass text, sources and a limit and never a vector, so every live search skips the semantic slice and answers lexical-only. `knowledge.vectors` has no reader. Until a query embedding is wired, treat every statement about fusion in this document as describing the design rather than the running system.
+A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-no-index-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
 Two properties differ from the vendor path and both are visible:
 
@@ -497,7 +520,7 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. The native one fuses the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) whenever `knowledge.vectors` is on, embedding each query through `providers.embeddings` — a model that produces vectors, not an LLM. Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
 - **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.
@@ -549,6 +572,6 @@ A dedicated table, because `learning.Onboarding.Onboarded` answers with one inde
 The knowledge system has a block of its own — `knowledge.backend`, `knowledge.scope`, `knowledge.skills_container`, `knowledge.root_space` and `knowledge.vectors`, field by field in [Configuration](../getting-started/configuration.md#knowledge). Two upstream configs determine the rest:
 
 - **`integrations.confluence`** — required by `backend: confluence`, and refused beside `backend: native` because pages would then live in two places with nothing keeping them in step. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`); a `confluence` company missing it has no searcher at all, so the `## Relevant knowledge` block stays empty and only the agent's diary contributes. The native backend needs none of it — it searches as the engine, over this node's own applied rows.
-- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that is MEANT to fuse that half into the query — it has no reader today, so it fuses nothing — and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
+- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that fuses that half into the query, and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. An explicit `vectors: false` turns off everything that embeds the corpus at once: the embedding duty stops (no provider bill for documents), the coverage gauge measures nothing, and every search is keyword and says so — the diary and episode recall keep using the provider regardless. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
 
 See [Configuration](../getting-started/configuration.md) for the full YAML shape, [Confluence integration](../integrations/confluence.md) for setup, and [Agent Learning](agent-learning.md) for diary mechanics.

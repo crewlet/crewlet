@@ -5,12 +5,14 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -118,6 +120,64 @@ func TestASearchWithNoPhraseIsRefusedNamingTheParameter(t *testing.T) {
 		"work_search", map[string]any{"q": "   "})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a search with no phrase answered %v, want bad params", err)
+	}
+}
+
+// WORK_SEARCH HONOURS THE MODE IT IS ASKED FOR and says what it served.
+//
+// The three modes are the knowledge search's own vocabulary, and the four
+// outcome fields are what one screen control reads from both answers — a
+// served mode that differs from the asked one is the only way a reader learns
+// they are looking at the words alone.
+func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		asked string
+		want  knowledge.Mode
+	}{
+		{"", knowledge.ModeHybrid},
+		{"hybrid", knowledge.ModeHybrid},
+		{"keyword", knowledge.ModeKeyword},
+		{"semantic", knowledge.ModeSemantic},
+	} {
+		w := &stubWork{searchOutcome: knowledge.Outcome{
+			ServedMode: knowledge.ModeKeyword,
+			Modes:      []knowledge.Mode{knowledge.ModeKeyword},
+			Degraded:   knowledge.DegradedNoEmbeddings,
+			Coverage: knowledge.Coverage{
+				Nodes: []knowledge.NodeCoverage{
+					{ID: "n1", Answered: true},
+					{ID: "n2", Error: "no answer arrived inside the search budget"},
+				},
+				BucketsMissing: 32,
+			},
+		}}
+		params := map[string]any{"q": "billing"}
+		if tc.asked != "" {
+			params["mode"] = tc.asked
+		}
+		got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+			"work_search", params)
+		if w.searchMode != tc.want {
+			t.Errorf("mode %q reached the searcher as %q, want %q",
+				tc.asked, w.searchMode, tc.want)
+		}
+		if got["served_mode"] != "keyword" || got["degraded"] != "no_embeddings" {
+			t.Errorf("served_mode=%v degraded=%v, want the searcher's own",
+				got["served_mode"], got["degraded"])
+		}
+		cov, ok := got["coverage"].(knowledge.Coverage)
+		if !ok || cov.Complete || cov.BucketsMissing != 32 || len(cov.Nodes) != 2 {
+			t.Errorf("coverage = %#v, want the partial answer the searcher reported", got["coverage"])
+		}
+		if modes, _ := got["modes"].([]string); len(modes) != 1 || modes[0] != "keyword" {
+			t.Errorf("modes = %#v", got["modes"])
+		}
+	}
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
+		"work_search", map[string]any{"q": "billing", "mode": "meaning"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "semantic") {
+		t.Errorf("an unknown mode answered %v, want a refusal naming the modes", err)
 	}
 }
 

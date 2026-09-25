@@ -23,9 +23,11 @@ import (
 // spaces.
 type stubSearcher struct{}
 
-func (stubSearcher) Backend() string                                         { return "stub" }
-func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool             { return false }
-func (stubSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
+func (stubSearcher) Backend() string                             { return "stub" }
+func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return false }
+func (stubSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{}
+}
 
 // A TURN IS ITS OWN QUESTION, and it is not a slice of the trace.
 //
@@ -945,5 +947,75 @@ func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
 	}
 	if n := len(rows(t, got["attempts"])); n != 2 {
 		t.Errorf("%d attempts, want both runs of wk-old", n)
+	}
+}
+
+// modalSearcher is a wired, searchable backend that records the mode it was
+// asked for and answers the outcome it is given.
+type modalSearcher struct {
+	asked   *knowledge.Mode
+	outcome knowledge.Outcome
+}
+
+func (modalSearcher) Backend() string                             { return "native" }
+func (modalSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (s modalSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
+	*s.asked = q.Mode
+	return knowledge.Result{
+		Hits:    []knowledge.Hit{{PageID: "p1", Title: "Deploy runbook"}},
+		Outcome: s.outcome,
+	}
+}
+
+// KNOWLEDGE HONOURS THE MODE AND SAYS WHAT IT SERVED AND COVERED.
+//
+// A partial fan-out used to be a log line on the coordinating node, so this
+// answer drew two thirds of the corpus as the company's whole answer; and a
+// hybrid search with no embeddings provider was a keyword search presented as
+// hybrid. Both now ride in the answer, in the fields a screen reads.
+func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
+	t.Parallel()
+	var asked knowledge.Mode
+	searcher := modalSearcher{asked: &asked, outcome: knowledge.Outcome{
+		ServedMode: knowledge.ModeSemantic,
+		Modes:      knowledge.Modes,
+		Degraded:   knowledge.DegradedSemanticPartial,
+		Coverage: knowledge.Coverage{
+			Nodes:          []knowledge.NodeCoverage{{ID: "n1", Answered: true}, {ID: "n2", Error: "gone"}},
+			BucketsMissing: 32,
+		},
+	}}
+	sources := queries.Sources{
+		Knowledge: func() knowledge.Searcher { return searcher },
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	}
+	got := asMap(t, answer(t, sources, "knowledge",
+		map[string]any{"q": "deploy", "mode": "semantic"}))
+	if asked != knowledge.ModeSemantic {
+		t.Errorf("the searcher was asked %q, want semantic", asked)
+	}
+	if got["served_mode"] != "semantic" || got["degraded"] != "semantic_partial" ||
+		got["mode"] != "semantic" {
+		t.Errorf("mode=%v served_mode=%v degraded=%v", got["mode"], got["served_mode"], got["degraded"])
+	}
+	// ON THE WIRE, as a screen reads it: the fleet shape plus the one
+	// figure a bucket-divided search has.
+	cov, _ := got["coverage"].(map[string]any)
+	nodes, _ := cov["nodes"].([]any)
+	if cov["complete"] != false || cov["buckets_missing"] != float64(32) || len(nodes) != 2 {
+		t.Errorf("coverage = %#v, want the partial one the searcher reported", got["coverage"])
+	}
+
+	// NO MODE IS HYBRID, and an unknown one is refused rather than run as
+	// the default — that would answer a question nobody asked.
+	_ = asMap(t, answer(t, sources, "knowledge", map[string]any{"q": "deploy"}))
+	if asked != knowledge.ModeHybrid {
+		t.Errorf("a search naming no mode was asked %q, want hybrid", asked)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, sources)
+	if _, err := r.Answer(t.Context(), "knowledge",
+		map[string]any{"q": "deploy", "mode": "meaning"}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an unknown mode answered %v, want bad params", err)
 	}
 }

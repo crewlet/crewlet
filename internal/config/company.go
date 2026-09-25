@@ -701,15 +701,17 @@ type Knowledge struct {
 	// at the top of the chain exactly where a new seat starts reading.
 	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
 
-	// Vectors adds semantic recall to the knowledge search.
+	// Vectors adds semantic recall to the knowledge search and the
+	// tracker's item search.
 	//
 	// A POINTER because the zero value is a real setting and the absent
 	// value is a different one: unset DERIVES from whether the company
 	// configured an embeddings provider (it already has one for the diary,
 	// so a company that pays for embeddings gets the better search), and an
 	// explicit false keeps the search purely lexical on a company that has
-	// one for its diary and does not want its pages embedded.
-	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge search. Unset derives from providers.embeddings."`
+	// one for its diary and does not want its pages embedded — which is
+	// why false stops the embedding duty as well, not only the query side.
+	Vectors *bool `yaml:"vectors,omitempty" json:"vectors,omitempty" desc:"Fuse semantic recall into knowledge and work search; false also stops embedding the corpus. Unset derives from providers.embeddings."`
 }
 
 // KnowledgeBackend is which knowledge base a company runs.
@@ -941,7 +943,9 @@ func (c *Company) RunsStateLog() bool {
 	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
 }
 
-// VectorsEnabled reports whether knowledge search fuses semantic recall.
+// VectorsEnabled reports whether the corpus is embedded and searched by
+// meaning. The engine's embedding model is the one reader, and the duty, the
+// coverage gauge and a search's query vector all read that.
 func (c *Company) VectorsEnabled() bool {
 	if c.Knowledge.Vectors != nil {
 		return *c.Knowledge.Vectors

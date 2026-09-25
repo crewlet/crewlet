@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -21,20 +22,22 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	inbox        tracker.InboxAnswer
-	inboxQuery   tracker.InboxQuery
-	routing      tracker.RoutingAnswer
-	routingQuery tracker.RoutingQuery
-	ranked       []tracker.Ranked
-	searchText   string
-	searchLimit  int
-	query        tracker.Query
-	answer       tracker.Answer
-	detail       tracker.TaskDetail
-	views        tracker.ViewQuery
-	listing      tracker.ViewListing
-	personQuery  tracker.PersonQuery
-	person       tracker.PersonState
+	inbox         tracker.InboxAnswer
+	inboxQuery    tracker.InboxQuery
+	routing       tracker.RoutingAnswer
+	routingQuery  tracker.RoutingQuery
+	ranked        []tracker.Ranked
+	searchText    string
+	searchLimit   int
+	searchMode    knowledge.Mode
+	searchOutcome knowledge.Outcome
+	query         tracker.Query
+	answer        tracker.Answer
+	detail        tracker.TaskDetail
+	views         tracker.ViewQuery
+	listing       tracker.ViewListing
+	personQuery   tracker.PersonQuery
+	person        tracker.PersonState
 
 	projectQuery  tracker.ProjectQuery
 	projects      tracker.ProjectListing
@@ -143,9 +146,9 @@ func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Tim
 // [queries.WorkSearcher]. It is on this type for the harness's convenience
 // only; the surface takes the two independently, and a case that wants a node
 // with a board and no index leaves `WorkSearch` nil.
-func (s *stubWork) Search(_ context.Context, text string, limit int) ([]tracker.Ranked, error) {
-	s.searchText, s.searchLimit = text, limit
-	return s.ranked, s.err
+func (s *stubWork) Search(_ context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+	s.searchText, s.searchLimit, s.searchMode = q.Text, q.Limit, q.Mode
+	return tracker.SearchAnswer{Hits: s.ranked, Outcome: s.searchOutcome}, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {

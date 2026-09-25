@@ -23,8 +23,10 @@ type rankedSearcher struct{ hits []knowledge.Hit }
 
 func (rankedSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-func (s rankedSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit {
-	return s.hits
+func (s rankedSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{Hits: s.hits, Outcome: knowledge.Outcome{
+		ServedMode: knowledge.ModeHybrid, Coverage: knowledge.Coverage{Complete: true},
+	}}
 }
 
 // pageSkills serves one tool skill read from a named page.

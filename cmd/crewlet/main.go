@@ -2841,10 +2841,10 @@ func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return s != nil && s.CanSearch(seat, o)
 }
 
-func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	s := k.engine.Knowledge()
 	if s == nil {
-		return nil
+		return knowledge.Result{}
 	}
 	return s.Search(ctx, q)
 }

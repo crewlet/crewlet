@@ -430,10 +430,13 @@ func Catalogue() []Instrument {
 		{
 			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
-			Shows: "The semantic scan, split by whether it ran for a turn's " +
-				"prefetch or for somebody's deliberate search. Only the " +
-				"prefetch had a published percentile, and the interactive " +
-				"path is the one with a target.",
+			Shows: "One search's scan, split by whether it ran for a turn's " +
+				"prefetch or for somebody's deliberate search, and by the " +
+				"ranking it actually served (`rung`: hybrid, keyword, " +
+				"semantic, or none). Only the prefetch had a published " +
+				"percentile, and the interactive path is the one with a " +
+				"target; a keyword scan is a fraction of a fused one's cost, " +
+				"so reading them as one series hides a slow meaning half.",
 		},
 		{
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
@@ -447,9 +450,11 @@ func Catalogue() []Instrument {
 			Attributes: []string{"coverage", "semantic"},
 			Shows: "What each answer actually covered: whether every bucket " +
 				"of the corpus was scanned, and whether the semantic half " +
-				"ran. Both alarms below it are a FRACTION of this counter, " +
-				"and a short answer is indistinguishable from a short " +
-				"corpus without it.",
+				"ran (`full`), was asked for and lost (`skipped`), or was " +
+				"never asked for (`off` — a keyword search, or a company " +
+				"with no embeddings). Both alarms below it are a FRACTION " +
+				"of this counter, and a short answer is indistinguishable " +
+				"from a short corpus without it.",
 		},
 		{
 			Name: TrackerVectorCoverage, Kind: KindGauge, Unit: UnitCount,

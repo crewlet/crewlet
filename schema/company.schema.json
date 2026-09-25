@@ -720,7 +720,7 @@
           "type": "string"
         },
         "vectors": {
-          "description": "Fuse semantic recall into knowledge search. Unset derives from providers.embeddings.",
+          "description": "Fuse semantic recall into knowledge and work search; false also stops embedding the corpus. Unset derives from providers.embeddings.",
           "type": "boolean"
         }
       },

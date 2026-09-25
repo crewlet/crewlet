@@ -184,15 +184,25 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	// pending": read the second way, a page saved a moment ago made every
 	// empty search on the node answer "still building, try again", which
 	// on a company with people in it never cleared.
-	var hits []knowledge.Hit
+	var result knowledge.Result
 	waitFor(t, "the page to become searchable", func() bool {
-		hits = searcher.Search(t.Context(), knowledge.Query{
+		result = searcher.Search(t.Context(), knowledge.Query{
 			Text: "rollback drain node", Org: n.engine.Company().Org, Limit: 5,
 		})
-		return len(hits) > 0
+		return len(result.Hits) > 0
 	})
+	hits := result.Hits
 	if hits[0].Title != "Rollback runbook" {
 		t.Errorf("the top hit is %q", hits[0].Title)
+	}
+	// AND IT SAYS WHAT IT SERVED. This company configures no embeddings
+	// provider, so the default hybrid search is its keyword half — and
+	// says so, over the whole corpus, rather than calling itself hybrid.
+	if result.ServedMode != knowledge.ModeKeyword ||
+		result.Degraded != knowledge.DegradedNoEmbeddings || !result.Coverage.Complete {
+		t.Errorf("served %q degraded %q complete %v, want a keyword answer over "+
+			"everything that says why it was not hybrid",
+			result.ServedMode, result.Degraded, result.Coverage.Complete)
 	}
 	// AND THE GATE HAS STOOD DOWN by the time a hit comes back. A searcher
 	// that answers a hit and still calls itself building tells a seat to

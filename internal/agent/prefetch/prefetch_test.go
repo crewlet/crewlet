@@ -191,11 +191,11 @@ func (s *searcher) CanSearch(*org.Role, *org.Organization) bool { return !s.cann
 
 func (s *searcher) Building(context.Context) bool { return s.building }
 
-func (s *searcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return s.hits
+	return knowledge.Result{Hits: s.hits}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -429,7 +429,7 @@ func (panickingSearcher) Backend() string { return "fake" }
 
 func (panickingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
-func (p panickingSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit {
+func (p panickingSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 	panic(p.mark("a malformed hit"))
 }
 

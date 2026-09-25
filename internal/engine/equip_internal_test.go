@@ -113,7 +113,7 @@ func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 	if got.CanSearch(nil, nil) {
 		t.Error("an unstarted knowledge base reported itself searchable")
 	}
-	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}); hits != nil {
+	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}).Hits; hits != nil {
 		t.Errorf("an unstarted knowledge base returned %v", hits)
 	}
 }

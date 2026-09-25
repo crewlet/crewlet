@@ -91,34 +91,52 @@ func (s *Searcher) CanSearch(seat *org.Role, o *org.Organization) bool {
 // BEST EFFORT: it never reports an error. Every failure path is an empty
 // result and the prefetch degrades to an empty block — a turn must not die
 // because a wiki was slow.
-func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
-	if s == nil || strings.TrimSpace(q.Text) == "" {
-		return nil
+//
+// KEYWORD ONLY, AND IT SAYS SO. The site ranks by its own CQL text search and
+// the engine embeds nothing here, so `semantic` answers nothing with
+// `unsupported` rather than a keyword ranking passed off as one, and `hybrid`
+// serves the keyword answer and names what it served.
+func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
+	mode := q.Mode.Resolved()
+	out := knowledge.Result{Outcome: knowledge.Outcome{
+		Modes:    []knowledge.Mode{knowledge.ModeKeyword},
+		Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+	}}
+	if mode != knowledge.ModeKeyword {
+		out.Degraded = knowledge.DegradedUnsupported
+	}
+	if s == nil || strings.TrimSpace(q.Text) == "" || mode == knowledge.ModeSemantic {
+		return out
 	}
 	client, self := s.clientFor(q.Seat)
 	if client == nil {
-		return nil
+		return out
 	}
 	scope := scopeOf(q.Org)
 	allowed, _ := knowledge.Permitted(scope, self)
 	if !allowed {
-		return nil
+		return out
 	}
 	cql := BuildCQL(q.Text, scope, self)
 	if cql == "" {
 		// Belt and braces on the rule above: an empty CQL and a refused
 		// permission are the same condition, and running a search with
 		// neither would search the whole instance.
-		return nil
+		return out
 	}
 
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the turn gets an empty knowledge block")
-		return nil
+		// NOT COMPLETE: the site was asked and did not answer, which is
+		// a different fact from a site that answered nothing.
+		return out
 	}
-	return s.hits(pages, q)
+	out.Hits = s.hits(pages, q)
+	out.ServedMode = knowledge.ModeKeyword
+	out.Coverage.Complete = true
+	return out
 }
 
 // hits filters and renders what came back.
