@@ -57,6 +57,11 @@ export interface ReconcileFinding {
    * Absent on the ordinary finding about one thing.
    */
   subjects?: string[];
+  /**
+   * When the credential a `credential_expiring` finding is about stops
+   * working (ISO-8601, UTC). Absent on every other kind.
+   */
+  expires_at?: string;
 }
 
 /**
@@ -144,8 +149,58 @@ export interface IntegrationRow {
   [key: string]: unknown;
 }
 
+/**
+ * Every tool the catalogue draws, keyed by the tool, with the answer's
+ * surface keys behind it in the engine's order.
+ *
+ * Held against `integration.Tools` by
+ * `internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes`: a card
+ * whose surfaces differ from the roll-up's carries a state in its header that
+ * its own body cannot account for.
+ */
+export const INTEGRATION_TOOLS = {
+  slack: ["slack"],
+  mattermost: ["mattermost"],
+  atlassian: ["atlassian", "confluence", "jira", "forge"],
+  github: ["github"],
+  gitlab: ["gitlab"],
+  datadog: ["datadog"],
+} as const;
+
+/**
+ * A tool's standing, from `integration.ToolStates`, held by
+ * `internal/integration.TestTheDashboardKnowsExactlyTheRollupStates`.
+ *
+ * `attention` is only ever something a PERSON can do, which is what makes it
+ * countable; `not_connected` is configured and not working yet with nobody
+ * owing anything (a card in it offers no action); `not_in_use` is no block,
+ * or every block switched off — `label` says which.
+ */
+export type IntegrationToolState = "attention" | "not_connected" | "connected" | "not_in_use";
+
+/**
+ * One tool's roll-up, decided in the engine (`integration.Rollup`) rather than
+ * on the client: which surface's word wins and when a ready phase still needs
+ * a person are rules, and two copies of a rule drift.
+ */
+export interface IntegrationTool {
+  /** The tool: a key of `INTEGRATION_TOOLS`. */
+  key: string;
+  /** Its surface keys, configured or not, in the engine's order. */
+  surfaces: string[];
+  state: IntegrationToolState;
+  /** The state in a reader's words — a phase's label, or the roll-up's own. */
+  label: string;
+  /** One sentence saying why, about `surface`. Empty when nothing is owed. */
+  reason: string;
+  /** The surface the state was taken from; absent when nothing is configured. */
+  surface?: string;
+}
+
 export interface IntegrationsAnswer {
   integrations: IntegrationRow[];
+  /** One roll-up per tool in `INTEGRATION_TOOLS`, whether configured or not. */
+  tools: IntegrationTool[];
   traffic_known: boolean;
   /** The oldest delivery counted, or null when nothing was: the page is
    *  capped rather than time-bounded, so there is no fixed window to name. */

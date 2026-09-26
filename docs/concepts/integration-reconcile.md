@@ -14,6 +14,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 |---|---|
 | `credential_missing` | The block is enabled and the credential its `${VAR}` names resolved to nothing. |
 | `credential_rejected` | The credential resolved and the third-party app refused it: a revoked token, a rotated key, an account that lost its access. |
+| `credential_expiring` | A credential that works today and stops on a date the third-party app has already published, inside the **14-day** warning window (`integration.ExpiryWarning`). The finding carries the date in `expires_at`. GitLab is the case: every seat's token is minted and replaced by the pass itself, but the group Owner token the pass runs on was pasted in by a person, nothing rotates it, and the day it lapses every pass is refused. So each pass reads its own token's `expires_at` (`GET /personal_access_tokens/self`, GitLab 15.5+) and warns while there are still two weekly looks left to act on it. An advisory — the integration is ready — owned by the **operator**, because the replacement is a value in this deployment's secret store. A GitLab that cannot say (an older instance, a credential that is not an access token) leaves a note and no finding. |
 | `approval_required` | A person must install or approve something at the third-party app. |
 | `ingress_blocked` | Deliveries cannot reach this engine, and it will not fix itself. |
 | `ingress_pending` | The delivery path is not established yet; the next pass tries again. |
@@ -38,7 +39,7 @@ Those findings fold into one **report**, which is what an operator reads:
 
 **And a seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the third-party app and the engine can never perform it — creating a GitHub App, installing one — the finding is `approval_required`, whose verdict is *awaiting_admin*, owed to an admin. `identity_missing` is the engine's own work and reads as *Setting up agents*, which over an act nobody is performing is a card waiting for a pass that will never change anything. The rule extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat at all is not satisfied, whatever its company block says.
 
-Three findings have a verdict of **ready**: `grant_excess`, `registration_orphaned` and `coverage_partial`. Everything below is about the first, and applies to both.
+Four findings have a verdict of **ready**: `credential_expiring`, `grant_excess`, `registration_orphaned` and `coverage_partial`. `credential_expiring` ranks first among them because it is the only note with a deadline — it becomes `credential_rejected` on its own date — and it is the one advisory the [tool roll-up](#one-state-per-tool) reads as needing attention. Everything below is about `grant_excess`, and applies to the other two.
 
 `grant_excess` is the older of the two. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
 
@@ -286,11 +287,28 @@ One of backlet's phases has no counterpart here, and it is not an omission:
 
 `disconnecting` is a phase this engine does have, and it sorts **first**, so it wins a tool row's tag over every other surface: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails. Nothing about a surface that is going away is worth reporting over the fact that it is going away.
 
-Two labels the dashboard adds for situations that are not phases: **Connecting**, for a block that is configured and that the loop has not reported on yet, which is the window of one reconcile interval after somebody connects, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
+### One state per tool
 
-**On the dashboard** the Integrations screen shows one row per *tool*, not per surface: Atlassian is one row over the Jira, Confluence and Forge relay surfaces. A row's tag is the least ready phase among its surfaces, ordered by `Phases` above, so an `activating` surface outranks a `degraded` one (a degraded integration is still working; one still coming up is not) and a phase the dashboard build does not know sits between the two, never presented as ready and never masking a phase it does know.
+A company connects **tools**, not surfaces: Atlassian is one tool over the organization, Confluence, Jira and the Forge relay. The answer carries one **roll-up** per tool in `tools`, for every tool this build serves whether or not the company configured it, and it is decided in the engine (`integration.Rollup`) rather than by whatever screen reads it — the dashboard used to derive it with its own copy of the phase order and its own ingress rules, and the copy had drifted.
 
-The status line under the name is that surface's `detail`, prefixed with the surface's name when the tool has more than one, so "Jira: swe has no Jira account" reads on the Atlassian row. **A `ready` phase does not silence a broken ingress.** The loop says nothing about deliveries at all (see above), while `secret_usable` and `routes` are computed from what the process resolved and which parsers registered, so the three answer different questions: a tool whose phase is `ready` and whose webhook secret did not resolve is tagged `ready` and still carries the line that says every delivery is refused. What the line is *drawn* as follows the `actor`, not the phase: amber and an alert icon only where a person owes the next step (`admin` or `operator`) or where ingress is broken, because nothing the engine or a third-party app is doing needs a person told about it.
+```json
+{ "key": "atlassian", "surfaces": ["atlassian", "confluence", "jira", "forge"],
+  "state": "attention", "label": "Action required",
+  "reason": "swe has no Jira account", "surface": "jira" }
+```
+
+| `state` | Means |
+|---|---|
+| `attention` | A **person** has to act: a phase whose actor is an `admin` or the `operator`, a `ready` surface whose deliveries cannot work, or a credential about to expire. Only ever something a person can do, which is what makes it countable. |
+| `not_connected` | Configured and not working **yet**, with nobody owing anything: the engine or the vendor is mid-flight (setting up agents, applying a grant, the window before the loop's first report, a disconnect being carried out), or this node could not read the fleet's status at all. Nothing a person does moves it. |
+| `connected` | Every configured surface works. |
+| `not_in_use` | No block at all (`label` *Not in use*), or every block switched off (`label` *Paused*). |
+
+Each configured surface is judged on its own, by its report's **outcome** — who has to act, not what failed: *settled* is connected, *blocked* is attention, *waiting* is not connected. Over a `ready` phase two more facts are read, because the loop says nothing about them: a delivery path that cannot work (`secret_usable`, `routes` or `endpoint_current` false) is **Action needed**, and a `credential_expiring` finding is **Credential expiring**. A surface with no report is *Paused* where its block is off; judged on those same ingress facts where no pass converges it (Slack, whose apps are created by hand, never gets a report — so "connecting" would be permanent); *Status unavailable* where this node could not read the status; and *Connecting* otherwise, which is the window of one reconcile interval after somebody connects.
+
+The tool then takes one surface's verdict: a **teardown** first, whatever else is wrong, because a tool being taken away is not one anybody should be sent to fix; then the first state in the order above — so a surface a person owes something outranks one the engine is still bringing up; then, within one state, the least ready phase by `Phases` (a phase a newer node wrote sits between the worst phase this build knows and ready, never presented as ready and never masking a phase it does know); then the catalogue's order. `label` is that surface's phase label or the roll-up's own word, `reason` its sentence, and `surface` names which surface it was.
+
+**On the dashboard** the Integrations screen draws one card per tool from that roll-up, and the Settings sidebar dots each configured tool by it. A card whose tool is `not_connected` offers no action, because nothing a person does moves it. The card's body still lays out each surface's `detail`, prefixed with the surface's name when the tool has more than one, so "Jira: swe has no Jira account" reads on the Atlassian card. What the line is *drawn* as follows the `actor`, not the phase: amber and an alert icon only where a person owes the next step (`admin` or `operator`) or where ingress is broken, because nothing the engine or a third-party app is doing needs a person told about it.
 
 Everything else in the object above, the actor, the link, the fault, the findings the phase was not derived from, sits under the row's **Details** disclosure, per surface, beside that surface's inbound counts and path.
 

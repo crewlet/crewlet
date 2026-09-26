@@ -523,10 +523,9 @@ function wallFormatter(tz: string): Intl.DateTimeFormat {
  * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
  * against rather than in whatever order a JSON object happened to arrive.
  *
- * `LLM_` in the name deliberately: `PHASE_ORDER` on the Integrations screen is
- * the order a SETUP runs its steps in, `lib/phaseOrder.test.ts` holds that one
- * to a single declaration, and two unrelated things called `PHASE_ORDER` is
- * how one of them gets changed in the other's name.
+ * `LLM_` in the name deliberately: "phase" means an integration's reconcile
+ * phase elsewhere in this tree, and an unqualified `PHASE_ORDER` is how one of
+ * two unrelated orders gets changed in the other's name.
  */
 const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
 

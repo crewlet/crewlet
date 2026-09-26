@@ -120,9 +120,8 @@ func (p Phase) Label() string {
 // Phases is every phase, ordered from furthest-from-working to working.
 var Phases = []Phase{
 	// DISCONNECTING IS FIRST, which is not a claim that it is the worst
-	// thing that can happen to an integration: this slice is what the
-	// dashboard reports the least ready surface from, and a teardown has
-	// to win. Showing a tool as connected while one of its surfaces is
+	// thing that can happen to an integration: this slice is what [Rollup]
+	// orders a tool's surfaces by, and a teardown has to win. Showing a tool as connected while one of its surfaces is
 	// being removed invites a reader to act on something that is going
 	// away, which is the same precedence the console gives it.
 	PhaseDisconnecting,

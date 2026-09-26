@@ -181,10 +181,17 @@ type adminInstance struct {
 
 	// now is the instant token expiry is judged against, so a test can
 	// age a token without waiting.
-	now       time.Time
-	nextID    int
-	nextToken int
-	revokes   int
+	now time.Time
+	// selfExpires is the date the OPERATOR's own token expires, which is
+	// what `/personal_access_tokens/self` reports; zero serves no date,
+	// which is what GitLab sends for a token with none.
+	selfExpires time.Time
+	// selfRefused answers that route 404, the way GitLab before 15.5 and
+	// any credential that is not an access token do.
+	selfRefused bool
+	nextID      int
+	nextToken   int
+	revokes     int
 	// mintBodies are the token-mint payloads, so a test can assert what
 	// was SENT rather than what the fake chose to remember about it.
 	mintBodies []map[string]any
@@ -740,6 +747,22 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		// tokens of which this code could see the oldest 20.
 		json.NewEncoder(w).Encode(pageOf(f.tokenRows(atoi(id)), r.URL.Query()))
 
+	// THE OPERATOR'S OWN TOKEN, which any access token may read about
+	// itself. Checked before the listing's routes, which it shares a prefix
+	// with.
+	case r.Method == http.MethodGet && path == "/personal_access_tokens/self":
+		if f.selfRefused {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"404 Not Found"}`))
+			return
+		}
+		row := map[string]any{"id": 1, "name": "owner", "revoked": false, "active": true,
+			"expires_at": nil}
+		if !f.selfExpires.IsZero() {
+			row["expires_at"] = f.selfExpires.Format(time.DateOnly)
+		}
+		json.NewEncoder(w).Encode(row)
+
 	case r.Method == http.MethodGet && path == "/personal_access_tokens":
 		if !f.instanceAdmin {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -1041,6 +1064,7 @@ func mutatingRoute(call string) bool {
 		path == "/namespaces/nimbus",
 		path == "/service_accounts", // the instance's own account listing
 		path == "/personal_access_tokens",
+		path == "/personal_access_tokens/self", // the pass's own token's expiry
 		strings.HasSuffix(path, "/personal_access_tokens"),
 		strings.HasSuffix(path, "/members"),
 		strings.HasSuffix(path, "/hooks"),
@@ -3017,7 +3041,10 @@ func TestAGroupOwnerUsesTheGroupRouteForEveryTokenOperation(t *testing.T) {
 	// had already succeeded, and the revoke fails inside a rollback where
 	// the message says a live credential was left behind.
 	for _, call := range f.calls {
-		if !strings.Contains(call, "/personal_access_tokens") {
+		// `/personal_access_tokens/self` is the one token route every
+		// access token may call — it describes the caller's own token.
+		if !strings.Contains(call, "/personal_access_tokens") ||
+			strings.HasSuffix(call, "/personal_access_tokens/self") {
 			continue
 		}
 		if !strings.Contains(call, "/service_accounts/") {
@@ -4605,5 +4632,93 @@ func TestATierThatCouldNotBeReadIsNotFree(t *testing.T) {
 	if len(f.projectHooks["nimbus/api"]) != 0 {
 		t.Errorf("it fell back to project hooks over a failed read: %+v",
 			f.projectHooks)
+	}
+}
+
+// THE TOKEN THE PASS RUNS ON IS WARNED ABOUT INSIDE THE WINDOW, AND ONLY THERE.
+//
+// Every seat's token is minted and replaced by the pass itself; the group Owner
+// token was pasted in by a person and nothing rotates it. The day it lapses
+// every pass is refused and the card goes from Connected to Failed, so GitLab's
+// published date is read on each pass and turned into a finding exactly when
+// it falls inside integration.ExpiryWarning of the pass's clock — not before,
+// where a months-away date would sit on a working card until nobody read it.
+func TestTheOwnerTokenIsWarnedAboutOnlyInsideTheWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		expires time.Time
+		warned  bool
+	}{
+		{"no published expiry", time.Time{}, false},
+		{"a day past the window", now.Add(integration.ExpiryWarning + 24*time.Hour), false},
+		{"on the window's edge", now.Add(integration.ExpiryWarning), true},
+		{"in three days", now.Add(3 * 24 * time.Hour), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAdminInstance()
+			f.selfExpires = c.expires
+			res, err := reconcileWith(t, f, newRecordingSink(),
+				map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			var found *integration.Finding
+			for _, finding := range res.Findings() {
+				if finding.Kind == integration.FindingCredentialExpiring {
+					found = &finding
+				}
+			}
+			if (found != nil) != c.warned {
+				t.Fatalf("expiring finding present = %v, want %v (%+v)",
+					found != nil, c.warned, res.Findings())
+			}
+			if found == nil {
+				return
+			}
+			if !found.ExpiresAt.Equal(c.expires) {
+				t.Errorf("expires_at = %v, want the date GitLab published, %v",
+					found.ExpiresAt, c.expires)
+			}
+			if !strings.Contains(found.Detail, c.expires.Format(time.DateOnly)) {
+				t.Errorf("the sentence does not name the date: %q", found.Detail)
+			}
+			if found.Subject != "integrations.gitlab.provisioning.admin_token" {
+				t.Errorf("subject = %q, want the config path to change", found.Subject)
+			}
+			// ADVISORY: the integration works today, so a pass with
+			// nothing else outstanding is still ready.
+			if got := integration.Classify(res.Findings()); got.Phase != integration.PhaseReady {
+				t.Errorf("an expiring token alone classified %s, want ready", got.Phase)
+			}
+		})
+	}
+}
+
+// A GITLAB THAT CANNOT SAY IS NOT A FAULT. `/personal_access_tokens/self` is
+// 15.5+ and answers only for access tokens; refusing the whole pass over a
+// forecast would lose every observation the pass exists to make.
+func TestAnUnreadableTokenExpiryIsANoteNotAFault(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.selfRefused = true
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	if err != nil {
+		t.Fatalf("a pass failed over an expiry it could not read: %v", err)
+	}
+	if !res.CredentialExpires.IsZero() {
+		t.Errorf("an unreadable expiry produced a date: %v", res.CredentialExpires)
+	}
+	noted := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, "expires") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Errorf("the run did not say it could not read the expiry: %v", res.Notes)
 	}
 }

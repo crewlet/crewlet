@@ -198,6 +198,16 @@ type Sources struct {
 	// surface is unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
+	// Converges reports whether a reconcile pass converges a surface in
+	// this build, or is nil when this process cannot say.
+	//
+	// The one fact the tool roll-up needs that no row carries: a surface no
+	// pass converges (Slack, whose apps are created by hand) never gets a
+	// report, so without this its card would read "connecting" for as long
+	// as it is configured. Nil is "cannot say", and the roll-up then reads
+	// an unreported surface as connecting rather than guessing either way.
+	Converges func(kind integration.Kind) bool
+
 	// Work and Pages are this node's projections of the company's own
 	// tracker and knowledge base. Nil leaves their questions unregistered,
 	// which is the honest answer for a company on Jira and Confluence:
