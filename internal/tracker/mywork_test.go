@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -242,5 +243,114 @@ func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
 	}
 	if strings.Contains(string(raw), ":null") {
 		t.Errorf("an empty day marshals a null: %s", raw)
+	}
+}
+
+// A BLOCK IS A PAGE AND ITS TOTAL IS THE CLAIM.
+//
+// Every block carries at most [tracker.MyWorkRows] rows, so a count drawn from
+// a block's length says twenty for the person holding twenty-five — the page
+// size reported as a fact about their day. The total is counted by the block's
+// own predicate, in the same transaction as the page.
+func TestMyWorkTotalsExceedThePageCap(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const held = tracker.MyWorkRows + 5
+	ids := make([]string, 0, held)
+	for i := range held {
+		id := fmt.Sprintf("t-%02d", i)
+		ids = append(ids, id)
+		assign(t, r, id, "ana")
+	}
+	// A PRIORITY LIST LONGER THAN THE PAGE whose head is finished work: the
+	// page is cut AFTER the finished entries are dropped, so the first open
+	// twenty are what the block carries and the total is every open entry.
+	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana", ids,
+		nil, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+	done := tracker.StatusDone
+	for _, id := range ids[:3] {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-done-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Status: &done},
+			tracker.ChangeStatus, nil); err != nil {
+			t.Fatalf("finish %s: %v", id, err)
+		}
+		r.drain()
+	}
+	const asks = tracker.MyWorkRows + 2
+	for i := range asks {
+		askOn(t, r, fmt.Sprintf("op-ask-%02d", i), ids[3], tracker.Comment{
+			ID: fmt.Sprintf("c-%02d", i), Task: ids[3], Author: "bob",
+			AuthorKind: tracker.AuthorHuman, Body: "which region?", Ask: "ana",
+			CreatedAt: wednesday,
+		})
+	}
+
+	got := r.myWork("ana")
+	open := held - 3
+	if len(got.Assigned) != tracker.MyWorkRows {
+		t.Fatalf("assigned carries %d rows, want the page of %d",
+			len(got.Assigned), tracker.MyWorkRows)
+	}
+	if want := (tracker.ClaimTotal{Total: open}); got.Totals.Assigned != want {
+		t.Errorf("assigned's total is %+v, want %+v — every open task ana "+
+			"holds, not the page", got.Totals.Assigned, want)
+	}
+	if len(got.Priorities) != tracker.MyWorkRows {
+		t.Errorf("priorities carries %d rows, want the page of %d — the list "+
+			"was cut before its finished head was dropped", len(got.Priorities),
+			tracker.MyWorkRows)
+	}
+	if len(got.Priorities) > 0 && got.Priorities[0].ID != ids[3] {
+		t.Errorf("priorities opens on %s, want %s — the first OPEN entry in "+
+			"the stored order", got.Priorities[0].ID, ids[3])
+	}
+	if want := (tracker.ClaimTotal{Total: open}); got.Totals.Priorities != want {
+		t.Errorf("priorities' total is %+v, want %+v", got.Totals.Priorities, want)
+	}
+	if len(got.AskedOfMe) != tracker.MyWorkRows {
+		t.Errorf("asked_of_me carries %d rows, want the page of %d",
+			len(got.AskedOfMe), tracker.MyWorkRows)
+	}
+	if want := (tracker.ClaimTotal{Total: asks}); got.Totals.AskedOfMe != want {
+		t.Errorf("asked_of_me's total is %+v, want %+v", got.Totals.AskedOfMe, want)
+	}
+	// AND A BLOCK WITH NOTHING IN IT COUNTS ZERO, not "not counted".
+	if got.Totals.Collaborating != (tracker.ClaimTotal{}) {
+		t.Errorf("collaborating's total is %+v over an empty block",
+			got.Totals.Collaborating)
+	}
+}
+
+// EVERY BLOCK HAS A TOTAL, under the block's own name. A block added to the
+// answer without one is the block whose heading falls back to a length.
+func TestEveryMyWorkBlockHasATotal(t *testing.T) {
+	t.Parallel()
+	totals := map[string]bool{}
+	tt := reflect.TypeFor[tracker.MyWorkTotals]()
+	for i := range tt.NumField() {
+		totals[strings.Split(tt.Field(i).Tag.Get("json"), ",")[0]] = true
+	}
+	mw := reflect.TypeFor[tracker.MyWork]()
+	blocks := 0
+	for i := range mw.NumField() {
+		field := mw.Field(i)
+		if field.Type.Kind() != reflect.Slice {
+			continue
+		}
+		blocks++
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if !totals[name] {
+			t.Errorf("block %q has no total in MyWorkTotals", name)
+		}
+		delete(totals, name)
+	}
+	for name := range totals {
+		t.Errorf("MyWorkTotals carries %q, which is no block of MyWork", name)
+	}
+	if blocks != 7 {
+		t.Errorf("MyWork has %d blocks; the package doc names seven", blocks)
 	}
 }

@@ -708,7 +708,9 @@ the view. There are five:
 
 `my_queue` and `priorities` both need to know who is asking, and the surface
 supplies that from its own credential — never the query. That is also what
-makes `f.<slug>=me` mean the reader rather than whoever saved the view.
+makes `f.<slug>=me` mean the reader rather than whoever saved the view: `me`
+is resolved after the view's saved parameters and yours are merged, so a view
+saved with `f.reviewers=me` shows each person who opens it their own reviews.
 
 ### Filtering a custom field
 
@@ -868,6 +870,14 @@ task in `assigned` that had already moved out of it by the time `priorities`
 was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
+
+Each list is a **page of at most 20**, and beside the seven lists the answer
+carries `totals` — one `{total, capped}` per list, counted by the same
+predicate in the same read. The page is twenty; the claim is not, and a count
+taken from a list's length says 20 for the seat holding two hundred. `capped`
+means the count stopped at 10,000, so the number is a floor. `priorities` is
+cut **after** finished and removed entries are dropped, so a list whose head is
+done work still shows its first twenty open entries in the order they were put.
 
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like
@@ -1501,6 +1511,16 @@ change — `{add: [...]}` and `{remove: [...]}` against what is there now, or
 `{set: [...]}` for the whole list, never both — so starring a project from one
 screen never drops a view pinned from another. The caps (32 pinned views, 64
 starred things) are held against the list the move would leave.
+
+**A pin can carry its count.** Asked for a strip with a viewer and
+`counts=true`, every view pinned for that viewer carries `count` — how many
+tasks the view selects when it is run: its saved parameters, in the container
+it was saved in, with `me` as the viewer, on the company's clock. It is the
+same expansion and the same statement that answer the board's own total for
+that view, so the number beside a pin is the number on the board it opens. At most 32 counts, in the
+strip's one read. A view that no longer compiles — it filters on a field that
+was since archived, say — carries `count_refused` naming why, rather than no
+count at all.
 
 **A queue is the one list written whole**, because an order is a statement
 about every entry at once. `set_priorities` takes the whole list, and

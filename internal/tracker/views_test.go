@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -611,5 +612,258 @@ func TestAViewThatMovesNamesBothStrips(t *testing.T) {
 				"%s — a read of that strip would never wait for this record",
 				scope.Paths, term)
 		}
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE VIEW'S OWN TOTAL.
+//
+// The number beside a pin is what the board it opens will say it holds: the
+// `total_hint` of the view RUN — its saved parameters, in the container it was
+// saved in, as this viewer. A second definition of what a view selects would
+// be a sidebar that disagrees with the page it links to.
+func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	for i, who := range []string{"ana", "ana", "ana", "bob"} {
+		assign(t, r, fmt.Sprintf("t-%d", i), who)
+	}
+	// A FINISHED ONE, which the view does not ask for: the count must use
+	// the grammar's own default scope, as the board does.
+	done := tracker.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "t-0", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish t-0: %v", err)
+	}
+	r.drain()
+
+	for _, view := range []tracker.View{
+		aView("v-ana", func(v *tracker.View) { v.Name = "Ana's" }),
+		aView("v-bob", func(v *tracker.View) {
+			v.Name, v.Params = "Bob's", map[string]string{"assignee": "bob"}
+		}),
+		// A VIEW THAT NO LONGER COMPILES — the save parses, it does not
+		// resolve fields against the catalogue — so its count is a
+		// refusal on its own row rather than a failed strip.
+		aView("v-gone", func(v *tracker.View) {
+			v.Name, v.Params = "Gone", map[string]string{"f.severity": "high"}
+		}),
+	} {
+		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		tracker.PersonSubject("ana"), "", tracker.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-ana", "v-gone"},
+		}, tracker.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	rows := map[string]tracker.ViewRow{}
+	for _, row := range listing.Views {
+		rows[row.Key] = row
+	}
+
+	// THE BOARD'S OWN ANSWER for the same view, which is what the count
+	// has to equal.
+	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+		"view": "v-ana", "container": "project:ENG",
+	}, tracker.Viewer{Handle: "ana"}, wednesday, time.UTC)
+	if err != nil {
+		t.Fatalf("expand v-ana: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	board, err := r.reader.Tasks(t.Context(), q, wednesday)
+	if err != nil {
+		t.Fatalf("run v-ana: %v", err)
+	}
+	if board.TotalHint != 2 {
+		t.Fatalf("the fixture is wrong: v-ana's board holds %d, want ana's two "+
+			"open tasks", board.TotalHint)
+	}
+	ana := rows["v-ana"]
+	if ana.Count == nil || *ana.Count != board.TotalHint || ana.CountCapped {
+		t.Errorf("v-ana's count is %v (capped %v), want the board's total %d",
+			ana.Count, ana.CountCapped, board.TotalHint)
+	}
+	// NOT PINNED, NOT COUNTED — a count per shared view would be a query
+	// per row of every strip on every poll.
+	if bob := rows["v-bob"]; bob.Count != nil || bob.CountRefused != "" {
+		t.Errorf("v-bob is not pinned for ana and carries a count: %+v", bob)
+	}
+	if gone := rows["v-gone"]; gone.Count != nil ||
+		!strings.Contains(gone.CountRefused, "severity") {
+		t.Errorf("v-gone filters on a field nobody declares and says %+v — "+
+			"want no count and a refusal naming the field", gone)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin && row.Count != nil {
+			t.Errorf("builtin %s carries a count; nobody can pin it", row.Key)
+		}
+	}
+
+	// AND WITHOUT THE ASK, NO COUNTS: a strip is read on every poll, and
+	// the counts are a cost a caller opts into.
+	for _, row := range r.strip(eng, "ana").Views {
+		if row.Count != nil || row.CountRefused != "" {
+			t.Errorf("%s carries a count on a strip that did not ask", row.Key)
+		}
+	}
+
+	// COUNTS NEED A VIEWER, since only a viewer has pins.
+	if _, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+		Container: eng, Level: statelog.ReadStale, Counts: true,
+		Now: wednesday, Zone: time.UTC,
+	}); err == nil {
+		t.Error("a strip nobody is looking at was counted — it has no pins")
+	}
+}
+
+// A PINNED VIEW IS COUNTED AS THE PERSON WHO OPENS IT, and the count is the
+// board's total whatever the view names about its reader.
+//
+// Three views, each of which reads its viewer a different way: a saved
+// `f.reviewers=me`, which means whoever opens it; `asked_by=` the viewer's own
+// seat, which a person bound to an operator token holds under the token's name
+// too; and a view saved against a PERSON, which a board runs as saved. The
+// count and the board share one expansion ([Reader.Expand]) — and a saved
+// `me` was once resolved by neither, so the count and the board refused it
+// alike, or, while the count carried a merge of its own, disagreed.
+func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
+	if _, err := r.writer.WriteFields(t.Context(), "op-people", []tracker.FieldDef{
+		{ID: "f-rev", Slug: "reviewers", Name: "Reviewers", Type: tracker.FieldPeople},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedWithFields(t, r, "rev-ana-1", map[string]any{"f-rev": []string{"ana"}})
+	seedWithFields(t, r, "rev-ana-2", map[string]any{"f-rev": []string{"ana", "bob"}})
+	seedWithFields(t, r, "rev-bob", map[string]any{"f-rev": []string{"bob"}})
+	// The founder's questions, one through their token and one as their
+	// seat, and somebody else's.
+	for task, author := range map[string]string{
+		"by-token": "founder", "by-seat": "jane-founder", "by-other": "cy",
+	} {
+		assign(t, r, task, "ana")
+		askOn(t, r, "op-"+task, task, tracker.Comment{
+			ID: "c-" + task, Task: task, Author: author,
+			AuthorKind: tracker.AuthorHuman, Body: "when?", Ask: "ana",
+			CreatedAt: wednesday,
+		})
+	}
+
+	anaHome := tracker.Container{Kind: tracker.ContainerPerson, ID: "ana"}
+	for _, view := range []tracker.View{
+		aView("v-mine", func(v *tracker.View) {
+			v.Name, v.Params = "To review", map[string]string{"f.reviewers": "me"}
+		}),
+		aView("v-asked", func(v *tracker.View) {
+			v.Name, v.Params = "Asked", map[string]string{"asked_by": "jane-founder"}
+		}),
+		aView("v-home", func(v *tracker.View) {
+			v.Name, v.Container = "Held", anaHome
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+	} {
+		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	for handle, pins := range map[string][]string{
+		"ana": {"v-mine", "v-home"}, "bob": {"v-mine"},
+		"jane-founder": {"v-asked"},
+	} {
+		if _, err := r.writer.WriteDocument(t.Context(), "op-pins-"+handle,
+			tracker.PersonSubject(handle), "", tracker.Person{
+				V: 1, Handle: handle, PinnedViews: pins,
+			}, tracker.ChangePersonUpdated, nil); err != nil {
+			t.Fatalf("pin for %s: %v", handle, err)
+		}
+		r.drain()
+	}
+
+	// board is what work_items answers for the view, as the viewer.
+	board := func(viewer tracker.Viewer, params map[string]any) int {
+		t.Helper()
+		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		return answer.TotalHint
+	}
+	count := func(container tracker.Container, viewer tracker.Viewer, id string) tracker.ViewRow {
+		t.Helper()
+		listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
+			Container: container, Viewer: viewer.Party(), Level: statelog.ReadStale,
+			Counts: true, Now: wednesday, Zone: time.UTC,
+		})
+		if err != nil {
+			t.Fatalf("Views(%s) as %s: %v", container.ID, viewer.Handle, err)
+		}
+		for _, row := range listing.Views {
+			if row.ID == id {
+				return row
+			}
+		}
+		t.Fatalf("%s is not on %s's strip for %s", id, container.ID, viewer.Handle)
+		return tracker.ViewRow{}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		container tracker.Container
+		viewer    tracker.Viewer
+		view      string
+		params    map[string]any
+		want      int
+	}{
+		{"a saved me is ana", eng, tracker.Viewer{Handle: "ana"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"a saved me is bob", eng, tracker.Viewer{Handle: "bob"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"asked_by reaches the token's asks", eng,
+			tracker.Viewer{Handle: "jane-founder", OperatorID: "founder"}, "v-asked",
+			map[string]any{"view": "v-asked", "container": "project:ENG"}, 2},
+		{"a person's view runs as saved", anaHome, tracker.Viewer{Handle: "ana"},
+			"v-home", map[string]any{"view": "v-home"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			total := board(tc.viewer, tc.params)
+			if total != tc.want {
+				t.Fatalf("the fixture is wrong: %s's board holds %d for %s, want %d",
+					tc.view, total, tc.viewer.Handle, tc.want)
+			}
+			row := count(tc.container, tc.viewer, tc.view)
+			if row.CountRefused != "" || row.Count == nil || *row.Count != total ||
+				row.CountCapped {
+				got := "none"
+				if row.Count != nil {
+					got = fmt.Sprint(*row.Count)
+				}
+				t.Errorf("%s's count for %s is %s (capped %v, refused %q), want "+
+					"the board's total %d", tc.view, tc.viewer.Handle, got,
+					row.CountCapped, row.CountRefused, total)
+			}
+		})
 	}
 }

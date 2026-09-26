@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -169,6 +170,13 @@ func fieldOpsFor(t FieldType) []string {
 	return FieldOps
 }
 
+// errUnresolvedField marks a refusal about the QUERY — an `f.<ref>` nothing
+// declares — as distinct from a store that could not be read, which is the
+// only other way [resolveFields] fails. A pinned view's count needs the two
+// apart: the first is the view's own problem and is named on its row, the
+// second fails the read.
+var errUnresolvedField = errors.New("no such field")
+
 // resolveFields reads the declarations every `f.<ref>` in a query names.
 //
 // THE WHOLE QUERY, disjunction branches included, because a branch is a
@@ -207,7 +215,7 @@ func resolveFields(ctx context.Context, tx *sql.Tx, q Query) (
 			return nil, fmt.Errorf("tracker: f.%s names no field this company "+
 				"declares — a filter nothing resolved would widen this answer "+
 				"silently, so it is refused; read the catalogue for the slugs "+
-				"that exist", ref)
+				"that exist: %w", ref, errUnresolvedField)
 		}
 		out[ref] = field
 	}

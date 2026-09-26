@@ -2038,6 +2038,15 @@ export interface WorkView {
   icon?: string;
   /** The saved query, in `work_items`' own parameter names. */
   params?: Record<string, string>;
+  /** How many tasks the view selects when RUN — the board's own `total_hint`
+   *  for it — carried only on a row pinned for the viewer, and only when the
+   *  strip was asked with `counts=true`. Absent is "not counted", never zero. */
+  count?: number;
+  /** The count stopped at the engine's ceiling, so it is a floor. */
+  count_capped?: boolean;
+  /** Why a pinned row asked for a count carries none: the view no longer
+   *  compiles against this company (a filtered field was archived, say). */
+  count_refused?: string;
 }
 
 export interface WorkViewsAnswer {
@@ -3347,6 +3356,24 @@ export interface WorkChecklistRow {
   done: boolean;
 }
 
+/** How many rows one `work_my_work` block holds in full. `capped` says the
+ *  count stopped at the engine's ceiling, so `total` is a floor, not a fact. */
+export interface WorkClaimTotal {
+  total: number;
+  capped?: boolean;
+}
+
+/** One [WorkClaimTotal] per block, keyed by the block's own name. */
+export interface WorkMyWorkTotals {
+  priorities: WorkClaimTotal;
+  assigned: WorkClaimTotal;
+  asked_of_me: WorkClaimTotal;
+  checklist_items: WorkClaimTotal;
+  collaborating: WorkClaimTotal;
+  watching_recent: WorkClaimTotal;
+  unblocked_recent: WorkClaimTotal;
+}
+
 /** Everything one person is expected to look at — seven different CLAIMS on
  *  their attention, each bounded the same so no block crowds out another. */
 export interface WorkMyWork {
@@ -3360,6 +3387,10 @@ export interface WorkMyWork {
   collaborating: WorkSummary[];
   watching_recent: WorkSummary[];
   unblocked_recent: WorkSummary[];
+  /** Every block counted in FULL, by the predicate that drew its page and in
+   *  the same transaction. A block is a page of at most twenty rows; its total
+   *  is the claim — so a count is drawn from here, never from a length. */
+  totals: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;

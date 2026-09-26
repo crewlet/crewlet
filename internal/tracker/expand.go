@@ -140,44 +140,81 @@ func (v Viewer) Party() Party {
 // THE CALLER'S OWN KEYS WIN, every one of them: the expansion is a set of
 // defaults. A preset expands first and a view over it, because a view is the
 // more specific thing — somebody saved it — and both lose to what was typed.
+// [mergeExpansion] is what does the merging, and the one other reader of a
+// view's parameters — a pinned view's count in [Reader.Views] — goes through
+// it too.
 func (r *Reader) Expand(ctx context.Context, params map[string]any,
 	viewer Viewer) (MapParams, error) {
 
-	// `me` IS RESOLVED FIRST AND ALWAYS, before the early return: a
-	// `f.<slug>=me` on a query that names no view and no preset is still
-	// a query about the reader, and returning the parameters untouched
-	// would hand the compiler a literal "me".
-	params, err := resolveViewerKeys(params, viewer.Handle)
-	if err != nil {
-		return nil, err
-	}
-
-	view := strings.TrimSpace(stringOf(params["view"]))
-	preset := strings.TrimSpace(stringOf(params["preset"]))
-	if view == "" && preset == "" {
-		return MapParams(params), nil
-	}
-
-	merged := MapParams{}
-	if preset != "" {
+	var presetDefaults, viewDefaults MapParams
+	if preset := strings.TrimSpace(stringOf(params["preset"])); preset != "" {
 		defaults, err := expandPreset(preset, viewer)
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(merged, defaults)
+		presetDefaults = defaults
 	}
-	if view != "" {
+	if view := strings.TrimSpace(stringOf(params["view"])); view != "" {
 		defaults, err := r.expandView(ctx, view)
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(merged, defaults)
+		viewDefaults = defaults
 	}
+	return mergeExpansion(params, presetDefaults, viewDefaults, viewer.Handle)
+}
+
+// mergeExpansion is the whole of what a read's parameters mean once a preset
+// and a saved view have been read: the preset's defaults, the view's over
+// them, the caller's over both — and then `me` resolved to the viewer over the
+// RESULT.
+//
+// OVER THE RESULT, because a `me` means the reader wherever it was written.
+// Resolved over the caller's keys alone, a view SAVED with `f.reviewers=me`
+// reached the compiler as a literal "me" and was refused as unresolved — so
+// the one thing [resolveViewerKeys] says a saved `me` is for, a view that
+// means whoever opens it, could not be opened at all.
+//
+// ONE FUNCTION FOR BOTH READERS of a view — the board that runs it
+// ([Reader.Expand]) and the count beside its pin ([countView]) — because the
+// count is only the board's total while the two expand alike, and a second
+// merge is how a sidebar number stops being the number on the board it opens.
+func mergeExpansion(caller map[string]any, preset, view MapParams,
+	viewer string) (MapParams, error) {
+
+	merged := make(MapParams, len(preset)+len(view)+len(caller))
+	maps.Copy(merged, preset)
+	maps.Copy(merged, view)
 	// THE CALLER'S LAST, so every explicit key overrides — and `view` and
 	// `preset` themselves survive into the parsed query, where they are
 	// what an answer can say it came from.
-	maps.Copy(merged, MapParams(params))
-	return merged, nil
+	maps.Copy(merged, MapParams(caller))
+	// `me` IS RESOLVED ALWAYS, with or without a view or a preset: a
+	// `f.<slug>=me` on a query that names neither is still a query about
+	// the reader, and returning the parameters untouched would hand the
+	// compiler a literal "me".
+	resolved, err := resolveViewerKeys(merged, viewer)
+	if err != nil {
+		return nil, err
+	}
+	return MapParams(resolved), nil
+}
+
+// savedDefaults is what a saved view's own parameters contribute to an
+// expansion: every key but the ones [expansionRefused] names.
+//
+// A ROW AN OLDER BUILD WROTE may carry one, since the save refuses these —
+// dropped rather than honoured, because a saved cursor would resume a page
+// nobody asked for.
+func savedDefaults(params map[string]string) MapParams {
+	out := make(MapParams, len(params))
+	for key, value := range params {
+		if slices.Contains(expansionRefused, key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 // resolveViewerKeys substitutes the reader for every `me` a query names.
@@ -326,16 +363,7 @@ func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 				"deleted, or this copy has not caught up: %w",
 				id, statelog.ErrUnavailable)
 		}
-		out = make(MapParams, len(view.Params))
-		for key, value := range view.Params {
-			if slices.Contains(expansionRefused, key) {
-				// A ROW AN OLDER BUILD WROTE, since the save refuses
-				// these — dropped rather than honoured, because a
-				// saved cursor would resume a page nobody asked for.
-				continue
-			}
-			out[key] = value
-		}
+		out = savedDefaults(view.Params)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -359,6 +387,19 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	if err != nil {
 		return Query{}, err
 	}
+	return q.forViewer(viewer.Party()), nil
+}
+
+// forViewer gives the viewer's second name to the keys that name a PERSON.
+//
+// ONE PLACE for both readers of a query that knows its viewer — a surface's
+// [Reader.ExpandedQuery] and a pinned view's count in [Reader.Views] — so the
+// count beside a pin cannot miss the questions a founder asked through their
+// own credential while the board it opens finds them.
+func (q Query) forViewer(viewer Party) Query {
+	if viewer.Handle == "" {
+		return q
+	}
 	// AND THE PRIORITY LIST'S OWNER GETS THEIR SECOND NAME, which the
 	// parser could not give them: `priorities=` names a PERSON, a person
 	// bound to an operator token may hold a record under the credential
@@ -367,7 +408,7 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	// another person's list passes the handle alone, which is the record
 	// every write makes now — see [Writer.Record].
 	if q.PriorityListOf.Named() && q.PriorityListOf.Handle == viewer.Handle {
-		q.PriorityListOf = viewer.Party()
+		q.PriorityListOf = viewer
 	}
 	// AND SO DOES THE ASKER, for the same reason and with the same limit:
 	// `asked_by=` names a person, the questions a founder put through
@@ -378,16 +419,21 @@ func (r *Reader) ExpandedQuery(ctx context.Context, params map[string]any,
 	//
 	// IN EVERY `any=` BRANCH TOO, since a branch is a predicate like the
 	// top level and "asked by me, or assigned to me" is a disjunction a
-	// person writes.
+	// person writes. A COPY of the branches, because a Query is a value
+	// and its slice is shared with whoever holds the original.
 	if q.AskedBy.Named() && q.AskedBy.Handle == viewer.Handle {
-		q.AskedBy = viewer.Party()
+		q.AskedBy = viewer
 	}
-	for i := range q.Any {
-		if q.Any[i].AskedBy.Named() && q.Any[i].AskedBy.Handle == viewer.Handle {
-			q.Any[i].AskedBy = viewer.Party()
+	if len(q.Any) > 0 {
+		branches := slices.Clone(q.Any)
+		for i := range branches {
+			if branches[i].AskedBy.Named() && branches[i].AskedBy.Handle == viewer.Handle {
+				branches[i].AskedBy = viewer
+			}
 		}
+		q.Any = branches
 	}
-	return q, nil
+	return q
 }
 
 // stringOf renders a parameter value the way [MapParams] does.

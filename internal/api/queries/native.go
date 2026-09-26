@@ -347,6 +347,15 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// COUNTS ARE A VIEWER'S, because only a viewer has pins: `counts=true`
+	// on the shared strip is refused by name rather than answered with no
+	// counts, which would read as a person with nothing pinned.
+	counts := p.Bool("counts", false)
+	if counts && !viewer.Named() {
+		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
+			"are of the views PINNED for somebody, and the shared strip "+
+			"has no pins", ErrBadParams)
+	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
@@ -360,6 +369,10 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// poll. See [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
+		// THE COUNT BESIDE A PIN IS THE BOARD IT OPENS: the view run on
+		// the company's own clock, which every relative date in it is
+		// cut on — the pair `work_items` parses with.
+		Counts: counts, Now: s.clock(), Zone: s.zone(),
 	})
 	if err != nil {
 		return nil, err

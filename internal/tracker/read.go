@@ -1782,12 +1782,27 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 func countHint(ctx context.Context, tx *sql.Tx, where string,
 	args []any) (int, bool, error) {
 
-	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
+	counted, capped, err := countCapped(ctx, tx, "tracker_tasks t", where, args)
+	if err != nil {
+		return 0, false, fmt.Errorf("tracker: count the answer: %w", err)
+	}
+	return counted, capped, nil
+}
+
+// countCapped is [countHint] over any FROM clause: the rows `from` joins and
+// `where` selects, counted one past [TotalHintCeiling] and clamped.
+//
+// ONE CEILING FOR EVERY COUNT this package answers, so a task total and an
+// ask total cannot disagree about where "more than we counted" begins.
+func countCapped(ctx context.Context, tx *sql.Tx, from, where string,
+	args []any) (int, bool, error) {
+
+	query := `SELECT COUNT(*) FROM (SELECT 1 FROM ` + from + ` WHERE ` +
 		where + ` LIMIT ?)`
 	var n int
 	if err := tx.QueryRowContext(ctx, query,
 		append(append([]any{}, args...), TotalHintCeiling+1)...).Scan(&n); err != nil {
-		return 0, false, fmt.Errorf("tracker: count the answer: %w", err)
+		return 0, false, err
 	}
 	counted, capped := capHint(n)
 	return counted, capped, nil

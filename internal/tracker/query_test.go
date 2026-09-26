@@ -50,6 +50,28 @@ func TestAnAbsentContainerIsNotTheWorkspace(t *testing.T) {
 	}
 }
 
+// A CONTAINER OF ANOTHER KIND IS REFUSED, NOT READ AS A PROJECT KEY.
+//
+// A view strip belongs to a unit or a person; a task does not. Parsed as a
+// project key, `container=unit:eng` became the project `UNIT:ENG` — a key no
+// project can have — and a board asked for a team's work answered an empty
+// list, the one failure shape a person acts on.
+func TestAContainerOfAnotherKindIsRefusedRatherThanReadAsAProject(t *testing.T) {
+	t.Parallel()
+	for _, form := range []string{"unit:eng", "person:ana", "team:x"} {
+		_, err := parse(t, map[string]any{"container": form})
+		if err == nil {
+			t.Errorf("container=%s parsed — it names no project, and read as "+
+				"one it answers an empty board", form)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unit=") {
+			t.Errorf("container=%s is refused as %q, which does not say how a "+
+				"team's work is selected", form, err)
+		}
+	}
+}
+
 // A STATUS OUTSIDE THE SIX IS REFUSED, AND NEGATION IS ITS OWN LIST.
 //
 // The set is fixed, so a slug nobody declared can only be a typo — and a

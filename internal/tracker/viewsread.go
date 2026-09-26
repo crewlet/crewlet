@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,6 +61,25 @@ type ViewRow struct {
 	Rank   Rank              `json:"rank,omitempty"`
 	Icon   string            `json:"icon,omitempty"`
 	Params map[string]string `json:"params,omitempty"`
+
+	// Count is how many tasks this view selects when it is RUN — the
+	// `total_hint` a `work_items{view, container}` read of it answers, with
+	// the viewer's own `me` — and it is carried only on a row PINNED for
+	// this viewer, and only when [ViewQuery.Counts] asked. Absent is "not
+	// counted", never zero: a pointer, because a pinned view that selects
+	// nothing is the one whose count most needs to be drawn.
+	//
+	// CountCapped says the count stopped at [TotalHintCeiling], for
+	// [Answer.TotalCapped]'s reason.
+	Count       *int `json:"count,omitempty"`
+	CountCapped bool `json:"count_capped,omitempty"`
+
+	// CountRefused is WHY a pinned row asked for a count carries none: the
+	// view no longer compiles against this company — a custom field it
+	// filters on was archived, say. Named rather than left absent, because
+	// an absent count on a pinned row reads as "not asked", and the
+	// reader asked.
+	CountRefused string `json:"count_refused,omitempty"`
 }
 
 // ViewQuery asks for one container's strip.
@@ -98,6 +118,19 @@ type ViewQuery struct {
 	// from it through this node's own drain rate. Both may be set
 	// and the read refuses past whichever is reached first.
 	MaxLagSeq uint64
+
+	// Counts asks for [ViewRow.Count] on every row pinned for [Viewer] —
+	// what a sidebar draws beside a pin. It needs a named viewer, since
+	// only a viewer has pins, and it costs one capped count per pin: at
+	// most [MaxPinnedViews], which is the bound that makes it safe to ask
+	// on a poll.
+	//
+	// Now and Zone are the instant and the company's clock a view's
+	// relative dates are cut on — the pair [ParseQuery] takes — so a
+	// pinned "due this week" counts the week the board it opens draws.
+	Counts bool
+	Now    time.Time
+	Zone   *time.Location
 }
 
 // ViewListing is the strip, with the framework's own verdict on the read.
@@ -154,10 +187,23 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 			"strip this is", q.Container.Kind)
 	}
 
+	if q.Counts {
+		switch {
+		case len(q.Viewer.Handles()) == 0:
+			return ViewListing{}, fmt.Errorf("tracker: a view read asks for " +
+				"its pinned views' counts and names no viewer — pins are a " +
+				"person's, so a strip nobody is looking at has none to count")
+		case q.Now.IsZero() || q.Zone == nil:
+			return ViewListing{}, fmt.Errorf("tracker: a view read asks for " +
+				"counts with no instant or no clock — a surface passes the " +
+				"company's own, which every relative date in a view is cut on")
+		}
+	}
+
 	var listing ViewListing
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level:       q.Level,
-		Scope:       viewScope(q.Container),
+		Scope:       stripScope(q),
 		Session:     q.Session,
 		MinPosition: q.MinPosition,
 		MaxLag:      q.MaxLag,
@@ -178,6 +224,11 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		// to one slice and storing the result in another writes through
 		// whatever spare capacity the first has, which is a bug the day
 		// somebody reads `implicit` after this line.
+		if q.Counts {
+			if err = countPinned(ctx, tx, q, saved); err != nil {
+				return err
+			}
+		}
 		listing.Views = make([]ViewRow, 0, len(implicit)+len(saved))
 		listing.Views = append(listing.Views, implicit...)
 		listing.Views = append(listing.Views, saved...)
@@ -199,6 +250,116 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		listing.Incomplete = incompleteFrom(served.Incomplete)
 	}
 	return listing, nil
+}
+
+// stripScope is the closure of one strip read, and it is WIDER than the
+// container whenever the read looks past the container's own rows.
+//
+//   - A NAMED VIEWER adds the person family, because the viewer's pins are read
+//     from their person record inside this transaction. The closure was the
+//     container alone, so a node holding a deferred record on somebody's pins
+//     answered a strip ordered by the pins it had before, and called it
+//     complete.
+//   - COUNTS widen it to the domain, because a pinned view's count is a task
+//     query whose own closure is not known until the view's row has been read
+//     inside the transaction this scope has to be declared before — and the
+//     domain is the one closure every such query is inside.
+func stripScope(q ViewQuery) statelog.ScopeSet {
+	if q.Counts {
+		return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
+	}
+	scope := viewScope(q.Container)
+	if len(q.Viewer.Handles()) > 0 {
+		scope.Paths = append(scope.Paths, personScope().Paths...)
+	}
+	return scope.Normalised()
+}
+
+// countPinned fills [ViewRow.Count] on every row pinned for the viewer, inside
+// the strip's own transaction.
+//
+// THE COUNT IS THE VIEW'S OWN TOTAL: the rows `work_items` answers when the
+// view is run — its saved parameters, scoped to the container it was saved in,
+// with `me` resolved to the viewer — counted by [countHint], the statement
+// that answers that read's `total_hint`. It is not a second definition of what
+// a view selects, and a sidebar number that disagreed with the board it opens
+// would be exactly that.
+func countPinned(ctx context.Context, tx *sql.Tx, q ViewQuery, rows []ViewRow) error {
+	for i := range rows {
+		if !rows[i].Pinned {
+			continue
+		}
+		count, capped, err := countView(ctx, tx, q, rows[i])
+		switch {
+		case errors.Is(err, errUncountable):
+			rows[i].CountRefused = err.Error()
+		case err != nil:
+			return err
+		default:
+			rows[i].Count, rows[i].CountCapped = &count, capped
+		}
+	}
+	return nil
+}
+
+// errUncountable marks a count that failed because of the VIEW rather than the
+// store — see [countView].
+var errUncountable = errors.New("this view cannot be counted")
+
+// countView counts one view, or says why it cannot be counted.
+//
+// A VIEW THAT NO LONGER COMPILES IS A REFUSAL ON ITS ROW, never a failed
+// strip: the strip is still true, and one stale view must not take a person's
+// every pin with it. A STORE that cannot be read is the read's failure, since
+// nothing else in the answer could be trusted either. The first is wrapped in
+// [errUncountable] and the second is not, which is the whole of how
+// [countPinned] tells them apart.
+func countView(ctx context.Context, tx *sql.Tx, q ViewQuery, view ViewRow) (
+	int, bool, error) {
+
+	// THE CONTAINER THE VIEW WAS SAVED IN, as the caller's key, which is
+	// how a board runs it: `work_items{view, container}`. A unit's or a
+	// person's strip has no container in the query grammar — its own saved
+	// filters are what narrow it — so those run as saved.
+	caller := map[string]any{}
+	switch view.Container.Kind {
+	case ContainerWorkspace:
+		caller["container"] = "workspace"
+	case ContainerProject:
+		caller["container"] = ContainerProject + ":" + view.Container.ID
+	}
+	// THE BOARD'S OWN MERGE, `me` included — see [mergeExpansion].
+	resolved, err := mergeExpansion(caller, nil, savedDefaults(view.Params),
+		q.Viewer.Handle)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
+	}
+	parsed, err := ParseQuery(resolved, q.Now, q.Zone)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
+	}
+	parsed = parsed.forViewer(q.Viewer)
+	parsed.Units = q.Units
+	fields, err := resolveFields(ctx, tx, parsed)
+	switch {
+	case errors.Is(err, errUnresolvedField):
+		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
+	case err != nil:
+		return 0, false, err
+	}
+	if parsed.PriorityListOf.Named() {
+		if parsed.PriorityList, err = readPriorityList(ctx, tx,
+			parsed.PriorityListOf); err != nil {
+			return 0, false, err
+		}
+	}
+	where, args, err := compile(parsed, q.Now, fields)
+	if err != nil {
+		// COMPILING IS PURE — it reads nothing — so a failure here is
+		// about the view and never about the store.
+		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
+	}
+	return countHint(ctx, tx, where, args)
 }
 
 // viewScope is the read's closure: the container the strip belongs to.

@@ -766,6 +766,47 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	}
 }
 
+// PINNED COUNTS ARE ASKED FOR, AND ONLY FOR SOMEBODY.
+//
+// `counts=true` reaches the reader with the company's own clock, because a
+// pinned view's relative dates are cut on it exactly as the board it opens
+// cuts them. On the shared strip it is refused by name: the counts are of a
+// person's pins, and answering it with none would read as nothing pinned.
+func TestPinnedCountsReachTheReaderOnlyForAViewer(t *testing.T) {
+	t.Parallel()
+	w := &stubWork{}
+	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo",
+			"counts": "true"}); err != nil {
+		t.Fatalf("counts for a named viewer: %v", err)
+	}
+	if !w.views.Counts || w.views.Now.IsZero() || w.views.Zone == nil {
+		t.Errorf("the reader was asked %+v — want counts on, with an instant "+
+			"and the company's clock", w.views)
+	}
+
+	w = &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "counts": "true"}); !errors.Is(
+		err, queries.ErrBadParams) {
+		t.Errorf("counts on the shared strip answered %v, want a bad-params "+
+			"refusal naming viewer=", err)
+	}
+	if w.views.Counts {
+		t.Error("the refused counts reached the reader")
+	}
+
+	w = &stubWork{}
+	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
+		t.Fatalf("a strip without counts: %v", err)
+	}
+	if w.views.Counts {
+		t.Error("a strip that did not ask for counts was counted — every " +
+			"poll would pay a query per pin")
+	}
+}
+
 // A GROUPED ANSWER REACHES THE CALLER.
 //
 // The payload was built by hand from `items` alone, and a grouped answer has
