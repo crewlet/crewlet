@@ -109,6 +109,15 @@ const emptyDay = {
   collaborating: [],
   watching_recent: [],
   unblocked_recent: [],
+  totals: {
+    priorities: { total: 0 },
+    assigned: { total: 0 },
+    asked_of_me: { total: 0 },
+    checklist_items: { total: 0 },
+    collaborating: { total: 0 },
+    watching_recent: { total: 0 },
+    unblocked_recent: { total: 0 },
+  },
   complete: true,
 };
 
@@ -277,6 +286,11 @@ test("every claim is a tab, and its count is on the strip unopened", async () =>
         },
       ],
       watching_recent: [task({ key: "ENG-3" }), task({ key: "ENG-4" })],
+      totals: {
+        ...emptyDay.totals,
+        asked_of_me: { total: 1 },
+        watching_recent: { total: 2 },
+      },
     },
   });
   mount();
@@ -293,22 +307,39 @@ test("every claim is a tab, and its count is on the strip unopened", async () =>
   ]);
 });
 
-// A BOUNDED BLOCK'S COUNT IS THE CEILING, NOT THE COMPANY'S. `work_my_work`
-// answers twenty rows per claim, so a bare length says `20` on a person holding
-// a hundred and thirty — which is the page size drawn as a fact about their
-// day. `pageCount` is this product's own idiom for that.
-test("a claim at the engine's bound says so rather than reporting the bound", async () => {
+// A BLOCK'S COUNT IS THE ENGINE'S TOTAL, NOT ITS PAGE. `work_my_work` answers
+// twenty rows per claim, so a length says `20` on a person holding a hundred
+// and thirty — the page size drawn as a fact about their day. The engine counts
+// each block in full beside its page, and that is the number on the tab.
+test("a claim's count is the engine's total, not the length of its page", async () => {
   serving({
     viewer: ada,
     work_items: { ...noWork, total_hint: 0 },
     work_my_work: {
       ...emptyDay,
       collaborating: Array.from({ length: 20 }, (_, i) => task({ key: `ENG-${i}` })),
+      totals: { ...emptyDay.totals, collaborating: { total: 130 } },
     },
   });
   mount();
   await waitFor(() => expect(tabNamed("Collaborating")).toBeTruthy());
-  expect(tabNamed("Collaborating")?.textContent).toBe("Collaborating 20+");
+  expect(tabNamed("Collaborating")?.textContent).toBe("Collaborating 130");
+});
+
+// AND A `+` ONLY WHERE THE ENGINE'S OWN COUNT STOPPED: a capped total is a
+// floor, and drawn bare it reads as exactly the ceiling.
+test("a capped claim total says it is a floor", async () => {
+  serving({
+    viewer: ada,
+    work_items: { ...noWork, total_hint: 0 },
+    work_my_work: {
+      ...emptyDay,
+      totals: { ...emptyDay.totals, watching_recent: { total: 10000, capped: true } },
+    },
+  });
+  mount();
+  await waitFor(() => expect(tabNamed("Watching")).toBeTruthy());
+  expect(tabNamed("Watching")?.textContent).toBe(`Watching ${(10000).toLocaleString()}+`);
 });
 
 // AND ASSIGNED ESCAPES IT, by asking the tracker's own question: `total_hint`
@@ -323,6 +354,19 @@ test("the assignments are the tracker's count, not a block's page", async () => 
   mount();
   await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
   expect(tabNamed("Assigned")?.textContent).toBe("Assigned 137");
+});
+
+// AND THE TRACKER'S CEILING READS THE SAME WAY: a `total_capped` count is a
+// floor on the Assigned tab exactly as it is on the claims beside it.
+test("a capped assignment count says it is a floor", async () => {
+  serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, assigned: [task()] },
+    work_items: { ...noWork, items: [task()], total_hint: 10000, total_capped: true },
+  });
+  mount();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  expect(tabNamed("Assigned")?.textContent).toBe(`Assigned ${(10000).toLocaleString()}+`);
 });
 
 // NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the tab a reader

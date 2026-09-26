@@ -114,6 +114,7 @@ import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkAskRow,
   WorkChecklistRow,
+  WorkClaimTotal,
   WorkMyWork,
   WorkPersonState,
   WorkloadAnswer,
@@ -121,17 +122,6 @@ import type {
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-
-/**
- * The engine's bound on each block of `work_my_work`.
- *
- * `tracker.MyWorkRows`. It is not a page size this screen chose and it is not
- * one it can change — which is why a count drawn from one of these blocks says
- * `20+` at the bound rather than `20`: the figure is the ceiling, not the
- * company's. The Assigned tab is the one that escapes it, by asking the
- * tracker's own question instead.
- */
-const BLOCK_ROWS = 20;
 
 /**
  * The scope the Assigned tab's own COUNT is taken over.
@@ -374,11 +364,20 @@ export function MyWork() {
                   // EVERY COUNT, ALWAYS, which is what replaces the stacking:
                   // a tab nobody has opened still says how much is on it. The
                   // count rides in the LABEL rather than in the strip's own
-                  // `count` slot because that slot is `number | null` and six
-                  // of these seven are a CEILING — `pageCount` writes `20+`,
-                  // and a bare 20 there would report the engine's page size as
-                  // a fact about somebody's day.
-                  label: countedTab(key, mine, assigned.data?.total_hint),
+                  // `count` slot because that slot is `number | null`, and a
+                  // count the engine stopped at its ceiling is a floor —
+                  // `pageCount` writes it with a `+`, which a bare number
+                  // would report as a fact about somebody's day.
+                  label: countedTab(
+                    key,
+                    mine,
+                    assigned.data
+                      ? {
+                          total: assigned.data.total_hint,
+                          capped: assigned.data.total_capped,
+                        }
+                      : undefined,
+                  ),
                   // AND THE ONE MARK ON THE STRIP is the queue somebody else
                   // ordered — see [WhoseDay]. It is a FLAG rather than a
                   // warning glyph: a lead putting an order on your list is not
@@ -660,14 +659,17 @@ const TAB_LABEL: Record<Tab, string> = {
 /**
  * What a tab's count says, and what it is a count OF.
  *
- * THE BLOCKS ARE BOUNDED AND THE ASSIGNMENTS ARE NOT. Six of these come back
- * capped at [BLOCK_ROWS], so a bare length is the CEILING on anybody busy —
- * `pageCount` is this product's own idiom for that and writes `20+`. Assigned
- * asks the tracker, whose `total_hint` is a count over the matching set, so it
- * needs no hedge; while that read is in flight there is no number to draw and
- * the tab carries none rather than a zero, which would read as an empty day.
+ * THE BLOCKS ARE PAGES AND THE COUNTS ARE NOT. Each block comes back capped at
+ * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
+ * busy; the engine counts every block in full beside its page (`totals`), by
+ * the predicate that drew it, and that is the number a tab carries. `pageCount`
+ * writes a `+` only where the engine's own count stopped at its ceiling.
+ * Assigned asks the tracker, whose `total_hint` is the count over the list the
+ * tab opens onto and whose `total_capped` is the same ceiling; while that read
+ * is in flight there is no number to draw and the tab carries none rather than
+ * a zero, which would read as an empty day.
  */
-function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefined): string {
+function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
   const count = countFor(tab, mine, assignedTotal);
   // NO TRAILING SPACE ON A TAB WITH NO COUNT. The accessible name is the
   // label, and "Assigned " is a name with a word nobody wrote at the end of
@@ -677,21 +679,23 @@ function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefine
 }
 
 /** How many things are behind one tab, as the strip spells it. */
-function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: number | undefined): string {
-  if (tab === "assigned") return assignedTotal === undefined ? "" : String(assignedTotal);
-  const rows =
-    tab === "priorities"
-      ? mine.priorities
-      : tab === "asks"
-        ? mine.asked_of_me
-        : tab === "unblocked"
-          ? mine.unblocked_recent
-          : tab === "collaborating"
-            ? mine.collaborating
-            : tab === "watching"
-              ? mine.watching_recent
-              : mine.checklist_items;
-  return pageCount(rows.length, rows.length >= BLOCK_ROWS);
+function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
+  const claim =
+    tab === "assigned"
+      ? assignedTotal
+      : tab === "priorities"
+        ? mine.totals.priorities
+        : tab === "asks"
+          ? mine.totals.asked_of_me
+          : tab === "unblocked"
+            ? mine.totals.unblocked_recent
+            : tab === "collaborating"
+              ? mine.totals.collaborating
+              : tab === "watching"
+                ? mine.totals.watching_recent
+                : mine.totals.checklist_items;
+  if (claim === undefined) return "";
+  return pageCount(claim.total, claim.capped === true);
 }
 
 /**

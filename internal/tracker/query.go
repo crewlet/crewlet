@@ -711,6 +711,18 @@ func (q *Query) parseScope(p Params) error {
 	key := value
 	if rest, ok := strings.CutPrefix(value, "project:"); ok {
 		key = rest
+	} else if kind, _, named := strings.Cut(value, ":"); named {
+		// ANOTHER CONTAINER KIND IS REFUSED BY NAME. It was read as a
+		// project key — `container=unit:eng` became the project
+		// `UNIT:ENG`, which no project key can be (they are letters and
+		// digits) — so a board asked for a team's work answered an empty
+		// list rather than a refusal. A view strip belongs to a unit or a
+		// person; a TASK does not, and the grammar's own keys are how
+		// their work is selected.
+		return fmt.Errorf("tracker: container %q is not a task container — "+
+			"a task lives in the workspace or a project (container=workspace, "+
+			"container=project:<KEY>); a team's work is unit=<name> and a "+
+			"person's is assignee=<handle>, not container=%s:…", value, kind)
 	}
 	if key == "" {
 		return fmt.Errorf("tracker: container %q names no project", value)
