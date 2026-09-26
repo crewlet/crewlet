@@ -104,9 +104,9 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 			err = unresolved(step, descendant.ID)
 		}
 		if err != nil {
-			return result, fmt.Errorf("tracker: the root of %s is in the trash "+
-				"and %d of %d descendants followed it; re-run the removal to "+
-				"finish, which is idempotent: %w",
+			return result, partial(true, "tracker: the root of %s is in the "+
+				"trash and %d of %d descendants followed it; re-run the removal "+
+				"to finish, which is idempotent: %w",
 				id, i, len(descendants), err)
 		}
 	}
@@ -178,8 +178,8 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 			err = unresolved(step, descendant.ID)
 		}
 		if err != nil {
-			return result, fmt.Errorf("tracker: %s is out of the trash and %d "+
-				"of %d tasks removed with it followed; re-run the restore to "+
+			return result, partial(true, "tracker: %s is out of the trash and "+
+				"%d of %d tasks removed with it followed; re-run the restore to "+
 				"finish, which is idempotent: %w",
 				id, i, len(removedWith), err)
 		}

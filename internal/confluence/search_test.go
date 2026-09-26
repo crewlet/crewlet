@@ -2,7 +2,10 @@ package confluence_test
 
 import (
 	"context"
+	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -148,5 +151,133 @@ func TestALiveSearchIsNeverBuilding(t *testing.T) {
 	searcher := confluence.NewSearcher(confluence.SearcherOptions{})
 	if searcher.Building(context.Background()) {
 		t.Error("the Confluence searcher reports an index still building")
+	}
+}
+
+// sentSearch is the CQL and the depth the site was last asked for.
+func sentSearch(t *testing.T, inst *instance) (cql string, limit int) {
+	t.Helper()
+	values, err := url.ParseQuery(inst.lastQuery())
+	if err != nil {
+		t.Fatalf("parse the query the site was sent: %v", err)
+	}
+	limit, err = strconv.Atoi(values.Get("limit"))
+	if err != nil {
+		t.Fatalf("the site was sent no depth: %q", inst.lastQuery())
+	}
+	return values.Get("cql"), limit
+}
+
+// THE TOOL-SKILLS SPACE IS EXCLUDED AT THE SOURCE, whatever the scope.
+//
+// Dropped from what came back instead, every skill page among the site's top
+// rows would take a row of the headroom a knowledge page could have had. And
+// the exclusion is a clause of its own rather than a name taken off the scope
+// list: a scope that named only that space would then be empty, which on a
+// seat with its own credential is the unscoped search of the whole instance.
+//
+// Mutation: drop the clause from the query and every case fails; take the
+// space off the scope list instead and the last one searches unscoped.
+func TestTheSkillsSpaceIsExcludedAtTheSource(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		scope []string
+		want  []string
+	}{
+		{"unscoped", nil, []string{`type = page`}},
+		{"scoped", []string{"ENG"}, []string{`space IN ("ENG")`}},
+		{"scoped to the skills space alone", []string{"ts"}, []string{`space IN ("TS")`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inst := newInstance(t, func(string) (int, string) { return 200, `{"results":[]}` })
+			searcher := confluence.NewSearcher(confluence.SearcherOptions{
+				Org: client(t, inst), SkillsSpace: "ts",
+				ForSeat: func(*org.Role) (*confluence.Client, bool) {
+					return client(t, inst), true
+				},
+			})
+			o := &org.Organization{Name: "nimbus", KnowledgeScope: tc.scope}
+			o.Normalize()
+			answer := searcher.Search(context.Background(), knowledge.Query{
+				Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
+			})
+			if answer.Failed {
+				t.Fatalf("the search failed: %+v", answer)
+			}
+			cql, _ := sentSearch(t, inst)
+			for _, want := range append(tc.want, `space != "TS"`) {
+				if !strings.Contains(cql, want) {
+					t.Errorf("the site was sent %q, which does not carry %q", cql, want)
+				}
+			}
+		})
+	}
+}
+
+// THE SITE IS ASKED FOR A MULTIPLE OF THE LIMIT.
+//
+// The drafts the exclusion drops are a share of what the site ranks, so the
+// rows they take grow with the depth asked for: a fixed allowance tolerates a
+// smaller share the larger the limit, where a multiple tolerates the same
+// share at every limit.
+//
+// Mutation: ask for the limit plus a fixed number of rows and the two limits
+// below are asked for depths that are not the same multiple.
+func TestTheSiteIsAskedForAMultipleOfTheLimit(t *testing.T) {
+	t.Parallel()
+	depths := map[int]int{}
+	for _, limit := range []int{4, 8} {
+		inst := newInstance(t, func(string) (int, string) { return 200, `{"results":[]}` })
+		searcher := confluence.NewSearcher(confluence.SearcherOptions{
+			Org: client(t, inst),
+			ForSeat: func(*org.Role) (*confluence.Client, bool) {
+				return client(t, inst), true
+			},
+		})
+		o := &org.Organization{Name: "nimbus"}
+		o.Normalize()
+		searcher.Search(context.Background(), knowledge.Query{
+			Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"}, Limit: limit,
+		})
+		_, depths[limit] = sentSearch(t, inst)
+	}
+	if depths[4] <= 4 || depths[8] != 2*depths[4] {
+		t.Errorf("limits 4 and 8 asked the site for %d and %d rows, want the same "+
+			"multiple of each, above the limit", depths[4], depths[8])
+	}
+}
+
+// A NIL SEARCHER IS A SEARCH THAT DID NOT RUN, and says so — except for a
+// query with no text in it, which asked nothing and answers the unmarked
+// empty answer every searcher gives it.
+//
+// Mutation: answer the nil searcher before the blank text and the blank query
+// comes back marked failed; answer it unmarked and the search that did not
+// run reads as one that matched nothing.
+func TestANilSearcherIsASearchThatDidNotRun(t *testing.T) {
+	t.Parallel()
+	var searcher *confluence.Searcher
+	o := &org.Organization{Name: "nimbus", KnowledgeScope: []string{"ENG"}}
+	o.Normalize()
+	seat := &org.Role{Name: "SWE"}
+
+	if searcher.CanSearch(seat, o) {
+		t.Error("a nil searcher passed the pre-gate")
+	}
+	asked := searcher.Search(context.Background(), knowledge.Query{
+		Text: "deploy", Org: o, Seat: seat,
+	})
+	if !asked.Failed || len(asked.Hits) != 0 || asked.Partial != nil {
+		t.Errorf("a search on a nil searcher answered %+v, want an empty answer "+
+			"marked failed", asked)
+	}
+	blank := searcher.Search(context.Background(), knowledge.Query{
+		Text: "  ", Org: o, Seat: seat,
+	})
+	if blank.Failed || len(blank.Hits) != 0 || blank.Partial != nil {
+		t.Errorf("a blank query on a nil searcher answered %+v, want the unmarked "+
+			"empty answer, because nothing was asked", blank)
 	}
 }

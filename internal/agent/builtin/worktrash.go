@@ -151,8 +151,10 @@ func (t *restoreWorkItem) Description() string {
 	return "Take a work item out of the trash, at any age — one commit, no " +
 		"window and no rebuild. Anything removed by the same gesture comes " +
 		"back with it; anything that was already in the trash for its own " +
-		"reasons stays there. List the trash with list_work_items and " +
-		"`removed: true`."
+		"reasons stays there. Called on an item that is already out of the " +
+		"trash, it brings back whatever its removal took that is still in " +
+		"there, which is how a restore that stopped part-way is finished. " +
+		"List the trash with list_work_items and `removed: true`."
 }
 
 func (t *restoreWorkItem) Parameters() map[string]any {
@@ -198,11 +200,13 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
 	}
-	if before.Task.Removed == nil {
-		return failed(fmt.Sprintf("%s is not in the trash, so there is "+
-			"nothing to restore.", before.Task.Key)), nil
-	}
 
+	// AN ITEM ALREADY OUT OF THE TRASH IS NOT REFUSED. What a removal took
+	// with it comes back through the restore's own walk, which runs whether
+	// or not the root is still in the trash — its root step writes nothing
+	// for an item that is not. So a restore that stopped part-way, its root
+	// out and some of what went with it still in, is finished by calling
+	// this again, which is what the refusal it stopped on says to do.
 	after := before.Task
 	after.Removed = nil
 	op := opIDFor(actor, operationsBefore(turn), "restore", before.Task.ID)
@@ -215,8 +219,14 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedAfter(writeFailure(tracker.RestoreWorkItemTool, err), op), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return receipt(map[string]any{
+	answer := map[string]any{
 		"key": before.Task.Key, "restored": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	}, op)
+	}
+	if before.Task.Removed == nil {
+		answer["note"] = fmt.Sprintf("%s was not in the trash; this call "+
+			"brought back what a removal of it took that was still in there, "+
+			"if anything was.", before.Task.Key)
+	}
+	return receipt(answer, op)
 }

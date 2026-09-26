@@ -796,8 +796,8 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		TaskPatch{Promote: &PromotionIntent{Item: itemID, Subtask: subtask.ID}},
 		ChangeChecklist, nil)
 	if err != nil {
-		return created, fmt.Errorf("tracker: subtask %s was created and its "+
-			"item in %s is still un-marked; re-run the promotion, which "+
+		return created, partial(true, "tracker: subtask %s was created and "+
+			"its item in %s is still un-marked; re-run the promotion, which "+
 			"re-derives the same subtask and completes: %w",
 			subtask.Key, parentID, err)
 	}
@@ -1202,8 +1202,8 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		// would never look.
 		switch {
 		case err != nil:
-			return result, fmt.Errorf("tracker: task %s moved to %s with %d of "+
-				"%d descendants; the rest are still in %s and nothing "+
+			return result, partial(false, "tracker: task %s moved to %s with "+
+				"%d of %d descendants; the rest are still in %s and nothing "+
 				"completes this walk on its own — re-issuing the move is "+
 				"refused because the root has already moved: %w",
 				taskID, target, i, len(subtree), root.Project, err)
@@ -1211,11 +1211,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			// AN UNRESOLVED STEP STOPS THE WALK TOO, for [unresolved]'s
 			// reason: stepping past it reports a subtree this node cannot
 			// vouch for.
-			return result, fmt.Errorf("tracker: task %s moved to %s with %d of "+
-				"%d descendants, and the move of %s is unresolved — its record "+
-				"may be on the log and may not; the rest are still in %s and "+
-				"nothing completes this walk on its own — re-issuing the move "+
-				"is refused because the root has already moved: %w",
+			return result, partial(false, "tracker: task %s moved to %s with "+
+				"%d of %d descendants, and the move of %s is unresolved — its "+
+				"record may be on the log and may not; the rest are still in "+
+				"%s and nothing completes this walk on its own — re-issuing "+
+				"the move is refused because the root has already moved: %w",
 				taskID, target, i, len(subtree), descendant.ID, root.Project,
 				statelog.ErrUnavailable)
 		}
@@ -1419,7 +1419,13 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			"been ended by another writer when this call came to close it: %w",
 			duplicate, into, err)
 	case err != nil:
-		return WriteResult{}, err
+		// THE MARK HAS LANDED, so this is a merge in progress rather than
+		// one that did not happen: the duplicate stays marked, and the
+		// tracker duty completes every merge whose marker outlives its
+		// holder's claim.
+		return WriteResult{}, partial(false, "tracker: %s is marked as "+
+			"merging into %s and this call stopped before the merge closed; "+
+			"the tracker duty completes it: %w", duplicate, into, err)
 	case end.Purged != nil:
 		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s was "+
 			"given up after it began: %w — %s is left open with no merge "+

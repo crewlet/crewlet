@@ -21,12 +21,27 @@ import (
 // That asymmetry is the whole of [knowledge.Permitted], and it is stated in
 // the seam rather than here so both backends cannot answer it differently.
 
-// overfetch is how many extra rows are asked for beyond the caller's limit.
+// draftOverfetch is how many times the caller's limit a search asks the site
+// for.
 //
-// The ancestor filter drops rows AFTER the server has truncated, so without
-// headroom a search whose top hits are all auto-drafts comes back empty —
-// which reads as a knowledge base with nothing in it.
-const overfetch = 5
+// THE ANCESTOR EXCLUSION IS THE DROP IT PAYS FOR, and it is the one drop the
+// site cannot make for this searcher: whether a hit is an unreviewed draft is
+// judged on the parent chain the site returns with it ([knowledge.Excludes]),
+// after the site has already cut its ranking at the depth it was asked for.
+// Without headroom a search whose top rows are all drafts comes back empty,
+// which reads as a knowledge base with nothing in it. The tool-skills space is
+// excluded in the query itself ([Searcher.query]), so no row of the headroom
+// is spent on it.
+//
+// A MULTIPLE OF THE LIMIT rather than a fixed allowance, because drafts are a
+// share of what the site ranks: the rows they take grow with the depth asked
+// for, and a fixed allowance tolerates a smaller share the larger the limit.
+// Three leaves an answer short only when more than two in three of the rows
+// the site ranked were dropped — the tolerance the native backend's
+// over-fetch gives ([github.com/crewlet/crewlet/internal/pages.SearchOverfetch])
+// — and an answer left short while the site may rank more is logged; see
+// [Searcher.Search].
+const draftOverfetch = 3
 
 // SeatClient resolves a seat's own Confluence client, reporting whether the
 // seat authenticates as ITSELF.
@@ -38,8 +53,9 @@ type SeatClient func(seat *org.Role) (*Client, bool)
 
 // Searcher implements [knowledge.Searcher] over Confluence's CQL search.
 //
-// ITS ANSWER IS THE SEAM'S OWN, so no adapter stands between this searcher and
-// a reader — and a failed search reaches every reader marked
+// ITS ANSWER IS THE SEAM'S OWN, and nothing between this searcher and a reader
+// rewrites it: the engine's adapter that resolves the current searcher per call
+// forwards the answer unchanged. So a failed search reaches every reader marked
 // [knowledge.Answer.Failed], never as a search that matched nothing.
 type Searcher struct {
 	org     *Client
@@ -132,7 +148,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answ
 	// which answers this rule without I/O.
 	cql := ""
 	if allowed {
-		cql = BuildCQL(q.Text, scope, self)
+		cql = s.query(q.Text, scope, self)
 	}
 	if cql == "" {
 		log.WarnContext(ctx, "confluence_search_failed",
@@ -143,16 +159,57 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answ
 		return knowledge.Answer{Failed: true}
 	}
 
-	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
+	asked := q.Hits() * draftOverfetch
+	pages, err := client.Search(ctx, cql, asked)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the search did not complete, and its answer is marked failed")
 		return knowledge.Answer{Failed: true}
 	}
-	// WHOLE WHENEVER IT ANSWERS: one live query against one site, with no
-	// fan-out and no second ranker behind it, so there is nothing for a
-	// [knowledge.Partial] to count.
-	return knowledge.Answer{Hits: s.hits(pages, q)}
+	hits := s.hits(pages, q)
+	if shortOfTheSite(len(hits), q.Hits(), len(pages), asked) {
+		// THE SITE ANSWERED EVERY ROW ASKED FOR, so it may rank more than
+		// were fetched, and the exclusions left fewer than the limit: the
+		// pages ranked below the fetched depth are missing from this
+		// answer, and nothing on the seam's answer can say so. The log
+		// line is where it is said.
+		log.WarnContext(ctx, "confluence_search_short", "hits", len(hits),
+			"limit", q.Hits(), "ranked", len(pages),
+			"detail", "the site returned every row asked for and the draft "+
+				"exclusion dropped enough of them to leave the answer short of "+
+				"its limit, so pages the site ranked lower are missing from it")
+	}
+	// NO FAN-OUT AND NO SECOND RANKER: one live query against one site, so
+	// there is nothing for a [knowledge.Partial] to count.
+	return knowledge.Answer{Hits: hits}
+}
+
+// shortOfTheSite reports an answer the exclusions left short of its limit
+// while the site may rank more than it was asked for: it answered every row
+// asked for, so its ranking can go on past what was fetched.
+//
+// A site that answers fewer rows than asked has run out of matches, or capped
+// its own page below what was asked. The rows cannot tell those two apart, so
+// such an answer is not reported.
+func shortOfTheSite(hits, limit, ranked, asked int) bool {
+	return hits < limit && ranked >= asked
+}
+
+// query renders the CQL a search sends, or "" for one that may not run.
+//
+// THE TOOL-SKILLS SPACE IS EXCLUDED IN THE QUERY, so the site never ranks a
+// page from it: dropped from what came back instead, every skill page among
+// the site's top rows would take a row of [draftOverfetch] that a knowledge
+// page could have had. Appended to the rendered search rather than subtracted
+// from the scope list, because a scope that named only that space would then
+// be an EMPTY scope — which is the unscoped search, on a seat with its own
+// credential, of the whole instance.
+func (s *Searcher) query(text string, scope []string, self bool) string {
+	cql := BuildCQL(text, scope, self)
+	if cql == "" || s.skillsSpace == "" {
+		return cql
+	}
+	return cql + ` AND space != "` + EscapeCQL(s.skillsSpace) + `"`
 }
 
 // hits filters and renders what came back.
@@ -167,6 +224,10 @@ func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 		if len(out) >= q.Hits() {
 			break
 		}
+		// A SKILL PAGE THE SITE RETURNED ANYWAY. The query excludes the
+		// space ([Searcher.query]); this keeps one out of a seat's prompt
+		// from a site that answered it regardless, because a skill page
+		// read as knowledge is followed as an instruction.
 		if s.skillsSpace != "" && strings.EqualFold(page.Space, s.skillsSpace) {
 			continue
 		}

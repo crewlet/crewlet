@@ -1397,7 +1397,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// a new item filed with an edge nobody asked to drop.
 	var blockers []string
 	for _, ref := range argStrings(args, "waiting_on") {
-		id, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
+		var id string
+		id, refusal = t.deps.resolveRef(ctx, CreateWorkItemTool, "`waiting_on`", ref)
 		if refusal != "" {
 			return failed(refusal), nil
 		}
@@ -2382,7 +2383,26 @@ func readFailure(name string, err error) string {
 
 // writeFailure explains a write that did not land, in terms the model can act
 // on: which of these it can fix by trying differently, and which it cannot.
+//
+// A GESTURE WHOSE FIRST COMMIT LANDED is answered before any arm its cause
+// could match. It is the one failure after which the change is partly made — a
+// subtree removal stopped on a conflict has its root in the trash, which is not
+// "somebody else is editing this item" — and a model told the change was not
+// made reports a state that is not true, or makes the change again.
 func writeFailure(name string, err error) string {
+	var part *tracker.PartialError
+	if errors.As(err, &part) {
+		if part.Rerun {
+			return fmt.Sprintf("%s landed only in part (%v). Part of this "+
+				"change WAS made. Call %s again with the same arguments to "+
+				"finish it: the call picks up where this one stopped.",
+				name, err, name)
+		}
+		return fmt.Sprintf("%s landed only in part (%v). Part of this change "+
+			"WAS made, and calling %s again does not finish it — the message "+
+			"says what does. Report what landed rather than that nothing did.",
+			name, err, name)
+	}
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return fmt.Sprintf("%s: %v", name, err)

@@ -41,14 +41,14 @@ import (
 //
 // # The names are read off the receipts
 //
-// A write's base holds the object it resolved — a task's ID, never the key the
-// model typed, which a cross-project move changes — so the names cannot be
-// re-derived from the arguments. Every write therefore says what it was
-// written under, in the `operations` of its answer, and the next write reads
-// those answers back. A write that named its operations and then did not land
-// says so too, in the same field of a failed answer, and is counted with the
-// rest: a redelivery whose earlier attempt DID land that write must still name
-// every later write the way the earlier attempt did.
+// A write's base holds the object it resolved — a task's ID, never the
+// reference the model typed, which is the item's key as often as its id — so
+// the names cannot be re-derived from the arguments. Every write therefore says
+// what it was written under, in the `operations` of its answer, and the next
+// write reads those answers back. A write that named its operations and then
+// did not land says so too, in the same field of a failed answer, and is
+// counted with the rest: a redelivery whose earlier attempt DID land that
+// write must still name every later write the way the earlier attempt did.
 //
 // # A create has no base to repeat
 //
@@ -69,6 +69,13 @@ import (
 // one no later attempt can re-derive, and a redelivery that crosses builds
 // makes it again.
 //
+// The receipts cross builds too, on one path: a turn such a build suspended on
+// a coding run and this build resumes. The answers it re-enters carry no
+// `operations`, so this build names its next write to an object those calls
+// wrote as though it were the first — the name that build gave its own — and
+// the ledger collapses that one write into theirs, where the older build would
+// have collapsed every later write to that object the same way.
+//
 // # Outside a turn
 //
 // There is no seed, and every id is fresh: an operator's client made one
@@ -79,9 +86,11 @@ import (
 const operationsField = "operations"
 
 // sequencedTools are the tools whose answers carry [operationsField], and
-// therefore the only answers [operationsBefore] reads. Each implements
-// [tools.Sequenced], so a surface never runs two of them at once;
-// operation_test.go holds this list against the registered tools that do.
+// therefore the only answers [operationsBefore] reads: an MCP server's answer
+// is whatever that server says, and one carrying the same key would name no
+// write here. Each implements [tools.Sequenced], so a surface never runs two
+// of them at once; operation_internal_test.go holds this list against every
+// tool the seat and operator catalogues build that implements it.
 var sequencedTools = []string{
 	CreateWorkItemTool, UpdateWorkItemTool, CommentOnWorkTool,
 	tracker.MergeWorkItemTool, tracker.RemoveWorkItemTool,
@@ -210,9 +219,10 @@ func commentFor(actor Actor, before operations, taskID string) (id, opID string)
 // for the life of the format: it is durable in every comment row.
 var commentNamespace = uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
-// callKey is the operation id of ONE call that writes a person's own record:
-// prefix, then the turn's seed with the call's place after it in a turn, or a
-// fresh value outside one.
+// callKey is the operation id ONE call that writes a person's record is made
+// under. prefix names the verb and whose record it is; in a turn the turn's
+// seed follows it, and from the second such call in the turn on, `#n` after
+// that (see the file head). Outside a turn a fresh value follows it instead.
 //
 // AN OPERATOR HAS NO TURN and no redelivery: their client made one call, so
 // there is nothing to deduplicate against and two calls in one session are two
