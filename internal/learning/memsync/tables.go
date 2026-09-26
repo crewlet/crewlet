@@ -92,6 +92,20 @@ var tables = []table{
 			// with vectors of its own model (node migration 0031), so
 			// a vector that arrived without it would be recalled by
 			// nothing on the node the seat moved to.
+			//
+			// A CONTRACT BETWEEN PEERS, read both ways, and neither
+			// way compares two models' vectors. A build that carries
+			// this column hydrating a row that names no model — one a
+			// build without it published — leaves the column NULL,
+			// which recall reads as an unknown model and leaves out of
+			// similarity ranking. A build without the column hydrating
+			// a row that names one writes only the columns it carries
+			// ([upsert]), so the model is dropped and that build ranks
+			// the vector by width, as it ranks every row it holds; and
+			// since the first publish on a node that has just taken a
+			// seat carries every row it holds, the row goes back onto
+			// the changelog without its model, and a build that
+			// hydrates it afterwards holds it as unknown.
 			"embedding", "embedding_model", "created_at",
 		},
 		blobs: []string{"embedding"},

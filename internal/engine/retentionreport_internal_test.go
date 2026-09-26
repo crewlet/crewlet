@@ -299,6 +299,90 @@ func TestADeferralIsAgedByWhatItCosts(t *testing.T) {
 	}
 }
 
+// EACH SEARCH ALARM READS ITS OWN PATH, WITH THE RUNGS MERGED.
+//
+// `search_slow` is a target for somebody's deliberate search and
+// `prefetch_slow` a budget for the search a turn runs for its own context, so
+// each reads only the searches filed under its own path. Within a path the two
+// rungs are one population of searches: a slow lexical search among nineteen
+// fast hybrid ones is one search in twenty, below the 95th percentile.
+//
+// Mutation: read every path into SearchP95 and the first case raises
+// `search_slow` on the prefetch's scans; take the p95 of each rung apart and
+// keep the worst, and the second case raises it on one slow search in twenty;
+// leave PrefetchP95 unread and `prefetch_slow` never fires.
+func TestEachSearchAlarmReadsItsOwnPath(t *testing.T) {
+	t.Parallel()
+	const fast, slow = 10 * time.Millisecond, 2 * time.Second
+	type asked struct {
+		answer search.Answer
+		took   time.Duration
+		times  int
+	}
+	for _, tc := range []struct {
+		name      string
+		searches  []asked
+		want, not []statelog.Kind
+	}{
+		{
+			name: "a slow prefetch beside fast interactive searches",
+			searches: []asked{
+				{search.Answer{BucketsAnswered: 64, Hybrid: true}, fast, 20},
+				{search.Answer{BucketsAnswered: 64, Hybrid: true, Prefetch: true}, slow, 20},
+			},
+			want: []statelog.Kind{statelog.KindPrefetchSlow},
+			not:  []statelog.Kind{statelog.KindSearchSlow},
+		},
+		{
+			name: "one slow lexical search among nineteen fast hybrid ones",
+			searches: []asked{
+				{search.Answer{BucketsAnswered: 64, Hybrid: true}, fast, 19},
+				{search.Answer{BucketsAnswered: 64}, slow, 1},
+			},
+			not: []statelog.Kind{statelog.KindSearchSlow, statelog.KindPrefetchSlow},
+		},
+		{
+			name: "slow interactive searches on both rungs",
+			searches: []asked{
+				{search.Answer{BucketsAnswered: 64, Hybrid: true}, slow, 10},
+				{search.Answer{BucketsAnswered: 64}, slow, 10},
+				{search.Answer{BucketsAnswered: 64, Prefetch: true}, fast, 20},
+			},
+			want: []statelog.Kind{statelog.KindSearchSlow},
+			not:  []statelog.Kind{statelog.KindPrefetchSlow},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recorder, err := metrics.New()
+			if err != nil {
+				t.Fatalf("recorder: %v", err)
+			}
+			e := &Engine{metrics: recorder}
+			for _, s := range tc.searches {
+				for range s.times {
+					e.reportSearch(s.answer, s.took)
+				}
+			}
+			var reading statelog.Reading
+			(&retention{metrics: recorder}).observed(&reading)
+			fired := statelog.Evaluate(reading)
+			for _, kind := range tc.want {
+				if !firedKind(fired, kind) {
+					t.Errorf("%s did not fire (search p95 %s, prefetch p95 %s)",
+						kind, reading.SearchP95, reading.PrefetchP95)
+				}
+			}
+			for _, kind := range tc.not {
+				if firedKind(fired, kind) {
+					t.Errorf("%s fired (search p95 %s, prefetch p95 %s)",
+						kind, reading.SearchP95, reading.PrefetchP95)
+				}
+			}
+		})
+	}
+}
+
 // gaugeOf is one gauge's current value for one domain, and whether anything
 // set it.
 func gaugeOf(rec *metrics.Recorder, name, domain string) (float64, bool) {

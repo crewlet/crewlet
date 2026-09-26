@@ -1,17 +1,76 @@
 package confluence_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 )
+
+// logs is every record this package's tests wrote.
+//
+// Installed as the PROCESS's sink, from TestMain, because that is where
+// [logging.Configure] lets a test put one: the package logger resolves the
+// process root per record, so a line the searcher logs is reachable only
+// there. A case finds its own records by values no other case logs, which is
+// what lets parallel cases share one sink.
+var logs tap
+
+// tap is a concurrency-safe sink the JSON handler writes one record per line
+// into.
+type tap struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (t *tap) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.buf.Write(p)
+}
+
+// records is every record named event, decoded.
+func (t *tap) records(tb testing.TB, event string) []map[string]any {
+	tb.Helper()
+	t.mu.Lock()
+	raw := bytes.Clone(t.buf.Bytes())
+	t.mu.Unlock()
+	var out []map[string]any
+	lines := bufio.NewScanner(bytes.NewReader(raw))
+	lines.Buffer(nil, len(raw)+1)
+	for lines.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(lines.Bytes(), &record); err != nil {
+			tb.Fatalf("a log line is not a JSON record: %v\n%s", err, lines.Bytes())
+		}
+		if record["msg"] == event {
+			out = append(out, record)
+		}
+	}
+	if err := lines.Err(); err != nil {
+		tb.Fatalf("reading the captured log: %v", err)
+	}
+	return out
+}
+
+func TestMain(m *testing.M) {
+	logging.Configure(slog.LevelDebug, logging.FormatJSON, &logs)
+	os.Exit(m.Run())
+}
 
 // A CONFLUENCE SEARCH EXCLUDES BY THE SEAM'S ONE RULE.
 //
@@ -279,5 +338,88 @@ func TestANilSearcherIsASearchThatDidNotRun(t *testing.T) {
 	if blank.Failed || len(blank.Hits) != 0 || blank.Partial != nil {
 		t.Errorf("a blank query on a nil searcher answered %+v, want the unmarked "+
 			"empty answer, because nothing was asked", blank)
+	}
+}
+
+// draftRows is a site's answer of n pages, all but the last under the
+// auto-draft parent.
+func draftRows(n int) string {
+	rows := make([]string, 0, n)
+	for i := range n {
+		parent := "Auto-Drafted Skills"
+		if i == n-1 {
+			parent = "Runbooks"
+		}
+		rows = append(rows, fmt.Sprintf(`{"id":"%d","title":"Page %d",`+
+			`"space":{"key":"ENG"},"ancestors":[{"title":%q}],`+
+			`"body":{"storage":{"value":"<p>deploy</p>"}}}`, i+1, i+1, parent))
+	}
+	return `{"results":[` + strings.Join(rows, ",") + `]}`
+}
+
+// AN ANSWER THE DRAFTS LEFT SHORT IS LOGGED WHEN THE SITE MAY RANK MORE.
+//
+// The site answered every row it was asked for, so its ranking may go on past
+// them, and the draft exclusion left fewer than the limit: pages ranked below
+// the fetched depth are missing from the answer, and nothing on the seam's
+// answer can say so. A site that answered fewer rows than it was asked for has
+// ranked everything it matched — or capped its own page, which the rows cannot
+// tell apart — and is not reported.
+//
+// Each case asks for a limit no other case in this package asks for, which is
+// how it finds its own line in the shared log.
+//
+// Mutation: drop the log line, or report every short answer whatever the site
+// returned, and one of the two cases fails.
+func TestAShortAnswerIsLoggedWhenTheSiteMayRankMore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		limit  int
+		ranked int
+		logged bool
+	}{
+		{"the site answered every row asked for", 11, 33, true},
+		{"the site ran out of matches", 13, 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inst := newInstance(t, func(string) (int, string) {
+				return 200, draftRows(tc.ranked)
+			})
+			searcher := confluence.NewSearcher(confluence.SearcherOptions{
+				Org: client(t, inst),
+				ForSeat: func(*org.Role) (*confluence.Client, bool) {
+					return client(t, inst), true
+				},
+			})
+			o := &org.Organization{Name: "nimbus"}
+			o.Normalize()
+			answer := searcher.Search(context.Background(), knowledge.Query{
+				Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"}, Limit: tc.limit,
+			})
+			if answer.Failed || len(answer.Hits) != 1 {
+				t.Fatalf("the search answered %+v, want the one page no draft "+
+					"parent holds", answer)
+			}
+			if _, asked := sentSearch(t, inst); asked != tc.limit*3 {
+				t.Fatalf("the site was asked for %d rows, want three times the "+
+					"limit of %d", asked, tc.limit)
+			}
+			var mine []map[string]any
+			for _, record := range logs.records(t, "confluence_search_short") {
+				if record["limit"] == float64(tc.limit) {
+					mine = append(mine, record)
+				}
+			}
+			switch {
+			case tc.logged && (len(mine) != 1 || mine[0]["hits"] != float64(1) ||
+				mine[0]["ranked"] != float64(tc.ranked)):
+				t.Errorf("a short answer from a full page logged %v, want one "+
+					"line naming 1 hit of %d ranked", mine, tc.ranked)
+			case !tc.logged && len(mine) != 0:
+				t.Errorf("an answer from a site that ran out of matches logged %v", mine)
+			}
+		})
 	}
 }

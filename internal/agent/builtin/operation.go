@@ -29,15 +29,18 @@ import (
 // So an id names the turn AND the write's place in it. The turn is its seed
 // ([Actor.OperationSeed]): the work key, which a redelivery reproduces, or the
 // run where there is none. The place is counted within a BASE — the same verb
-// on the same object, `<seed>-update-<task>` — over [turnctx.Turn.Calls],
-// which is every closed round's calls and every call before this one in the
-// phase that is running: the first write under a base is named the base
+// on the same object, `<seed>-update-<task>` — over the calls
+// [turnctx.Turn.Calls] holds: the first write under a base is named the base
 // itself, and the n-th the base with `#n` after it. Strictly, each write takes
 // the first of those names no earlier write in the turn holds, which is the
 // same thing whenever nothing else holds one.
 //
 // A turn making the same calls in the same order therefore derives the same
-// ids, and two writes to one object in one turn are two writes.
+// ids, and two writes to one object in one turn are two writes — as far as
+// [turnctx.Turn.Calls] shows the turn. A write it does not show is one the
+// next write to the same object is named as though it had never been made, and
+// the ledger collapses the two; [turnctx.Turn.Earlier] says what a frame
+// binding a Turn owes it for that reason.
 //
 // # The names are read off the receipts
 //
@@ -53,28 +56,35 @@ import (
 // # A create has no base to repeat
 //
 // Its object is the task it files, whose id is DERIVED from the seed, the
-// author and how many creates came before it in the turn, so a redelivery
-// files the same task rather than a second one.
+// author and its place among the turn's creates, so a redelivery files the
+// same task rather than a second one.
 //
 // # Between builds
 //
-// A rolling upgrade puts this build on one ledger with builds that name every
-// write a seat makes in a turn under its base — the name this build gives the
-// FIRST write — and draw a create's task id and a project setting's operation
-// id at random. For every write but those two, a redelivery that crosses such
-// builds lands nothing twice in either direction: the first write to an
-// object is named alike by both, and each later one either never landed under
-// the other build's name, whose ledger collapsed it into the first, or lands
-// once under this build's. A create or a project setting such a build made is
-// one no later attempt can re-derive, and a redelivery that crosses builds
-// makes it again.
+// The names are state two builds share: a redelivery can run on a build other
+// than the one its first attempt ran on, against the same ledger, so how a
+// build names a turn's writes is a contract between PEERS. The builds before
+// this one name every write a seat makes in a turn under its base — the name
+// this build gives the FIRST write — derive a comment's id as this build
+// derives the first comment's, and draw a create's task id, a label
+// declaration's operation and a project setting's operation at random. For
+// every write but those last three, a redelivery that crosses builds lands
+// nothing twice in either direction: the first write to an object is named
+// alike by both, and each later one either never landed under the older
+// build's name, whose ledger collapsed it into the first, or lands once under
+// this build's. A create, a label declaration or a project setting an older
+// build made is one no later attempt can re-derive, and a redelivery that
+// crosses builds makes it again.
 //
-// The receipts cross builds too, on one path: a turn such a build suspended on
-// a coding run and this build resumes. The answers it re-enters carry no
-// `operations`, so this build names its next write to an object those calls
-// wrote as though it were the first — the name that build gave its own — and
-// the ledger collapses that one write into theirs, where the older build would
-// have collapsed every later write to that object the same way.
+// An older build's answers carry no `operations`, so a call it answered names
+// nothing here. A turn this build resumes after an older build suspended it
+// therefore names its next write to an object those calls wrote the way the
+// older build named its own, and the ledger collapses the two — which is what
+// the older build would have done with it.
+//
+// A name with `#n` after it is as opaque to an older build as any other: the
+// ledger, the broker's message id and the history row each take an operation
+// id whole, and nothing in either build splits one.
 //
 // # Outside a turn
 //

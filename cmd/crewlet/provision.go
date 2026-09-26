@@ -67,7 +67,8 @@ func bootstrapFlag(fs *flag.FlagSet) *string {
 		"Tier A config: this node's store and its secret keyring")
 }
 
-// open builds the chosen sink, refusing an ambiguous or absent choice.
+// open builds the chosen sink, refusing an ambiguous or absent choice, and a
+// run that cannot reach the fleet's secret store ([sinkFlags.reachable]).
 //
 // stdout is threaded through rather than read from a package variable, and
 // that is not tidiness: the variable it replaced was written by each of the
@@ -93,6 +94,12 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 			"name exactly one of -secret-store, -env-file and -print")
 	}
 
+	// REFUSED BEFORE ANY SINK IS BUILT, like an absent or ambiguous choice:
+	// see [sinkFlags.reachable] for what a run with no fleet in reach would
+	// do to it.
+	if err := s.reachable(ctx); err != nil {
+		return nil, nil, err
+	}
 	switch {
 	case *s.print:
 		sink, err := provision.NewPrintSink(stdout)
@@ -109,27 +116,115 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 	return provision.NewSecretStoreSink(sv, currentOperator()), closeStore, nil
 }
 
+// errFleetUnread refuses a run that would record credentials while the fleet's
+// secret store is out of reach.
+var errFleetUnread = errors.New("the fleet's secret store cannot be reached from here")
+
+// reachable refuses a run that records credentials when this host's Tier A
+// declares a keyring and no engine is running here to reach the fleet's
+// secret store through — nor, for -secret-store, one named by -api, which is
+// the node that sink writes through.
+//
+// A KEYRING IS WHAT MAKES THE STORE POSSIBLE. With none, no node can seal a
+// value into it, so the company's credentials live in the environment and a
+// file or printed sink is the whole story. With one, the company's
+// credentials may be in that store, which every node reads BEFORE the
+// environment, and with no engine running here it cannot be read or written:
+//
+//   - a pass asks its sink whether a credential is already held before it
+//     mints one, and neither this node's own table nor a file is the fleet's
+//     store — so a credential only the fleet holds reads as absent and is
+//     minted anew;
+//   - a -rotate run mints whatever is held;
+//   - and wherever a new credential is recorded — a file, the printed output,
+//     or this node's own table — the fleet's copy of that name wins: every
+//     node resolves the store first, and at its next start the engine keeps
+//     the fleet's copy of a name it already holds and deletes the local one.
+//
+// Each of those replaces a working credential at the third-party app while
+// every node goes on authenticating with the one it replaced. Refused here,
+// before anything touches the third-party app, rather than at the first
+// credential: a pass creates an account before it mints for it, and a run
+// stopped half way leaves the accounts behind.
+func (s sinkFlags) reachable(ctx context.Context) error {
+	if *s.secretStore && strings.TrimSpace(*s.api) != "" {
+		return nil
+	}
+	if _, err := os.Stat(*s.bootstrap); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	boot, err := loadBootstrapForStore(*s.bootstrap)
+	if err != nil {
+		return err
+	}
+	if len(boot.Secrets.Keys) == 0 {
+		return nil
+	}
+	switch _, err := runningNode(ctx, boot, *s.bootstrap); {
+	case errors.Is(err, errNoNodeHere):
+		elsewhere := ""
+		if *s.secretStore {
+			elsewhere = ", or pass -api naming a node that is up"
+		}
+		return fmt.Errorf("%w: %w, and %s declares a secret keyring, so the "+
+			"company's credentials may be in the fleet's secret store — which "+
+			"every node reads before the environment. A credential this run "+
+			"minted could replace one the fleet holds at the third-party app "+
+			"while every node went on authenticating with the fleet's copy. "+
+			"Start `crewlet run` on this host and re-run%s",
+			errFleetUnread, err, *s.bootstrap, elsewhere)
+	case err != nil:
+		return err
+	}
+	return nil
+}
+
 // companyResolver builds the chain a run resolves Tier B ${VAR} references
-// through: the node's secret store first, the environment behind it.
+// through: the fleet's secret store first, the environment behind it.
 //
 // THE SAME ORDER THE ENGINE USES, and it has to be the same one. Every
 // command below reads the company's own values — the instance URL, the
 // workspace, the webhook signing secret, the engine's read token — and a run
-// that saw only the environment read an EMPTY STRING for every one an
-// operator had already put in the store. That is not merely a missing value
-// for the GitLab signing secret: empty is the signal to MINT, so the run
-// replaced a working webhook secret at the third-party app with a fresh one and broke
-// every delivery in flight until the config caught up. The store is where a
-// rotated secret lives; a tool that provisions against it has to read it.
+// that saw only the environment reads an EMPTY STRING for every one an
+// operator has put in the store. That is not merely a missing value for a
+// webhook signing secret: empty is the signal to MINT, so the run would
+// replace a working secret at the third-party app with a fresh one and break
+// every delivery in flight until the config caught up.
 //
-// # When there is no store
+// # Through the running engine, and only through it
 //
-// A node with no bootstrap at this path, or one declaring no keyring,
-// resolves from the environment alone. That is the pre-store deployment and
-// it is supported — so it is a NOTE rather than a failure, and it is a note
-// rather than silence: a mistyped -config resolving nothing has exactly the
-// destructive outcome above, and an operator has to be able to see which
-// chain ran.
+// The fleet's store is on the coordination KV, which on the default topology
+// is inside the engine's own process and listens on no socket, so this
+// command reaches it through the engine running on this host: its /secrets
+// surface. This node's own secret table is NOT a way in. It holds only rows written while the
+// engine was stopped, and the engine moves them onto the fleet and deletes
+// them at every start, so read as the store it answers "unset" for every
+// credential the fleet holds.
+//
+// ONE READ OF EVERY VALUE, `GET /secrets?reveal=true`, rather than one per
+// name. The run cannot say in advance which names it will look up — whichever
+// of the document's references it reaches, through [config.Resolver.Value]
+// and [config.Resolver.LookupOK], neither of which can return an error — so a
+// read per name would be made inside a lookup, and a read that failed there
+// would resolve exactly as a value that is not set. Read up front, a failure
+// fails the run before anything is resolved. The node logs the read once,
+// naming every name and the operator.
+//
+// # When there is no store to read
+//
+// A bootstrap that is not at this path, or one declaring no keyring,
+// resolves from the environment alone: with no keyring there is no fleet
+// store, which is a supported deployment. So it is a NOTE rather than a
+// failure, and a note rather than silence: a mistyped -config resolving
+// nothing reads every stored credential as unset, and an operator has to be
+// able to see which chain ran.
+//
+// A keyring with NO ENGINE RUNNING on this host is the other case, and the
+// note says the fleet's values cannot be read from here. The run resolves
+// from the environment — which is what a report or a dry run needs — and a
+// run that would mint or record a credential is refused when it asks for its
+// sink ([sinkFlags.reachable]), because a value that resolved empty here may
+// be one the fleet holds.
 //
 // A bootstrap that exists and cannot be read fails the run instead. Someone
 // who configured a store and did not get it must not have their secrets
@@ -149,16 +244,31 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 	if len(boot.Secrets.Keys) == 0 {
 		return envOnly(bootstrapPath + " declares no secrets.keys")
 	}
-	sv, closeStore, err := openSecretValues(ctx, boot)
-	if err != nil {
-		return nil, nil, err
+	node, err := runningNode(ctx, boot, bootstrapPath)
+	return resolveThrough(ctx, node, err, notes)
+}
+
+// resolveThrough is the chain [companyResolver] builds once it has asked this
+// host for its running engine: the node's values ahead of the environment, or
+// the environment alone when there is no node, or the reason there is
+// neither.
+func resolveThrough(ctx context.Context, node *secretsClient, reach error, notes io.Writer) (*config.Resolver, func(), error) {
+	switch {
+	case errors.Is(reach, errNoNodeHere):
+		fmt.Fprintf(notes, "%s: resolving ${VAR} from the environment only.\n", reach)
+		fmt.Fprintln(notes, "The fleet's secret store cannot be read from here, "+
+			"so a run that would mint or record a credential is refused rather "+
+			"than minting over one the fleet may hold. Start `crewlet run` on "+
+			"this host and re-run to read the fleet's values through it.")
+		return config.EnvOnly(), func() {}, nil
+	case reach != nil:
+		return nil, nil, reach
 	}
-	values, err := sv.All(ctx)
+	values, err := node.Values(ctx)
 	if err != nil {
-		closeStore()
-		return nil, nil, fmt.Errorf("read the secret store: %w", err)
+		return nil, nil, fmt.Errorf("read the fleet's secret store: %w", err)
 	}
-	return config.WithStore(config.MapSource(values)), closeStore, nil
+	return config.WithStore(config.MapSource(values)), func() {}, nil
 }
 
 // operatorCredential reads the human operator's own credential, from the

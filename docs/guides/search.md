@@ -133,6 +133,18 @@ The three search alarms are kept apart because they cost different things:
 | `search_degraded` | The semantic half was meant to run and did not: the query could not be embedded, or a node's vector scan failed. | Over the range it *did* scan, only what shares words with the query was found. |
 | `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
 
+**`search_slow` and `prefetch_slow` read different searches.** Every search on
+the native backend is timed from its plan to its fused answer — not the
+embedding of its query, which is the provider's time — and filed in
+`crewlet.tracker.search.scan.duration` under `path` and `rung`. `prefetch` is
+the search a turn runs for its own context before its first round, held to a
+500 ms budget; `interactive` is every other one — a seat's own
+`search_knowledge`, the dashboard's, an operator's assistant's, the work-item
+search — held to a one-second target. Each alarm takes the p95 of its own path
+with the `hybrid` and `lexical` rungs merged, so a burst of slow prefetches
+never fires `search_slow`, and one slow words-only search among many fast
+hybrid ones is read as the one search in twenty it is.
+
 **A query the provider will not embed is still answered**, on its words
 alone, and the answer is labelled partial with `semantic_skipped` rather than
 passed off as whole — a page that says the same thing in other words can be

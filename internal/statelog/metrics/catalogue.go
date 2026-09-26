@@ -522,10 +522,16 @@ func Catalogue() []Instrument {
 		{
 			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
-			Shows: "The semantic scan, split by whether it ran for a turn's " +
-				"prefetch or for somebody's deliberate search, because the " +
-				"interactive path is the one with a target and a prefetch's " +
-				"scans would dilute it.",
+			Shows: "One search on the native backend, from its plan to its " +
+				"fused answer — this node's scan, its peers' slices and the " +
+				"fusion — and not the embedding of its query, which is the " +
+				"provider's time rather than the corpus's. `path` is who " +
+				"asked: `prefetch`, a turn's search for its own context, or " +
+				"`interactive`, every other. `rung` is how it ranked: " +
+				"`hybrid` with a query vector, `lexical` without. " +
+				"`search_slow` reads the interactive series and " +
+				"`prefetch_slow` the prefetch ones, each with its rungs " +
+				"merged, because the two paths are held to different figures.",
 		},
 		{
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitScans,

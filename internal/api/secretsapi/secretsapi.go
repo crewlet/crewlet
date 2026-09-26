@@ -16,18 +16,25 @@
 // listing here says which credentials a company holds and when each last
 // changed, which is reconnaissance even without the values.
 //
-// # There is exactly one route that returns a value, and it is break-glass
+// # Two routes return values, and each needs the flag and leaves a trace
 //
-// It requires an explicit ?reveal=true — a path that cannot be reached by
-// accident or by a crawl — and it logs the access by operator and name. A
-// read-back that leaves no trace is indistinguishable from an exfiltration,
-// and the name is the whole of what can be logged, because logging the value
-// would be the leak.
+// A value comes back only with an explicit ?reveal=true — a path that cannot
+// be reached by accident or by a crawl — and every such read logs the
+// operator and the names it returned. A read-back that leaves no trace is
+// indistinguishable from an exfiltration, and the names are the whole of what
+// can be logged, because logging a value would be the leak.
+//
+// One name, `GET /secrets/{name}?reveal=true`, is the break-glass read an
+// operator makes by hand. Every name, `GET /secrets?reveal=true`, is what a
+// command resolving the company document off this node reads — see
+// [Service.revealAll] for why it takes them all at once.
 package secretsapi
 
 import (
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -121,8 +128,13 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /secrets/{name}", s.delete)
 }
 
-// list serves GET /secrets — every name, with no values.
+// list serves GET /secrets — every name, with no values — and, with
+// ?reveal=true, every value ([Service.revealAll]).
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("reveal") == "true" {
+		s.revealAll(w, r)
+		return
+	}
 	rows, err := s.store.List(r.Context())
 	if err != nil {
 		s.fail(w, "list the secrets", err)
@@ -133,6 +145,40 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, render(row))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
+}
+
+// revealAll serves GET /secrets?reveal=true — every value the fleet holds, in
+// one answer.
+//
+// FOR A COMMAND THAT RESOLVES THE COMPANY DOCUMENT OFF THIS NODE. `crewlet
+// gitlab provision` and its siblings resolve the document's ${VAR}s the way
+// the engine does, this store first, and a value they cannot see resolves
+// empty — which for a webhook signing secret is the signal to mint one over
+// the secret the hook signs with. Such a command is handed the document
+// by path and reads whichever references and conventional names its run
+// reaches, so it cannot name in advance which values it needs. A read per name
+// would then happen lazily, inside a lookup that has no error to return, and a
+// read that failed would resolve exactly as a value that is not there.
+//
+// ONE SNAPSHOT AND ONE LOG LINE. The read is [fleetsecrets.Store.All], which
+// fails closed on a row it cannot open rather than answering part of the
+// store; and the line names every name it returned and the operator, so a
+// command's read is one record in the log rather than one break-glass line per
+// credential, where a real break-glass read would be lost among them.
+func (s *Service) revealAll(w http.ResponseWriter, r *http.Request) {
+	if !s.sealed(w) {
+		return
+	}
+	values, err := s.store.All(r.Context())
+	if err != nil {
+		s.fail(w, "open the secrets", err)
+		return
+	}
+	operator, _ := auth.OperatorFrom(r.Context())
+	log.WarnContext(r.Context(), "secrets_revealed",
+		"names", slices.Sorted(maps.Keys(values)), "operator", operator)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"values": values})
 }
 
 // get serves GET /secrets/{name} — metadata, or the value with ?reveal=true.

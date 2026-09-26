@@ -540,10 +540,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		workKey:   in.Run.UnitOfWork(),
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
-		// THE RUN'S FIRST LAUNCH, the earliest instant its row records. It
-		// is later than every operation the turn named before it suspended,
-		// so it bounds only the ones the resume names afresh; the original
-		// turn's own instant, which the row does not carry, bounds all.
+		// THE RUN'S FIRST LAUNCH, the earliest instant its row records.
+		// Every operation a resume mints is minted after it, so it bounds
+		// those. An operation the turn named before that launch and the
+		// resume names again was minted before it, and only the dispatched
+		// turn's own instant, which the row does not carry, bounds that.
 		triggeredAt: in.Run.CreatedAt,
 		role:        in.Run.Role,
 		agentID:     in.Run.AgentID,

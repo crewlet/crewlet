@@ -394,12 +394,19 @@ func (r *retention) observed(out *statelog.Reading) {
 	// rather than resizing the deployment it is about.
 	out.LinearizableReadsExpected = statelog.LinearizableReadsPerDay
 
+	// EACH SEARCH LATENCY IS ITS OWN PATH'S, with the rungs merged. A
+	// deliberate search and a turn's own prefetch are held to different
+	// figures, so a prefetch counted into `search_slow` would fire it on
+	// scans nobody waiting on a search made. And one path's two rungs are
+	// one population: the p95 of each rung apart, maximised, fires on a
+	// single slow lexical search among a thousand fast hybrid ones.
+	out.SearchP95 = pathP95(reading, searchPathInteractive)
+	out.PrefetchP95 = pathP95(reading, searchPathPrefetch)
+
 	for _, snapshot := range reading {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
 			out.BarrierP95 = max(out.BarrierP95, quantileDuration(snapshot, 0.95))
-		case metrics.TrackerSearchScanDuration:
-			out.SearchP95 = max(out.SearchP95, quantileDuration(snapshot, 0.95))
 		case metrics.StorePoolWait:
 			// THE WORST FILE, not the sum of them. A caller queues on
 			// ONE pool, and two estates each half-starved is not the
@@ -417,6 +424,38 @@ func (r *retention) observed(out *statelog.Reading) {
 			out.LinearizableReads += int(snapshot.Total)
 		}
 	}
+}
+
+// The two values of the search duration's `path` label, as [Engine.reportSearch]
+// files them.
+const (
+	searchPathInteractive = "interactive"
+	searchPathPrefetch    = "prefetch"
+)
+
+// pathP95 is the windowed p95 of every search filed under one path, whatever
+// rung it ranked on, or 0 when none was.
+//
+// THE BINS ARE SUMMED, which is exact rather than an approximation: a
+// histogram's boundaries belong to its instrument ([metrics.Snapshot.Bounds]),
+// so every series of one name counts against the same ones, and the sum is the
+// histogram one series holding all of those searches would have held.
+func pathP95(reading []metrics.Snapshot, path string) time.Duration {
+	var merged metrics.Snapshot
+	for _, s := range reading {
+		if s.Name != metrics.TrackerSearchScanDuration || s.Attrs["path"] != path {
+			continue
+		}
+		if merged.Counts == nil {
+			merged.Bounds = s.Bounds
+			merged.Counts = make([]uint64, len(s.Counts))
+		}
+		for i, c := range s.Counts {
+			merged.Counts[i] += c
+		}
+		merged.Count += s.Count
+	}
+	return quantileDuration(merged, 0.95)
 }
 
 // quantileDuration reads a histogram's quantile back as the duration its unit

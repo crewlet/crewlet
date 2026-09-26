@@ -65,7 +65,8 @@ const (
 	// has been failing for some time.
 	ReadBudget = 2 * time.Second
 
-	// PrefetchScanBudget is what a turn's context assembly was promised.
+	// PrefetchScanBudget is what the knowledge search a turn runs for its
+	// own context was promised.
 	PrefetchScanBudget = 500 * time.Millisecond
 
 	// HeadroomAlarmFraction is how little of a log's byte ceiling may
@@ -236,7 +237,12 @@ type Reading struct {
 	// generation above the one this node's rows are on.
 	GenerationLeftFor time.Duration
 
-	// PrefetchP95 and SearchP95 are the two latencies a turn waits on.
+	// PrefetchP95 is the p95 of the knowledge searches turns ran for their
+	// own context before their first round, and SearchP95 of every other
+	// search — somebody's deliberate one, a seat's own `search_knowledge`
+	// included. Each is one path's searches with their rungs merged, timed
+	// from the plan to the fused answer; see
+	// [github.com/crewlet/crewlet/internal/statelog/metrics.TrackerSearchScanDuration].
 	PrefetchP95, SearchP95 time.Duration
 
 	// SearchDegradedFraction and SearchScopedFraction are the fractions of
@@ -458,8 +464,9 @@ var table = []rule{
 	{
 		kind: KindPrefetchSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("turn-start context assembly is %s at p95, against "+
-					"a %s budget", round(r.PrefetchP95), round(PrefetchScanBudget)),
+			return fmt.Sprintf("the knowledge search in turn-start context "+
+					"assembly is %s at p95, against a %s budget",
+					round(r.PrefetchP95), round(PrefetchScanBudget)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
 		remedy: "Every turn on this node pays this before its first token. Check " +

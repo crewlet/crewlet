@@ -45,9 +45,11 @@ import (
 // When the engine is STOPPED there is no KV to reach and no API to call, so
 // the command writes this node's own table. That is the bootstrap path: the
 // engine migrates those rows onto the fleet at its next start and removes
-// them. Which of the two is in play is not a guess — the store's file lock
-// makes "the engine holds this database" an answer with a pid on it — and
-// the command says which one it used after every write.
+// them — except a name the fleet already holds, whose fleet copy is kept and
+// whose local row is deleted, so a ROTATION cannot take this path. Which of
+// the two is in play is not a guess — the store's file lock makes "the engine
+// holds this database" an answer with a pid on it — and the command says which
+// one it used after every write.
 //
 // # Every command here needs the keyring, and the keyring is Tier A
 //
@@ -244,7 +246,8 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 		return &secretTarget{
 			secretBackend: sv, fleet: false,
 			where: boot.Store.Path + " — this node's own rows, which no peer " +
-				"can see until the engine migrates them at its next start",
+				"can see; the engine moves each onto the fleet at its next start " +
+				"unless the fleet already holds its name",
 		}, closeStore, nil
 	}
 	target, rerr := throughTheRunningNode(boot, bootstrapPath, err)
@@ -254,8 +257,19 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 	return target, func() {}, nil
 }
 
-// throughTheRunningNode answers a locked store with a client for the node
+// throughTheRunningNode answers a locked store with a target for the node
 // that is holding it.
+func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
+	client, err := runningNodeClient(boot, bootstrapPath, err)
+	if err != nil {
+		return nil, err
+	}
+	return &secretTarget{secretBackend: client, fleet: true,
+		where: client.Describe()}, nil
+}
+
+// runningNodeClient answers a locked store with a client for the node that is
+// holding it.
 //
 // [store.ErrLocked] is the ONLY error routed this way, and the distinction
 // matters: a locked file means the engine is up, which is precisely when its
@@ -263,7 +277,7 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 // path, a driver that will not load — is a broken node, and answering one of
 // those by silently trying HTTP would replace an accurate message with a
 // connection refused.
-func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
+func runningNodeClient(boot *config.Bootstrap, bootstrapPath string, err error) (*secretsClient, error) {
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
@@ -274,15 +288,52 @@ func throughTheRunningNode(boot *config.Bootstrap, bootstrapPath string, err err
 		// through its API" reads as a refusal with no way forward, and
 		// the API's own complaint without the lock reads as though the
 		// local store were never an option.
-		return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds "+
-			"its store files, so this has to go through its API — and it cannot: "+
-			"%w\n\nEither stop `crewlet run` on this node and re-run, or "+
-			"supply the value through the process environment instead: the "+
-			"resolver falls back to it, so a rotation needs no downtime that way",
-			err, bootstrapPath, cerr)
+		//
+		// AND NO ROUTE ROUND THE API, because there is none. This node's
+		// own table is not one: at its next start the engine keeps the
+		// fleet's copy of every name the fleet already holds and deletes
+		// the local one ([fleetsecrets.Migrate]). Nor is the environment:
+		// the store is read before it, so an export is shadowed by any
+		// value the fleet holds under that name.
+		return nil, fmt.Errorf("%w\n\nthe engine for %s is running (`crewlet "+
+			"run`) and holds its store files, so the fleet's secret store is "+
+			"reached through its API — and it cannot be: %w\n\nMake the API "+
+			"reachable from here: fix api.host and api.port in %s (a command "+
+			"that takes -api can name the node's address instead)",
+			err, bootstrapPath, cerr, bootstrapPath)
 	}
-	return &secretTarget{secretBackend: client, fleet: true,
-		where: client.Describe()}, nil
+	return client, nil
+}
+
+// errNoNodeHere reports a host on which no engine holds the store, so the
+// fleet's secret store cannot be read from it.
+var errNoNodeHere = errors.New("no engine is running on this host")
+
+// runningNode is a client for the engine running on this host, or
+// [errNoNodeHere].
+//
+// FOR A COMMAND THAT READS THE FLEET'S VALUES, and the answer that matters is
+// the second one. With no engine running there is no fleet store to reach —
+// on the default topology it lives inside the engine's process — and this
+// node's own table is not a copy of it: it holds only rows written to it
+// while the engine was stopped, which the engine moves onto the fleet and
+// deletes at its next start. A reader that took that table for the fleet's
+// store would read every credential the fleet holds as unset.
+//
+// THE LOCK DECIDES, for [openSecretStore]'s reason. A store file that is not
+// there is answered without opening one: every running engine has its file,
+// and opening a missing one would create an empty database on a machine that
+// runs no engine.
+func runningNode(ctx context.Context, boot *config.Bootstrap, bootstrapPath string) (*secretsClient, error) {
+	if _, err := os.Stat(boot.Store.Path); errors.Is(err, os.ErrNotExist) {
+		return nil, errNoNodeHere
+	}
+	_, closeStore, err := openSecretValues(ctx, boot)
+	if err == nil {
+		closeStore()
+		return nil, errNoNodeHere
+	}
+	return runningNodeClient(boot, bootstrapPath, err)
 }
 
 // engineHoldsTheStore turns the store's lock refusal into a remediation.
@@ -388,7 +439,7 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	// rejects a credential on the one node that never got it.
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
 	if !sv.fleet {
-		fmt.Fprintln(stdout, secretsLocalNote)
+		fmt.Fprintln(stdout, secretsLocalNote(name))
 	}
 	return nil
 }
@@ -400,8 +451,18 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 // stopped and saw nothing propagate would reasonably conclude the write
 // failed, and the fix — start the node, or point -api at one that is up — is
 // not guessable.
-const secretsLocalNote = "This node will put it on the fleet at its next start. " +
-	"To reach a RUNNING fleet now, re-run against a node that is up."
+//
+// AND THE CASE IN WHICH IT NEVER ARRIVES. At its next start the engine copies
+// a local row onto the fleet only when the fleet holds no value under that
+// name, and deletes it either way ([fleetsecrets.Migrate]): a rotation written
+// here is discarded, and nothing else would say so.
+func secretsLocalNote(name string) string {
+	return "At its next start this node copies it onto the fleet — unless the " +
+		"fleet already holds " + name + ", in which case the fleet keeps its own " +
+		"value and this one is deleted. A rotation, or a value a RUNNING fleet " +
+		"needs now, has to be written through a node that is up: re-run with " +
+		"-api naming one."
+}
 
 // getSecret is the ONLY read-back, and it is break-glass.
 //
@@ -428,6 +489,13 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, 
 	}
 	value, err := sv.Get(ctx, name)
 	if err != nil {
+		if !sv.fleet && errors.Is(err, secrets.ErrNotFound) {
+			// WHICH STORE SAID SO. This node's own table holds only rows
+			// written while the engine was stopped, so its "not found"
+			// says nothing about the fleet's value.
+			return fmt.Errorf("%w in %s; the fleet's value, if it holds one, "+
+				"is read through a node that is up (-api)", err, sv.where)
+		}
 		return err
 	}
 	logging.Get("cli").Warn("secret_revealed", "name", name, "operator", currentOperator())
@@ -445,11 +513,24 @@ func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.W
 	if err != nil {
 		return err
 	}
-	if !gone {
+	// THE LOCAL TABLE'S ANSWER, said as one, either way. It holds only rows
+	// written while the engine was stopped, so "was not set" would tell an
+	// operator removing a live credential that there was nothing to remove,
+	// and "removed" that the credential is gone while every node goes on
+	// resolving the fleet's copy.
+	const fleetUntouched = "; the fleet's value, if it holds one, is " +
+		"untouched and is removed through a node that is up (-api)"
+	switch {
+	case !gone && !sv.fleet:
+		fmt.Fprintf(stdout, "%s is not among the rows in %s%s\n",
+			name, sv.where, fleetUntouched)
+	case !gone:
 		fmt.Fprintf(stdout, "%s was not set\n", name)
-		return nil
+	case !sv.fleet:
+		fmt.Fprintf(stdout, "removed %s from %s%s\n", name, sv.where, fleetUntouched)
+	default:
+		fmt.Fprintf(stdout, "removed %s\n", name)
 	}
-	fmt.Fprintf(stdout, "removed %s\n", name)
 	return nil
 }
 

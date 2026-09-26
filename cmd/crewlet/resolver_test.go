@@ -2,26 +2,111 @@ package main
 
 import (
 	"bytes"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// A PROVISIONING RUN READS THE SECRET STORE, NOT JUST THE ENVIRONMENT.
+// A PROVISIONING RUN READS THE FLEET'S SECRET STORE, THROUGH THE RUNNING NODE.
 //
-// The chain used to be config.EnvOnly(), so every Tier B ${VAR} an operator
-// had already put in the store resolved to the empty string. For a GitLab
-// signing secret that is not merely a missing value. Empty is the signal to
-// MINT, so the run replaced a working webhook secret at the third-party app
-// with a fresh one and broke every delivery in flight until the config
-// caught up.
-func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
+// A run that saw only the environment would resolve EMPTY for every Tier B
+// ${VAR} an operator has put in the store — and for a webhook signing secret
+// empty is the signal to MINT, which replaces a working secret at the
+// third-party app. The node's store is read whole, in one revealing request,
+// before anything resolves.
+//
+// Mutation: resolve from the environment alone once a node is reached, and
+// the stored secret does not arrive.
+func TestAProvisioningRunResolvesThroughTheRunningNode(t *testing.T) {
+	t.Parallel()
+	const stored = "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ=="
+	node := newFakeSecretsNode(t)
+	node.body = `{"values":{"GITLAB_SIGNING_SECRET":"` + stored + `"}}`
+
+	var notes bytes.Buffer
+	env, closeEnv, err := resolveThrough(t.Context(), node.client(t), nil, &notes)
+	if err != nil {
+		t.Fatalf("resolveThrough: %v", err)
+	}
+	defer closeEnv()
+
+	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != stored {
+		t.Fatalf("the fleet's secret did not reach the run: %q", got)
+	}
+	if node.last.method != http.MethodGet || node.last.path != "/secrets" ||
+		node.last.query != "reveal=true" {
+		t.Errorf("the node was asked %s %s?%s, want the one revealing read of "+
+			"every value", node.last.method, node.last.path, node.last.query)
+	}
+	if notes.Len() > 0 {
+		t.Errorf("a run that DID read the fleet announced that it did not: %q",
+			notes.String())
+	}
+}
+
+// THE FLEET FIRST, ENVIRONMENT BEHIND — the same order the engine resolves in.
+//
+// A rotated secret must win over a stale export, which is the whole reason
+// the store exists: rotation is an update of one row, and an environment
+// that could shadow it would make the rotation appear to work and change
+// nothing.
+func TestAFleetSecretWinsOverAStaleExport(t *testing.T) {
+	node := newFakeSecretsNode(t)
+	node.body = `{"values":{"CONFLUENCE_TOKEN":"the-rotated-one"}}`
+	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
+
+	env, closeEnv, err := resolveThrough(t.Context(), node.client(t), nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("resolveThrough: %v", err)
+	}
+	defer closeEnv()
+
+	if got := env.Lookup("CONFLUENCE_TOKEN"); got != "the-rotated-one" {
+		t.Fatalf("a stale export shadowed the rotated secret: %q", got)
+	}
+}
+
+// A FLEET THAT WAS REACHED AND COULD NOT BE READ FAILS THE RUN.
+//
+// Resolving on from the environment would be the stale-export shadowing this
+// chain exists to prevent, and every stored credential would read as unset —
+// the case in which a run mints over the one that works.
+//
+// Mutation: fall back to the environment on a failed read, and the run
+// resolves instead of failing.
+func TestAFleetThatCannotBeReadFailsTheRun(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.status = http.StatusInternalServerError
+	node.body = `{"error":"internal_error"}`
+
+	var notes bytes.Buffer
+	if _, _, err := resolveThrough(t.Context(), node.client(t), nil, &notes); err == nil {
+		t.Fatal("a node that could not answer its secrets was resolved around")
+	}
+	if notes.Len() > 0 {
+		t.Errorf("a failed run announced a fallback it did not take: %q", notes.String())
+	}
+}
+
+// WITH NO ENGINE RUNNING, THIS NODE'S OWN TABLE IS NOT READ AS THE FLEET'S.
+//
+// It holds only rows written while the engine was stopped, and the engine
+// moves them onto the fleet and deletes them at every start — so read as the
+// store it answers "unset" for every credential the fleet holds. The run
+// resolves from the environment and says why, and what to do.
+//
+// Mutation: open this node's table and resolve from it, and the locally
+// written row resolves.
+func TestWithNoEngineRunningTheLocalTableIsNotTheFleet(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_SIGNING_SECRET",
-		"-value", "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ=="); err != nil {
-		t.Fatalf("seed the store: %v (%s)", err, errs)
+		"-value", "whsec_bG9jYWwtb25seS1zaWduaW5nLWtleS0zMi1ieXRlcyE="); err != nil {
+		t.Fatalf("write a local row: %v (%s)", err, errs)
 	}
+	t.Setenv("GITLAB_SIGNING_SECRET", "")
 
 	var notes bytes.Buffer
 	env, closeEnv, err := companyResolver(t.Context(), cfg, &notes)
@@ -30,38 +115,17 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 	defer closeEnv()
 
-	got := env.Value("${GITLAB_SIGNING_SECRET}")
-	if got != "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ==" {
-		t.Fatalf("the stored secret did not reach the run: %q", got)
+	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != "" {
+		t.Errorf("a row in this node's own table resolved as the fleet's: %q", got)
 	}
-	if notes.Len() > 0 {
-		t.Errorf("a run that DID read the store announced that it did not: %q",
-			notes.String())
-	}
-}
-
-// STORE FIRST, ENVIRONMENT BEHIND — the same order the engine resolves in.
-//
-// A rotated secret must win over a stale export, which is the whole reason
-// the store exists: rotation is an update of one row, and an environment
-// that could shadow it would make the rotation appear to work and change
-// nothing.
-func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
-	cfg := bootstrapWithKeyring(t, "k1")
-	if _, errs, err := secretsCmd(t, cfg, "set", "CONFLUENCE_TOKEN",
-		"-value", "the-rotated-one"); err != nil {
-		t.Fatalf("seed the store: %v (%s)", err, errs)
-	}
-	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
-
-	env, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
-	if err != nil {
-		t.Fatalf("companyResolver: %v", err)
-	}
-	defer closeEnv()
-
-	if got := env.Lookup("CONFLUENCE_TOKEN"); got != "the-rotated-one" {
-		t.Fatalf("a stale export shadowed the rotated secret: %q", got)
+	for _, want := range []string{
+		"no engine is running", // why the fleet is out of reach
+		"environment only",     // which chain ran
+		"crewlet run",          // what to do about it
+	} {
+		if !strings.Contains(notes.String(), want) {
+			t.Errorf("the note omits %q: %q", want, notes.String())
+		}
 	}
 }
 

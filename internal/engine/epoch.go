@@ -438,7 +438,7 @@ func seatCount(c *Company) int {
 // company too, and put back if the edge will not start.
 func (e *Engine) startEdge(ctx context.Context, next *Company) (attached bool, err error) {
 	if e.reflector == nil {
-		if err := e.reconfigureReflection(ctx, next); err != nil {
+		if err = e.reconfigureReflection(ctx, next); err != nil {
 			return false, err
 		}
 		attached = e.reflector != nil
@@ -446,10 +446,10 @@ func (e *Engine) startEdge(ctx context.Context, next *Company) (attached bool, e
 	index := e.partyIndex()
 	e.refreshParties(next)
 	if e.inboundStarted() {
-		e.reconcileInbound(ctx, next)
+		e.rewireInbound(ctx, next)
 		return attached, nil
 	}
-	if err := e.startInbound(ctx, next); err != nil {
+	if err = e.startInbound(ctx, next); err != nil {
 		e.restoreParties(index)
 		if attached {
 			e.detachReflection(ctx)
@@ -459,10 +459,14 @@ func (e *Engine) startEdge(ctx context.Context, next *Company) (attached bool, e
 	return attached, nil
 }
 
-// reconcileInbound brings every surface of a running inbound edge in line with
-// a revision. None of them refuses: a surface whose new wiring does not build
+// rewireInbound brings every surface of a running inbound edge in line with a
+// revision. None of them refuses: a surface whose new wiring does not build
 // keeps its previous one and says so in its own log line.
-func (e *Engine) reconcileInbound(ctx context.Context, next *Company) {
+//
+// NOT NAMED reconcile*, because that prefix names one surface's reconciler, and
+// the guard that holds every one of them to the apply path follows a helper
+// only when its name is not one.
+func (e *Engine) rewireInbound(ctx context.Context, next *Company) {
 	// The TRACKER is rebuilt on the same edge as the party index and for the
 	// same reason: its lead map is derived from the org, so a node that kept
 	// its boot-time parser would route the new revision's work items by the

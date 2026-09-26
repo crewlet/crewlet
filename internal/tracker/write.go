@@ -501,12 +501,13 @@ type Provenance struct {
 	//
 	// It is what an ambiguous write is resolved against on a node that
 	// adopted a snapshot ([statelog.Request.MintedAt]): the adopted ledger
-	// is scrubbed, so an operation minted before the adoption is answered
-	// `unknown` rather than decided again. An id a surface DERIVES — one a
-	// retry re-derives — is minted by its first attempt, so the instant is
-	// that attempt's: a retry stamped with its own call time, after an
-	// adoption its first record predates, reads as newer than the adoption
-	// and is decided a second time.
+	// is scrubbed, and on the two paths [statelog.Publisher.Publish] names
+	// an operation minted before the adoption is answered from what the
+	// adoption brought, where one minted after it is decided again. An id
+	// a surface DERIVES — one a retry re-derives — is minted by its first
+	// attempt, so the instant is that attempt's: a retry stamped with its
+	// own call time, after an adoption its first record predates, reads as
+	// newer than the adoption and is decided a second time.
 	MintedAt time.Time
 }
 

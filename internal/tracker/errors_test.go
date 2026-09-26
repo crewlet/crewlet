@@ -262,3 +262,19 @@ func assertPartial(t *testing.T, what string, err error, rerun bool) {
 			what, part.Rerun, rerun, err)
 	}
 }
+
+// A PARTIAL ERROR CARRYING NO ACCOUNT STILL PRINTS, rather than panicking in
+// the frame that reports it — its zero value is a value a caller outside this
+// package can build.
+//
+// Mutation: read the account without checking it is there and this panics.
+func TestAPartialErrorWithNoAccountStillPrints(t *testing.T) {
+	t.Parallel()
+	var zero tracker.PartialError
+	if got := zero.Error(); got == "" {
+		t.Error("a PartialError with no account prints nothing")
+	}
+	if zero.Unwrap() != nil {
+		t.Error("a PartialError with no account unwraps to a cause")
+	}
+}
