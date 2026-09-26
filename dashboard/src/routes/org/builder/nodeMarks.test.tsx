@@ -57,7 +57,7 @@ function api(agents: AgentRow[], sandboxes: SandboxEntry[] = [], problems: numbe
 }
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
-  ({ id: "a1", role: "Dev", handle: "dev", state: "idle", ...over }) as AgentRow;
+  ({ id: "a1", role: "Dev", handle: "dev", activity: "idle", ...over }) as AgentRow;
 
 describe("a seat's live state", () => {
   /*
@@ -69,7 +69,7 @@ describe("a seat's live state", () => {
   test("is found by the saved handle, through a rename in the draft", () => {
     render(
       <LiveState
-        api={api([agent({ state: "working" })])}
+        api={api([agent({ activity: "working" })])}
         view={seat({ name: "Builder", handle: "builder" })}
         compact
       />,
@@ -84,12 +84,12 @@ describe("a seat's live state", () => {
   test("falls back to the saved name when the seat runs under no handle", () => {
     render(
       <LiveState
-        api={api([agent({ handle: undefined, role: "Dev", state: "afk" })])}
+        api={api([agent({ handle: undefined, role: "Dev", activity: "stopped" })])}
         view={seat({ saved: { handle: undefined, name: "Dev" }, handle: undefined })}
         compact
       />,
     );
-    expect(screen.getByText("afk")).toBeDefined();
+    expect(screen.getByText("stopped")).toBeDefined();
   });
 
   /*
@@ -141,18 +141,19 @@ describe("a seat's live state", () => {
   });
 
   /*
-   * A RUN WAITING ON ITS BOX outranks whatever the seat's own row says, which
-   * is `runState`'s rule and the reason the chart passes the sandboxes at all.
+   * THE ROW'S WORD IS THE ENGINE'S, a seat's coding runs included: the chart
+   * folds nothing in. A running box beside an idle row is a row the engine
+   * has not yet re-sent, not a seat this client may call busy.
    */
-  test("a seat with a sandbox waiting says so rather than what its row says", () => {
+  test("a seat says the engine's word, and a box beside it changes nothing", () => {
     render(
       <LiveState
-        api={api([agent({ state: "idle" })], [{ role: "Dev" } as SandboxEntry])}
+        api={api([agent({ activity: "needs" })], [{ role: "Dev" } as SandboxEntry])}
         view={seat()}
         compact
       />,
     );
-    expect(screen.getByText("sandbox")).toBeDefined();
+    expect(screen.getByText("needs you")).toBeDefined();
   });
 
   /*
@@ -164,7 +165,7 @@ describe("a seat's live state", () => {
    */
   test("the compact drawing carries the word for a reader who cannot see it", () => {
     const { container } = render(
-      <LiveState api={api([agent({ state: "working" })])} view={seat()} compact />,
+      <LiveState api={api([agent({ activity: "working" })])} view={seat()} compact />,
     );
     expect(container.querySelector(".bnode-state")?.getAttribute("title")).toBe("working");
     expect(screen.getByText("working")).toBeDefined();

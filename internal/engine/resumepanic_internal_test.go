@@ -19,8 +19,8 @@ import (
 // unwound through the coordinator, skipping both its revert and its settle, so
 // the run row stayed in resumed while the queue redelivered a completion the
 // claim then refused. Abandoned, the coordinator leaves the claim taken and
-// settles the delivery, and the seat is put AFK with the cause.
-func TestAResumeThatPanicsIsAbandonedAndPutsTheSeatAFK(t *testing.T) {
+// settles the delivery, and the failure is put on the seat with its cause.
+func TestAResumeThatPanicsIsAbandonedAndRecordsTheFailureOnTheSeat(t *testing.T) {
 	t.Parallel()
 	p := &pub{}
 	e := &Engine{backends: &Backends{Queue: p}}

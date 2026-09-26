@@ -1,12 +1,16 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 )
 
 // The three surfaces the dashboard renders from CONFIGURATION.
@@ -48,13 +52,19 @@ units:
 
 func rosterApp(t *testing.T, runtime api.NodeRuntime) *api.App {
 	t.Helper()
+	return rosterAppWith(t, runtime, nil)
+}
+
+// rosterAppWith is rosterApp over a lease table the case controls.
+func rosterAppWith(t *testing.T, runtime api.NodeRuntime, leases coord.Backend) *api.App {
+	t.Helper()
 	c, err := config.ParseCompany([]byte(rosterCompany))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	return newApp(t, api.Options{
 		Runtime: runtime,
-		Sources: queries.Sources{Company: func() *config.Company { return c }},
+		Sources: queries.Sources{Company: func() *config.Company { return c }, Coord: leases},
 	})
 }
 
@@ -129,29 +139,86 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	}
 }
 
-// A SEAT THIS NODE HOLDS READS AS IDLE, and one it does not says nothing.
+// EVERY SEAT HELD ANYWHERE IN THE FLEET CARRIES A STATE — and one held nowhere
+// says so.
 //
-// The client defaults a missing state to offline, so silence is the honest
-// answer for a seat this process has never seen — while claiming offline for
-// one it is actively serving would report a healthy company as entirely down.
-func TestOnlyHeldSeatsCarryAState(t *testing.T) {
+// The roster used to mark only the seats THIS node held as idle and leave every
+// other seat without a state, which the client drew as offline: on a fleet,
+// every seat a peer ran read as down on this node's dashboard. Placement is the
+// lease table's answer, which every node reads alike, and a seat no node holds
+// is `stopped`/`unplaced` rather than silent.
+func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, &fakeRuntime{state: api.RuntimeState{Seats: []string{"ceo"}}})
+	for _, tc := range []struct {
+		name    string
+		local   []string
+		peer    []string
+		wantCTO map[string]any
+	}{
+		{
+			name: "a peer holds the other seat", local: []string{"ceo"}, peer: []string{"cto"},
+			wantCTO: map[string]any{"activity": "idle", "stopped_reason": nil},
+		},
+		{
+			name: "no node holds the other seat", local: []string{"ceo"},
+			wantCTO: map[string]any{"activity": "stopped", "stopped_reason": "unplaced"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			leases := coordmemory.New()
+			for _, handle := range tc.peer {
+				lease, err := leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+					coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute})
+				if err != nil || lease == nil {
+					t.Fatalf("a peer could not claim %s: %v", handle, err)
+				}
+			}
+			a := rosterAppWith(t, &fakeRuntime{state: api.RuntimeState{Seats: tc.local}}, leases)
 
+			byHandle := map[string]map[string]any{}
+			for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+				handle, _ := row["handle"].(string)
+				byHandle[handle] = row
+			}
+			if got := byHandle["ceo"]; got["activity"] != "idle" || got["stopped_reason"] != nil {
+				t.Errorf("the seat this node holds reads %v (%v), want idle",
+					got["activity"], got["stopped_reason"])
+			}
+			cto := byHandle["cto"]
+			for key, want := range tc.wantCTO {
+				value, present := cto[key]
+				if !present || value != want {
+					t.Errorf("cto %s = %#v, want %#v", key, value, want)
+				}
+			}
+			// THE ROSTER STATES NO STATE OF ITS OWN: the one word on the
+			// row is the projection's.
+			if _, present := cto["state"]; present {
+				t.Errorf("the row still carries the retired `state` word: %v", cto)
+			}
+		})
+	}
+}
+
+// AN UNREADABLE LEASE TABLE STOPS NOBODY. "No node holds any seat" is a claim
+// about the lease table, and a read that failed has not made it.
+func TestAnUnreadableLeaseTableClaimsNoSeatIsUnplaced(t *testing.T) {
+	t.Parallel()
+	a := rosterAppWith(t, &fakeRuntime{}, unreadableLeases{coordmemory.New()})
 	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
-		handle, _ := row["handle"].(string)
-		state, present := row["state"]
-		switch handle {
-		case "ceo":
-			if state != "idle" {
-				t.Errorf("a held seat reads %v, want idle", state)
-			}
-		default:
-			if present {
-				t.Errorf("seat %q is not held here yet claims state %v", handle, state)
-			}
+		if row["activity"] != "idle" {
+			t.Errorf("seat %v reads %v over a lease table nobody could read, want idle",
+				row["handle"], row["activity"])
 		}
 	}
+}
+
+// unreadableLeases is a lease table whose listing fails.
+type unreadableLeases struct{ coord.Backend }
+
+func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return nil, coord.ErrUnavailable
 }
 
 // THE ORG TREE IS ON THE SNAPSHOT, nested the way the company is.

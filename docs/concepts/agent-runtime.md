@@ -34,33 +34,36 @@ For a seat with direct reports, the executor prompt includes a **team roster**: 
 
 ## Agent States
 
-The engine keeps no per-seat state machine. What a seat is doing is derived from its events by the dashboard's live projection (`internal/api/livestate`), and the states it reports are these:
+The engine keeps no per-seat state machine in the turn path. What a seat is doing is computed by the live projection (`internal/api/livestate`) that every node serving the API holds, and it is served as **one word per seat** — `activity` — on every seat row: the handshake snapshot's, [`GET /agents`](../reference/api-endpoints.md#what-the-handshake-snapshot-carries) and every `agents` push. The dashboard maps the word to a colour and a label and derives nothing itself, so no two screens can disagree about a seat.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Offline
-    Offline --> Idle: this node holds the seat
-    Idle --> Working: agent_turn_started
-    Working --> Idle: agent_turn_completed
-    Working --> Afk: llm_unavailable, turn.guard_breach, budget_exhausted
-    Afk --> Working: the next turn or phase starts
-```
+| `activity` | When | `stopped_reason` |
+|---|---|---|
+| `working` | A turn is running on the seat (from `agent_turn_started`, so the prefetch counts as work), or a [coding run](code-sandbox.md) it launched is `launching` or `running`. | `null` |
+| `needs` | A coding run the seat launched is waiting on a person: `awaiting_clarification`, or `reseed` (the box was reclaimed and only the question survives). | `null` |
+| `stopped` | The seat cannot take work. | `paused`, `unplaced`, `budget` or `provider` |
+| `idle` | None of the above: the seat is held somewhere in the fleet and waiting for work. | `null` |
 
-- **Offline**: no node this API can see is serving the seat. The roster marks a seat idle only when this node holds its lease, so on a fleet a seat a peer is running reads as offline here; the fleet view answers who holds what.
-- **Idle**: the seat is held, its mailbox is attached, and no turn is running.
-- **Working**: a turn has started and has not completed. That begins at `agent_turn_started`, which every turn publishes before it assembles its context, so the prefetch counts as work. Before, the seat read as idle until its first phase started, with a wake already in hand.
-- **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again. A seat whose budget ran out is also [parked](#the-budget-park): its mail waits for the window to turn over.
+The rows are checked **in that order**, and the order is the rule. A seat whose turn is still running is `working` even while a person's pause waits for that turn to end, or while an older run of its waits on a question: what it is doing now is the truer word, and `paused` and the running-runs panel say the rest.
+
+The four reasons a seat is `stopped`, in the order they are stated when more than one holds:
+
+- **`paused`** — a person [paused the seat](#pausing-a-seat). Its mail waits on its inbox until somebody resumes it.
+- **`unplaced`** — no node in the fleet holds the seat's lease, so nothing will run it however much mail it has. This is read from the **seat leases** (the same table [`fleet`](../reference/api-endpoints.md#fleet-sandbox-runs--schedules) reads), never from which seats the node serving the dashboard runs: a seat a peer holds is placed and reads `idle` or `working` like any other. The leases are read on every snapshot and on the dashboard's five-second tick, because a seat moves between nodes on a lease and publishes nothing. A read that fails changes nothing, and before the first read no seat is called unplaced — "no node holds it" is a fact about a lease table somebody read.
+- **`budget`** — a capped token window the seat is charged against, its own or the company's, is refusing: the seat is [parked](#the-budget-park) until the window resets or the ceiling is raised. Read from the live meter's per-window `state`, and only while that window lasts.
+- **`provider`** — the seat's model provider chain was exhausted (`llm_unavailable`), and the seat has done no work since. It clears the moment the seat starts a turn or a phase again, or a new instance of it is spawned.
+
+**A failed last turn is not a stop.** A turn guard that fired (stall, max iterations, the delegation-depth cap, a scheduled turn's wall-clock cap, an unhandled exception) fails that turn, and the seat takes its next wake like any other: it reads `idle`, and why its last turn failed is `last_error` and `last_turn.outcome`, which are separate fields.
+
+**The runs are read from the durable record**, not from the turn's stage. A turn that launched a detached coding run is `parked`, and a park says only that a run was launched; the run record — reconciled into the projection at boot and every thirty seconds, and never aged out — says whether that run is still running, has stopped to ask somebody, or is gone. A run parked on a question for thirteen hours is exactly the seat a person most needs to see, and it reads `needs` for as long as it waits.
 
 Beside the state, the projection holds **the turn the seat is on** and **the last turn it ended**. Both are on every seat row of the `agents` push:
 
 - `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
 - `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
 
-A third key says whether a person has **paused** the seat: `paused` is `{by, at, reason, stop_running}` — who paused it (the person their token is bound to, or the token itself), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state rather than the state itself; see [Pausing a seat](#pausing-a-seat).
+A third key says whether a person has **paused** the seat: `paused` is `{by, at, reason, stop_running}` — who paused it (the person their token is bound to, or the token itself), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
 
-All three keys are always present, and each is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn on the card. After a restart, both are seeded from the fleet's turn list. Each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
-
-The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
+`activity`, `stopped_reason`, `turn`, `last_turn` and `paused` are always present, and each of the last four is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn, or a lifted stop, on the card. After a restart, the turns are seeded from the fleet's turn list: each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
 How a seat comes to be held, and what happens when it is released, is [Seat Ownership](seat-ownership.md).
 

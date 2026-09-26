@@ -48,7 +48,7 @@ const running = (phase: string, roundNum = 0): AgentRow =>
   ({
     id: "ada",
     role: "Ada Lovelace",
-    state: "working",
+    activity: "working",
     live_call: {
       phase,
       in_progress: true,

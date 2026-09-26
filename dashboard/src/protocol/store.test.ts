@@ -37,12 +37,12 @@ describe("agent overlays", () => {
     // lost the seat's static identity on every progress round would redraw
     // the roster several times a second with half its fields blank.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", state: "idle" }] });
-    store.applyAgents([{ role: "PM", state: "working", current_phase: "execute" }]);
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", activity: "idle" }] });
+    store.applyAgents([{ role: "PM", activity: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
-    expect(row?.state).toBe("working");
+    expect(row?.activity).toBe("working");
     expect(row?.current_phase).toBe("execute");
   });
 
@@ -53,15 +53,15 @@ describe("agent overlays", () => {
     // The guard is what makes that loud rather than silent — and the e2e
     // replay is what makes it impossible to ship again.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", state: "idle" }] });
-    store.applyAgents({ PM: { state: "working" } } as never);
-    expect(store.state.agents[0]?.state).toBe("idle");
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "idle" }] });
+    store.applyAgents({ PM: { activity: "working" } } as never);
+    expect(store.state.agents[0]?.activity).toBe("idle");
   });
 
   test("an overlay for a role the roster does not carry is appended", () => {
     // A live revision can add a seat before the roster push lands.
     const store = new Store();
-    store.applyAgents([{ role: "New", state: "working" }]);
+    store.applyAgents([{ role: "New", activity: "working" }]);
     expect(store.state.agents).toHaveLength(1);
     expect(store.state.agents[0]?.id).toBe("New");
   });
@@ -80,9 +80,9 @@ describe("agent overlays", () => {
 
   test("a seats push keeps the live overlay the roster knows nothing about", () => {
     const store = new Store();
-    store.applyAgents([{ role: "PM", state: "working" }]);
+    store.applyAgents([{ role: "PM", activity: "working" }]);
     store.applySeats([{ id: "pm", role: "PM", handle: "pm" }]);
-    expect(store.state.agents[0]?.state).toBe("working");
+    expect(store.state.agents[0]?.activity).toBe("working");
     expect(store.state.agents[0]?.handle).toBe("pm");
   });
 });
@@ -233,7 +233,7 @@ describe("subscriptions", () => {
     store.subscribe(["tokens"], tokens);
     store.subscribe(["agents"], agents);
 
-    store.applyAgents([{ role: "PM", state: "working" }]);
+    store.applyAgents([{ role: "PM", activity: "working" }]);
     expect(agents).toHaveBeenCalledTimes(1);
     expect(tokens).not.toHaveBeenCalled();
   });

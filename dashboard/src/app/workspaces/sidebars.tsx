@@ -30,7 +30,6 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { unfinished } from "~/lib/work.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib/seats.ts";
-import { useSandboxes } from "~/lib/store-hooks.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useRecents } from "~/lib/recents.ts";
 
@@ -214,7 +213,6 @@ export function useKnowledgeSidebar(): SidebarSection[] {
  */
 export function useActivitySidebar(): SidebarSection[] {
   const agents = useAgents();
-  const sandboxes = useSandboxes();
   const org = useOrg();
 
   return useMemo(() => {
@@ -228,7 +226,7 @@ export function useActivitySidebar(): SidebarSection[] {
           label: seat.name,
           path: ["activity", "turns"],
           query: { seat: seat.handle },
-          tone: toneOf(seatTone(live, sandboxes)),
+          tone: toneOf(seatTone(live)),
         };
       });
     return [
@@ -240,7 +238,7 @@ export function useActivitySidebar(): SidebarSection[] {
         empty: "This company has no agent seats.",
       },
     ];
-  }, [agents, sandboxes, org]);
+  }, [agents, org]);
 }
 
 /** Cost: two lists, and nothing that is a filter wearing a row's clothes. */

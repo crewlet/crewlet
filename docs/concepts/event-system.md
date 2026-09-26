@@ -334,11 +334,14 @@ agent_phase_started, agent_phase_completed
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
-                           # spend and ceiling. Drives `afk` too
+                           # spend and ceiling. Recorded as the seat's
+                           # `last_error`; the seat's `stopped`/`budget` is
+                           # read from the refusing window itself
 turn.guard_breach          # runtime invariant fired (stall, max_iter,
-                           # depth_cap, scheduled_timeout). Drives the
-                           # dashboard `afk` state
-llm_unavailable            # the fallback chain is exhausted. Drives `afk` too
+                           # depth_cap, scheduled_timeout). A failed turn:
+                           # the seat's `last_error`, never a stop
+llm_unavailable            # the fallback chain is exhausted. The seat reads
+                           # `stopped`/`provider` until it works again
 provider_fallback          # the chain moved to its next provider. One per
                            # provider CALL, not per phase (a benched member
                            # is a hand-off on every round), addressed to

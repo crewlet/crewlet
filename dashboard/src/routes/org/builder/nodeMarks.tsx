@@ -189,7 +189,7 @@ export function LiveState({
     (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
     api.agents.find((a) => a.role === name);
   if (compact) {
-    const state = runState(agent, api.sandboxes);
+    const state = runState(agent);
     const said = stateLabel(state);
     return (
       <span className="bnode-state" title={said}>
@@ -200,7 +200,7 @@ export function LiveState({
   }
   return (
     <span className="bnode-state">
-      <StateBadge agent={agent} sandboxes={api.sandboxes} />
+      <StateBadge agent={agent} />
     </span>
   );
 }

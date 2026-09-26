@@ -95,7 +95,7 @@ import {
   seatResolvers,
   seatSettings,
   statusLine,
-  afkReason,
+  stoppedLine,
   runState,
   type OrgIndex,
   type Seat,
@@ -820,7 +820,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   const manager = seat.manager;
   const reports = seat.reports;
-  const state = runState(agent, sandboxes);
+  const state = runState(agent);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
   return (
@@ -849,13 +849,7 @@ export function SeatScreen({ handle }: { handle: string }) {
         icon={human ? "person" : "memory"}
         identifier={seat.handle ? `@${seat.handle}` : undefined}
         title={seat.name}
-        status={
-          human ? (
-            <Tag appearance="outline">human seat</Tag>
-          ) : (
-            <StateBadge agent={agent} sandboxes={sandboxes} />
-          )
-        }
+        status={human ? <Tag appearance="outline">human seat</Tag> : <StateBadge agent={agent} />}
         facts={seatFacts({ seat, agent, reading, hierarchy: index.hierarchy, human })}
       />
       <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
@@ -876,8 +870,8 @@ export function SeatScreen({ handle }: { handle: string }) {
           {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
         </Callout>
       )}
-      {state === "afk" && (
-        <Callout variant="warning">This seat is AFK: {afkReason(agent?.afk_reason)}.</Callout>
+      {state === "stopped" && (
+        <Callout variant="warning">This seat is stopped: {stoppedLine(agent)}.</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
         <Callout
@@ -1296,10 +1290,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           {r.kind === "human" ? (
                             <Tag appearance="outline">human</Tag>
                           ) : (
-                            <StateBadge
-                              agent={agents.find((a) => a.role === r.name)}
-                              sandboxes={sandboxes}
-                            />
+                            <StateBadge agent={agents.find((a) => a.role === r.name)} />
                           )}
                         </div>
                         {/* A GOAL IS PROSE, SO IT GETS THE CARD'S OWN WIDTH.
@@ -2358,13 +2349,7 @@ export function SeatPeek({ handle }: { handle: string }) {
         icon={human ? "person" : "memory"}
         identifier={`@${seat.handle}`}
         title={seat.name}
-        status={
-          human ? (
-            <Tag appearance="outline">human seat</Tag>
-          ) : (
-            <StateBadge agent={agent} sandboxes={sandboxes} />
-          )
-        }
+        status={human ? <Tag appearance="outline">human seat</Tag> : <StateBadge agent={agent} />}
         // THE RAIL READS NOTHING GUARDED. It is opened from a row in a list,
         // and a per-peek read of the whole company document would be an
         // operator-gated fetch on every `[`/`]` step through one — so the model
@@ -2481,10 +2466,7 @@ export function SeatPeek({ handle }: { handle: string }) {
                       {r.kind === "human" ? (
                         <Tag appearance="outline">human</Tag>
                       ) : (
-                        <StateBadge
-                          agent={agents.find((a) => a.role === r.name)}
-                          sandboxes={sandboxes}
-                        />
+                        <StateBadge agent={agents.find((a) => a.role === r.name)} />
                       )}
                     </div>
                     {/* THE SAME CORRECTION THE CARD ABOVE CARRIES, and the rail

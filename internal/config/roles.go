@@ -548,7 +548,7 @@ func (r *Role) Seat() *org.Role {
 	seat := &org.Role{
 		Name:                 r.Name,
 		Kind:                 r.Kind,
-		Contact:              r.Contact,
+		Contact:              r.Contact.Clone(),
 		Availability:         r.Availability,
 		DeclaredHandle:       r.Handle,
 		Email:                r.Email,

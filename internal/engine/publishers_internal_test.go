@@ -60,7 +60,7 @@ func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 //
 // The same gap as the one above, one level down: a registered event type can
 // carry a value nothing ever writes into it. `unhandled_exception` was
-// declared, documented and given an AFK sentence by the dashboard, and no code
+// declared, documented and given a failure sentence by the dashboard, and no code
 // path set it, because nothing recovered a panic at all. The registry test
 // cannot see that, since the event type itself had producers for its other
 // kinds.

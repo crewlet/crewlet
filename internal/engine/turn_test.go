@@ -621,7 +621,8 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 // The loop recovers a panicking phase; everything between the broker and the
 // loop is this frame's: the screening stages, and the turn's own set-up and
 // tear-down around the loop. Each case panics somewhere different, and each
-// must settle the delivery, record the trigger and put the seat AFK, because
+// must settle the delivery, record the trigger and put the failure on the seat,
+// because
 // no turn telemetry ran to do it.
 //
 // AND THE BREACH NAMES THE RUN THE PANIC ENDED, when there was one. A turn
@@ -690,7 +691,7 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 			}
 			if breach == nil {
 				t.Fatalf("observed %v, want a guard breach: without it the seat never "+
-					"goes AFK and shows whatever it was last doing", typesSeen(seen))
+					"records the failure and shows whatever it was last doing", typesSeen(seen))
 			}
 			if breach.Kind != types.GuardUnhandledException || breach.RoleName != "CEO" ||
 				breach.Agent != "a-1" {

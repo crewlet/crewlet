@@ -35,12 +35,7 @@ import {
   unitTally,
   UNIT_TOTAL_HINT,
 } from "./seats.ts";
-import type {
-  CompanyDocument,
-  DerivedSeat,
-  OrgProjection,
-  SandboxEntry,
-} from "~/protocol/index.ts";
+import type { CompanyDocument, DerivedSeat, OrgProjection } from "~/protocol/index.ts";
 
 const seat = (over: Partial<DerivedSeat> & Pick<DerivedSeat, "handle" | "name">): DerivedSeat => ({
   kind: "agent",
@@ -343,69 +338,65 @@ describe("what only the company document says", () => {
 });
 
 describe("what a seat is doing", () => {
-  const box: SandboxEntry = {
-    turn_id: "t1",
-    role: "Dev A",
-    agent_handle: "dev-a",
-    agent_id: "",
-    coding_agent: "claude-code",
-    sandbox_id: "s1",
-    task: "",
-    status: "running",
-    started_at: "",
-  };
-
-  test("an in-flight sandbox run keeps a seat busy", () => {
-    // Its kick-off turn already completed, which the projection reads as
-    // idle — so without folding the live sandbox set in, a seat writing code
-    // for ten minutes renders as idle.
-    expect(runState({ id: "a", role: "Dev A", state: "idle" }, [box])).toBe("awaiting_sandbox");
-    expect(runState({ id: "a", role: "Dev A", state: "idle" }, [])).toBe("idle");
+  test("a seat's state is the ENGINE'S word, and nothing is folded in here", () => {
+    // The client used to fold the running-runs panel into the seat's state
+    // itself, three different ways on three screens. The engine now serves
+    // one word per seat — its runs included — and this reads it unchanged:
+    // a running box beside an idle row does NOT make the seat working here.
+    expect(runState({ id: "a", role: "Dev A", activity: "working" })).toBe("working");
+    expect(runState({ id: "a", role: "Dev A", activity: "needs" })).toBe("needs");
+    expect(runState({ id: "a", role: "Dev A", activity: "idle" })).toBe("idle");
+    // No row from the engine yet is its own answer, never a guess.
+    expect(runState(undefined)).toBe("offline");
+    expect(runState({ id: "a", role: "Dev A" })).toBe("offline");
   });
 
   test("colour is STATE and an idle seat gets none", () => {
     // An idle seat used to draw a tinted, glowing tile that read as activity.
     // The fix for that is not a duller hue, it is none.
-    expect(seatTone({ id: "a", role: "Dev A", state: "idle" }, [])).toBe("quiet");
-    expect(seatTone({ id: "a", role: "Dev A", state: "working" }, [])).toBe("working");
+    expect(seatTone({ id: "a", role: "Dev A", activity: "idle" })).toBe("quiet");
+    expect(seatTone({ id: "a", role: "Dev A", activity: "working" })).toBe("working");
   });
 
-  test("waiting on a person and having fallen over are DIFFERENT tones", () => {
-    // Both stopped, and only one is a failure. Red is reserved for failure.
-    //
-    // THE ENGINE'S OWN WORD. This asserted `awaiting_input`, which
-    // `sandbox.PendingRun` cannot write, so the case passed against a fixture
-    // no engine produces while the real state reached no tone at all.
+  test("waiting on a person and being stopped are DIFFERENT tones", () => {
+    // Both have stopped, and only one is a failure of the seat. Red is
+    // reserved for a stop.
+    expect(seatTone({ id: "a", role: "Dev A", activity: "needs" })).toBe("needs");
     expect(
-      seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_clarification" }]),
-    ).toBe("needs");
-    // A box reaped past its pause TTL is the same fact one step worse.
-    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "reseed" }])).toBe("needs");
-    // And a running one is not waiting on anybody — without this the rule
-    // could be "any sandbox at all" and still pass.
-    expect(
-      seatTone({ id: "a", role: "Dev A", state: "idle" }, [{ ...box, status: "running" }]),
-    ).toBe("working");
-    expect(
-      seatTone(
-        {
-          id: "a",
-          role: "Dev A",
-          last_error: { kind: "x", message: "", phase: "", turn_id: "", at: "", event_id: "" },
-        },
-        [],
-      ),
+      seatTone({ id: "a", role: "Dev A", activity: "stopped", stopped_reason: "provider" }),
     ).toBe("broken");
+    // A FAILED LAST TURN IS NOT A STOP: the seat takes its next wake like any
+    // other, so `last_error` does not paint an idle seat red.
+    expect(
+      seatTone({
+        id: "a",
+        role: "Dev A",
+        activity: "idle",
+        last_error: { kind: "x", message: "", phase: "", turn_id: "", at: "", event_id: "" },
+      }),
+    ).toBe("quiet");
   });
 
-  test("a status line describes live state and never invents one", () => {
+  test("a status line describes the engine's state and never invents one", () => {
     expect(
-      statusLine({ id: "a", role: "Dev A", state: "working", current_phase: "execute" }),
+      statusLine({ id: "a", role: "Dev A", activity: "working", current_phase: "execute" }),
     ).toContain("working on the task");
-    expect(statusLine({ id: "a", role: "Dev A", state: "afk", afk_reason: "stall" })).toContain(
-      "no forward progress",
+    expect(
+      statusLine({ id: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" }),
+    ).toBe("not placed on any node");
+    expect(
+      statusLine({
+        id: "a",
+        role: "Dev A",
+        activity: "stopped",
+        stopped_reason: "paused",
+        paused: { by: "jane", at: "2026-01-01T00:00:00Z", stop_running: false },
+      }),
+    ).toBe("paused by jane");
+    expect(statusLine({ id: "a", role: "Dev A", activity: "needs" })).toContain(
+      "waiting on an answer",
     );
-    expect(statusLine(undefined)).toBe("not running on this node");
+    expect(statusLine(undefined)).toBe("no state from the engine yet");
     expect(statusLine(null, { seat: index.byName.get("Jane Founder")! })).toContain("human");
   });
 });

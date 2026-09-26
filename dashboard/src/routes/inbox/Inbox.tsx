@@ -92,7 +92,6 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import type {
   AgentRow,
   Rollup,
-  SandboxEntry,
   WorkInboxAnswer,
   WorkInboxNotice,
   WorkProjectRow,
@@ -236,7 +235,6 @@ export function Inbox() {
 
   const facts = usePulse({
     agents,
-    sandboxes,
     attention,
     projects: projects.data?.projects,
     workload: workload.data?.rows,
@@ -746,18 +744,16 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
  */
 function usePulse(input: {
   agents: AgentRow[];
-  sandboxes: SandboxEntry[];
   attention: Attention[];
   projects?: WorkProjectRow[];
   workload?: WorkloadRow[];
   tokens: Rollup | null;
 }): PulseFact[] {
-  const { agents, sandboxes, attention, projects, workload, tokens } = input;
+  const { agents, attention, projects, workload, tokens } = input;
   return useMemo(() => {
-    const working = agents.filter((a) => {
-      const state = runState(a, sandboxes);
-      return state === "working" || state === "awaiting_sandbox";
-    }).length;
+    // THE ENGINE'S WORD: a seat whose coding run is running is already
+    // `working` there, so nothing is folded in here.
+    const working = agents.filter((a) => runState(a) === "working").length;
     // A RUN WAITING FOR A PERSON, which the attention queue already derived
     // from the DURABLE rows: counting it a second way here would let the
     // headline and the queue beneath it disagree about who is waiting.
@@ -775,7 +771,7 @@ function usePulse(input: {
         icon: PULSE_GLYPHS.seats,
         value: working,
         label: "working",
-        title: "Agent seats running a turn or waiting on a sandbox, from the live projection.",
+        title: "Agent seats running a turn or a coding run, as the engine reports them.",
         path: ["company", "people"],
       },
       {
@@ -840,5 +836,5 @@ function usePulse(input: {
       },
     ];
     return facts;
-  }, [agents, sandboxes, attention, projects, workload, tokens]);
+  }, [agents, attention, projects, workload, tokens]);
 }

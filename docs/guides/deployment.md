@@ -870,7 +870,7 @@ test rather than vanishing quietly.
 |---|---|
 | `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
-| `agent_terminated` | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
+| `agent_terminated` | The counterpart, excluded for the same reason. It is what takes a released instance's call off a live screen rather than leaving it showing whatever it last did; whether the seat still runs anywhere is the seat leases' to say. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
@@ -1451,5 +1451,5 @@ inside the process to hook them, because the engine loads no plugins.
 - **Scope isolation** — agents can only access knowledge within their permitted scopes
 - **Tool availability** — all registered tools available; per-role MCP tools carry role-specific credentials
 - **Communication permissions** — agents can only post to channels they're members of
-- **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as `afk` state
+- **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and an unreachable provider as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent

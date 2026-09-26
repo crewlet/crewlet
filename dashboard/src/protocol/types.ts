@@ -12,9 +12,9 @@
  *
  *  - **Optional is not nullable is not absent.** An overlay is MERGED onto the
  *    row a client already holds, so an omitted key reads as "unchanged". That
- *    is why `afk_reason` is required-but-possibly-empty while `budget` is
- *    `| null`: one has to be able to say "no longer AFK", the other has to be
- *    able to say "nobody is measuring".
+ *    is why `stopped_reason` is required-but-possibly-null while `budget` is
+ *    `| null`: one has to be able to say "no longer stopped", the other has to
+ *    be able to say "nobody is measuring".
  *  - **A count that could not be taken is `null`, never `0`.** The integrations
  *    answer and the budgets answer both distinguish "zero" from "this process
  *    cannot say", and collapsing them is how a dashboard reports a healthy
@@ -36,7 +36,7 @@ import type {
   ReconcileStatus,
 } from "../contract/integrations.ts";
 import type { AgentMemory } from "../contract/memory.ts";
-import type { PushKind } from "../contract/wire.ts";
+import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 
 // ---------------------------------------------------------------------------
@@ -381,25 +381,26 @@ export interface BudgetMeter {
 /** The live half of a seat row, merged onto its static config row. */
 export interface Overlay {
   /**
-   * Omitted until an event says whether the seat is running, so the state the
-   * roster sent (or the one a client already holds) stands.
+   * What the seat is doing — the ONE seat-state vocabulary, computed by the
+   * engine and on every row. A screen maps it; it never derives it.
    */
-  state?: string;
+  activity?: SeatActivity;
+  /** Why a `stopped` seat cannot take work; null on a seat that is not
+   *  stopped. Always present, so a seat that started again sheds its reason. */
+  stopped_reason?: StoppedReason | null;
   runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
-  /** Always present, even empty: an omitted key would read as "still AFK". */
-  afk_reason?: string;
   /** The turn the seat is on, or null when it is on none. Always present, for
-   *  `afk_reason`'s reason. */
+   *  `stopped_reason`'s reason. */
   turn?: LiveTurn | null;
   /** The newest turn the seat ended, or null while none is known. */
   last_turn?: LastTurn | null;
   /** Who paused the seat, or null while nobody has. Always present, for
-   *  `afk_reason`'s reason: an omitted key would leave a resumed seat paused. */
+   *  `stopped_reason`'s reason: an omitted key would leave a resumed seat paused. */
   paused?: Paused | null;
 }
 

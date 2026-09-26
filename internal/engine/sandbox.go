@@ -375,7 +375,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 //
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
-// it the seat renders as whatever it was last doing rather than AFK. The run's
+// it the seat renders as whatever it was last doing rather than its failure. The run's
 // own row names the seat, and the live epoch is preferred where it still does,
 // so a seat renamed since the run detached is addressed as it is now.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
@@ -1532,10 +1532,10 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	}
 	// THE SEAT IS LIVE HERE, which is the fact the live projection has
 	// always had a branch for and nothing ever published: an
-	// `agent_spawned` is what clears a stale `terminated`, `offline` or
-	// `afk` from a seat that has moved to this node, so without it a seat
-	// whose last owner went away renders as broken until it happens to do
-	// some work.
+	// `agent_spawned` is what clears a failure held from the seat's last
+	// instance — a provider stop included — when it has moved to this node,
+	// so without it a seat whose last owner went away renders as stopped
+	// until it happens to do some work.
 	e.publishSeatLifecycle(ctx, handle, types.AgentSpawned{})
 	return nil
 }

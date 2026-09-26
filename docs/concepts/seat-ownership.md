@@ -299,8 +299,8 @@ every turn that closed a single round.
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
 behind it will not come back, and why. A panic also publishes
-`turn.guard_breach(kind="unhandled_exception")`, which is what puts the seat in
-the dashboard's `afk` state, and the log line that recovered it
+`turn.guard_breach(kind="unhandled_exception")`, which is what puts the failure
+on the seat as its `last_error`, and the log line that recovered it
 (`turn_phase_panicked`, `dispatch_panicked` or `sandbox_resume_panicked`)
 carries the stack.
 

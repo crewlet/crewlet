@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
+import type { SeatActivity } from "~/contract/wire.ts";
 import { locate } from "./model/draft.ts";
 import { builderReducer, handlesOf } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
@@ -226,7 +227,12 @@ describe("credentials", () => {
 });
 
 describe("live state", () => {
-  const agent = (state: string): AgentRow => ({ id: "1", role: "Dev", handle: "dev", state });
+  const agent = (activity: SeatActivity): AgentRow => ({
+    id: "1",
+    role: "Dev",
+    handle: "dev",
+    activity,
+  });
   const run: SandboxEntry = {
     turn_id: "t",
     role: "Dev",
@@ -245,6 +251,10 @@ describe("live state", () => {
     // A coding run is work in flight even when no live row names the seat.
     expect(isWorking("dev", [], [run])).toBe(true);
     expect(isWorking("dev", [agent("idle")], [])).toBe(false);
+    // A seat parked on a question still has its work in flight.
+    expect(isWorking("dev", [agent("needs")], [])).toBe(true);
+    // A stopped seat is running nothing.
+    expect(isWorking("dev", [agent("stopped")], [])).toBe(false);
     expect(isWorking("sre", [agent("working")], [])).toBe(false);
     expect(isWorking(undefined, [agent("working")], [run])).toBe(false);
   });

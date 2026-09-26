@@ -56,7 +56,7 @@ func wantUnhandled(t *testing.T, res turn.Result, err error, wantInDetail string
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
 	if res.Breach == nil || res.Breach.Kind != types.GuardUnhandledException {
-		t.Fatalf("breach = %+v, want %s: the seat never goes AFK without it",
+		t.Fatalf("breach = %+v, want %s: the seat never records the failure without it",
 			res.Breach, types.GuardUnhandledException)
 	}
 	if !strings.Contains(res.Breach.Detail, wantInDetail) {

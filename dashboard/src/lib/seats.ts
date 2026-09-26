@@ -41,6 +41,7 @@
  */
 
 import { plural } from "./format.ts";
+import type { SeatActivity } from "~/contract/wire.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -859,8 +860,21 @@ export function seatResolvers(index: OrgIndex): {
   };
 }
 
-export type RunState =
-  "working" | "awaiting_sandbox" | "idle" | "afk" | "failed" | "terminated" | "offline" | "human";
+/**
+ * What a seat is doing, as a screen draws it: the ENGINE'S word
+ * ({@link SeatActivity}, served on every `agents` row as `activity`), plus
+ * `offline` for a seat no row is held for yet and `human` for a seat the engine
+ * does not run.
+ *
+ * NOTHING HERE DERIVES IT. The engine computes one word per seat from its turn,
+ * its coding runs' durable record, its pause, its placement across the fleet
+ * and its budget windows; this client used to compute three words of its own
+ * from a fraction of those — the sidebar off the projection's old `state`, the
+ * live screen and the seat library each folding the running-runs panel in a
+ * different way — and a run parked past the old twelve-hour age-out dropped out
+ * of every ring at once.
+ */
+export type RunState = SeatActivity | "offline" | "human";
 
 /**
  * Whether a detached coding run is waiting on a person.
@@ -875,25 +889,16 @@ export type RunState =
  * work is gone and only the question survives.
  *
  * One predicate rather than six comparisons, because six copies of a
- * vocabulary is how five of them come to be wrong at once.
+ * vocabulary is how five of them come to be wrong at once. It classifies a RUN
+ * for the runs panel; what a SEAT is doing is `activity`.
  */
 export function awaitingPerson(status: string | undefined): boolean {
   return status === "awaiting_clarification" || status === "reseed";
 }
 
-/**
- * What a seat is actually doing.
- *
- * A seat with an in-flight detached sandbox run is still busy even though its
- * kick-off turn already completed — which the projection reads as idle. The
- * live sandbox set is folded in here, at read time, so it is right on the
- * first snapshot and on every push after it.
- */
-export function runState(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): RunState {
-  if (!agent) return "offline";
-  const role = agent.role;
-  if (role && sandboxes.some((s) => s.role === role)) return "awaiting_sandbox";
-  return (agent.state as RunState) || "offline";
+/** The engine's word for a seat, or `offline` while no row is held for it. */
+export function runState(agent: AgentRow | null | undefined): RunState {
+  return agent?.activity ?? "offline";
 }
 
 /**
@@ -905,31 +910,35 @@ export function runState(agent: AgentRow | null | undefined, sandboxes: SandboxE
  * not a duller hue, it is none.
  *
  * `needs` and `broken` are separate on purpose: a seat parked on a question and
- * a seat that fell over have both stopped, and only one of them is a failure.
- * Red is reserved for failure.
+ * a seat that cannot take work have both stopped, and only one of them is a
+ * failure. Red is reserved for a stop. A FAILED LAST TURN IS NOT ONE — the seat
+ * takes its next wake like any other — so `last_error` does not colour the
+ * seat; the engine's `activity` alone does.
  */
 export type SeatTone = "working" | "needs" | "broken" | "quiet";
 
-export function seatTone(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): SeatTone {
-  if (!agent) return "quiet";
-  const sandbox = sandboxes.find((s) => s.role === agent.role);
-  if (awaitingPerson(sandbox?.status)) return "needs";
-  if (agent.last_error) return "broken";
-  const state = runState(agent, sandboxes);
-  if (state === "afk") return "broken";
-  if (state === "working" || state === "awaiting_sandbox") return "working";
-  return "quiet";
+export function seatTone(agent: AgentRow | null | undefined): SeatTone {
+  switch (agent?.activity) {
+    case "working":
+      return "working";
+    case "needs":
+      return "needs";
+    case "stopped":
+      return "broken";
+    default:
+      return "quiet";
+  }
 }
 
 export function toneOf(state: RunState): "positive" | "caution" | "critical" | "info" | "neutral" {
   switch (state) {
     case "working":
-    case "awaiting_sandbox":
       return "info";
+    case "needs":
+      return "caution";
     case "idle":
       return "positive";
-    case "afk":
-    case "failed":
+    case "stopped":
       return "critical";
     default:
       return "neutral";
@@ -937,24 +946,23 @@ export function toneOf(state: RunState): "positive" | "caution" | "critical" | "
 }
 
 export function stateLabel(state: RunState): string {
-  // "sandbox", not "awaiting sandbox": the badge shares a row with the seat's
-  // name, and the longer phrase pushed the name into an ellipsis on every card
-  // carrying it.
-  return state === "awaiting_sandbox" ? "sandbox" : state;
+  return state === "needs" ? "needs you" : state;
 }
 
-/** Why a seat is AFK, in a sentence, keyed on the engine-detected cause. */
-export function afkReason(reason: string | undefined): string {
-  const reasons: Record<string, string> = {
-    llm_unavailable: "the LLM provider was unreachable",
-    stall: "the turn made no forward progress and was given up",
-    max_iter: "the round cap was reached before the turn finished",
-    unhandled_exception: "an unhandled error ended the turn",
-    budget_exhausted: "the token budget is spent",
-    depth_cap: "delegation went deeper than the cap allows",
-    scheduled_timeout: "a scheduled turn ran past its wall-clock cap",
-  };
-  return reasons[reason ?? ""] ?? "the engine paused this seat";
+/** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
+export function stoppedLine(agent: AgentRow | null | undefined): string {
+  switch (agent?.stopped_reason) {
+    case "paused":
+      return agent.paused?.by ? `paused by ${agent.paused.by}` : "paused";
+    case "unplaced":
+      return "not placed on any node";
+    case "budget":
+      return "its token budget is spent until the window resets";
+    case "provider":
+      return "its model provider is unreachable";
+    default:
+      return "stopped";
+  }
 }
 
 const PHASE_DOING: Record<string, string> = {
@@ -963,7 +971,7 @@ const PHASE_DOING: Record<string, string> = {
   review: "reviewing its own work",
 };
 
-/** What this seat is doing, in a sentence. Derived from live state only. */
+/** What this seat is doing, in a sentence: the engine's word, put in words. */
 export function statusLine(
   agent: AgentRow | null | undefined,
   opts: { sandbox?: SandboxEntry | null; seat?: Seat | null } = {},
@@ -972,17 +980,21 @@ export function statusLine(
   if (seat?.kind === "human") {
     return seat.availability || "human teammate — not run by the engine";
   }
-  if (sandbox) {
-    return awaitingPerson(sandbox.status)
-      ? "waiting on an answer to keep coding"
-      : `writing code in a sandbox (${sandbox.coding_agent || "coding agent"})`;
+  switch (runState(agent)) {
+    case "needs":
+      return "waiting on an answer to keep coding";
+    case "stopped":
+      return stoppedLine(agent);
+    case "working":
+      if (sandbox && !awaitingPerson(sandbox.status) && !agent?.current_phase) {
+        return `writing code in a sandbox (${sandbox.coding_agent || "coding agent"})`;
+      }
+      return PHASE_DOING[agent?.current_phase ?? ""] ?? "working on a task";
+    case "idle":
+      return "idle — nothing in the inbox";
+    default:
+      return "no state from the engine yet";
   }
-  const state = (agent?.state as RunState) || "offline";
-  if (state === "afk") return afkReason(agent?.afk_reason);
-  if (state === "working") return PHASE_DOING[agent?.current_phase ?? ""] ?? "working on a task";
-  if (state === "terminated") return "terminated";
-  if (state === "offline") return "not running on this node";
-  return "idle — nothing in the inbox";
 }
 
 // ---------------------------------------------------------------------------

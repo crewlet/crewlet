@@ -6,11 +6,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 )
 
-// --- the AFK hold -------------------------------------------------------- //
+// --- the failure hold ---------------------------------------------------- //
 
 func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 	t.Parallel()
-	// An engine-detected failure publishes its AFK event and the turn's
+	// An engine-detected failure publishes its event and the turn's
 	// own completion microseconds apart, in that order. Forcing idle on
 	// the second would erase the cause the instant it was set — which is
 	// why an agent whose provider died still showed as a healthy idle
@@ -23,17 +23,19 @@ func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "afk" {
-		t.Errorf("state = %q, want the seat to stay afk", got.State)
+	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
+		*got.StoppedReason != livestate.StoppedProvider {
+		t.Errorf("activity = %q (%v), want the seat to stay stopped on its provider",
+			got.Activity, got.StoppedReason)
 	}
-	if got.AFKReason != "provider_down" {
-		t.Errorf("afk reason = %q, want the cause kept", got.AFKReason)
+	if got.LastError == nil || got.LastError.Kind != "provider_down" {
+		t.Errorf("last error = %+v, want the cause kept", got.LastError)
 	}
 }
 
-func TestRealWorkClearsTheAFKHold(t *testing.T) {
+func TestRealWorkClearsTheFailureHold(t *testing.T) {
 	t.Parallel()
-	// A seat leaves AFK only when it does real work again.
+	// A seat leaves the hold only when it does real work again.
 	s := livestate.New()
 	s.Apply(env("budget_exhausted", map[string]any{"role": "Lead", "kind": "budget"},
 		at("2026-06-14T12:00:00Z")))
@@ -42,18 +44,15 @@ func TestRealWorkClearsTheAFKHold(t *testing.T) {
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q, want working", got.State)
-	}
-	if got.AFKReason != "" {
-		t.Errorf("afk reason = %q, want cleared", got.AFKReason)
+	if got.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want working", got.Activity)
 	}
 	if got.LastError != nil {
 		t.Errorf("last error = %+v, want cleared by forward progress", got.LastError)
 	}
 }
 
-func TestARespawnClearsTheAFKHold(t *testing.T) {
+func TestARespawnClearsTheFailureHold(t *testing.T) {
 	t.Parallel()
 	// A spawn is a NEW instance of the seat, so whatever stopped the last
 	// one is not this one's state. Without this the hold outlives an
@@ -66,18 +65,41 @@ func TestARespawnClearsTheAFKHold(t *testing.T) {
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle", got.Activity)
 	}
-	if got.AFKReason != "" || got.LastError != nil {
+	if got.StoppedReason != nil || got.LastError != nil {
 		t.Errorf("overlay still carries the old run's failure: %+v", got)
 	}
 }
 
 func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 	t.Parallel()
-	// The counterfactual to the respawn clear: only a stopped seat is
-	// reset by a spawn. Resetting a working one would blank a live turn.
+	// The counterfactual to the respawn clear: a spawn that LOST A RACE to
+	// the turn — published before its first phase, delivered after it — is
+	// the instance that turn runs under. Resetting on it would blank a live
+	// turn.
+	s := livestate.New()
+	s.Apply(env("agent_phase_started",
+		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
+		at("2026-06-14T12:00:00Z")))
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+		at("2026-06-14T11:59:59Z")))
+
+	got := overlayOf(t, s, "Lead")
+	if got.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want the working seat left alone", got.Activity)
+	}
+	if got.LiveCall == nil {
+		t.Error("a spawn wiped a working seat's live call")
+	}
+}
+
+// A SPAWN AFTER A TURN IS A NEW INSTANCE, and the turn died with the old one:
+// the seat is idle, and the call that turn left must go with it rather than
+// sit on an idle seat as a round nothing will ever finish.
+func TestASpawnAfterATurnTakesItsCallWithIt(t *testing.T) {
+	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started",
 		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
@@ -86,11 +108,11 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q, want the working seat left alone", got.State)
+	if got.Activity != livestate.ActivityIdle || got.Turn != nil {
+		t.Errorf("activity = %q, turn = %+v, want idle on no turn", got.Activity, got.Turn)
 	}
-	if got.LiveCall == nil {
-		t.Error("a spawn wiped a working seat's live call")
+	if got.LiveCall != nil {
+		t.Errorf("live call = %+v: a dead turn's call stayed on an idle seat", got.LiveCall)
 	}
 }
 
@@ -148,7 +170,7 @@ func TestTheFailedCallStaysOnScreen(t *testing.T) {
 	}
 }
 
-func TestAFollowingAFKEventDoesNotWipeTheFailedCall(t *testing.T) {
+func TestAFollowingFailureEventDoesNotWipeTheFailedCall(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
@@ -157,11 +179,11 @@ func TestAFollowingAFKEventDoesNotWipeTheFailedCall(t *testing.T) {
 		at("2026-06-14T12:00:06Z")))
 
 	if call := liveCallOf(t, s, "Lead"); call == nil || !call.Failed {
-		t.Errorf("call = %+v: the AFK event wiped the frozen call", call)
+		t.Errorf("call = %+v: the failure event wiped the frozen call", call)
 	}
 }
 
-func TestAnAFKEventClearsAHealthyCall(t *testing.T) {
+func TestAFailureEventClearsAHealthyCall(t *testing.T) {
 	t.Parallel()
 	// The counterfactual: only a FAILED call is protected. A healthy
 	// in-flight row on a seat that has gone AFK is a call that will never

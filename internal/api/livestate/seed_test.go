@@ -340,8 +340,15 @@ func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
 		coder.Turn.WorkItem == nil || coder.Turn.WorkItem.Key != "ENG-1" {
 		t.Errorf("turn = %+v, want the parked turn on its item", coder.Turn)
 	}
-	if coder.State != "" {
-		t.Errorf("state = %q, want none claimed by a seed", coder.State)
+	// A PARKED TURN IS NOT WORK OF ITS OWN: what its run is doing is the
+	// run record's to say, and the record is read separately. The seed
+	// claims nothing for the seat.
+	if coder.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle until the run record says what the run is doing",
+			coder.Activity)
+	}
+	if lead.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle with only ended turns seeded", lead.Activity)
 	}
 }
 

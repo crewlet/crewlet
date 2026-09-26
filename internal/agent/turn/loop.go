@@ -626,8 +626,9 @@ func guarded(ctx context.Context, turnID, phaseName string, round int, call func
 //
 // A panic is BOTH a breach and an error, which is the pairing
 // [types.GuardUnhandledException] was declared for: the error says what broke
-// and the breach names the invariant that ended the turn, so the seat goes AFK
-// with a cause rather than sitting in `working` until its next turn. Any other
+// and the breach names the invariant that ended the turn, so the seat carries
+// the failure as its `last_error` with a cause rather than sitting in `working`
+// until its next turn. Any other
 // broken phase is an error alone, as it always was.
 func broke(res Result, err error) (Result, error) {
 	var panicked *PanicError

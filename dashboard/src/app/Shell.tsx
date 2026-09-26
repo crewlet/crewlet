@@ -316,7 +316,10 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const page: PageContext = useMemo(() => ({ setLabels, setCoverage }), [setLabels, setCoverage]);
 
-  const working = agents.filter((a) => a.state === "working").length;
+  // THE ENGINE'S WORD, the same one every other screen counts: a seat whose
+  // coding run is running is `working` there, and one parked on a question
+  // is `needs`, not a fourth reading of the running-runs panel.
+  const working = agents.filter((a) => a.activity === "working").length;
 
   // WHAT THE READER CAN ACTUALLY DRIVE DOWN, which is the whole of why this
   // badge is not `answer.unread`.

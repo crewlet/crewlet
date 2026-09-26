@@ -27,7 +27,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
-import { awaitingPerson, indexOrg, runState, unitDirectLabel, type Seat } from "~/lib/seats.ts";
+import { indexOrg, runState, unitDirectLabel, type Seat } from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -160,34 +160,32 @@ const STATE_ORDER = [
   { key: "broken", label: "Stopped" },
   { key: "working", label: "Working" },
   { key: "idle", label: "Idle" },
-  { key: "offline", label: "Not running here" },
-  // A SEAT THE ENGINE REMOVED is not a seat a healthy peer is running.
-  // `terminated` had no branch and fell through to `offline`, so a removed
-  // seat sat in "Not running here" beside seats another node runs perfectly
-  // well — the one bucket whose whole meaning is "this is fine, look
-  // elsewhere".
-  { key: "terminated", label: "Removed from the company" },
+  // NO ROW FROM THE ENGINE YET — never "not running here": whether a seat is
+  // held anywhere in the fleet is the engine's `stopped`/`unplaced` to say,
+  // and a seat a peer runs is idle or working like any other.
+  { key: "offline", label: "No state from the engine yet" },
   { key: "human", label: "Human teammates" },
 ] as const;
 
-function bucketOf(
-  seat: Seat,
-  agent: AgentRow | undefined,
-  sandboxes: ReturnType<typeof useSandboxes>,
-): string {
+function bucketOf(seat: Seat, agent: AgentRow | undefined): string {
   // A KIND IS NOT A STATE, and this short-circuit is why a human teammate
   // could never be reported as waiting on anybody: every human seat was
   // filed under one label before anything about what it is doing was read.
   // Grouping by state now answers the same question for both kinds, and
   // "which seats are people" is a filter rather than a bucket.
-  const sandbox = sandboxes.find((s) => s.role === seat.name);
-  if (awaitingPerson(sandbox?.status)) return "needs";
-  if (agent?.last_error) return "broken";
-  const state = runState(agent, sandboxes);
-  if (state === "afk" || state === "failed") return "broken";
-  if (state === "working" || state === "awaiting_sandbox") return "working";
-  if (state === "terminated") return "terminated";
-  if (state === "idle") return "idle";
+  //
+  // THE ENGINE'S WORD, bucketed. A failed last turn is not a stop, so a seat
+  // whose last turn failed sits with the idle ones; its card says why.
+  switch (runState(agent)) {
+    case "needs":
+      return "needs";
+    case "stopped":
+      return "broken";
+    case "working":
+      return "working";
+    case "idle":
+      return "idle";
+  }
   // A human seat is never run by a node, so "not running here" would be a
   // fault report about something that is working exactly as designed.
   return seat.kind === "human" ? "human" : "offline";
@@ -250,9 +248,9 @@ export function People() {
     return STATE_ORDER.map((b) => ({
       key: b.key,
       label: b.label,
-      rows: rows.filter((r) => bucketOf(r.seat, r.agent, sandboxes) === b.key),
+      rows: rows.filter((r) => bucketOf(r.seat, r.agent) === b.key),
     })).filter((g) => g.rows.length > 0);
-  }, [rows, group, sandboxes]);
+  }, [rows, group]);
 
   /**
    * WHAT THE NUMBER BESIDE A GROUP HEAD COUNTS.

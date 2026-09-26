@@ -443,11 +443,12 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 // agent_turn_completed's error/error_kind and the three dedicated types were
 // registered, categorised and documented with no producer.
 //
-// What that cost is a whole dashboard state. `afk` is derived from exactly
-// these three types (internal/api/livestate: llm_unavailable,
-// turn.guard_breach, budget_exhausted) and from nothing else, so no seat could
-// ever reach it — the attention queue's "the engine stopped it" row, the seat
-// screen's AFK banner and the `broken` rail were all unreachable branches.
+// What that cost was a whole dashboard state. The live projection's failure
+// hold is taken from exactly these three types (internal/api/livestate:
+// llm_unavailable, turn.guard_breach, budget_exhausted) and from nothing else —
+// and `stopped`/`provider` from the first of them — so no seat could ever reach
+// it: the attention queue's "the engine stopped it" row, the seat screen's
+// banner and the `broken` rail were all unreachable branches.
 //
 // The summary event still carries error/error_kind, and that is not a second
 // copy to keep in step: it is the ONE-LINE reason on a row about the turn,
@@ -493,8 +494,8 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		return
 	}
 
-	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left and is
-	// effectively AFK. A non-retryable failure from one member is not this:
+	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left, which is
+	// what reads it as stopped on its provider. A non-retryable failure from one member is not this:
 	// it comes back as that backend's own error, the chain never wrapped it,
 	// and calling it "unavailable" would blame a chain that was never walked.
 	var exhausted *chain.Error

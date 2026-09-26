@@ -98,7 +98,7 @@ const probe = new LiveSocket(replay);
 for (const raw of frames) {
   probe.onMessage(raw);
   for (const agent of replay.state.agents) {
-    if (agent.state === "working") sawWorking = true;
+    if (agent.activity === "working") sawWorking = true;
     if (agent.live_call) {
       sawLiveCall = true;
       if (agent.live_call.phase) phases.add(agent.live_call.phase);

@@ -67,6 +67,15 @@ type Service struct {
 	tools     func() []map[string]any
 	schedules func() any
 
+	// placement reads the seat leases for the seat-state vocabulary's
+	// `unplaced`. See Options.Placement.
+	placement PlacementFunc
+
+	// placementFailing is whether the last placement read failed, so a
+	// lease table that stays unreadable is said once rather than on every
+	// tick.
+	placementFailing atomic.Bool
+
 	now      func() time.Time
 	interval time.Duration
 
@@ -82,6 +91,11 @@ type Service struct {
 
 // HandleFunc answers the role-to-handle map the per-agent rollup links with.
 type HandleFunc func() map[string]string
+
+// PlacementFunc reads which of the company's agent seats some node in the fleet
+// holds, keyed by role: every agent seat in the company, true where a node
+// holds it. An error is a read that did not happen, never "none are held".
+type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
@@ -120,6 +134,15 @@ type Options struct {
 	Tools     func() []map[string]any
 	Schedules func() any
 
+	// Placement is which of the company's agent seats some node in the
+	// FLEET holds — the seat leases, never this node's own seats — which
+	// the seat-state vocabulary needs for `stopped`/`unplaced`, and which
+	// no event reports: a seat moves between nodes on a lease, not on
+	// anything published. So it is READ, on every snapshot and roster
+	// answer and on the shared tick, and the seats whose state it moved are
+	// pushed.
+	Placement PlacementFunc
+
 	// Now is injectable so a test can pin the timestamps envelopes carry.
 	Now func() time.Time
 
@@ -147,6 +170,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Org", opts.Org == nil},
 		{"Tools", opts.Tools == nil},
 		{"Schedules", opts.Schedules == nil},
+		{"Placement", opts.Placement == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -166,6 +190,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		org:       opts.Org,
 		tools:     opts.Tools,
 		schedules: opts.Schedules,
+		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 	}
@@ -206,16 +231,7 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	if change.Events {
 		s.hub.Broadcast(Push(KindEvent, env, now))
 	}
-	if len(change.Agents) > 0 {
-		// Sorted, so a push carrying two seats is byte-stable across
-		// runs — Go map iteration is randomised, and a frame whose row
-		// order changes for no reason makes a diff of two captures
-		// unreadable.
-		roles := slices.Sorted(maps.Keys(change.Agents))
-		if rows := s.state.OverlayRows(roles); len(rows) > 0 {
-			s.hub.Broadcast(Push(KindAgents, rows, now))
-		}
-	}
+	s.pushAgents(change, now)
 	if change.Sandboxes {
 		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
 	}
@@ -235,10 +251,51 @@ func (s *Service) Ingest(env livestate.Envelope) {
 // ReconcileSandboxes lands a read of the durable run record on the projection
 // and pushes the sandbox set when it moved — which is what corrects every open
 // panel when an event that would have was lost.
+//
+// AND THE SEATS WHOSE STATE IT MOVED: a seat's runs are read from this record,
+// so a question found here makes its seat need somebody on every open screen at
+// the same moment the panel shows it.
 func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf time.Time) {
-	if change := s.state.ReconcileSandboxes(records, asOf); change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), s.now()))
+	change := s.state.ReconcileSandboxes(records, asOf)
+	now := s.now()
+	if change.Sandboxes {
+		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
 	}
+	s.pushAgents(change, now)
+}
+
+// pushAgents sends the rows of the seats a change moved.
+func (s *Service) pushAgents(change livestate.Change, now time.Time) {
+	if len(change.Agents) == 0 {
+		return
+	}
+	// Sorted, so a push carrying two seats is byte-stable across runs — Go
+	// map iteration is randomised, and a frame whose row order changes for
+	// no reason makes a diff of two captures unreadable.
+	roles := slices.Sorted(maps.Keys(change.Agents))
+	if rows := s.state.OverlayRows(roles); len(rows) > 0 {
+		s.hub.Broadcast(Push(KindAgents, rows, now))
+	}
+}
+
+// RefreshPlacement reads the seat leases onto the projection and pushes the
+// seats whose state that moved.
+//
+// A READ THAT FAILED CHANGES NOTHING: the projection keeps the placement it
+// last read rather than reading an unreachable lease table as "no node holds
+// anything", which would stop every seat on every screen over a store blip.
+func (s *Service) RefreshPlacement() {
+	placed, err := s.placement()
+	if err != nil {
+		if !s.placementFailing.Swap(true) {
+			log.Warn("stream_placement_unread", "error", err,
+				"hint", "which seats no node holds is read from the seat leases; "+
+					"each seat keeps the placement last read until a read succeeds")
+		}
+		return
+	}
+	s.placementFailing.Store(false)
+	s.pushAgents(s.state.SetPlacement(placed), s.now())
 }
 
 // Snapshot is the state a client receives the instant it connects.
@@ -247,7 +304,12 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 // connect. That is the whole reason the projection exists: a dashboard that
 // rebuilt agent history from the store on every reconnect would take a
 // thirty-day scan per tab, and would lose any call mid-flight while it did.
+//
+// The one read it makes is the seat leases ([Service.RefreshPlacement]),
+// because no event says which seats a node holds and a connecting tab must not
+// be handed a placement up to a tick old.
 func (s *Service) Snapshot() map[string]any {
+	s.RefreshPlacement()
 	return map[string]any{
 		"health": s.currentHealth(),
 		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
@@ -274,7 +336,10 @@ func (s *Service) Snapshot() map[string]any {
 // Exported because a config apply has to re-send it: the client's own doc
 // says a merge cannot express a deletion, so a revision that removed a role
 // would leave its card on screen until someone reloaded the page.
-func (s *Service) Roster() []map[string]any { return s.state.MergeAgents(s.currentRoster()) }
+func (s *Service) Roster() []map[string]any {
+	s.RefreshPlacement()
+	return s.state.MergeAgents(s.currentRoster())
+}
 
 // Org is the company's role and unit tree, for the same re-send.
 func (s *Service) Org() any { return s.currentOrg() }
@@ -341,6 +406,13 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 			case <-ticker.C:
 				s.hub.Broadcast(Push(KindHealth, s.currentHealth(), s.now()))
 				s.flushTokens()
+				// PLACEMENT ON THE SAME TICK: a seat moves between
+				// nodes on a lease, which publishes nothing, so an open
+				// screen learns a seat went unplaced — or was taken up
+				// by a peer — only from a read. The seat host sweeps on
+				// five seconds too (seat.SweepInterval), so a faster
+				// read would find nothing newer.
+				s.RefreshPlacement()
 			}
 		}
 	}()

@@ -67,8 +67,8 @@ func TestASpawnMarksIdleAndRecordsTheRuntimeID(t *testing.T) {
 	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle", got.Activity)
 	}
 	if got.RuntimeID != "a-1" {
 		t.Errorf("runtime id = %q, want a-1", got.RuntimeID)
@@ -95,43 +95,59 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 	}))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q, want working", got.State)
+	if got.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want working", got.Activity)
 	}
 
 	s.Apply(env("agent_turn_completed", map[string]any{
 		"role": "Lead", "turn_id": "t-1",
 	}, at("2026-06-14T12:01:00+00:00")))
 	got = overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle", got.Activity)
 	}
 }
 
-func TestAnAFKReasonComesFromTheEventsOwnKind(t *testing.T) {
+// A BREACHED GUARD IS A FAILED TURN, NOT A STOP: the seat takes its next wake
+// like any other, so it is idle, and why its last turn failed is `last_error`,
+// in the event's own kind.
+func TestAGuardBreachIsAFailedTurnNotAStop(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("turn.guard_breach", map[string]any{"role": "Lead", "kind": "delegation_loop"}))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "afk" {
-		t.Errorf("state = %q, want afk", got.State)
+	if got.Activity != livestate.ActivityIdle || got.StoppedReason != nil {
+		t.Errorf("activity = %q (%v), want idle: a failed turn does not stop a seat",
+			got.Activity, got.StoppedReason)
 	}
-	if got.AFKReason != "delegation_loop" {
-		t.Errorf("afk reason = %q, want the payload's own kind", got.AFKReason)
+	if got.LastError == nil || got.LastError.Kind != "delegation_loop" {
+		t.Errorf("last error = %+v, want the payload's own kind", got.LastError)
 	}
 }
 
-func TestAnAFKReasonFallsBackToTheEventType(t *testing.T) {
+// AN UNREACHABLE PROVIDER STOPS THE SEAT, and says so in the reason — the one
+// engine-detected failure that is a stop, because every wake the seat takes
+// until the provider answers fails the same way.
+func TestAnUnreachableProviderStopsTheSeat(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}))
-	if got := overlayOf(t, s, "Lead").AFKReason; got != "llm_unavailable" {
-		t.Errorf("afk reason = %q, want the event type", got)
+	got := overlayOf(t, s, "Lead")
+	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
+		*got.StoppedReason != livestate.StoppedProvider {
+		t.Errorf("activity = %q (%v), want stopped/provider", got.Activity, got.StoppedReason)
+	}
+	if got.LastError == nil || got.LastError.Kind != "llm_unavailable" {
+		t.Errorf("last error = %+v, want the event type as its kind", got.LastError)
 	}
 }
 
-func TestReflectionReturnsTheSeatToIdle(t *testing.T) {
+// Reflection is the trailing pass after a turn: it clears the phase the turn
+// was in and the call on screen. It does NOT end the turn — a parked turn is
+// reflected on too, and its run is still in flight — so what the seat is doing
+// stays the turn's to say.
+func TestReflectionClearsThePhaseItFollows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
@@ -140,9 +156,6 @@ func TestReflectionReturnsTheSeatToIdle(t *testing.T) {
 		at("2026-06-14T12:01:00+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle", got.State)
-	}
 	if got.CurrentPhase != nil {
 		t.Errorf("current phase = %v, want null", *got.CurrentPhase)
 	}
@@ -151,12 +164,31 @@ func TestReflectionReturnsTheSeatToIdle(t *testing.T) {
 	}
 }
 
-func TestTerminationIsRecorded(t *testing.T) {
+// A TERMINATED INSTANCE IS NOT A STATE OF ITS OWN. The instance on one node
+// ended, which takes its call off the screen; whether the SEAT runs anywhere is
+// the lease table's to say, so a seat a peer took over reads idle, and one no
+// node took over reads stopped/unplaced.
+func TestTerminationLeavesTheSeatToItsPlacement(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_terminated", map[string]any{"role": "Lead"}))
-	if got := overlayOf(t, s, "Lead").State; got != "terminated" {
-		t.Errorf("state = %q, want terminated", got)
+	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute"}
+	s.Apply(env("agent_phase_started", base))
+	s.Apply(env("agent_terminated", map[string]any{"role": "Lead"},
+		at("2026-06-14T12:00:01+00:00")))
+	got := overlayOf(t, s, "Lead")
+	if got.LiveCall != nil {
+		t.Error("a terminated instance left its call on screen")
+	}
+
+	s.SetPlacement(map[string]bool{"Lead": true})
+	if got := overlayOf(t, s, "Lead"); got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q after a peer holds the seat, want idle", got.Activity)
+	}
+	s.SetPlacement(map[string]bool{"Lead": false})
+	if got := overlayOf(t, s, "Lead"); got.Activity != livestate.ActivityStopped ||
+		got.StoppedReason == nil || *got.StoppedReason != livestate.StoppedUnplaced {
+		t.Errorf("activity = %q (%v) with no node holding it, want stopped/unplaced",
+			got.Activity, got.StoppedReason)
 	}
 }
 
@@ -171,8 +203,8 @@ func TestAnOlderStateEventCannotClobberNewerState(t *testing.T) {
 	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
-	if got := overlayOf(t, s, "Lead").State; got != "working" {
-		t.Errorf("state = %q: an older event clobbered newer state", got)
+	if got := overlayOf(t, s, "Lead").CurrentPhase; got == nil {
+		t.Error("an older event clobbered newer state: the phase was cleared")
 	}
 }
 
@@ -186,8 +218,8 @@ func TestSameInstantEventsAreBothApplied(t *testing.T) {
 	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}, ts))
 	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}, ts))
 
-	if got := overlayOf(t, s, "Lead").State; got != "idle" {
-		t.Errorf("state = %q: a same-instant event was refused as stale", got)
+	if got := overlayOf(t, s, "Lead").CurrentPhase; got != nil {
+		t.Errorf("current phase = %q: a same-instant event was refused as stale", *got)
 	}
 }
 
@@ -202,8 +234,8 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
 		at("2026-06-14T12:01:00Z")))
 
-	if got := overlayOf(t, s, "Lead").State; got != "working" {
-		t.Errorf("state = %q: an older event won on its encoding", got)
+	if got := overlayOf(t, s, "Lead").CurrentPhase; got == nil {
+		t.Error("an older event won on its encoding: the phase was cleared")
 	}
 }
 
@@ -251,8 +283,8 @@ func TestATurnCompletingReturnsTheSeatToIdle(t *testing.T) {
 		at("2026-06-14T12:00:06+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle once the turn is over", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle once the turn is over", got.Activity)
 	}
 	if got.CurrentPhase != nil {
 		t.Errorf("current phase = %v, want null", *got.CurrentPhase)
@@ -298,8 +330,8 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 			if got.LiveCall.TurnID != "tn-2" {
 				t.Errorf("live call turn = %q, want tn-2", got.LiveCall.TurnID)
 			}
-			if got.State != "working" {
-				t.Errorf("state = %q, want working — the seat is mid-turn", got.State)
+			if got.Activity != livestate.ActivityWorking {
+				t.Errorf("activity = %q, want working — the seat is mid-turn", got.Activity)
 			}
 		})
 	}

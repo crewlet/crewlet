@@ -142,6 +142,9 @@ func wireAPI(
 			Usage:   e.UsageEstate(),
 			Company: company,
 			NodeID:  nodeID,
+			// THE FLEET'S LEASE TABLE, as cmd/crewlet wires it: the seat
+			// states the dashboard is served read placement from it.
+			Coord: backends.Coord,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,

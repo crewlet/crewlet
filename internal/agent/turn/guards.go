@@ -112,10 +112,10 @@ func (s *StallDetector) Reset() { s.history = nil }
 // Its Kind is the WIRE vocabulary, [types.GuardKind], and not a second enum of
 // the loop's own. There were two, and they had already disagreed: the loop
 // called the delegation cap "depth" while the event type, the docs and the
-// dashboard's AFK sentence all said "depth_cap". The engine converted one into
-// the other with a plain string cast, so every depth breach reached the store
-// and the screen as a kind nothing recognised, and the seat's AFK line fell
-// back to the generic "the engine paused this seat". One type makes that drift
+// dashboard's failure sentence all said "depth_cap". The engine converted one
+// into the other with a plain string cast, so every depth breach reached the
+// store and the screen as a kind nothing recognised, and the seat's failure line
+// fell back to the generic "the engine paused this seat". One type makes that drift
 // a compile error rather than a silent rename.
 type Breach struct {
 	Kind   types.GuardKind

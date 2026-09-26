@@ -124,7 +124,7 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 	return out
 }
 
-// seatStates reports every state an `agents` push put a seat in, by role.
+// seatStates reports every activity an `agents` push put a seat in, by role.
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
@@ -138,9 +138,9 @@ func (c *capture) seatStates(t *testing.T) map[string][]string {
 		}
 		for _, row := range env.Data {
 			role, _ := row["role"].(string)
-			state, _ := row["state"].(string)
-			if role != "" && state != "" {
-				out[role] = append(out[role], state)
+			activity, _ := row["activity"].(string)
+			if role != "" && activity != "" {
+				out[role] = append(out[role], activity)
 			}
 		}
 	}

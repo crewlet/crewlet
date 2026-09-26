@@ -30,8 +30,8 @@ func TestATurnIsWorkingFromItsStartEvent(t *testing.T) {
 	}
 
 	o := overlayOf(t, s, "Lead")
-	if o.State != "working" {
-		t.Errorf("state = %q, want working from the start event", o.State)
+	if o.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want working from the start event", o.Activity)
 	}
 	turn := o.Turn
 	if turn == nil {

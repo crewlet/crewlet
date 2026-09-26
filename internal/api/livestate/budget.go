@@ -31,8 +31,7 @@ import (
 // Their reads are of one counter, so the later READ is the truer one, and the
 // envelope timestamp is when it was read. Clock skew between nodes bounds how
 // wrong that can be: a node ahead by a second holds the meter for a second.
-func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
-	var change Change
+func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Change) {
 	meterID := str(payload, "meter_id")
 	seq := num(payload, "seq")
 	at := newStamp(env.Timestamp)
@@ -54,6 +53,10 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 	if !decodePayload(payload, &report) {
 		return change
 	}
+	// THE COMPANY'S WINDOWS STOP EVERY SEAT, so a report that turns the
+	// org meter to refusing — or back — moves seats it never names.
+	before := s.states()
+	defer s.noteMoved(before, &change)
 	// Nothing is cleared here for a new meter, and that is deliberate
 	// rather than an omission: every seat this report does not mention
 	// loses its bar in the sweep at the end, which covers a node on another

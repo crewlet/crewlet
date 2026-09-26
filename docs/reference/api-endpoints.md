@@ -1273,15 +1273,19 @@ opens — before a single turn has run:
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
-A seat carries `state: "idle"` when **this node** is serving it. A seat it
-does not hold carries no state at all and the dashboard reads that as
-`offline` — which is right for a seat nothing has claimed, and is this node
-declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet-sandbox-runs--schedules)
-answers "who holds what" from the lease table, which is the one place that
-knows. The live overlay merged on top replaces that state only once an event
-says what the seat is doing (a spawn, a phase, a turn ending): a token meter
-report names every capped seat whether or not anything runs it, so it carries
-no state at all.
+Every seat carries **one seat-state vocabulary**, computed by the engine and
+never by a client: `activity` is `working`, `needs`, `stopped` or `idle`, and
+`stopped_reason` is `paused`, `unplaced`, `budget` or `provider` on a stopped
+seat and `null` otherwise. Both keys are on every row, a seat no event has
+mentioned included. What each word means, which inputs it is read from and in
+what order they win is [Agent States](../concepts/agent-runtime.md#agent-states).
+Placement is the **fleet's** lease table, read on every snapshot and on the
+five-second tick, so a seat a peer runs reads `idle` or `working` here rather
+than being left without a state — which the dashboard used to draw as offline,
+on every seat another node held — and a seat no node holds reads
+`stopped`/`unplaced`. A token meter report names every capped seat whether or
+not anything runs it, and moves a seat's state only when one of its windows is
+refusing.
 
 The three config-derived sections are **re-sent on every config apply**, as
 `seats`, `org` and `tools` pushes. Nothing else would correct them: a
@@ -1426,7 +1430,9 @@ upgrade to a WebSocket (corporate proxies, etc.).
 {
   "health":    { /* status, in_flight and shutting_down, from the
                       health envelope described below */ },
-  "agents":    [ { /* /agents row: live state + budget meter + live_call (the
+  "agents":    [ { /* /agents row: activity (working | needs | stopped |
+                      idle) + stopped_reason (paused | unplaced | budget |
+                      provider, or null) + budget meter + live_call (the
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
                       seat, or null) + turn (the turn the seat is on,
@@ -1837,7 +1843,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 |--------|------|--------|
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
-| `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
+| `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `role`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |

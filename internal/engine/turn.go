@@ -154,7 +154,7 @@ type Dispatcher struct {
 	//
 	// FOR ONE RECORD ONLY: the guard breach a panic that escaped a turn's
 	// own frames publishes. The live projection keys a seat by ROLE, so a
-	// breach addressed by handle alone would move no seat to AFK, and the
+	// breach addressed by handle alone would reach no seat's failure, and the
 	// turn's own telemetry, which does know the role, is exactly what did
 	// not run.
 	//
@@ -859,8 +859,8 @@ func turnStoppedEvent(handle, role, agentID, turnID, workKey string,
 // [turn.Abandon] gives for every panic: a redelivery runs the same defect on
 // the same input, and a defer would only hand that defect to a peer running the
 // same build. What the panic cost is put on the record instead: the stack in
-// the log, the unhandled-exception guard on the seat, so it renders AFK with a
-// cause rather than as whatever it was last doing, and a skipped-trigger record
+// the log, the unhandled-exception guard on the seat, so it renders its failure
+// with a cause rather than as whatever it was last doing, and a skipped-trigger record
 // per event saying it will not come back.
 //
 // held is what the delivery still held when it panicked (see [holding]), not
@@ -911,7 +911,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 	panicked *turn.PanicError,
 ) *events.Event {
 	if role == "" {
-		// A handle this company does not name has no seat to put AFK, and
+		// A handle this company does not name has no seat to fail, and
 		// a breach addressed to nobody moves nothing.
 		return nil
 	}

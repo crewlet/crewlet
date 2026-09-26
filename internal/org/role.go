@@ -230,6 +230,22 @@ type Identity struct {
 	ExternalID string
 }
 
+// Clone returns a copy the caller may normalise without touching the original,
+// or nil for nil.
+//
+// A seat is BUILT from the authored config on every read of the org — each
+// apply, and each placement read the dashboard makes on its five-second tick —
+// and [Organization.Normalize] then rewrites the contact in place. Shared, that
+// rewrote the stored revision's own contact, from several goroutines at once:
+// a data race, and a stored document silently changed by being read.
+func (c *HumanContact) Clone() *HumanContact {
+	if c == nil {
+		return nil
+	}
+	dup := *c
+	return &dup
+}
+
 // Normalize strips whitespace and lowercases the literal values of the
 // case-normalised fields. It is idempotent.
 //

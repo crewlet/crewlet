@@ -278,13 +278,18 @@ func New(opts Options) (*App, error) {
 		Handles: opts.Sources.RoleHandles,
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
-		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
+		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
 		Schedules: func() any { return opts.Sources.ConfiguredSchedules() },
+		// WHICH SEATS SOME NODE HOLDS, from the fleet's lease table, for
+		// the seat-state vocabulary's `unplaced`.
+		Placement: func() (map[string]bool, error) {
+			return placementTick(opts.Sources.Company, opts.Sources.Coord, opts.Runtime)
+		},
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -428,6 +433,7 @@ func (o Options) missing() error {
 		{"EventLog", o.EventLog == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
+		{"Sources.Coord", o.Sources.Coord == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},

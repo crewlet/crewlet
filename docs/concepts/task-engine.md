@@ -183,7 +183,7 @@ There is no special escalation mechanism in Crewlet. When an agent is blocked or
 - The `getting-unstuck` tool skill (see `examples/tool-skills/getting-unstuck.md`) teaches the agent the discipline: include what you tried, options you see, your recommendation, and urgency. Never hand a naked problem.
 - The agent's identity prompt names its manager, so the handoff target is always resolvable.
 
-When the engine itself stops a turn it ends it as `failed` and publishes the cause: `turn.guard_breach` for a fired guard (stall, max-iteration exhaustion, the delegation-depth cap, a scheduled turn's wall-clock cap), `budget_exhausted` for a spent token budget, or `llm_unavailable` for an exhausted provider chain. The dashboard derives an `afk` state from those events and surfaces a cause-specific status line so the founder sees what happened.
+When the engine itself stops a turn it ends it as `failed` and publishes the cause: `turn.guard_breach` for a fired guard (stall, max-iteration exhaustion, the delegation-depth cap, a scheduled turn's wall-clock cap), `budget_exhausted` for a spent token budget, or `llm_unavailable` for an exhausted provider chain. The failure is kept on the seat as its `last_error`, with a cause-specific status line, so the founder sees what happened; an exhausted provider chain also reads the seat as `stopped` with the reason `provider` until it works again, and a spent budget as `stopped`/`budget` while its window refuses (see [Agent States](agent-runtime.md#agent-states)).
 
 ---
 
@@ -221,7 +221,7 @@ flowchart TD
     subgraph enginefail["Engine-driven failure (a guard, a spent budget, the LLM down)"]
         direction TB
         E["turn.guard_breach, budget_exhausted or llm_unavailable"]
-        F["The dashboard reports the seat as AFK with its cause,<br/>first in the overview's attention queue.<br/>The founder follows it to the seat, the turn, or the log."]
+        F["The dashboard reports the failure on the seat with its cause —<br/>stopped when the provider or the budget is why — first in<br/>the overview's attention queue. The founder follows it<br/>to the seat, the turn, or the log."]
         E --> F
     end
 ```

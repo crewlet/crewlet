@@ -51,7 +51,7 @@ import {
 // Arrowing between chart and charter under that control is history a reader
 // then has to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
-import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import {
   indexOrg,
   seatPath,
@@ -94,7 +94,6 @@ type Lens = (typeof LENSES)[number];
  */
 function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
   const agents = useAgents();
-  const sandboxes = useSandboxes();
   return (
     <div className="org-seats" style={style}>
       {seats.map((seat) => (
@@ -125,7 +124,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           {seat.kind === "human" ? (
             <Tag appearance="outline">human</Tag>
           ) : (
-            <StateBadge agent={agents.find((a) => a.role === seat.name)} sandboxes={sandboxes} />
+            <StateBadge agent={agents.find((a) => a.role === seat.name)} />
           )}
         </a>
       ))}

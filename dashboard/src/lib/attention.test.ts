@@ -406,8 +406,8 @@ describe("ordering", () => {
         connected: false,
         engine: { status: "ok", configured: false },
         agents: [
-          { id: "a", role: "A", state: "afk", afk_reason: "stall" },
-          { id: "b", role: "B", state: "afk", afk_reason: "stall" },
+          { id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
+          { id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
         ],
       }),
     );
