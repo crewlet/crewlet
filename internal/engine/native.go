@@ -1268,7 +1268,7 @@ func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 //
 // The READER AND WRITER are this node's, and do not change with a revision;
 // the DEFAULT PROJECT is the org chart's, and does. Both halves nil omits
-// all five tools, which is what a company on Jira has — and omitting them is
+// every tracker tool, which is what a company on Jira has — and omitting them is
 // the point: a seat offered a tool against a tracker its company does not
 // run would reach for it and fail at the call.
 func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
