@@ -2751,7 +2751,8 @@ claim, and a store blip is not evidence for it.
     {
       "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
       "owner": "core-1:8f2a", "protocol": 3, "seats": 4, "expires_in": 41.2,
-      "config_epoch": 7, "config_status": "ok", "config_error": ""
+      "config_epoch": 7, "config_status": "ok", "config_error": "",
+      "object_weight": 1
     }
   ],
   "seats": [
@@ -2761,9 +2762,30 @@ claim, and a store blip is not evidence for it.
   "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41.2}],
   "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],
   "unmanned_roles": [],
-  "this_node": "core-1"
+  "this_node": "core-1",
+  "objects": {
+    "available": true, "placed": true, "epoch": 3, "replicas": 3, "copies": 3,
+    "members": [
+      {"node": "core-1", "weight": 1},
+      {"node": "core-2", "weight": 1, "absent_since": "2026-09-01T12:00:00Z"},
+      {"node": "core-3", "weight": 2}
+    ]
+  }
 }
 ```
+
+**`objects` is where the company's files are placed** — the
+[object store's](../concepts/object-store.md) placement map, read from the
+coordination store like the rest of this answer, so every node reports the
+same one. `replicas` is how many copies of each chunk the fleet asks for and
+`copies` how many it holds now: fewer while it has fewer data nodes than
+that, which is a shortfall the screen says in words. A member with
+`absent_since` is one the map is still counting while it is gone; its share
+moves to the others ten minutes after that instant. Three states are named
+apart rather than drawn as an empty list: `available: false` (the store did
+not answer), `placed: false` (no map yet, so no file can be stored) and
+`unreadable: true` (a newer build wrote it). Each node row's `object_weight`
+is the share that node offers, absent on a node that holds no data.
 
 ### `GET /sandbox-runs`
 

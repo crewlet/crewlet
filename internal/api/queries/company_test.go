@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -24,6 +25,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/objstore"
+	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -2325,5 +2328,92 @@ func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
 
 			t.Errorf("%v answered %v, want bad params", params, err)
 		}
+	}
+}
+
+// objectMaps is a stored placement map a test sets directly.
+type objectMaps struct {
+	raw   []byte
+	found bool
+	err   error
+}
+
+func (m objectMaps) ObjectMap(context.Context) (coord.ObjectMapRecord, bool, error) {
+	return coord.ObjectMapRecord{Value: m.raw, Version: 7}, m.found, m.err
+}
+
+// THE FLEET VIEW SHOWS WHERE THE COMPANY'S FILES ARE PLACED, and names the
+// three states that would otherwise all read as an empty list: a store that
+// would not answer, a fleet with no map yet, and a map a newer build wrote.
+func TestTheFleetShowsTheObjectPlacement(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("data-a"), coord.AcquireOptions{
+		Owner: "data-a:1", TTL: time.Minute,
+		Meta: map[string]any{"roles": []any{"data"}, "object_weight": 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	absent := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	raw, err := objstore.MapState{
+		Map: objplacement.Map{Epoch: 3, Replicas: 3, Members: []objplacement.Member{
+			{Node: "data-a", Weight: 4}, {Node: "data-b", Weight: 1},
+		}},
+		Absent: map[string]time.Time{"data-b": absent},
+	}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet := func(m objectMaps) map[string]any {
+		t.Helper()
+		body := asMap(t, answer(t, queries.Sources{Coord: backend, NodeID: "data-a", Objects: m}, "fleet", nil))
+		objects, _ := body["objects"].(map[string]any)
+		if objects == nil {
+			t.Fatalf("no objects in %v", body)
+		}
+		return objects
+	}
+
+	got := fleet(objectMaps{raw: raw, found: true})
+	if got["epoch"] != float64(3) || got["replicas"] != float64(3) || got["copies"] != float64(2) {
+		t.Errorf("epoch/replicas/copies = %v/%v/%v, want 3/3/2 — two members hold what three were asked for",
+			got["epoch"], got["replicas"], got["copies"])
+	}
+	members, _ := got["members"].([]any)
+	if len(members) != 2 {
+		t.Fatalf("members = %v", got["members"])
+	}
+	b, _ := members[1].(map[string]any)
+	if b["node"] != "data-b" || b["absent_since"] != absent.Format(time.RFC3339Nano) {
+		t.Errorf("the absent member reads %v", b)
+	}
+	if a, _ := members[0].(map[string]any); a["absent_since"] != nil {
+		t.Errorf("a present member carries an absence: %v", a)
+	}
+
+	for name, tc := range map[string]struct {
+		maps objectMaps
+		want map[string]any
+	}{
+		"a store that would not answer": {objectMaps{err: errors.New("down")},
+			map[string]any{"available": false}},
+		"a fleet with no map yet": {objectMaps{},
+			map[string]any{"available": true, "placed": false}},
+		"a map a newer build wrote": {objectMaps{raw: []byte("not a map"), found: true},
+			map[string]any{"available": true, "placed": true, "unreadable": true}},
+	} {
+		if got := fleet(tc.maps); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: objects = %v, want %v", name, got, tc.want)
+		}
+	}
+
+	// AND EACH NODE'S OFFERED SHARE, off its own presence.
+	body := asMap(t, answer(t, queries.Sources{Coord: backend, NodeID: "data-a"}, "fleet", nil))
+	nodes, _ := body["nodes"].([]any)
+	if node, _ := nodes[0].(map[string]any); node["object_weight"] != float64(4) {
+		t.Errorf("object_weight = %v, want the weight the presence lease carries", node["object_weight"])
+	}
+	if _, present := body["objects"]; present {
+		t.Error("a surface with no map reader reported a placement anyway")
 	}
 }

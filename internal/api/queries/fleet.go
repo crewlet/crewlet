@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -67,6 +68,12 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"protocol":   lease.Protocol,
 			"seats":      held[id],
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
+		}
+		// THE SHARE OF THE OBJECT STORE THIS NODE OFFERS, off its own
+		// presence — absent on a node that holds none, never a 0 that
+		// reads as a data node offering nothing.
+		if profile.ObjectWeight > 0 {
+			row["object_weight"] = profile.ObjectWeight
 		}
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
@@ -132,7 +139,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		return cmp.Compare(a["duty"].(string), b["duty"].(string))
 	})
 
-	return map[string]any{
+	out := map[string]any{
 		"nodes": nodeRows, "seats": seatRows, "duties": dutyRows,
 		"unplaceable":    s.unplaceable(nodeRows, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows),
@@ -153,7 +160,55 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// never existed.
 		"target_epoch": target.epoch,
 		"activation":   target.detail,
-	}, nil
+	}
+	if s.Objects != nil {
+		out["objects"] = s.objectMap(ctx)
+	}
+	return out, nil
+}
+
+// ObjectMapReader is the stored placement map, read as every node reads it.
+type ObjectMapReader interface {
+	ObjectMap(ctx context.Context) (coord.ObjectMapRecord, bool, error)
+}
+
+// objectMap is the fleet's placement map as the fleet view shows it.
+//
+// THE STORED MAP, not this node's cached copy, for the reason the whole view
+// reads the lease table: every node gives the same answer. And THREE STATES
+// NAMED APART, never folded into an empty list — a map the store would not
+// give up (`available: false`), a fleet with no map yet (`placed: false`,
+// where no upload can land), and one a newer build wrote that this one cannot
+// read (`unreadable: true`) — because each sends an operator somewhere
+// different, and "no members" reads as the second of them whichever it was.
+func (s Sources) objectMap(ctx context.Context) map[string]any {
+	rec, found, err := s.Objects.ObjectMap(ctx)
+	switch {
+	case err != nil:
+		return map[string]any{"available": false}
+	case !found:
+		return map[string]any{"available": true, "placed": false}
+	}
+	state, err := objstore.DecodeMapState(rec.Value)
+	if err != nil {
+		return map[string]any{"available": true, "placed": true, "unreadable": true}
+	}
+	members := make([]map[string]any, 0, len(state.Map.Members))
+	for _, m := range state.Map.Members {
+		row := map[string]any{"node": m.Node, "weight": m.Weight}
+		if since, gone := state.Absent[m.Node]; gone {
+			row["absent_since"] = isoOrEmpty(since)
+		}
+		members = append(members, row)
+	}
+	// BOTH COUNTS: the replica count asked for, and how many members hold
+	// each chunk now — fewer while the fleet has fewer data nodes than it
+	// asks for, which is exactly the shortfall an operator is looking for.
+	return map[string]any{
+		"available": true, "placed": true,
+		"epoch": state.Map.Epoch, "replicas": state.Map.Replicas,
+		"copies": state.Map.Size(), "members": members,
+	}
 }
 
 // applyStatus is each node's last config outcome, keyed by node id.

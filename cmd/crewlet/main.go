@@ -1561,9 +1561,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
 			// is no longer running.
-			Company:  func() *config.Company { return companyConfig(e) },
-			Coord:    e.Backends().Coord,
-			Plane:    e.Backends().Fleet,
+			Company: func() *config.Company { return companyConfig(e) },
+			Coord:   e.Backends().Coord,
+			Plane:   e.Backends().Fleet,
+			// The object store's placement map, read from the store
+			// every node reads it from, for the fleet view's card.
+			Objects:  e.Backends().Fleet,
 			Runs:     sqlledger.New(e.Backends().Store.SQL()),
 			Diary:    learning.NewDiary(e.Backends().Store),
 			Episodes: learning.NewEpisodes(e.Backends().Store),

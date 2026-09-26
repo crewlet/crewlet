@@ -77,6 +77,11 @@ type Sources struct {
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
+	// Objects is the object store's stored placement map, for the fleet
+	// view's placement card. Nil leaves the card out of the answer rather
+	// than reporting a fleet with no map.
+	Objects ObjectMapReader
+
 	// Runs is the schedule dispatch ledger. Nil still answers the
 	// schedules question — the configured schedules are a projection of
 	// the org — with an empty history, because "no ledger" and "nothing
