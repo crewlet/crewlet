@@ -305,7 +305,7 @@ func relationKindList() string {
 // It returns the scope unchanged when the task has no dependents, which is the
 // overwhelming majority of tasks: the read below is one indexed lookup and the
 // widening is nothing at all.
-func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
+func (w *Writer) scopeForDependents(ctx context.Context, id string,
 	scope ScopeSet) (ScopeSet, error) {
 
 	if w.db == nil {
@@ -323,7 +323,10 @@ func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
 		// lands on, and refuses naming the object the claim is short by.
 		return scope, nil
 	}
-	var dependents []string
+	var (
+		dependents []string
+		filed      map[string]string
+	)
 	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		if err != nil || !held {
@@ -335,12 +338,43 @@ func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
 			return err
 		}
 		dependents = current.Dependents
-		return nil
+		filed, err = dependentsFiled(ctx, tx, dependents)
+		return err
 	}); err != nil {
 		return scope, fmt.Errorf("tracker: read task %s's dependents to scope "+
 			"its write: %w", id, err)
 	}
-	return scope.withObjects(project, id, dependents), nil
+	return scope.withObjects(id, dependents, filed), nil
+}
+
+// dependentsFiled is where each of these tasks is filed — its project — for
+// the ones this node holds.
+//
+// READ FROM THE DEPENDENTS' OWN ROWS, because a dependent's project is not on
+// the blocker's row and cross-project dependencies are allowed: a scope that
+// named a dependent under the BLOCKER's project named a path no record about
+// the dependent is filed under, so a record this node could not decode about
+// that dependent never blocked the write rewriting its row.
+func dependentsFiled(ctx context.Context, tx *sql.Tx, ids []string) (map[string]string, error) {
+	filed := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return filed, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, project_key FROM tracker_tasks
+		WHERE id IN (`+placeholders(len(ids))+`)`, anyOf(ids)...)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read where %d dependent(s) are filed: %w",
+			len(ids), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, project string
+		if err := rows.Scan(&id, &project); err != nil {
+			return nil, fmt.Errorf("tracker: read where a dependent is filed: %w", err)
+		}
+		filed[id] = project
+	}
+	return filed, rows.Err()
 }
 
 // withObjects turns a sentinel scope into the enumeration that also names
@@ -349,7 +383,14 @@ func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
 // THE SUBJECT IS ALWAYS AMONG THEM. A scope built from terms carries no
 // sentinel, so dropping the subject's own term would claim the dependents and
 // not the task being written.
-func (s ScopeSet) withObjects(container, subject string, ids []string) ScopeSet {
+//
+// EACH DEPENDENT UNDER THE PROJECT IT IS FILED IN, from filed. One this node
+// does not hold has no path this build can form, so it is claimed by the
+// DOMAIN: the one term that certainly contains it. That over-claims — a
+// deferral anywhere in the tracker then blocks this write — which is the safe
+// direction, and it is reached only by an edge whose other end this node has
+// never applied.
+func (s ScopeSet) withObjects(subject string, ids []string, filed map[string]string) ScopeSet {
 	if len(ids) == 0 {
 		return s
 	}
@@ -361,33 +402,48 @@ func (s ScopeSet) withObjects(container, subject string, ids []string) ScopeSet 
 	}
 	terms = append(terms, s.Terms...)
 	for _, id := range ids {
-		if slices.ContainsFunc(terms, func(t ScopeTerm) bool {
-			return t.Kind == TermObject && t.ID == id
-		}) {
+		if s.namesFiled(terms, id, filed) {
 			continue
 		}
-		// THE BLOCKER'S OWN CONTAINER, because a dependent's project
-		// is not on the blocker's row and cross-project dependencies
-		// are allowed. A container term is the coarser claim of the
-		// two, so naming this one over-claims rather than under-claims
-		// — and an under-claim is the failure this whole path exists
-		// to avoid.
+		project, held := filed[id]
+		if !held {
+			terms = append(terms, ScopeTerm{Kind: TermDomain})
+			continue
+		}
 		terms = append(terms, ScopeTerm{
-			Kind: TermObject, Container: container, ID: id,
+			Kind: TermObject, Container: project, ID: id,
 		})
 	}
 	return ScopeSet{Terms: terms}
 }
 
-// covers reports whether this scope already names every one of these objects.
-func (s ScopeSet) covers(ids []string) error {
+// namesFiled reports whether terms already claim id where filed says it is:
+// its object term under its own project, or the domain.
+func (ScopeSet) namesFiled(terms []ScopeTerm, id string, filed map[string]string) bool {
+	project, held := filed[id]
+	return slices.ContainsFunc(terms, func(t ScopeTerm) bool {
+		switch t.Kind {
+		case TermDomain:
+			return true
+		case TermObject:
+			return held && t.ID == id && t.Container == project
+		}
+		return false
+	})
+}
+
+// covers reports whether this scope already names every one of these objects
+// where filed says each one is.
+//
+// WHERE, not only WHICH: a dependent that moved project between the read that
+// built this scope and the snapshot deciding it is named at a path its records
+// are no longer filed under, and a check on the id alone would pass it.
+func (s ScopeSet) covers(ids []string, filed map[string]string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	for _, id := range ids {
-		if slices.ContainsFunc(s.Terms, func(t ScopeTerm) bool {
-			return t.Kind == TermObject && t.ID == id
-		}) {
+		if s.namesFiled(s.Terms, id, filed) {
 			continue
 		}
 		// NAMED, AND NOT SILENTLY WIDENED. The request's scope is what

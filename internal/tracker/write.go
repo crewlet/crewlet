@@ -483,7 +483,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// came up short again. Any edit at all to a task somebody waits on was
 	// refused for ever, with an error promising it would not be.
 	var err error
-	if scope, err = w.scopeForDependents(ctx, id, project, scope); err != nil {
+	if scope, err = w.scopeForDependents(ctx, id, scope); err != nil {
 		return WriteResult{}, err
 	}
 	at := w.Now()
@@ -627,8 +627,13 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			// rather than published under a scope that does not cover
 			// it. The caller re-runs and the second attempt enumerates
 			// the dependent that arrived.
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+			filed, err := dependentsFiled(ctx, tx, current.Dependents)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := scope.covers(current.Dependents); err != nil {
+			if err := scope.covers(current.Dependents, filed); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
