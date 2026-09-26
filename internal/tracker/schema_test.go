@@ -136,35 +136,61 @@ func TestNoUniqueOutsideAPrimaryKey(t *testing.T) {
 // reader in the DDL is what makes deleting one a decision somebody can check
 // rather than a guess — and it is how two partial indexes with no writer at
 // all survived a design review in the shape this replaces.
+//
+// EVERY LIVE INDEX, WHICHEVER MIGRATION MADE IT. This read 0002 alone, so an
+// index a later migration added was never asked for its reader — and one had
+// none. What it checks now is the schema a database actually ends up with:
+// every tracker index present there is found at the LAST migration that
+// creates it, and that statement must name what reads it.
 func TestEveryTrackerIndexNamesItsQuery(t *testing.T) {
 	t.Parallel()
-	source, err := trackerSchemaSource()
+	sources, err := trackerSchemaSources()
 	if err != nil {
-		t.Fatalf("read the migration: %v", err)
+		t.Fatalf("read the migrations: %v", err)
 	}
-	lines := strings.Split(source, "\n")
+	// closing is each index's creating statement's last line, from the
+	// latest migration that creates it.
+	closing := map[string]string{}
+	for _, source := range sources {
+		lines := strings.Split(source, "\n")
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "CREATE INDEX") {
+				continue
+			}
+			fields := strings.Fields(trimmed)
+			if len(fields) < 3 {
+				t.Fatalf("an index statement with no name: %q", trimmed)
+			}
+			end := i
+			for end < len(lines) && !strings.Contains(lines[end], ";") {
+				end++
+			}
+			if end == len(lines) {
+				t.Fatalf("the CREATE INDEX %s never terminates", fields[2])
+			}
+			closing[fields[2]] = lines[end]
+		}
+	}
 	seen := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(line), "CREATE INDEX") {
+	for name := range ddl(t) {
+		index, ok := strings.CutPrefix(name, "index:")
+		if !ok || !strings.HasPrefix(index, "tracker_") || strings.HasPrefix(index, "sqlite_autoindex") {
 			continue
 		}
 		seen++
-		// Walk to the line that closes the statement; the comment goes
-		// there, because a multi-line index ends with its WHERE clause.
-		closing := i
-		for closing < len(lines) && !strings.Contains(lines[closing], ";") {
-			closing++
+		line, found := closing[index]
+		if !found {
+			t.Errorf("index %s is in the schema and no migration creates it", index)
+			continue
 		}
-		if closing == len(lines) {
-			t.Fatalf("the CREATE INDEX beginning at line %d never terminates", i+1)
-		}
-		_, tail, _ := strings.Cut(lines[closing], ";")
+		_, tail, _ := strings.Cut(line, ";")
 		if !strings.Contains(tail, "--") || len(strings.TrimSpace(tail)) < 8 {
-			t.Errorf("this index names no reader:\n\t%s", strings.TrimSpace(lines[closing]))
+			t.Errorf("index %s names no reader:\n\t%s", index, strings.TrimSpace(line))
 		}
 	}
 	if seen == 0 {
-		t.Fatal("the migration declares no indexes at all, so this guard is " +
+		t.Fatal("the schema holds no tracker indexes at all, so this guard is " +
 			"measuring its own scanner")
 	}
 }
@@ -294,13 +320,18 @@ func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 	}
 }
 
-// trackerSchemaSource reads the migration file itself, for the one assertion
-// that is about the SOURCE rather than about what the driver created: a
-// trailing comment is not part of the schema the database keeps.
-func trackerSchemaSource() (string, error) {
-	body, err := store.SchemaFile(store.EstateReplicated, "0002_the_tracker_lands.sql")
-	if err != nil {
-		return "", err
+// trackerSchemaSources reads every replicated migration, in application
+// order, for the one assertion that is about the SOURCE rather than about what
+// the driver created: a trailing comment is not part of the schema the
+// database keeps.
+func trackerSchemaSources() ([]string, error) {
+	var out []string
+	for _, name := range store.SchemaVersions(store.EstateReplicated) {
+		body, err := store.SchemaFile(store.EstateReplicated, name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, string(body))
 	}
-	return string(body), nil
+	return out, nil
 }
