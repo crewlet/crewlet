@@ -25,7 +25,7 @@
  * and the two the engine already retired had both drifted into bugs.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Button,
   Callout,
@@ -59,35 +59,24 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
+import { isAbort, rest, RestError } from "~/protocol/index.ts";
+import { restErrorCode, useRest } from "~/lib/useRest.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
- * A REST refusal as the CODE [QueryState] is keyed on.
+ * A refusal as the code [QueryState] renders, with this surface's one 404.
  *
- * THE BANNER IS A TABLE OVER `QueryErrorCode`, not a place to put a sentence:
- * this screen handed it prose, the lookup missed every time, and a 401 —
- * the refusal an unguarded operator actually hits here, since `/secrets` is
- * guarded reads included — rendered the red "a code this build does not know"
- * banner instead of the auth-gated one. The sentence even promised a button
- * that only exists inside the entry that was being skipped.
- *
- * The other two REST statuses this surface can answer with are mapped rather
- * than folded into the generic failure, because each means something
- * different to whoever is reading: status 0 is `offline()` — the request never
- * reached the engine — and a 404 on the LIST route is the whole surface being
- * unregistered, which `secretsapi.Routes` does on a process that cannot reach
- * the fleet's coordination store. Everything else is a fault on the node.
+ * The loader maps every status (`restErrorCode`); what it cannot know is that
+ * a 404 on THIS list route is the whole surface being unregistered —
+ * `secretsapi.Routes` does that on a process that cannot reach the fleet's
+ * coordination store — rather than a record that is not there.
  */
-function refusalCode(err: unknown): QueryErrorCode {
-  if (!(err instanceof RestError)) return "query_failed";
-  if (err.unauthorized) return "unauthorized";
-  if (err.status === 0) return "closed";
-  if (err.status === 404) return "unknown_query";
-  return "query_failed";
+function refusalCode(err: RestError | null): QueryErrorCode | null {
+  if (err?.status === 404) return "unknown_query";
+  return restErrorCode(err);
 }
 
 /**
@@ -141,112 +130,22 @@ function useCredentials(enabled = true): Credentials {
   // a bad-params error and the table could never hold a row. The socket is
   // still the data channel for everything it answers; this surface is simply
   // not one of them.
-  const [rows, setRows] = useState<SecretRow[] | null>(null);
-  const [error, setError] = useState<QueryErrorCode | null>(null);
-  const [loading, setLoading] = useState(enabled);
-
-  // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
-  // mistake this screen must not make. `references` null means the question
-  // was not answered — never that the answer was "nothing" — and the removal
-  // confirmation branches on exactly that.
-  const [references, setReferences] = useState<ConfigReference[] | null>(null);
-  const [unknown, setUnknown] = useState<string | null>(null);
-
-  // THE ANSWER THAT LANDS IS NOT ALWAYS AN ANSWER ANYBODY IS STILL WAITING
-  // FOR, and this screen wrote every one of them into state unconditionally.
   //
-  // Three things start a read — mount, a token arriving, and the reader
-  // pressing refresh — so two can be in flight at once, and nothing here
-  // polls: whichever landed last was what the screen held. The same
-  // generation counter [Integrations] uses for exactly this covers both
-  // halves, because "superseded" and "unmounted" are one question to a read
-  // still in flight.
-  //
-  // Unmounted is the half that was actually failing. A read outliving its
-  // screen set state against a torn-down document, and in a test run that is
-  // an unhandled `ReferenceError: window is not defined` from React's own
-  // dispatch — every case passing and the run still exiting non-zero. It is
-  // timing, so it appeared on CI and not here, which is exactly the kind of
-  // leak a guard has to close rather than a rerun.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
-  );
-
-  const load = useCallback(async (mine: number) => {
-    setLoading(true);
-    try {
-      const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
-      if (generation.current !== mine) return;
-      setRows(body?.secrets ?? []);
-      setError(null);
-    } catch (err) {
-      if (generation.current !== mine) return;
-      // The last good list stays on screen. A refusal to refresh is not a
-      // reason to tell an operator the company holds no credentials.
-      setError(refusalCode(err));
-    } finally {
-      // ANSWERED, not answered WELL: a refusal is a state this screen
-      // renders honestly, and waiting is not. Guarded like the rest — a
-      // `finally` runs on the superseded path too.
-      if (generation.current === mine) setLoading(false);
-    }
-  }, []);
-
-  const loadReferences = useCallback(async (mine: number) => {
-    try {
-      const body = (await rest.get("/config/references")) as {
-        references?: ConfigReference[];
-      } | null;
-      if (generation.current !== mine) return;
-      setReferences(body?.references ?? []);
-      setUnknown(null);
-    } catch (err) {
-      if (generation.current !== mine) return;
-      // A 404 IS AN ANSWER. A deployment before its first config import has
-      // no active document, so nothing can be pointing at anything, and
-      // treating that as a failed check would put a warning in front of
-      // every removal on a new install.
-      if (err instanceof RestError && err.status === 404) {
-        setReferences([]);
-        setUnknown(null);
-        return;
-      }
-      setReferences(null);
-      setUnknown(refusal(err));
-    }
-  }, []);
-
-  // ONE GENERATION FOR THE PAIR, taken here rather than inside each loader:
-  // the two reads are one refresh, and giving them a generation each would
-  // let the second supersede the first half of the same gesture.
-  const reload = useCallback(async () => {
-    generation.current++;
-    const mine = generation.current;
-    await Promise.all([load(mine), loadReferences(mine)]);
-  }, [load, loadReferences]);
-
-  useEffect(() => {
-    if (enabled) void reload();
-  }, [enabled, reload]);
-  // This screen's refusal names the missing token, so supplying one has to
-  // refresh it in place rather than waiting for a reload.
-  useEffect(
-    () =>
-      onTokenChanged(() => {
-        if (enabled) void reload();
-      }),
-    [enabled, reload],
-  );
+  // ONE READ FOR THE PAIR, because the list and its reference index are one
+  // refresh: two loaders would let the second answer land beside a first
+  // that a newer refresh already superseded.
+  const answer = useRest(enabled ? "/secrets+/config/references" : null, async (signal) => {
+    const [list, index] = await Promise.all([
+      rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,
+      readReferences(signal),
+    ]);
+    return { rows: list?.secrets ?? [], ...index };
+  });
 
   // Grouped by name, because one credential routinely has several readers: a
   // seat's bot_token and its mcp_env entry are two pointers at one row, and
   // both have to be visible before it goes.
+  const references = answer.data?.references ?? null;
   const readers = useMemo(() => {
     if (references === null) return null;
     const byName = new Map<string, string[]>();
@@ -261,7 +160,45 @@ function useCredentials(enabled = true): Credentials {
     [readers],
   );
 
-  return { rows, loading, error, unknown, readersOf, reload };
+  const { reload } = answer;
+  return {
+    rows: answer.data?.rows ?? null,
+    loading: answer.loading,
+    error: refusalCode(answer.error),
+    unknown: answer.data?.unknown ?? null,
+    readersOf,
+    reload: useCallback(() => reload(), [reload]),
+  };
+}
+
+/**
+ * The reference index, THREE-VALUED — and collapsing it to two is the one
+ * mistake this screen must not make. `references` null means the question
+ * was not answered, never that the answer was "nothing", and the removal
+ * confirmation branches on exactly that. So its refusal is caught HERE rather
+ * than failing the pair: a list that answered is still the list, and only the
+ * check beside each row becomes "unknown".
+ */
+async function readReferences(
+  signal: AbortSignal,
+): Promise<{ references: ConfigReference[] | null; unknown: string | null }> {
+  try {
+    const body = (await rest.get("/config/references", signal)) as {
+      references?: ConfigReference[];
+    } | null;
+    return { references: body?.references ?? [], unknown: null };
+  } catch (err) {
+    // The pair's own abort is the loader's to recognise, not an answer.
+    if (isAbort(err)) throw err;
+    // A 404 IS AN ANSWER. A deployment before its first config import has
+    // no active document, so nothing can be pointing at anything, and
+    // treating that as a failed check would put a warning in front of
+    // every removal on a new install.
+    if (err instanceof RestError && err.status === 404) {
+      return { references: [], unknown: null };
+    }
+    return { references: null, unknown: refusal(err) };
+  }
 }
 
 /**

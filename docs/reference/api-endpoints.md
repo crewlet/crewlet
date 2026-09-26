@@ -1858,21 +1858,31 @@ verbatim, which is what a reader opens the finished card for.
 Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 `{"kind": "...", "data": ..., "ts": "<iso8601>"}`.
 
-> **The socket is the dashboard's only read channel.** Everything it draws
-> arrives here — pushes plus a request/response query channel — and the
-> REST snapshot exists only for degraded mode, when the socket is down. The
-> socket carries no write: a change travels over REST, through
+> **The socket is the dashboard's channel for state, not for everything.**
+> The projection arrives here as pushes, and every question the query
+> registry answers is asked and answered here too. What the socket does not
+> carry is REST: every write — through
 > [`/operator/act`](#operatoract--the-dashboards-write-surface) as the person
 > the token is bound to, or through the credential-scoped `/config`,
 > `/secrets`, `/setup` and `/backup`, because a write has to be able to say
-> whether it happened and a frame into a dropped socket has no answer. The
-> dashboard survives losing it by polling `/stream/snapshot` every five
-> seconds, which is exactly the kind of failure that is easy to miss:
-> nothing looks broken, the page is simply always a few seconds stale.
-> `internal/e2e` closes that gap by replaying the frames a real server
-> produced through the dashboard's own `store.js`, so both halves of the
-> protocol are checked against each other rather than each against its own
-> idea of the other.
+> whether it happened and a frame into a dropped socket has no answer — and
+> the few guarded reads no query answers (`GET /secrets`,
+> `GET /config/references`, `GET /setup/integrations` and its passes), which
+> the dashboard reads through one loader that re-reads on a new token and
+> honours a `Retry-After`. The dashboard survives losing the socket by
+> polling `/stream/snapshot` every five seconds, which is exactly the kind of
+> failure that is easy to miss: nothing looks broken, the page is simply
+> always a few seconds stale. `internal/e2e` closes that gap by replaying the
+> frames a real server produced through the dashboard's own protocol module
+> (`static/dashboard/protocol.js`, the same source its bundle contains), so
+> both halves of the protocol are checked against each other rather than each
+> against its own idea of the other.
+>
+> **A kind a client does not know is ignored, never an error.** A fleet part
+> way through an upgrade has a node pushing kinds an older bundle was built
+> before, so the dashboard drops such a frame — and counts it, because the
+> same fall-through is what a kind this build's engine sends and its own
+> client forgot looks like, and the e2e replay fails on a non-zero count.
 
 **Server → client kinds**
 
@@ -1884,11 +1894,11 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
+| `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**

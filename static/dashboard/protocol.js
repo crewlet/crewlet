@@ -27,6 +27,20 @@ function emptyState() {
 }
 var Store = class {
 	state = emptyState();
+	/**
+	* The push kinds this build does not know, each with how many arrived.
+	*
+	* IGNORED AND COUNTED. A fleet part way through an upgrade has a node
+	* pushing a kind this bundle was built before, and throwing on it — or
+	* applying it to a slice by a guess — would break a screen over a frame it
+	* has no use for. But the same fall-through is exactly what this build's
+	* own engine sending a kind its own client forgot looks like, which is the
+	* silent failure the e2e replay exists to catch: so it is kept here, and
+	* the replay asserts it is empty. Not a slice, because nothing renders it
+	* and a listener woken by a frame nobody can read would be woken for
+	* nothing.
+	*/
+	unknownPushes = /* @__PURE__ */ new Map();
 	subs = /* @__PURE__ */ new Map();
 	/**
 	* A monotonic counter per slice.
@@ -170,6 +184,11 @@ var Store = class {
 			}
 		}
 	}
+	/** Count one frame whose `kind` this build does not dispatch. */
+	noteUnknownPush(kind) {
+		const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
+		this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
+	}
 	agentById(id) {
 		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
 	}
@@ -270,23 +289,21 @@ function clearToken() {
 //#endregion
 //#region src/protocol/api.ts
 /**
-* The one HTTP read the dashboard still makes.
+* The degraded-mode snapshot, over HTTP.
 *
-* Everything else goes over the WebSocket — state arrives as pushes and
-* anything on demand is a query on the same socket. This remains for exactly
-* one case: a browser that cannot upgrade to a WebSocket at all, usually a
-* corporate proxy. While the socket is down the client polls this snapshot so
-* the page keeps telling the truth, and it stops the moment the socket is back.
+* The socket carries the projection and every question the query registry
+* answers. This remains for exactly one case: a socket that cannot connect
+* at all — usually a corporate proxy refusing the upgrade, or an engine
+* restarting. While the socket is down the client polls this snapshot so the
+* page keeps telling the truth, and it stops the moment the socket is back.
 *
-* It had a second entry once, and that one is why the Fleet screen shipped
-* dead: a screen reaching for its own transport takes its client from
-* somewhere, and the somewhere it chose was a context field the shell never
-* populated. There is one transport for reads, and only `socket.ts` imports
-* this file.
-*
-* The REST API itself is much larger than this — it is a public read surface
-* documented in docs/reference/api-endpoints.md. The dashboard simply does not
-* use it.
+* It is not the dashboard's only HTTP. Writes and the guarded reads no query
+* answers (`/secrets`, `/setup`, `/config`) go over REST through `rest.ts`,
+* and a screen reads those through `lib/useRest.ts`. What this file keeps is
+* its own separation: it had a second entry once, and that one is why the
+* Fleet screen shipped dead — a screen reaching for its own transport takes
+* its client from somewhere, and the somewhere it chose was a context field
+* the shell never populated. Only `socket.ts` imports this file.
 */
 var api = { 
 /**
@@ -320,10 +337,13 @@ async snapshot() {
 * payload, a trace, a different spend window, the configuration document — is
 * asked for over the same socket and answered on it.
 *
-* There are no HTTP fetches in normal operation. The REST snapshot is used for
-* exactly one thing: keeping the page honest while the socket is down (a proxy
-* that refuses to upgrade, a restarting engine), and it stops the moment the
-* socket is back.
+* The socket is the channel for the projection and for every question the
+* query registry answers — not for everything. Writes and the guarded reads no
+* query answers (`/secrets`, `/setup`, `/config`) go over REST through
+* `rest.ts`, and this file makes two HTTP requests of its own: the degraded
+* snapshot, which keeps the page honest while the socket is down (a proxy that
+* refuses to upgrade, a restarting engine) and stops the moment the socket is
+* back, and the refusal probe after a handshake that never opened.
 */
 var PATH = "/ws/stream";
 /**
@@ -385,6 +405,33 @@ var QUERY_ERROR_CODES = {
 */
 function queryErrorCode(value) {
 	return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? value : null;
+}
+/**
+* A query the engine refused, with the wait it asked for.
+*
+* AN ERROR WHOSE MESSAGE IS THE CODE, so every caller that reads a refusal by
+* [queryErrorCode] of its message keeps working, and a TYPE beside it because
+* the wait is a number and the text of an error is no place to carry one: the
+* `unavailable` frame carries `retry_after_seconds`, computed by the same
+* engine helper as the REST 503's `Retry-After`, and a transport that dropped
+* it left each screen to guess a wait of its own.
+*/
+var QueryError = class extends Error {
+	/**
+	* The engine's wait in seconds, on an `unavailable` refusal that named one,
+	* and null everywhere else — the socket's own `timeout` and `closed`
+	* included, which no engine said anything about.
+	*/
+	retryAfterSeconds;
+	constructor(code, retryAfterSeconds = null) {
+		super(code);
+		this.name = "QueryError";
+		this.retryAfterSeconds = retryAfterSeconds;
+	}
+};
+/** The engine's wait on a refusal, or null where it named none. */
+function retryHint(value) {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 var LiveSocket = class {
 	store;
@@ -479,7 +526,7 @@ var LiveSocket = class {
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);
-			entry.reject(/* @__PURE__ */ new Error("timeout"));
+			entry.reject(new QueryError("timeout"));
 		}, QUERY_TIMEOUT_MS);
 	}
 	flushQueries() {
@@ -642,22 +689,26 @@ var LiveSocket = class {
 			case "result":
 				this.settle(msg.id, null, msg.data);
 				break;
-			case "error": this.settle(msg.id, msg.error || "query_failed", null);
+			case "error":
+				this.settle(msg.id, msg.error || "query_failed", null, retryHint(msg.retry_after_seconds));
+				break;
+			case "pong": break;
+			default: this.store.noteUnknownPush(msg.kind);
 		}
 	}
-	settle(id, error, data) {
+	settle(id, error, data, retryAfterSeconds = null) {
 		if (id === void 0) return;
 		const entry = this.inflight.get(id);
 		if (!entry) return;
 		this.inflight.delete(id);
 		clearTimeout(entry.timer);
-		if (error) entry.reject(new Error(error));
+		if (error) entry.reject(new QueryError(error, retryAfterSeconds));
 		else entry.resolve(data);
 	}
 	failInflight(reason) {
 		for (const entry of this.inflight.values()) {
 			clearTimeout(entry.timer);
-			entry.reject(new Error(reason));
+			entry.reject(new QueryError(reason));
 		}
 		this.inflight.clear();
 	}
@@ -701,8 +752,13 @@ var LiveSocket = class {
 * The dashboard's one REST transport: every write, and the guarded reads the
 * socket has no question for.
 *
-* The socket remains the data channel for state. This is not a second one: it
-* carries the requests that are not questions about state at all. Writes never
+* The socket remains the data channel for the projection and for every
+* question in the query registry. This is not a second one: it carries the
+* requests that are not questions about state at all, and the reads that no
+* query answers. A screen does not call it for a read directly — it reads
+* through `lib/useRest.ts`, the one loader, so that a superseded answer, an
+* unmounted screen, a changed token and a server's `Retry-After` are each
+* handled once. Writes never
 * go over the socket, deliberately — its token rides the query string on the
 * handshake, and a channel whose credential appears in a proxy log is not
 * where a credential-bearing write belongs (see internal/api/auth's own note
@@ -735,7 +791,19 @@ var RestError = class extends Error {
 	hint;
 	/** Everything else the body carried, for a caller that needs a field. */
 	body;
-	constructor(status, body) {
+	/**
+	* How long the engine asked the caller to wait before asking again, in
+	* seconds, from the refusal's `Retry-After` header — or null where it named
+	* no wait.
+	*
+	* THE ONLY RETRY SIGNAL A REST READ HAS. A 503 is not one on its own: the
+	* engine answers 503 both for a node draining or catching up, which a wait
+	* clears and which carries the header, and for a node with no keyring,
+	* which no wait clears and which does not. The header is the engine saying
+	* which, so a loader retries exactly when it is present.
+	*/
+	retryAfterSeconds;
+	constructor(status, body, retryAfter = null) {
 		const code = typeof body.error === "string" ? body.error : "";
 		const detail = typeof body.detail === "string" ? body.detail : "";
 		super(detail || code || `HTTP ${status}`);
@@ -745,12 +813,31 @@ var RestError = class extends Error {
 		this.detail = detail;
 		this.hint = typeof body.hint === "string" ? body.hint : "";
 		this.body = body;
+		this.retryAfterSeconds = retryAfterSeconds(retryAfter, Date.now());
 	}
 	/** Whether the engine refused the credential rather than the request. */
 	get unauthorized() {
 		return this.status === 401 || this.status === 403;
 	}
 };
+/**
+* A `Retry-After` header value as whole seconds from `now`, or null for a
+* header that is absent or says nothing usable.
+*
+* BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
+* front of it may answer for it with an HTTP-date, and reading that as "no
+* hint" would drop the one instruction the refusal carried. A date already
+* past is a wait of zero, never a negative one.
+*/
+function retryAfterSeconds(header, now) {
+	const value = header?.trim() ?? "";
+	if (value === "") return null;
+	if (/^\d+$/.test(value)) return Number(value);
+	if (!/[A-Za-z]/.test(value)) return null;
+	const at = Date.parse(value);
+	if (Number.isNaN(at)) return null;
+	return Math.max(0, Math.ceil((at - now) / 1e3));
+}
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
 * answering HTML. Status 0, so a caller testing `status === 409` cannot
@@ -877,11 +964,11 @@ async function request(method, path, options = {}) {
 		throw new RestError(response.ok ? 502 : response.status, {
 			error: "unreadable_body",
 			detail: "the engine answered something that is not JSON"
-		});
+		}, response.ok ? null : response.headers.get("Retry-After"));
 	}
 	if (!response.ok && response.status !== 304) {
 		const refusal = parsed && typeof parsed === "object" ? parsed : {};
-		throw new RestError(response.status, refusal);
+		throw new RestError(response.status, refusal, response.headers.get("Retry-After"));
 	}
 	return {
 		status: response.status,
@@ -899,7 +986,9 @@ var rest = {
 	* precondition, reads a tag, cancels, or branches on a success status.
 	*/
 	request,
-	get: (path) => bodyOf("GET", path),
+	/** A read's body. `signal` is the loader's: `lib/useRest.ts` aborts a read
+	*  it superseded, and a screen reads through that rather than calling this. */
+	get: (path, signal) => bodyOf("GET", path, { signal }),
 	post: (path, body, headers) => bodyOf("POST", path, {
 		body: body ?? {},
 		headers
@@ -931,4 +1020,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };

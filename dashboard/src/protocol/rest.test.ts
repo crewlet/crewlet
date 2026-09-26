@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
+import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError, retryAfterSeconds } from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -274,5 +274,46 @@ describe("a body that never arrives whole", () => {
     expect(err).toBeInstanceOf(RestError);
     expect((err as RestError).status).toBe(0);
     expect((err as RestError).detail).toContain("did not answer");
+  });
+});
+
+// THE REFUSAL CARRIES THE ENGINE'S WAIT.
+//
+// A 503 is two different answers — a node catching up or draining, which a
+// wait clears and which says how long, and a node with no keyring, which no
+// wait clears and which says nothing — and the header is the only thing that
+// tells a loader which of the two it holds.
+describe("Retry-After", () => {
+  test("a 503 with Retry-After carries the wait", async () => {
+    stub(() => json({ error: "unavailable" }, 503, { "Retry-After": "7" }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).retryAfterSeconds).toBe(7);
+  });
+
+  test("a 503 without one carries none", async () => {
+    stub(() => json({ error: "no_keyring" }, 503));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).retryAfterSeconds).toBeNull();
+  });
+
+  test("a proxy's HTML 503 still carries its wait", async () => {
+    stub(() => new Response("<html>down</html>", { status: 503, headers: { "Retry-After": "3" } }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).code).toBe("unreadable_body");
+    expect((err as RestError).retryAfterSeconds).toBe(3);
+  });
+
+  test.each([
+    ["12", 12],
+    [" 0 ", 0],
+    ["", null],
+    [null, null],
+    ["soon", null],
+    ["-4", null],
+    ["Thu, 01 Jan 2026 00:00:30 GMT", 30],
+    ["Wed, 31 Dec 2025 23:59:00 GMT", 0],
+  ] as const)("the header %j reads as %j seconds", (header, want) => {
+    expect(retryAfterSeconds(header, Date.parse("2026-01-01T00:00:00Z"))).toBe(want);
   });
 });

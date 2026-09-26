@@ -116,7 +116,7 @@ export interface EventsPage {
   /** True when the store itself has nothing older, as opposed to this page ending. */
   exhausted: boolean;
   /** Which nodes the page was merged from; a node that did not answer is named. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 export interface TraceAnswer {
@@ -130,7 +130,7 @@ export interface TraceAnswer {
    */
   truncated: boolean;
   /** Which nodes the trace was assembled from. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,10 +475,10 @@ export interface SandboxRun {
   audience: string;
   /** Who the question is put to, resolved against the org chart when the run
    *  parked. Empty on a run that is not parked. */
-  audience_handles: string[];
+  audience_handles?: string[];
   /** True when `audience` named nobody the chart has and the question was put
    *  to the seat's lead chain instead. */
-  audience_fallback: boolean;
+  audience_fallback?: boolean;
   branch: string;
   trace_id: string;
   owner: string;
@@ -612,7 +612,7 @@ export interface Rollup {
   totals: Bucket;
   by_phase: PhaseRow[];
   by_model: ModelRow[];
-  by_provider: ProviderSpendRow[];
+  by_provider?: ProviderSpendRow[];
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
   /** The tail of recent turns — the LIVE window's only. A company day holds no
@@ -687,7 +687,7 @@ export interface EventBar {
   /** How many of `count` reported a failure — a SPLIT of the bar, never an
    *  addition to it, counted by the engine with the rule a turn's own
    *  `failed` mark uses. */
-  failed: number;
+  failed?: number;
 }
 
 /**
@@ -708,7 +708,7 @@ export interface EventSeries {
   /** The window's whole count, stated rather than left as a sum of the bars. */
   total: number;
   /** The window's failed count — the sum of the bars' `failed`. */
-  failed: number;
+  failed?: number;
   /**
    * How many rows each category would give, over the window, with the CATEGORY
    * filter lifted and every other one applied — which is the only meaning a
@@ -717,7 +717,7 @@ export interface EventSeries {
    */
   by_category: Record<string, number>;
   /** Which nodes the bars were summed over. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 /** The org-wide live meter, plus the identity of the engine run reporting it
@@ -2304,7 +2304,7 @@ export interface WorkPersonState {
   version: number;
   /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
    *  screen offers only the presets the write accepts. */
-  max_snooze_ahead: number;
+  max_snooze_ahead?: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -2584,7 +2584,7 @@ export interface WorkItemDetail {
   /** How many times agents may hand this item on before the engine refuses
    *  the next one — the limit `task.reassignments` counts against, served by
    *  the engine that enforces it so no screen carries a figure of its own. */
-  reassignment_budget: number;
+  reassignment_budget?: number;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2727,7 +2727,7 @@ export interface PhasesPage {
   next: { before_time?: string; before_id?: string };
   exhausted: boolean;
   /** Which nodes the page was merged from. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 /** Every stored event of one RUN of a turn, ordered oldest first. */
@@ -2774,7 +2774,7 @@ export interface TurnAnswer {
   /** Which nodes the turn was assembled from — a turn resumed on another node
    *  has rows on both, and a node that did not answer may hold the missing
    *  part. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -2786,7 +2786,7 @@ export interface AgentAnswer {
   next: string;
   /** Which nodes the history came from — a seat's history is on every node
    *  that ever held it — or null when it could not be read at all. */
-  coverage: Coverage | null;
+  coverage?: Coverage | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -3320,7 +3320,7 @@ export interface WorkAskRow extends WorkSummary {
   /** Present when the ask asks somebody to choose. */
   decision?: WorkDecision;
   /** Whether the ask is still waiting on an answer. */
-  open: boolean;
+  open?: boolean;
   /** The literal call that answers it. A model handed a comment id still has
    *  to compose the call, and every one it composes differently is a round
    *  spent being refused. */
@@ -3373,7 +3373,7 @@ export interface WorkMyWork {
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
-  totals: WorkMyWorkTotals;
+  totals?: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -3591,7 +3591,7 @@ export interface TurnRow {
   /** Whether the turn is waiting on a detached coding run: its newest
    *  completion is a suspension, and it completes again when the run is
    *  collected. Never true beside `complete`. */
-  parked: boolean;
+  parked?: boolean;
   phases: number;
   /** SELF-ITERATE rounds — the highest iteration any phase reached. A phase's
    *  TOOL rounds are `rounds_used` on its own record; the two are different
@@ -3607,8 +3607,8 @@ export interface TurnRow {
   total_tokens: number;
   /** The share of `input_tokens` the provider's prompt cache served and
    *  stored — a BREAKDOWN of the input, never an addition to it. */
-  cache_read_tokens: number;
-  cache_write_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   /** Every distinct model the turn used, comma-joined — a turn routinely uses
    *  two, a cheap one for the extension judge and the seat's own. */
   models?: string;
@@ -3637,7 +3637,7 @@ export interface TurnsAnswer {
    *  it left to show. */
   next: string | null;
   /** Which nodes the page was merged from. */
-  coverage: Coverage;
+  coverage?: Coverage;
 }
 
 /** Who the presented credential belongs to — see `lib/viewer.ts`. */
@@ -3654,7 +3654,7 @@ export interface Viewer {
   /** The tools `POST /operator/act/{tool}` serves this caller: every write
    *  the operator catalogue holds for a token bound to a seat, and EMPTY for
    *  an anonymous or unbound caller, who may not act (ADR-0024). */
-  acts: string[];
+  acts?: string[];
 }
 
 export interface QueryMap {

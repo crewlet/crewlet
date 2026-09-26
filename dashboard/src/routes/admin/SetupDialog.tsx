@@ -39,7 +39,7 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { Button, Callout, InlineCode, Modal, Tag, useToast } from "@crewlethq/ui";
 import {
   CableGlyph,
@@ -51,6 +51,7 @@ import {
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { useRest } from "~/lib/useRest.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 
@@ -296,6 +297,17 @@ const WHY_SECRETS =
  * A shared value is the exception and keeps the bare name, which is exactly
  * what makes one input feed every section that declares it.
  */
+/**
+ * How long a read of the secret names stays fresh enough that a completion
+ * opening does not ask again.
+ *
+ * THREE SECONDS: the list is asked for whenever a completion opens, and a
+ * form where somebody types several references would otherwise spend a
+ * request on each. Long enough to collapse one person's typing, short enough
+ * that leaving to create an entry and coming back gets the new name.
+ */
+const SECRET_NAMES_FRESH_MS = 3_000;
+
 function valueKey(section: SetupSection, r: SetupRequirement): string {
   return r.shared ? r.field : `${sectionKey(section)}:${r.field}`;
 }
@@ -351,38 +363,31 @@ export function SetupDialog({
   const toast = useToast();
   // THE NAMES THIS COMPANY HOLDS, so typing `$` in any box offers them.
   //
-  // NAMES ONLY, read once when the dialog opens. A refused read leaves the
-  // list empty and the fields exactly as they were: the completion is a
+  // NAMES ONLY, read when the dialog opens. A refused read offers no names
+  // and leaves the fields exactly as they were: the completion is a
   // convenience, and a form that could not be filled in because a second
   // request failed would be worse than one with no completion at all.
-  const [secretNames, setSecretNames] = useState<string[]>([]);
-  // WHEN THE LIST WAS LAST READ. There is no push for the secret store, so a
-  // read taken when this dialog opened goes stale the moment somebody adds an
-  // entry in another tab, which is exactly what a person does on finding the
-  // name they wanted is not there.
-  const readAt = useRef(0);
-  const loadSecrets = useCallback(async () => {
-    // ONE READ A FEW SECONDS AT MOST. The list is asked for whenever a
-    // completion opens, and a form where somebody types several references
-    // would otherwise spend a request on each. Long enough to collapse one
-    // person's typing, short enough that leaving to create an entry and
-    // coming back gets the new name.
+  const secrets = useRest(
+    "/secrets",
+    (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: { name?: string }[] } | null>,
+  );
+  const secretNames = useMemo(
+    () => (secrets.data?.secrets ?? []).map((s) => s.name ?? "").filter(Boolean),
+    [secrets.data],
+  );
+  // WHEN THE LIST WAS LAST ASKED FOR. There is no push for the secret store,
+  // so a read taken when this dialog opened goes stale the moment somebody
+  // adds an entry in another tab, which is exactly what a person does on
+  // finding the name they wanted is not there — so a completion opening asks
+  // again, quietly, at most once per [SECRET_NAMES_FRESH_MS].
+  const askedAt = useRef(Date.now());
+  const { reload: reloadSecrets } = secrets;
+  const refreshSecrets = useCallback(() => {
     const now = Date.now();
-    if (now - readAt.current < 3000) return;
-    readAt.current = now;
-    try {
-      const body = (await rest.get("/secrets")) as { secrets?: { name?: string }[] } | null;
-      setSecretNames((body?.secrets ?? []).map((s) => s.name ?? "").filter(Boolean));
-    } catch {
-      // THE LAST GOOD LIST STAYS. A refusal to refresh is not a reason to
-      // tell somebody their company holds no entries, and the completion is
-      // a convenience: a form that could not be filled in because a second
-      // request failed would be worse than one with no completion at all.
-    }
-  }, []);
-  useEffect(() => {
-    void loadSecrets();
-  }, [loadSecrets]);
+    if (now - askedAt.current < SECRET_NAMES_FRESH_MS) return;
+    askedAt.current = now;
+    void reloadSecrets({ quiet: true });
+  }, [reloadSecrets]);
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
   // one section per seat and they all carry the same vendor key.
   // CONNECTING is "no section here is configured yet". It no longer decides
@@ -1216,7 +1221,7 @@ export function SetupDialog({
             // exactly what was typed. See [HELD].
             placeholder={r.kind === "secret" && !r.value && r.present ? HELD : undefined}
             secrets={secretNames}
-            onSecretsNeeded={() => void loadSecrets()}
+            onSecretsNeeded={refreshSecrets}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two

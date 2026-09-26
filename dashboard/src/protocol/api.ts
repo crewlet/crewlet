@@ -1,21 +1,19 @@
 /**
- * The one HTTP read the dashboard still makes.
+ * The degraded-mode snapshot, over HTTP.
  *
- * Everything else goes over the WebSocket — state arrives as pushes and
- * anything on demand is a query on the same socket. This remains for exactly
- * one case: a browser that cannot upgrade to a WebSocket at all, usually a
- * corporate proxy. While the socket is down the client polls this snapshot so
- * the page keeps telling the truth, and it stops the moment the socket is back.
+ * The socket carries the projection and every question the query registry
+ * answers. This remains for exactly one case: a socket that cannot connect
+ * at all — usually a corporate proxy refusing the upgrade, or an engine
+ * restarting. While the socket is down the client polls this snapshot so the
+ * page keeps telling the truth, and it stops the moment the socket is back.
  *
- * It had a second entry once, and that one is why the Fleet screen shipped
- * dead: a screen reaching for its own transport takes its client from
- * somewhere, and the somewhere it chose was a context field the shell never
- * populated. There is one transport for reads, and only `socket.ts` imports
- * this file.
- *
- * The REST API itself is much larger than this — it is a public read surface
- * documented in docs/reference/api-endpoints.md. The dashboard simply does not
- * use it.
+ * It is not the dashboard's only HTTP. Writes and the guarded reads no query
+ * answers (`/secrets`, `/setup`, `/config`) go over REST through `rest.ts`,
+ * and a screen reads those through `lib/useRest.ts`. What this file keeps is
+ * its own separation: it had a second entry once, and that one is why the
+ * Fleet screen shipped dead — a screen reaching for its own transport takes
+ * its client from somewhere, and the somewhere it chose was a context field
+ * the shell never populated. Only `socket.ts` imports this file.
  */
 
 import { apiToken } from "./authToken.ts";

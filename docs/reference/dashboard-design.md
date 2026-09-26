@@ -3013,7 +3013,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   engine understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload. The table is keyed on the contract's `QueryErrorCode` union, so a
+  reload — after the wait the engine named in the refusal's
+  `retry_after_seconds`, never after a constant of the client's. The table is keyed on the contract's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
@@ -3285,13 +3286,34 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
   caller's abort cover reading the body as well as waiting for the headers,
   and a body that breaks part way through is status 0 (an answer never fully
   heard, so a write's outcome is unknown) rather than an empty success. A
-  screen that reads a REST answer uses `lib/useRest.ts`, which aborts a
-  superseded read, re-reads when the operator token changes and, where asked,
-  when the tab comes back.
-  A refusal replaces what is on screen; a request that never reached the
-  engine keeps the last answer with the error beside it; and an answer belongs
-  to its path, so a read whose path changed reports nothing until the new path
-  answers.
+  screen that reads a REST answer uses `lib/useRest.ts` — the Secrets,
+  Integrations, Setup and Audit screens each carried a loader of their own,
+  one of which never re-read on a new token. The one reader outside it is the
+  org builder's session over the `/config` document, which is not a screen's
+  read but half of a conditional write: it holds the `ETag` a save sends back
+  as `If-Match`. It aborts a
+  superseded read and an unmounted screen's, re-reads when the operator token
+  changes, when the socket comes back after a drop and, where asked, when the
+  tab comes back or on a poll — those last quietly, keeping what is on
+  screen. A refusal replaces what is on screen; a request that never reached
+  the engine keeps the last answer with the error beside it; and an answer
+  belongs to its key, so a read whose key changed reports nothing until the
+  new key answers.
+- **A retry is the engine's to schedule.** A socket refusal is asked again
+  after its `retry_after_seconds` and a REST refusal after its `Retry-After`,
+  quietly, and nothing else is retried on its own: a 503 with no hint is a node
+  no wait repairs (no keyring, no surface), and re-asking it only repeats it.
+  There is no retry constant anywhere in the client, because a flat one is
+  wrong both ways on one fleet — too early for a node grinding through a bulk
+  apply, too late for one that caught up in milliseconds.
+- **A newer peer's frame is ignored and counted.** A push kind this build does
+  not dispatch is dropped rather than thrown on or applied by a guess, and the
+  store counts it (`unknownPushes`), because the same fall-through is what a
+  kind this build's engine sends and its client forgot looks like; the e2e
+  replay fails on any. Every field the engine gained after a screen was built
+  against it is optional in `protocol/types.ts`, so an older node's answer
+  without it takes the screen's "unknown" branch rather than reading
+  `undefined` as a value.
 - **Nothing outside `src/protocol/` reaches the network.** A screen that called
   `fetch` itself would work on the happy path and be the one request in the
   product with no operator token, no deadline and no refusal it could branch
