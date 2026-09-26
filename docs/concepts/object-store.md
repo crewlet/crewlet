@@ -196,6 +196,13 @@ its groups and the remaining nodes repair from each other. Take one node out at
 a time and let `objects_missing` stay clear between them — at three replicas
 the fleet survives any one loss, not two at once.
 
+**Watching it.** The dashboard's Fleet screen draws the map — each data
+node's share, how many copies of every chunk the fleet holds against how many
+it asks for, and which member the map is still counting while it is gone —
+from [`GET /fleet`](../reference/api-endpoints.md#get-fleet). A chunk no node
+holds raises [`objects_missing`](../reference/alarms.md) on the node the map
+places it on.
+
 **Backups carry every chunk.** A node holds only its share, so a copy of its
 directory is a fraction of the company's files. A backup instead reads every
 chunk the store copy names, from wherever the fleet holds it, into an

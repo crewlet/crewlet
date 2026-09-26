@@ -15,8 +15,12 @@
 
 import { describe, expect, test } from "vitest";
 
-import { nodeFacts } from "./Fleet.tsx";
-import type { FleetNode } from "~/protocol/types.ts";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+import { nodeFacts, ObjectPlacement, placementSummary } from "./Fleet.tsx";
+import { Router } from "~/app/router.tsx";
+import type { FleetNode, FleetObjects } from "~/protocol/types.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
   return { id: "n1", roles: [], seats: 0, config_epoch: 3, ...over };
@@ -54,5 +58,63 @@ describe("nodeFacts", () => {
       target: 3,
     }).map((f) => f.label);
     expect(labels.indexOf("Copies")).toBe(labels.indexOf("Epoch") + 1);
+  });
+});
+
+describe("object placement", () => {
+  afterEach(cleanup);
+  const now = Date.parse("2026-09-01T12:05:00Z");
+
+  test("a fleet short of data nodes says so, not just a number", () => {
+    // Two members asked for three copies hold two: every file has one copy
+    // fewer than configured, which is the fact this line exists to carry.
+    expect(
+      placementSummary({ available: true, placed: true, epoch: 4, replicas: 3, copies: 2 }),
+    ).toBe("epoch 4 · 2 of 3 copies of every chunk — fewer data nodes than replicas");
+    expect(
+      placementSummary({ available: true, placed: true, epoch: 4, replicas: 3, copies: 3 }),
+    ).toBe("epoch 4 · 3 copies of every chunk");
+  });
+
+  test("an absent member is marked, with when it went", () => {
+    const objects: FleetObjects = {
+      available: true,
+      placed: true,
+      epoch: 2,
+      replicas: 2,
+      copies: 2,
+      members: [
+        { node: "data-a", weight: 1 },
+        { node: "data-b", weight: 4, absent_since: "2026-09-01T12:00:00Z" },
+      ],
+    };
+    // IN A ROUTER, because a member's node links to its own fleet page.
+    render(
+      <Router>
+        <ObjectPlacement objects={objects} now={now} />
+      </Router>,
+    );
+    expect(screen.getByText("data-b")).toBeTruthy();
+    expect(screen.getAllByText("absent")).toHaveLength(1);
+    expect(screen.getAllByText("present")).toHaveLength(1);
+  });
+
+  test.each([
+    [{ available: false }, "could not be read"],
+    [{ available: true, placed: false }, "No placement map yet"],
+    [{ available: true, placed: true, unreadable: true }, "newer build"],
+  ] as [FleetObjects, string][])(
+    "each state the engine names renders apart: %j",
+    (objects, says) => {
+      // An unreadable store, a fleet with no map and a newer build's map are
+      // three different trips for an operator, and none of them is an empty grid.
+      render(<ObjectPlacement objects={objects} now={now} />);
+      expect(screen.getByText(new RegExp(says))).toBeTruthy();
+    },
+  );
+
+  test("a node that reads no map draws no card", () => {
+    const { container } = render(<ObjectPlacement now={now} />);
+    expect(container.textContent).toBe("");
   });
 });

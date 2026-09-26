@@ -1141,6 +1141,41 @@ export interface FleetNode {
   draining?: boolean;
   started_at?: string;
   posture?: string;
+  /**
+   * The share of the object store this node offers to hold, off its own
+   * presence. ABSENT on a node that holds none — a node without the `data`
+   * role — never a 0 that would read as a data node offering nothing.
+   */
+  object_weight?: number;
+}
+
+/** One member of the object store's placement map. */
+export interface FleetObjectMember {
+  node: string;
+  weight: number;
+  /** When the map's maintainer first saw it gone; absent while it is live. */
+  absent_since?: string;
+}
+
+/**
+ * The object store's placement map, as `internal/api/queries/fleet.go`
+ * reads it from the store every node reads it from.
+ *
+ * THREE STATES NAMED APART rather than folded into an empty member list: a
+ * store that would not answer (`available: false`), a fleet with no map yet
+ * (`placed: false`, where no upload can land), and a map a newer build wrote
+ * that this one cannot read (`unreadable`).
+ */
+export interface FleetObjects {
+  available: boolean;
+  placed?: boolean;
+  unreadable?: boolean;
+  epoch?: number;
+  /** The replica count asked for. */
+  replicas?: number;
+  /** How many members hold each chunk now — fewer while the fleet is short. */
+  copies?: number;
+  members?: FleetObjectMember[];
 }
 
 /**
@@ -1471,6 +1506,8 @@ export interface FleetAnswer {
   this_node: string;
   /** The epoch every node is meant to converge on. A number, not an id. */
   target_epoch: number;
+  /** Where the company's files are placed; absent where the node reads no map. */
+  objects?: FleetObjects;
 }
 
 /** One observation a reconcile pass made that is not "fine". */

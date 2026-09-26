@@ -43,6 +43,7 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
+  DatabaseGlyph,
   DnsGlyph,
   GroupGlyph,
   KeyGlyph,
@@ -73,7 +74,14 @@ import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
+import type {
+  FleetAnswer,
+  FleetDutyLease,
+  FleetNode,
+  FleetObjectMember,
+  FleetObjects,
+  FleetSeatLease,
+} from "~/protocol/index.ts";
 import { RetentionPanels } from "./Retention.tsx";
 
 /**
@@ -97,6 +105,136 @@ function leaseMs(seconds?: number | null): number | null {
 
 export function Fleet({ node }: { node?: string }) {
   return node ? <NodeScreen id={node} /> : <FleetScreen />;
+}
+
+// ---------------------------------------------------------------------------
+// Where the company's files are placed
+// ---------------------------------------------------------------------------
+
+/**
+ * The object store's placement map: which data nodes hold the company's file
+ * chunks, at what share, and which of them the map is still counting while
+ * they are gone.
+ *
+ * THE ABSENT COLUMN IS THE ONE AN OPERATOR OPENS THIS FOR. A data node that
+ * went away stays in the map for ten minutes before its share is moved, so a
+ * restart moves nothing — and a node listed here as absent is one whose chunks
+ * are one copy short until it returns or the grace runs out.
+ *
+ * Each state the engine names apart renders apart: an unreadable store is not
+ * a fleet with no map, and neither is a map a newer build wrote.
+ */
+/**
+ * The map's epoch and how many copies of each chunk it keeps, in one line —
+ * and the SHORTFALL said in words, since a fleet with fewer data nodes than
+ * it asks replicas of is holding every file with fewer copies than configured.
+ */
+export function placementSummary(objects: FleetObjects): string {
+  const copies = objects.copies ?? 0;
+  const replicas = objects.replicas ?? 0;
+  const held =
+    copies < replicas
+      ? `${copies} of ${replicas} copies of every chunk — fewer data nodes than replicas`
+      : `${plural(copies, "copy", "copies")} of every chunk`;
+  return `epoch ${objects.epoch ?? 0} · ${held}`;
+}
+
+export function ObjectPlacement({ objects, now }: { objects?: FleetObjects; now: number }) {
+  if (!objects) return null;
+  const header = (
+    <Card.Header icon={<DatabaseGlyph size="sm" />} count={objects.members?.length ?? 0}>
+      Object placement
+    </Card.Header>
+  );
+  if (!objects.available || !objects.placed || objects.unreadable) {
+    return (
+      <Card>
+        {header}
+        {!objects.available ? (
+          <Callout variant="warning" role="alert">
+            <span>
+              The placement map could not be read from the coordination store. Files already stored
+              are where they were; this screen cannot say where that is.
+            </span>
+          </Callout>
+        ) : !objects.placed ? (
+          <EmptyState
+            size="compact"
+            icon={<DatabaseGlyph size="xl" />}
+            title="No placement map yet"
+            description="No data node has been placed on, so no file can be stored. A map is written within seconds of the first data node joining."
+          />
+        ) : (
+          <Callout variant="warning" role="alert">
+            <span>
+              The placement map was written by a newer build than this one, which does not read it
+              and does not overwrite it. Finish the upgrade to see it.
+            </span>
+          </Callout>
+        )}
+      </Card>
+    );
+  }
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<DatabaseGlyph size="sm" />}
+        count={objects.members?.length ?? 0}
+        subtitle={placementSummary(objects)}
+      >
+        Object placement
+      </Card.Header>
+      <DataGrid<FleetObjectMember>
+        name="object-placement"
+        rows={objects.members ?? []}
+        rowKey={(m) => m.node}
+        defaultSort="node"
+        empty={{
+          title: "The map places on no data node",
+          hint: "A data node joins the map at the weight its store.objects.weight gives it.",
+        }}
+        columns={[
+          {
+            key: "node",
+            header: "Data node",
+            sortValue: (m) => m.node,
+            cell: (m) => <KeyCell value={m.node} path={["admin", "fleet", m.node]} />,
+          },
+          {
+            key: "weight",
+            header: "Weight",
+            align: "right",
+            shrink: true,
+            sortValue: (m) => m.weight,
+            cell: (m) => <NumberCell value={m.weight} />,
+          },
+          {
+            key: "presence",
+            header: "Presence",
+            shrink: true,
+            sortValue: (m) => m.absent_since ?? "",
+            // HOLLOW FOR GONE, the mark this screen already uses for a node
+            // with no apply reported: a member counted while absent is one
+            // whose chunks are a copy short until it returns.
+            cell: (m) =>
+              m.absent_since ? (
+                <span className="row gap-1">
+                  <StatusCell
+                    glyph="○"
+                    label="absent"
+                    tone="caution"
+                    title="its share moves to the other data nodes ten minutes after it went"
+                  />
+                  <DateCell at={m.absent_since} now={now} />
+                </span>
+              ) : (
+                <StatusCell glyph="●" label="present" tone="positive" />
+              ),
+          },
+        ]}
+      />
+    </Card>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +578,8 @@ function FleetScreen() {
             />
           </Card>
         </div>
+
+        <ObjectPlacement objects={data?.objects} now={now} />
 
         {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
             zero as the text "0" — so a healthy fleet drew a stray digit under
