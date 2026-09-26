@@ -653,11 +653,12 @@ export function SeatScreen({ handle }: { handle: string }) {
     { role, days: 7, limit: 50 },
     { enabled: tab === "cost" && role !== "" },
   );
-  // THE GUARDED HALF. A seat's email, model chain, token budget, contact
+  // THE GUARDED HALF. A seat's email, authored model fields, contact
   // identities, tool credentials, integrations and schedules are NOT on the
   // anonymous org projection — `internal/api/orgprojection.go` spells out what
-  // is, field by field, and everything else stays behind the operator token —
-  // so this screen reads them from the company document.
+  // is, field by field (the RESOLVED chain and tool sources among them), and
+  // everything else stays behind the operator token — so this screen reads
+  // them from the company document.
   // ...AND ON EVERY TAB, because the HEADER reads the model chain out of this
   // same answer and renders above the strip on all eight of them. `enabled` is
   // the guard for a question whose PARAMETER is not chosen yet; gating it on

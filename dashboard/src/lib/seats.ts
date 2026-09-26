@@ -28,8 +28,9 @@
  * a chart that lies.
  *
  * THE GUARDED HALF IS NOT HERE EITHER. `/org` is anonymously readable, so the
- * projection carries a charter and a tree and nothing else: a seat's email,
- * model chain, token budget, contact identities, tool credentials,
+ * projection carries a charter, a tree, the budgets as written and each
+ * agent seat's RESOLVED model chain and tool sources, and nothing else: a
+ * seat's email, authored `llm` fields, contact identities, tool credentials,
  * integrations and schedules are read from the company document through the
  * operator-gated `config` query, which is what [seatSettings] and
  * [unitSettings] below are for.

@@ -751,11 +751,11 @@ export interface BudgetsAnswer {
  * credential field holds a whole `${VAR}` reference or the mask
  * `__redacted__`, never a value.
  *
- * WHERE EVERYTHING THE PROJECTION NO LONGER CARRIES IS READ. `/org` is
- * anonymous, so it was narrowed to a charter and a tree ([OrgProjection]); a
- * seat's email, model chain, token budget, contact identities, tool
- * credentials, integration blocks and schedules live here instead, behind the
- * operator token.
+ * WHERE EVERYTHING THE PROJECTION DOES NOT CARRY IS READ. `/org` is
+ * anonymous, so it carries a charter, a tree, the budgets and each seat's
+ * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
+ * `llm` fields, contact identities, tool credentials, integration blocks and
+ * schedules live here instead, behind the operator token.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -995,9 +995,15 @@ export type PhaseLLM =
  * projection used to be `config.Role` verbatim, so every field a role gained
  * reached anonymous readers the day it landed: contact identities, per-seat
  * credentials, placement labels and sandbox setup commands among them. What
- * is NOT here — `email`, `contact`, `llm`, `token_budget`, `schedules`,
- * `integrations`, `mcp_env` — is read through the operator-gated `config`
- * query instead, as [CompanyDocument].
+ * is NOT here — `email`, `contact`, the authored `llm_*` fields,
+ * `schedules`, `integrations`, `mcp_env` — is read through the operator-gated
+ * `config` query instead, as [CompanyDocument].
+ *
+ * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
+ * fields of the same name: a client re-running the precedence between a flat
+ * `llm_<phase>`, the `llm` mapping and the company's default provider — or
+ * the grant rule between a shared server, a template and a unit's `mcp_env` —
+ * would be a second implementation of a rule the engine already applies.
  *
  * `handle` is what the DOCUMENT declares, and empty where the engine derives
  * one from the name. The handle a seat actually runs under is
@@ -1013,6 +1019,22 @@ export interface OrgSeat {
   behavioral_guidelines?: string[];
   manages?: string[];
   availability?: string;
+  /** This seat's own ceilings per window, as written; absent = only the company's. */
+  token_budget?: TokenBudget;
+  /**
+   * Every phase's provider chain as a turn resolves it, keyed by phase wire
+   * name (`execute`, `review`, …): the first key is the model the phase runs
+   * on, every later one a fallback in the order tried. Provider KEYS only.
+   * Absent on a human seat and on a company configuring no provider.
+   */
+  llm?: Record<string, string[]>;
+  /**
+   * Where this seat's tools come from, in the registry's origin grammar:
+   * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
+   * order. The grant, not what is running — the node heartbeat's MCP report
+   * says whether a server started. Absent on a human seat.
+   */
+  tool_sources?: string[];
 }
 
 /**
@@ -1062,6 +1084,8 @@ export interface OrgProjection {
    * the browser's own zone. Absent only on `{}`, a node running no company.
    */
   timezone?: string;
+  /** The company's own ceilings per window, as written; absent = uncapped. */
+  token_budget?: TokenBudget;
   roles?: OrgSeat[];
   units?: OrgUnit[];
   derived?: Derived;

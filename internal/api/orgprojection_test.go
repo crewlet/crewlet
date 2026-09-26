@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The org projection is ANONYMOUSLY READABLE, so what it carries is a security
@@ -26,6 +29,10 @@ const (
 	exposurePublic exposure = iota + 1
 	// exposureGuarded: read only through the guarded `config` query.
 	exposureGuarded
+	// exposureResolved: read, with others, into the RESOLVED seat field
+	// named by `into`, which carries the labels the value decides (a
+	// provider key, a server name) and never the value's own contents.
+	exposureResolved
 )
 
 // classified is one field's decision and the reason for it. The reason is
@@ -34,6 +41,41 @@ const (
 type classified struct {
 	exposure exposure
 	why      string
+	// into is the api.OrgSeat wire field a resolved value reaches.
+	into string
+}
+
+// companyFields classifies every field of config.Company.
+var companyFields = map[string]classified{
+	"Name":           {exposure: exposurePublic, why: "the company's identity"},
+	"Mission":        {exposure: exposurePublic, why: "founder prose"},
+	"Vision":         {exposure: exposurePublic, why: "founder prose"},
+	"Policies":       {exposure: exposurePublic, why: "founder prose"},
+	"Timezone":       {exposure: exposurePublic, why: "every date a reader is shown is cut on it (ADR-0018)"},
+	"TokenBudget":    {exposure: exposurePublic, why: "a statement of what the company may spend, beside the /budgets meter spending against it"},
+	"Integrations":   {exposure: exposureGuarded, why: "vendor identities, bot tokens and signing secrets"},
+	"Tracker":        {exposure: exposureGuarded, why: "which tracker backend and project keys: a map of what is wired to what"},
+	"Knowledge":      {exposure: exposureGuarded, why: "which knowledge backend and container keys"},
+	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
+	"Providers": {exposure: exposureResolved, into: "llm",
+		why: "only the KEYS reach a reader, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
+	"TurnEngine": {exposure: exposureGuarded, why: "an operational setting"},
+	"Learning":   {exposure: exposureGuarded, why: "an operational setting"},
+	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
+	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
+		why: "only a granted server's NAME reaches a reader, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
+	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
+	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
+	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
+	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
+	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
+	"Units":                             {exposure: exposurePublic, why: "the tree itself"},
+}
+
+// projectionOnly is every OrgProjection field no authored company field
+// accounts for, and why it may exist anyway.
+var projectionOnly = map[string]string{
+	"derived": "the hierarchy the fields above resolve to, with no document paths",
 }
 
 // A tracker project and a knowledge space are the decision here that is not
@@ -48,70 +90,97 @@ type classified struct {
 
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
-	"Name":                 {exposurePublic, "the seat's identity in the chart"},
-	"Kind":                 {exposurePublic, "agent or human, which the chart draws differently"},
-	"Contact":              {exposureGuarded, "a person's account ids on external services"},
-	"Availability":         {exposurePublic, "free text written to be read by colleagues"},
-	"Handle":               {exposurePublic, "the declared slug every other surface addresses the seat by"},
-	"Email":                {exposureGuarded, "a personal identifier, and it may hold a ${VAR} name"},
-	"Unit":                 {exposureGuarded, "a placement reference; where a seat sits is derived, not authored prose"},
-	"Goal":                 {exposurePublic, "founder prose"},
-	"Backstory":            {exposurePublic, "founder prose"},
-	"Responsibilities":     {exposurePublic, "founder prose"},
-	"Manages":              {exposurePublic, "the reporting structure the chart draws"},
-	"BehavioralGuidelines": {exposurePublic, "founder prose"},
-	"Workers":              {exposureGuarded, "operational configuration of the delegate surface"},
-	"TokenBudget":          {exposureGuarded, "operational configuration; the enforced cap has its own surface, /budgets"},
-	"LLM":                  {exposureGuarded, "provider keys, which name the company's model accounts"},
-	"LLMReview":            {exposureGuarded, "provider keys"},
-	"LLMSubagent":          {exposureGuarded, "provider keys"},
-	"LLMAuxiliary":         {exposureGuarded, "provider keys"},
-	"LLMJudge":             {exposureGuarded, "provider keys"},
-	"LLMSandbox":           {exposureGuarded, "provider keys"},
-	"LearningEnabled":      {exposureGuarded, "an operational setting"},
-	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names"},
-	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential"},
-	"Placement":            {exposureGuarded, "node ids and labels describing the deployment"},
-	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets"},
-	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in"},
-	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages"},
-	"Schedules":            {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
+	"Name":                 {exposurePublic, "the seat's identity in the chart", ""},
+	"Kind":                 {exposurePublic, "agent or human, which the chart draws differently", ""},
+	"Contact":              {exposureGuarded, "a person's account ids on external services", ""},
+	"Availability":         {exposurePublic, "free text written to be read by colleagues", ""},
+	"Handle":               {exposurePublic, "the declared slug every other surface addresses the seat by", ""},
+	"Email":                {exposureGuarded, "a personal identifier, and it may hold a ${VAR} name", ""},
+	"Unit":                 {exposureGuarded, "a placement reference; where a seat sits is derived, not authored prose", ""},
+	"Goal":                 {exposurePublic, "founder prose", ""},
+	"Backstory":            {exposurePublic, "founder prose", ""},
+	"Responsibilities":     {exposurePublic, "founder prose", ""},
+	"Manages":              {exposurePublic, "the reporting structure the chart draws", ""},
+	"BehavioralGuidelines": {exposurePublic, "founder prose", ""},
+	"Workers":              {exposureGuarded, "operational configuration of the delegate surface", ""},
+	"TokenBudget":          {exposurePublic, "the seat's own ceilings, beside the /budgets meter spending against them", ""},
+	"LLM":                  {exposureResolved, "provider keys, labels for the company's model entries, resolved per phase as a turn resolves them", "llm"},
+	"LLMReview":            {exposureResolved, "provider keys, resolved into the reviewer's chain", "llm"},
+	"LLMSubagent":          {exposureResolved, "provider keys, resolved into the worker chain", "llm"},
+	"LLMAuxiliary":         {exposureResolved, "provider keys, resolved into the auxiliary chain", "llm"},
+	"LLMJudge":             {exposureResolved, "provider keys, resolved into the judge's chain", "llm"},
+	"LLMSandbox":           {exposureResolved, "provider keys, resolved into the coding agent's chain", "llm"},
+	"LearningEnabled":      {exposureGuarded, "an operational setting", ""},
+	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
+	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential", ""},
+	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
+	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets", ""},
+	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in", ""},
+	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages", ""},
+	"Schedules":            {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it", ""},
 }
 
 // unitFields classifies every field of config.Unit.
 var unitFields = map[string]classified{
-	"Name":      {exposurePublic, "the unit's identity in the chart"},
-	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name"},
-	"Type":      {exposurePublic, "an informational label"},
-	"Purpose":   {exposurePublic, "founder prose"},
-	"Lead":      {exposurePublic, "the structure the chart draws"},
-	"Goals":     {exposurePublic, "founder prose"},
-	"Channel":   {exposurePublic, "where the unit talks, which a colleague needs to know"},
-	"Knowledge": {exposurePublic, "free-text references, not a read scope"},
-	"MCPEnv":    {exposureGuarded, "tool credentials inherited by members"},
-	"Project":   {exposureGuarded, "a tracker project key: the container this unit's work is filed in"},
-	"Space":     {exposureGuarded, "a knowledge container key: where this unit's pages are written"},
-	"Roles":     {exposurePublic, "the tree itself"},
-	"Children":  {exposurePublic, "the tree itself"},
-	"Schedules": {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
+	"Name":      {exposurePublic, "the unit's identity in the chart", ""},
+	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name", ""},
+	"Type":      {exposurePublic, "an informational label", ""},
+	"Purpose":   {exposurePublic, "founder prose", ""},
+	"Lead":      {exposurePublic, "the structure the chart draws", ""},
+	"Goals":     {exposurePublic, "founder prose", ""},
+	"Channel":   {exposurePublic, "where the unit talks, which a colleague needs to know", ""},
+	"Knowledge": {exposurePublic, "free-text references, not a read scope", ""},
+	"MCPEnv":    {exposureGuarded, "tool credentials inherited by members", ""},
+	"Project":   {exposureGuarded, "a tracker project key: the container this unit's work is filed in", ""},
+	"Space":     {exposureGuarded, "a knowledge container key: where this unit's pages are written", ""},
+	"Roles":     {exposurePublic, "the tree itself", ""},
+	"Children":  {exposurePublic, "the tree itself", ""},
+	"Schedules": {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it", ""},
 }
 
 // EVERY AUTHORED FIELD HAS A DECISION, and the public ones are exactly what
 // the projection carries.
 //
-// A field added to config.Role fails the first half until somebody decides
-// whether an anonymous reader may see it. Marking it public without adding it
-// to the projection (or the reverse) fails the second half, so the table and
-// the type cannot drift apart.
+// A field added to config.Company, config.Role or config.Unit fails the first
+// half until somebody decides whether an anonymous reader may see it. Marking
+// it public without adding it to the projection (or the reverse) fails the
+// second half, so the table and the type cannot drift apart. A RESOLVED field
+// must name the api.OrgSeat field it reaches, and every resolved seat field
+// must be reached by something classified, so a resolved field is never a way
+// to publish a value nobody decided on.
 func TestEveryOrgFieldIsClassified(t *testing.T) {
 	t.Parallel()
+	seatWire := map[string]bool{}
+	for field := range fieldsOf(reflect.TypeFor[api.OrgSeat]()) {
+		seatWire[jsonName(field)] = true
+	}
+	// resolvedInto is every seat field a resolved value reaches, from any
+	// table: a seat's chain is resolved from its own llm fields AND the
+	// company's provider keys.
+	resolvedInto := map[string]string{}
+	for _, table := range []map[string]classified{companyFields, roleFields, unitFields} {
+		for name, decision := range table {
+			switch {
+			case decision.exposure == exposureResolved && !seatWire[decision.into]:
+				t.Errorf("%s is resolved into %q, which api.OrgSeat does not carry", name, decision.into)
+			case decision.exposure != exposureResolved && decision.into != "":
+				t.Errorf("%s names a field it is resolved into but is not classified resolved", name)
+			case decision.exposure == exposureResolved:
+				resolvedInto[decision.into] = "resolved from " + name
+			}
+		}
+	}
 	for _, tc := range []struct {
 		authored   reflect.Type
 		table      map[string]classified
 		projection reflect.Type
+		// extra is the projected fields no public authored field accounts
+		// for, each with the reason it may exist.
+		extra map[string]string
 	}{
-		{reflect.TypeFor[config.Role](), roleFields, reflect.TypeFor[api.OrgSeat]()},
-		{reflect.TypeFor[config.Unit](), unitFields, reflect.TypeFor[api.OrgUnit]()},
+		{reflect.TypeFor[config.Company](), companyFields, reflect.TypeFor[api.OrgProjection](), projectionOnly},
+		{reflect.TypeFor[config.Role](), roleFields, reflect.TypeFor[api.OrgSeat](), resolvedInto},
+		{reflect.TypeFor[config.Unit](), unitFields, reflect.TypeFor[api.OrgUnit](), nil},
 	} {
 		t.Run(tc.authored.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -123,7 +192,8 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 				if !ok {
 					t.Errorf("config.%s.%s is not classified. Decide whether an anonymous "+
 						"reader of /org may see it: add it to this test's table as public "+
-						"(and to api.%s) or guarded (and read it through the config query)",
+						"(and to api.%s), resolved (naming the api.OrgSeat field it "+
+						"reaches) or guarded (and read it through the config query)",
 						tc.authored.Name(), field.Name, tc.projection.Name())
 					continue
 				}
@@ -140,6 +210,9 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 						"remove the entry", tc.authored.Name(), name)
 				}
 			}
+			for name := range tc.extra {
+				publicNames = append(publicNames, name)
+			}
 			var projected []string
 			for field := range fieldsOf(tc.projection) {
 				projected = append(projected, jsonName(field))
@@ -147,7 +220,7 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 			slices.Sort(publicNames)
 			slices.Sort(projected)
 			if !slices.Equal(publicNames, projected) {
-				t.Errorf("the public fields of config.%s are %v but api.%s carries %v; "+
+				t.Errorf("the public and resolved fields of config.%s are %v but api.%s carries %v; "+
 					"the two must name the same wire fields",
 					tc.authored.Name(), publicNames, tc.projection.Name(), projected)
 			}
@@ -232,6 +305,7 @@ var publicKeys = func() map[string]bool {
 		reflect.TypeFor[api.OrgProjection](),
 		reflect.TypeFor[api.OrgSeat](),
 		reflect.TypeFor[api.OrgUnit](),
+		reflect.TypeFor[api.OrgTokenBudget](),
 		// The derived hierarchy is the values above, resolved: handles,
 		// names, unit names and the effective lead and channel. Its own
 		// keys belong to the public shape for that reason.
@@ -242,6 +316,10 @@ var publicKeys = func() map[string]bool {
 		for field := range fieldsOf(typ) {
 			out[jsonName(field)] = true
 		}
+	}
+	// A seat's resolved chain is keyed by phase.
+	for _, ph := range phase.All {
+		out[ph.String()] = true
 	}
 	return out
 }()
@@ -304,6 +382,8 @@ type filler struct {
 
 	guardedValues []string
 	publicValues  []string
+	// providerKeys is every provider key a seat was given.
+	providerKeys []string
 }
 
 // fillDepth bounds the walk into guarded values. The authored types are not
@@ -330,33 +410,46 @@ func (f *filler) prose() string {
 	return value
 }
 
-// company fills the charter with prose and everything else with secrets.
+// company fills every field by its classification.
 func (f *filler) company() *config.Company {
 	c := &config.Company{}
 	v := reflect.ValueOf(c).Elem()
-	for i := range v.NumField() {
-		field := v.Type().Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		switch field.Name {
-		case "Name", "Mission", "Vision", "Policies":
-			f.public(v.Field(i))
-		case "Timezone":
+	for field := range fieldsOf(v.Type()) {
+		target := v.FieldByIndex(field.Index)
+		switch {
+		case field.Name == "Timezone":
 			// PUBLIC, and filled with a zone that LOADS rather than with
 			// prose: the projection carries the clock the engine resolved,
 			// so a value that does not load would surface as UTC and this
 			// could not tell a dropped field from a defaulted one.
-			v.Field(i).SetString("Pacific/Chatham")
+			target.SetString("Pacific/Chatham")
 			f.publicValues = append(f.publicValues, "Pacific/Chatham")
-		case "Roles", "Units":
+		case field.Name == "Roles" || field.Name == "Units":
 			// Filled below, through the classification tables.
+		case companyFields[field.Name].exposure == exposurePublic:
+			f.public(target)
 		default:
-			f.guarded(v.Field(i), 0)
+			// A resolved field is filled like a guarded one, whole, and
+			// then given the labels it resolves from below: whatever the
+			// label does not carry must still never appear.
+			f.guarded(target, 0)
 		}
 	}
+	// One SHARED server, so every agent seat is granted it and its name
+	// must reach every seat's tool_sources while its command, URL, env and
+	// headers — filled with secrets above — reach nothing.
+	c.MCPServers[0].Name = f.prose()
 	c.Roles = []config.Role{f.role()}
 	c.Units = []config.Unit{f.unit(2)}
+	// Every provider key a seat names is configured, each entry filled with
+	// secrets, so a key reaching the answer is the resolved chain and the
+	// entry behind it reaching it is a leak.
+	var entry config.LLMProvider
+	f.guarded(reflect.ValueOf(&entry).Elem(), 0)
+	c.Providers.LLM = map[string]config.LLMProvider{}
+	for _, key := range f.providerKeys {
+		c.Providers.LLM[key] = entry
+	}
 	return c
 }
 
@@ -365,13 +458,35 @@ func (f *filler) role() config.Role {
 	v := reflect.ValueOf(&r).Elem()
 	for field := range fieldsOf(v.Type()) {
 		target := v.FieldByIndex(field.Index)
-		if roleFields[field.Name].exposure == exposurePublic {
+		switch roleFields[field.Name].exposure {
+		case exposurePublic:
 			f.public(target)
-		} else {
+		case exposureResolved:
+			f.resolvedLLM(target)
+		default:
 			f.guarded(target, 0)
 		}
 	}
 	return r
+}
+
+// resolvedLLM fills a seat's model field with a provider key the company
+// configures, which must then reach the seat's resolved chain.
+//
+// The mapping form gets its default only: a flat llm_<phase> field wins over
+// the same phase inside the mapping, so a key written there would be one no
+// chain resolves to and nothing could require it to appear.
+func (f *filler) resolvedLLM(v reflect.Value) {
+	key := f.prose()
+	f.providerKeys = append(f.providerKeys, key)
+	switch field := v.Addr().Interface().(type) {
+	case *config.ProviderKeys:
+		*field = config.ProviderKeys{key}
+	case *config.PhaseLLM:
+		*field = config.PhaseLLM{Default: config.ProviderKeys{key}}
+	default:
+		panic(fmt.Sprintf("a resolved model field of type %s; teach the filler before classifying it", v.Type()))
+	}
 }
 
 // unit fills one unit, with a seat and, above depth zero, a child unit.
@@ -396,8 +511,18 @@ func (f *filler) unit(depth int) config.Unit {
 	return u
 }
 
-// public fills a public field, which is a string or a list of strings.
+// public fills a public field: a string, a list of strings, or a budget.
 func (f *filler) public(v reflect.Value) {
+	if budget, ok := v.Addr().Interface().(*config.TokenBudget); ok {
+		// Distinct ceilings in every window, each of which must appear.
+		ceiling := func() *int {
+			n := 900000 + f.next()
+			f.publicValues = append(f.publicValues, strconv.Itoa(n))
+			return &n
+		}
+		*budget = config.TokenBudget{Day: ceiling(), Week: ceiling(), Month: ceiling()}
+		return
+	}
 	switch v.Kind() {
 	case reflect.String:
 		v.SetString(f.prose())
@@ -563,5 +688,131 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	if string(body) != "{}" {
 		t.Errorf("a node with no company answers %s, want {} — the shape the "+
 			"dashboard reads as nothing loaded", body)
+	}
+}
+
+// WHAT A SEAT RUNS ON AND WHAT IT CAN REACH ARE PUBLISHED AS THE ENGINE
+// RESOLVES THEM.
+//
+// The model chain is every phase's, the way a turn resolves it: a flat
+// llm_<phase> field wins, a phase naming nothing falls to the seat's llm, and a
+// seat naming nothing lands on the company's `default` provider. The tool
+// sources are the builtins, every shared server, and a per-seat template only
+// where the seat — or its unit — declares credentials for it, which is the
+// grant the engine starts a seat's children by. A human seat runs neither. The
+// budgets are the ceilings as written, company and seat alike, and a window
+// nobody caps is absent rather than zero.
+func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
+	t.Parallel()
+	ceiling := func(n int) *int { return &n }
+	company := &config.Company{
+		Name:        "Acme",
+		TokenBudget: config.TokenBudget{Month: ceiling(40_000_000)},
+		Providers: config.Providers{
+			LLM: map[string]config.LLMProvider{
+				"fast": {}, "big": {}, "default": {},
+			},
+			LLMOrder: []string{"fast", "big", "default"},
+		},
+		MCPServers: []config.MCPServer{
+			{Name: "github", Shared: org.Off()},
+			{Name: "search"},
+			{Name: "jira", Shared: org.Off()},
+		},
+		Roles: []config.Role{
+			{
+				Name: "CTO", LLM: config.PhaseLLM{Default: config.ProviderKeys{"fast"}, Review: config.ProviderKeys{"fast"}},
+				LLMReview:   config.ProviderKeys{"big", "fast"},
+				TokenBudget: config.TokenBudget{Day: ceiling(2_000_000)},
+				MCPEnv:      org.MCPEnv{"jira": {"JIRA_TOKEN": "${CTO_JIRA}"}},
+			},
+			{Name: "Founder", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}},
+		},
+		Units: []config.Unit{{
+			Name:   "Engineering",
+			MCPEnv: org.MCPEnv{"github": {"GITHUB_TOKEN": "${ENG_GITHUB}"}},
+			Roles:  []config.Role{{Name: "SRE"}},
+		}},
+	}
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: func() *config.Company { return company }},
+	})
+	got := orgOf(t, a)
+
+	if got.TokenBudget == nil || got.TokenBudget.Month == nil || *got.TokenBudget.Month != 40_000_000 ||
+		got.TokenBudget.Day != nil || got.TokenBudget.Week != nil {
+		t.Errorf("the company's budget = %+v, want only a month of 40000000", got.TokenBudget)
+	}
+
+	cto, founder, sre := got.Roles[0], got.Roles[1], got.Units[0].Roles[0]
+	if cto.TokenBudget == nil || cto.TokenBudget.Day == nil || *cto.TokenBudget.Day != 2_000_000 ||
+		cto.TokenBudget.Week != nil || cto.TokenBudget.Month != nil {
+		t.Errorf("the CTO's budget = %+v, want only a day of 2000000", cto.TokenBudget)
+	}
+	if sre.TokenBudget != nil {
+		t.Errorf("a seat capping nothing carries a budget %+v", sre.TokenBudget)
+	}
+
+	for _, tc := range []struct {
+		seat  string
+		llm   map[string][]string
+		tools []string
+	}{
+		{
+			seat: "CTO",
+			llm: map[string][]string{
+				// The flat field wins over the mapping's own review.
+				"review":  {"big", "fast"},
+				"execute": {"fast"}, "subagent": {"fast"}, "auxiliary": {"fast"},
+				"judge": {"fast"}, "sandbox": {"fast"}, "onboarding": {"fast"},
+			},
+			// Its own jira credentials grant jira; github is its unit's
+			// and it sits in none. Declaration order, builtins first.
+			tools: []string{"builtin", "mcp:search", "mcp:jira"},
+		},
+		{
+			seat: "SRE",
+			llm: map[string][]string{
+				"execute": {"default"}, "review": {"default"}, "subagent": {"default"},
+				"auxiliary": {"default"}, "judge": {"default"}, "sandbox": {"default"},
+				"onboarding": {"default"},
+			},
+			// Inherited from the unit's mcp_env.
+			tools: []string{"builtin", "mcp:github", "mcp:search"},
+		},
+	} {
+		seat := cto
+		if tc.seat == "SRE" {
+			seat = sre
+		}
+		if !reflect.DeepEqual(seat.LLM, tc.llm) {
+			t.Errorf("%s's chain = %v, want %v", tc.seat, seat.LLM, tc.llm)
+		}
+		if !slices.Equal(seat.ToolSources, tc.tools) {
+			t.Errorf("%s's tool sources = %v, want %v", tc.seat, seat.ToolSources, tc.tools)
+		}
+	}
+	if founder.LLM != nil || founder.ToolSources != nil {
+		t.Errorf("a human seat carries a chain %v and tool sources %v; it runs neither",
+			founder.LLM, founder.ToolSources)
+	}
+	for phaseName := range cto.LLM {
+		if !slices.ContainsFunc(phase.All, func(p phase.Phase) bool { return p.String() == phaseName }) {
+			t.Errorf("the chain names %q, which is not a phase", phaseName)
+		}
+	}
+	if len(cto.LLM) != len(phase.All) {
+		t.Errorf("the CTO's chain covers %d phases, want every one of %d", len(cto.LLM), len(phase.All))
+	}
+
+	// A company with no provider has no chain to show, and says nothing
+	// rather than an empty one.
+	bare := &config.Company{Name: "Acme", Roles: []config.Role{{Name: "CTO"}}}
+	b := newApp(t, api.Options{
+		Sources: queries.Sources{Company: func() *config.Company { return bare }},
+	})
+	if seat := orgOf(t, b).Roles[0]; seat.LLM != nil || !slices.Equal(seat.ToolSources, []string{"builtin"}) {
+		t.Errorf("with no provider and no server, the seat carries %v and %v; want no chain and only the builtins",
+			seat.LLM, seat.ToolSources)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // MCPTransport is how the engine reaches a tool server.
@@ -134,6 +136,29 @@ const (
 // IsShared reports whether one instance serves the company, applying the
 // true default.
 func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
+
+// Grants reports whether seat's turns are offered this server's tools.
+//
+// A shared server serves every AGENT seat; a per-seat template serves only a
+// seat that declares credentials for it under mcp_env — its own or its unit's,
+// which is why this reads the seat AS THE ENGINE RUNS IT ([Company.SeatsAsRun])
+// rather than the authored role — because a template with nobody's identity
+// in it is a server nobody can act through. A human seat runs no tools at all.
+//
+// THE ONE RULE, read by the engine when it starts a seat's children and by the
+// org projection when it tells a reader which servers a seat can reach, so the
+// two cannot answer differently. What it describes is the GRANT: whether the
+// server actually started is the heartbeat's report, not this.
+func (m *MCPServer) Grants(seat *org.Role) bool {
+	if seat == nil || !seat.IsAgent() {
+		return false
+	}
+	if m.IsShared() {
+		return true
+	}
+	_, declared := seat.MCPEnv[m.Name]
+	return declared
+}
 
 // Kind is the transport, applying the stdio default.
 func (m *MCPServer) Kind() MCPTransport {

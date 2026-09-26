@@ -161,40 +161,68 @@ func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
 	if r == nil || len(r.order) == 0 {
 		return nil, ErrNoProviders
 	}
+	keys, missing := resolve(role, ph, r.order, r.Has)
+	if len(missing) > 0 {
+		log.Warn("phase_provider_key_unknown",
+			"role", role.Name, "phase", ph.String(),
+			"missing", missing, "configured", r.order)
+	}
+	members := make([]chain.Member, 0, len(keys))
+	for _, key := range keys {
+		members = append(members, chain.Member{Key: key, Provider: r.byKey[key]})
+	}
+	return members, nil
+}
 
+// Resolve is [Registry.Chain] as provider KEYS: the ordered chain role runs ph
+// on, given the company's providers.llm keys in config order, with no provider
+// built. The first key is the model the phase runs on and every later one is
+// a fallback, in the order the chain tries them.
+//
+// THE SAME FUNCTION Chain resolves through, rather than a description of it,
+// because it is published: the org projection shows every seat's chain to the
+// people watching the company, and a chain worked out beside the one a turn
+// runs on is one that is right until either rule moves. Nil for a role that is
+// nil and for a company with no providers, which has no chain to show.
+func Resolve(role *org.Role, ph Phase, order []string) []string {
+	if role == nil || len(order) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(order))
+	for _, key := range order {
+		known[key] = true
+	}
+	keys, _ := resolve(role, ph, order, func(key string) bool { return known[key] })
+	return keys
+}
+
+// resolve is the four levels [Registry.Chain] documents, over keys alone:
+// the chain it lands on, never empty for a non-empty order, and every key the
+// role named that the company does not configure.
+func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (keys, missing []string) {
 	candidates := roleKeys(role, ph)
 	if len(candidates) == 0 {
 		candidates = role.LLM
 	}
-
-	var members []chain.Member
-	var missing []string
 	seen := make(map[string]bool, len(candidates))
 	for _, key := range candidates {
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		if p, ok := r.byKey[key]; ok {
-			members = append(members, chain.Member{Key: key, Provider: p})
+		if has(key) {
+			keys = append(keys, key)
 		} else {
 			missing = append(missing, key)
 		}
 	}
-	if len(missing) > 0 {
-		log.Warn("phase_provider_key_unknown",
-			"role", role.Name, "phase", ph.String(),
-			"missing", missing, "configured", r.order)
+	if len(keys) > 0 {
+		return keys, missing
 	}
-	if len(members) > 0 {
-		return members, nil
+	if has("default") {
+		return []string{"default"}, missing
 	}
-
-	if p, ok := r.byKey["default"]; ok {
-		return []chain.Member{{Key: "default", Provider: p}}, nil
-	}
-	first := r.order[0]
-	return []chain.Member{{Key: first, Provider: r.byKey[first]}}, nil
+	return []string{order[0]}, missing
 }
 
 // Head returns the chain's first member, for callers that want one provider
@@ -236,15 +264,6 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 		return nil
 	}
 }
-
-// RoleKeys returns the raw per-phase chain a role declares for ph, with no
-// registry and no fallback applied.
-//
-// Exported for the config validator, which must check every key an operator
-// WROTE — including ones the fallback would quietly survive. Resolution and
-// validation ask different questions of the same field, and the validator
-// asking Chain() would only ever see the answer that hid the problem.
-func RoleKeys(role *org.Role, ph Phase) org.ProviderKeys { return roleKeys(role, ph) }
 
 // All is every phase, for callers that must cover the set exhaustively.
 //

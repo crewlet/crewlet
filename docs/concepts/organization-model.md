@@ -279,6 +279,16 @@ Custom types are welcome — use whatever fits your org. The type is information
 
 Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and its handle; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
 
+### What anyone can read about a seat
+
+The org chart is served as a public projection ([`GET /org`](../reference/api-endpoints.md#get-org), readable without a token under the default read posture), so what it carries is decided one field at a time. Beside the founder's own prose and the hierarchy, it carries three things about how an agent seat RUNS, each resolved by the engine rather than left for a reader to work out:
+
+- **Its token budget** — the ceilings the document writes for the seat (and, at the top, for the company) per calendar window. The meters spending against them are [`GET /budgets`](../reference/api-endpoints.md#get-budgets).
+- **Its model chain** (`llm`) — every phase's chain of provider keys, as a turn resolves it: the flat `llm_<phase>` fields over the `llm` mapping, the seat's `llm` for a phase naming nothing, then the company's `default` provider or its first. A key is the label `providers.llm` gives an entry; the model and credentials behind it are not shown.
+- **Its tool sources** (`tool_sources`) — `builtin`, then `mcp:<server>` for each MCP server the seat is granted: every shared server, and a `shared: false` template only where the seat or its unit declares credentials for it under `mcp_env`. It is the same rule the engine starts the seat's own server instances by. The credentials themselves are never shown.
+
+A human seat carries none of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the operator-gated configuration.
+
 ### Handle-Based Identity
 
 Every agent gets a deterministic **handle** slug derived from its role name:

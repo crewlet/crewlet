@@ -1269,7 +1269,7 @@ opens — before a single turn has run:
 | Section | What it is |
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The same public projection [`GET /org`](#get-org) answers: the charter, the company's resolved `timezone`, root-level `roles` and `units` nesting to any depth, with only the public fields of each |
+| `org` | The same public projection [`GET /org`](#get-org) answers: the charter, the company's resolved `timezone` and its `token_budget`, root-level `roles` and `units` nesting to any depth, with only the public fields of each — a seat's resolved `llm` chain and `tool_sources` among them |
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
@@ -2101,6 +2101,7 @@ push, so all three surfaces carry exactly one shape.
   "vision": "...",
   "policies": ["..."],
   "timezone": "Europe/Berlin",
+  "token_budget": {"month": 40000000},
   "roles": [
     {"name": "Founder", "kind": "human", "manages": ["CTO"], "availability": "CET business hours"}
   ],
@@ -2121,7 +2122,14 @@ push, so all three surfaces carry exactly one shape.
           "backstory": "...",
           "responsibilities": ["..."],
           "behavioral_guidelines": ["..."],
-          "manages": ["Platform"]
+          "manages": ["Platform"],
+          "token_budget": {"day": 2000000},
+          "llm": {
+            "execute": ["fast", "backup"], "review": ["big", "fast"],
+            "subagent": ["fast", "backup"], "auxiliary": ["cheap"], "judge": ["cheap"],
+            "sandbox": ["fast", "backup"], "onboarding": ["fast", "backup"]
+          },
+          "tool_sources": ["builtin", "mcp:search", "mcp:github"]
         }
       ],
       "children": [
@@ -2171,9 +2179,9 @@ document to point into, and membership is each unit's `seats`; the same block
 with paths comes back from [a configuration write or dry run](#what-a-write-answers).
 
 **What it carries, and nothing else.** The company's `name`, `mission`,
-`vision`, `policies`, `timezone` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
-`backstory`, `responsibilities`, `behavioral_guidelines`, `manages` and
-`availability`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
+`vision`, `policies`, `timezone`, `token_budget` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
+`backstory`, `responsibilities`, `behavioral_guidelines`, `manages`,
+`availability`, `token_budget`, `llm` and `tool_sources`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
 `channel`, `knowledge`, `roles` and `children`. Every value is the one the
 company document holds, as written: a seat with no declared `handle` has none
 here (the engine derives it from the name), and a unit that inherits its lead
@@ -2188,25 +2196,56 @@ string a client would default to its own browser's zone. Every day the engine
 cuts is cut on it ("today", a due band, an overdue mark, a person's own day), so
 a screen deciding which day something falls on cuts on this.
 
+**`token_budget` is the ceilings as written**, on the company and on each seat
+that names its own: one number per calendar window it caps (`day`, `week`,
+`month`, on the company clock), and nothing for a window it leaves open — so
+an absent key is "no ceiling", never zero. How much of each window is spent,
+and when it resets, is [`GET /budgets`](#get-budgets); this is the rule those
+meters count against.
+
+**A seat's `llm` and `tool_sources` are RESOLVED**, for the reason `derived`
+is: the rule is one a client would get wrong. Both are absent on a human seat,
+which runs neither.
+
+- **`llm`** is every phase's provider chain exactly as a turn resolves it —
+  keyed by phase (`execute`, `review`, `subagent`, `auxiliary`, `judge`,
+  `sandbox`, `onboarding`), the first key the model that phase runs on and
+  every later one a fallback in the order it is tried. A flat `llm_<phase>`
+  field wins over the same phase inside the `llm` mapping, a phase naming
+  nothing takes the seat's `llm`, and a seat naming nothing lands on the
+  company's `default` provider or, without one, the first provider declared.
+  The values are provider KEYS, the labels `providers.llm` gives its entries;
+  the model, endpoint and credentials behind each stay guarded. Absent when the
+  company configures no provider at all.
+- **`tool_sources`** is where the seat's tools come from, in the tool
+  registry's own origin grammar: `builtin` first, then `mcp:<server>` for each
+  server the seat is granted, in the order `mcp_servers` declares them. A
+  shared server is granted to every agent seat; a `shared: false` template only
+  to a seat that declares credentials for it under `mcp_env`, its own or its
+  unit's — the rule the engine starts a seat's own server instances by. It is
+  the GRANT, not what is running: a server that failed to start is still
+  listed, and the node heartbeat's MCP report is what says it failed.
+
 **What it never carries.** A seat's `contact` identities, `email`, `unit`
-reference, `llm` and per-phase `llm_*` chains, `workers`, `token_budget`,
-`learning_enabled`, `mcp_env`, `sandbox`, `placement`, `integrations` and
-`schedules`; a unit's `mcp_env`, `integrations` and `schedules`; and every
-company block outside the charter (providers, MCP servers, integrations,
-knowledge, budgets). Those are read through the operator-gated `config` query
-or [`GET /config`](#config--live-config-management-auth-gated), which masks
-credentials. Two of them also have a read surface of their own, under the same
+reference, `workers`, `learning_enabled`, `mcp_env`, `sandbox`, `placement`,
+`integrations` and `schedules`, and its authored `llm` / `llm_*` fields (their
+effect is the resolved `llm` above); a unit's `mcp_env`, `integrations` and
+`schedules`; and every company block outside the charter and its budget
+(providers, MCP servers, integrations, knowledge, the tracker, notification and
+learning settings, worker templates). Those are read through the
+operator-gated `config` query or
+[`GET /config`](#config--live-config-management-auth-gated), which masks
+credentials. Schedules also have a read surface of their own, under the same
 posture as `/org`, and the tree does not repeat them:
-[`GET /schedules`](#routes) answers every configured schedule with its
-task and next run, and [`GET /budgets`](#get-budgets) answers each seat's token
-cap beside the counter it is enforced against.
+[`GET /schedules`](#routes) answers every configured schedule with its task
+and next run.
 
 **Why an explicit shape.** `/org` is readable without a token under the
 default `api.auth.allow_anonymous_read: true`. Serialising the config's own
 seat and unit types would make every field added to a seat public the day it
 landed, whatever it held. The shape is declared field by field in
-`internal/api` instead, and a test fails when the config gains a seat or unit
-field nobody has classified as public or guarded.
+`internal/api` instead, and a test fails when the config gains a company, seat
+or unit field nobody has classified as public, resolved or guarded.
 
 Founder prose is served as written. Nothing in the public fields is resolved as
 a `${VAR}`, so a reference typed into a goal is shown as the text it is; keep
