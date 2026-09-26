@@ -724,6 +724,8 @@ func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
 			"at all, and the direction it moves is whichever way the refused caller's "+
 			"TTL happened to point",
 			what, before.ExpiresAt, after.ExpiresAt)
+	case !after.AcquiredAt.Equal(before.AcquiredAt):
+		h.t.Fatalf("%s: tenure start moved %v -> %v", what, before.AcquiredAt, after.AcquiredAt)
 	case after.Preferred != before.Preferred:
 		h.t.Fatalf("%s: placement hint moved %q -> %q", what, before.Preferred, after.Preferred)
 	case after.Protocol != before.Protocol:
