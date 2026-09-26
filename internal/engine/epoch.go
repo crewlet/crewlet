@@ -190,13 +190,15 @@ func embeddingWidth(c *Company) int {
 //   - degraded — the apply failed AFTER a subsystem that cannot be put back
 //     was changed.
 //
-// DEGRADED IS NOT REACHABLE, and the ordering is what keeps it so: every step
-// that can refuse runs before the first one that changes this node's state,
-// and every step that changes it — a shared server stopped, a transport
-// reconnected — runs where nothing after it can refuse. A step added to the
-// commit that can fail must either be moved into the build or be one this
-// function can take back, or degraded becomes reachable and this function
-// has to report it.
+// DEGRADED IS NOT REACHABLE, and the ordering is what keeps it so. Every
+// refusal a revision can earn on a node already serving a company happens in
+// the build, before this node's state moves. A node's first company adds the
+// two starts in [Engine.startEdge], each of which takes back what it started
+// before it refuses. And every step after them that changes the node — a
+// shared server stopped, a transport reconnected — runs where nothing can
+// refuse any more. A step added to the commit that can fail must either be
+// moved into the build or be one this function can take back, or degraded
+// becomes reachable and this function has to report it.
 //
 // ONE CALLER: the reconciler's tick, which is synchronous. The API's write
 // path does NOT reach here: it activates a revision and lets the tick apply
@@ -265,7 +267,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// silently dropped every builtin would look like a model that stopped
 	// using its tools. The half that writes only into the epoch; the shared
 	// MCP children, which are this node's processes, start in the commit.
-	if err := e.equipEpoch(next); err != nil {
+	if err = e.equipEpoch(next); err != nil {
 		return refuse(err, "the revision built but could not be equipped with "+
 			"this node's tools; the previous epoch is still current")
 	}
@@ -319,12 +321,17 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// be reflected by a revision it did not run. A first company's
 	// dispatcher was attached with them by [Engine.startEdge].
 	if !attached {
-		// A SWAP, which cannot refuse: the dispatcher exists by now, and
-		// attaching one is the only failure this has. So an error here is
-		// logged rather than refused — the node's state has already moved.
-		if err := e.reconfigureReflection(ctx, next); err != nil {
-			log.ErrorContext(ctx, "reflection_reconfigure_failed", "error", err,
-				"detail", "the previous revision's learning workers keep serving")
+		// A SWAP, and it does not refuse. [Engine.startEdge] made this
+		// node's attach attempt and refused the apply when it failed, so
+		// what is left is handing a dispatcher this revision's workers —
+		// and a worker set it will not take is logged inside the call,
+		// with the previous revision's workers kept serving. An error
+		// returned here can only be an attach, and it is logged rather
+		// than refused because this node's state has already moved.
+		if err = e.reconfigureReflection(ctx, next); err != nil {
+			log.ErrorContext(ctx, "reflection_attach_failed", "error", err,
+				"detail", "no reflect dispatcher is attached on this node, so "+
+					"no completed turn is reflected on until an apply attaches one")
 		}
 		applied = append(applied, "learning")
 	}

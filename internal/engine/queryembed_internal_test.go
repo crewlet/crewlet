@@ -9,14 +9,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // conceptWidth is the fake provider's vector width, and the store's.
@@ -41,6 +48,11 @@ type conceptServer struct {
 	failQueries bool
 	models      map[string]bool
 	askedWidths map[int]bool
+
+	// embedded is every text the server was asked for, with the models it
+	// was asked for under — what lets a case say WHICH caller embedded with
+	// which model, where models alone says only that somebody did.
+	embedded map[string]map[string]bool
 }
 
 // concepts folds the words the fixture uses onto shared meanings.
@@ -51,7 +63,8 @@ var concepts = map[string]string{
 
 func newConceptServer(t *testing.T) *conceptServer {
 	t.Helper()
-	s := &conceptServer{models: map[string]bool{}, askedWidths: map[int]bool{}}
+	s := &conceptServer{models: map[string]bool{}, askedWidths: map[int]bool{},
+		embedded: map[string]map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
@@ -86,6 +99,12 @@ func (s *conceptServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.models[req.Model] = true
 	s.askedWidths[req.Dimensions] = true
+	for _, text := range texts {
+		if s.embedded[text] == nil {
+			s.embedded[text] = map[string]bool{}
+		}
+		s.embedded[text][req.Model] = true
+	}
 	fail := query && s.failQueries
 	s.mu.Unlock()
 	if fail {
@@ -145,6 +164,17 @@ func (s *conceptServer) counts() (queries, batches int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.queries, s.batches
+}
+
+// embeddedUnder is the set of models text was embedded under, copied.
+func (s *conceptServer) embeddedUnder(text string) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]bool{}
+	for model := range s.embedded[text] {
+		out[model] = true
+	}
+	return out
 }
 
 func (s *conceptServer) failing(fail bool) {
@@ -363,6 +393,10 @@ func TestAQueryThatCannotBeEmbeddedIsAnsweredLexicallyAndMarked(t *testing.T) {
 
 // sandboxedVectorCompany is a company on the native backends with the fake
 // embeddings provider at model, and sandbox as its providers.sandbox block.
+//
+// Its learning passes that call a model are off, so a turn reflected on here
+// runs only the passes that call none — the episodist, which embeds, and the
+// skill use stamp. The model the company names answers nobody in a test.
 func sandboxedVectorCompany(t *testing.T, provider, model, sandbox string) *config.Company {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
@@ -381,6 +415,15 @@ providers:
     dimensions: %d
   sandbox:
 %s
+learning:
+  reflect:
+    persist_decider: false
+  skill_synthesis:
+    enabled: false
+  skill_refinement:
+    enabled: false
+  counterparty:
+    enabled: false
 roles:
   - name: CEO
     handle: ceo
@@ -394,17 +437,23 @@ roles:
 
 // A REVISION AN APPLY REFUSED CHANGES NOTHING THE VECTORS ARE MADE OR READ BY.
 //
-// An apply builds a revision's embedding backend when it equips it, and only
-// later reaches steps that can still refuse it — here the sandbox, whose e2b
-// key resolves to nothing. The refused revision moves the model. Its backend
-// is part of an epoch that is never published, so the duty and a search go on
-// embedding with the model the node is serving: a backend held anywhere but
-// on the epoch would be the refused revision's, filing its model's vectors
-// under the served revision's model id and embedding every query with it.
+// The refused revision moves the embedding model and is refused at its
+// sandbox block, whose e2b key resolves to nothing. Everything on this node
+// that embeds goes on embedding with the model the node serves, and stores
+// what it made under that model's id:
 //
-// Mutation: read the backend from anywhere but the epoch [Engine.vectorSpace]
-// loads — the equip that built it, for one — and the provider is asked for the
-// refused revision's model.
+//   - the duty and a search read the backend off the published epoch;
+//   - the diary `reflect_and_persist` writes through is equipped into the
+//     epoch it belongs to, which for a refused revision is never published;
+//   - the reflection workers — the episodist, and the persist decider whose
+//     diary is built in the same call — are handed over only in the apply's
+//     commit, after every step that can refuse. A worker set handed over
+//     before a refusal would be the refused revision's, embedding every
+//     completed turn with its model.
+//
+// Mutation: in [Engine.Apply], hand the reflection workers over between
+// equipping the revision and building its sandbox, and the episodist files
+// the turn under the refused model.
 func TestARefusedRevisionMovesNoVector(t *testing.T) {
 	t.Parallel()
 	provider := newConceptServer(t)
@@ -432,6 +481,56 @@ func TestARefusedRevisionMovesNoVector(t *testing.T) {
 	})
 	duty.tick(t.Context())
 	searcher.Search(t.Context(), knowledge.Query{Text: "automobile upkeep", Org: org})
+
+	// THE DIARY, through the tool a seat keeps a note with.
+	seat := org.AgentSeatByHandle("ceo")
+	entry, found := e.Company().Tools.Lookup(builtin.ReflectAndPersistTool)
+	if !found {
+		t.Fatal("the served epoch offers no reflect_and_persist, so this case " +
+			"cannot say which model the diary embeds with")
+	}
+	keep, ok := entry.Tool.(tools.SeatCallable)
+	if !ok {
+		t.Fatalf("reflect_and_persist is a %T, not a seat's tool", entry.Tool)
+	}
+	const note = "the fleet vehicles are serviced on fridays"
+	kept, err := keep.CallForTurn(t.Context(),
+		&turnctx.Turn{RunID: "run-note", Seat: seat, Org: org},
+		map[string]any{"content": note})
+	if err != nil || kept.Failed {
+		t.Fatalf("keep a note: %v (%s)", err, kept.Output)
+	}
+
+	// THE EPISODIST, through the dispatcher every completed turn reaches.
+	const summary = "car maintenance planned for the fleet"
+	reflected := e.reflector.Reflect(t.Context(), types.TurnCompleted{
+		AgentHandle: "ceo", RoleName: "CEO", TurnID: "run-episode",
+		ReviewOutcome: "done", ToolSequence: []string{"search_knowledge"},
+		TaskSummary: summary,
+	}, events.TraceContext{})
+	if !slices.Contains(reflected.Ran, learning.EpisodistSource) {
+		t.Fatalf("the episodist did not run on a completed turn (%+v), so this "+
+			"case cannot say which model it embeds with", reflected)
+	}
+
+	for what, text := range map[string]string{"the diary": note, "the episodist": summary} {
+		if got := provider.embeddedUnder(text); len(got) != 1 || !got["concepts-a"] {
+			t.Errorf("%s embedded %q under %v, want the served model alone",
+				what, text, got)
+		}
+	}
+	agentID, _ := org.AgentIDFor(seat)
+	notes, err := learning.NewDiary(e.backends.Store).Recent(t.Context(),
+		agentID.String(), time.Now().UTC(), 10)
+	if err != nil || len(notes) != 1 || notes[0].EmbeddingModel != "concepts-a" {
+		t.Errorf("the diary holds %+v (%v), want the note filed under the served model",
+			notes, err)
+	}
+	episodes, err := learning.NewEpisodes(e.backends.Store).Recent(t.Context(), "ceo", 10)
+	if err != nil || len(episodes) != 1 || episodes[0].EmbeddingModel != "concepts-a" {
+		t.Errorf("the episode store holds %+v (%v), want the turn filed under the "+
+			"served model", episodes, err)
+	}
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()

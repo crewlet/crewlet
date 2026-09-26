@@ -115,10 +115,10 @@ func TestAnOperatorsSecondWriteIsNotCollapsedAsARedelivery(t *testing.T) {
 	}
 }
 
-// AND A TURN'S SECOND WRITE STILL IS ONE, which is the half that was always
-// right and the half a careless fix breaks: a re-run turn re-issues the same
-// call, and two writes there are two comments, two status moves and two
-// notifications for one thing that happened.
+// AND A RE-RUN OF A TURN'S WRITE IS STILL ONE OPERATION, which is the half a
+// careless fix breaks: a re-run turn re-issues the same call, and two writes
+// there are two comments, two status moves and two notifications for one thing
+// that happened. (Two calls in ONE run are two writes — see operation_test.go.)
 func TestATurnsRepeatedWriteIsStillOneOperation(t *testing.T) {
 	t.Parallel()
 	first, second := newFakeTracker(), newFakeTracker()
@@ -191,12 +191,13 @@ func TestTwoRunsOfOneTriggerWriteOneOperation(t *testing.T) {
 	}
 }
 
-// AND A TURN WITH NO LEDGERABLE TRIGGER IS STILL IDEMPOTENT WITHIN ITS RUN.
+// AND A TURN WITH NO LEDGERABLE TRIGGER SEEDS FROM ITS RUN.
 //
 // A scheduled fire has no work key — the documented "nothing to collapse" —
-// and its seed used to be empty, so every call minted a fresh id and an
-// executor that updated the same item in two rounds wrote twice. Falling back
-// to the run keeps the within-run guarantee without inventing a cross-run one.
+// but a run can still repeat its own calls: a resumed coding turn that fails is
+// retried under the same run, re-entering the same conversation and making its
+// calls again. An empty seed would mint a fresh id per call and land each of
+// those twice; the run names them again, and invents no cross-run guarantee.
 func TestATurnWithNoWorkKeySeedsFromItsRun(t *testing.T) {
 	t.Parallel()
 	agent := builtin.Actor{TurnID: "run-1", WorkKey: ""}
