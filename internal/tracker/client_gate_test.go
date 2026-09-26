@@ -78,7 +78,7 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 // need a gate, and a sort key is the only one a column mints.
 //
 // One direction only, deliberately. The engine has sort keys the grid has no
-// column for — `rank` is a board's manual order and `spend` and
+// column for — `rank` is a board's manual order and `spend_tokens` and
 // `status_entered` are not on the row at all — and a column for every key
 // would be a grid nobody asked for. What must never happen is a head that
 // names a key the grammar has never heard of.

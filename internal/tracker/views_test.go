@@ -104,6 +104,12 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 		{"a value the grammar refuses", func(v *tracker.View) {
 			v.Params = map[string]string{"status": "shipped"}
 		}, "does not parse"},
+		// WHICH TASK A CALLER IS STANDING ON is theirs, like a cursor: a
+		// view that pinned one would answer every reader's "3 of 18"
+		// about a task they never opened.
+		{"the task a caller stands on", func(v *tracker.View) {
+			v.Params = map[string]string{"around": "ENG-1"}
+		}, "which a saved view cannot"},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
