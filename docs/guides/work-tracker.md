@@ -247,7 +247,8 @@ task's share is gone, with the task.
 
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
-(input plus output — the `sort=spend` key), `spend_workers` and
+(input plus output — the `sort=spend_tokens` key, named after the column
+like every total), `spend_workers` and
 `spend_sent_back`. Every one can be totalled over a board — including as a
 `median` or `p90`, which answer the value a task actually holds rather than an
 average of two.
@@ -513,6 +514,52 @@ would have a shape whose meaning depended on a parameter it could be saved
 without. The builtins carry no id, so they are defaults rather than
 destinations — a client that offers the shapes as an arrangement (the
 dashboard does) shows only what somebody actually saved in its view strip.
+
+### Recent work, a task's place, and a card's facts
+
+Three keys exist for the screens that draw a board rather than for the
+question it asks:
+
+- **`closed_since=<date>`** is the open work **plus** whatever finished — done
+  or cancelled — at or after a date. It takes every date token the `due=`
+  filters take (`sow`, `som`, `-7d`, `2031-04-14`, a timestamp) and resolves
+  it on the **company's clock**, so `closed_since=sow` begins at Monday
+  midnight in the company's zone — the same week `due=range:sow..eow` and the
+  `due:bucket` bands mean — and a Done lane built on it empties itself when
+  that week ends rather than dropping one task an hour. It is the dashboard's
+  **Recent** scope. It is the third way to say which finished work is in an
+  answer, beside `show_closed=true` and `show_closed=recent:<duration>`, so
+  naming it beside `show_closed` is refused, and an `any=` branch may not
+  carry it.
+- **`around=<task>`** asks where one task — its key, a former key or its id —
+  sits in this answer, and the answer carries `around: {position, prev, next,
+  total_hint}`: its 1-based place, the keys of the tasks drawn before and after
+  it, and how long the order is. The order is the **drawing** order, over the
+  whole answer rather than the page: a list's own sort, or a board read column
+  by column — and lane by lane inside a column — in the order the board draws
+  them, with each column's rows in the row order. So the task after the last
+  card in To do is the first card in In progress, even when each column only
+  carried twenty rows. On a label board, where one task is on several columns,
+  the order counts **cards** and a task is placed at the first column it is
+  on. A task the answer does not hold — filtered out, finished, or in a column
+  the board did not draw — is `around: null`, never a refusal, and `position`
+  is null past the 10 000 the total stops counting at. A saved view cannot
+  carry `around`: which task somebody is standing on is theirs.
+- **`fields=tags,dependents_count,open_asks,spend`** puts facts a board CARD
+  draws on each row, and only on an answer that asked: its labels; how many
+  live tasks wait on it (the authored `waiting_on` edges `blocking=` reads);
+  how many of its questions are still unanswered (the same test
+  `has_open_asks=` makes); and `spend: {tokens, turns, workers, sent_back,
+  reopens}`. A fact that was asked for is always present, `0` and `[]`
+  included. They are opt-in because the same row is what an agent reads
+  through `list_work_items`, where every byte is context on every listing —
+  and `list_work_items` never asks for them, even through a saved view that
+  does. `sort=-spend_tokens` with `fields=spend` is the most expensive work.
+
+**A priority list is paged in its own order.** `priorities=<person>` answers
+the tasks on somebody's list in the order they arranged, and a page smaller
+than the list now carries on in that order: the whole list (at most 32 tasks)
+is read on every page and the cursor is a place in it.
 
 ### What a board groups on
 

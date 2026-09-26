@@ -1828,6 +1828,40 @@ export interface WorkSummary {
   updated: string;
   /** The composed log position this row was last written at. */
   version: number;
+  /** THE OPT-IN CARD FACTS, present only on an answer that named them in
+   *  `fields=` — and then present at zero too (`[]`, `0`), so "asked, and
+   *  none" is never an absent key. The same row is what an agent reads
+   *  through `list_work_items`, which never asks. */
+  tags?: string[];
+  /** Live tasks waiting on this one, through the authored `waiting_on`
+   *  edges `blocking=` reads — the card's "blocks N". */
+  dependents_count?: number;
+  /** Questions on the task still waiting for their answer. */
+  open_asks?: number;
+  spend?: WorkRowSpend;
+}
+
+/** What one task has cost, as a card and the most expensive tasks draw it:
+ *  tokens only, never a price. */
+export interface WorkRowSpend {
+  tokens: number;
+  turns: number;
+  workers: number;
+  sent_back: number;
+  reopens: number;
+}
+
+/** Where `around=` placed one task in an answer's DRAWING order — the list's
+ *  own sort, or a board read column by column and lane by lane — over the
+ *  whole answer rather than the page. `prev`/`next` are keys, null at the
+ *  ends; `position` is null past the count's ceiling. On a label board the
+ *  order counts cards, so `total_hint` here is the number drawn. */
+export interface WorkAround {
+  position: number | null;
+  prev: string | null;
+  next: string | null;
+  total_hint: number;
+  total_capped?: boolean;
 }
 
 /** One person's load, as `work_workload` answers it.
@@ -1968,6 +2002,9 @@ export interface WorkItemsAnswer {
    *  are different facts, and `read_level` speaks only to the first. */
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** Present only when the request named `around=`, and NULL when that task
+   *  is not in this answer — it moved off the board — rather than absent. */
+  around?: WorkAround | null;
 }
 
 /** One entry in a container's view strip.
@@ -2482,6 +2519,10 @@ export interface WorkSpend {
   cache_write?: number;
   wall_ms?: number;
   tokens?: number;
+  /** How many delegated tasks its turns ran, and how many reviews sent the
+   *  work back — the two counts that say WHY a task was expensive. */
+  workers?: number;
+  sent_back?: number;
 }
 
 /** One custom-field value with the declaration that explains it.

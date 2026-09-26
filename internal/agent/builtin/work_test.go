@@ -35,7 +35,12 @@ type fakeTracker struct {
 
 	// params is what the tool handed the grammar, before it was parsed.
 	params map[string]string
-	tasks  map[string]tracker.TaskDetail
+
+	// views are the saved views [fakeTracker.ExpandedQuery] expands, by id
+	// — a view's own keys under the caller's, as the real expansion loads
+	// them.
+	views map[string]map[string]any
+	tasks map[string]tracker.TaskDetail
 
 	// reads is every freshness the point readers were handed.
 	reads []statelog.Freshness
@@ -169,11 +174,24 @@ func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tr
 	}
 	answer := tracker.Answer{Complete: true, Level: statelog.ReadSession}
 	for _, d := range f.tasks {
-		answer.Rows = append(answer.Rows, tracker.TaskRow{
+		row := tracker.TaskRow{
 			ID: d.Task.ID, Key: d.Task.Key, Title: d.Task.Title,
 			Status: d.Task.Status, Project: d.Task.Project,
-		})
+		}
+		// THE OPT-IN FACTS, as the real reader fills them: present when
+		// the query asked, so a surface that forwarded `fields=` shows up
+		// in what it renders rather than only in the query it built.
+		if q.Wants(tracker.RowFieldSpend) {
+			row.Spend = &tracker.RowSpend{Tokens: 1400, Turns: 2}
+		}
+		if q.Wants(tracker.RowFieldTags) {
+			row.Tags = []string{"api"}
+		}
+		answer.Rows = append(answer.Rows, row)
 	}
+	slices.SortFunc(answer.Rows, func(a, b tracker.TaskRow) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 	answer.TotalHint = len(answer.Rows)
 	return answer, nil
 }
@@ -212,7 +230,16 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	for key, value := range params {
 		f.params[key] = fmt.Sprint(value)
 	}
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	merged := tracker.MapParams{}
+	if view, held := f.views[fmt.Sprint(params["view"])]; held {
+		for key, value := range view {
+			merged[key] = value
+		}
+	}
+	for key, value := range params {
+		merged[key] = value
+	}
+	return tracker.ParseQuery(merged, now, loc)
 }
 
 func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {

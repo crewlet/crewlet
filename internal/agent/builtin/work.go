@@ -939,6 +939,15 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// and `totals` — see the passthrough list above. A model that wants a
 	// subtree asks with `parent`, which the mode does not apply to at all.
 	q.Subtasks = tracker.SubtasksSeparate
+	// AND THE ROW IS THE ROW A MODEL HAS ALWAYS READ. `fields=` is a board
+	// card's opt-in — labels, "blocks 3", an open question, what the task
+	// cost — and a saved `view` built on a board carries it; forwarded here,
+	// every listing through that view would grow every row in a model's
+	// context by facts it never asked for. Overruled for the reason the
+	// subtask mode above is, and `around` with it: where one task sits in a
+	// board's drawing order is a task page's question, and a view refuses
+	// to carry it anyway.
+	q.RowFields, q.Around = nil, ""
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):

@@ -260,6 +260,26 @@ func (a groupAxis) canonical(key string) string {
 // columns from, and nil leaves each column reading as the key the rows hold.
 func compileGroup(key string, fields map[string]resolvedField,
 	window dayWindow, units Units) (groupAxis, error) {
+	return compileAxis(key, "gv", fields, window, units)
+}
+
+// compileLane is [compileGroup] for the SECOND axis, the swimlanes.
+//
+// ITS OWN ALIAS, because a lane is read with the column's join in the same
+// statement: two custom-field axes — `group_by=f.team&group_by2=f.risk` —
+// each joined `tracker_field_values` as `gv`, and a statement carrying the
+// alias twice is refused by the engine, so that board failed its read on
+// every poll. Only the field axis names a join alias a second axis could
+// repeat: `tag` is one axis and cannot be both, and every other axis reads a
+// column of the task itself.
+func compileLane(key string, fields map[string]resolvedField,
+	window dayWindow, units Units) (groupAxis, error) {
+	return compileAxis(key, "gl", fields, window, units)
+}
+
+// compileAxis is one axis with its field join under `alias`.
+func compileAxis(key, alias string, fields map[string]resolvedField,
+	window dayWindow, units Units) (groupAxis, error) {
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
@@ -278,15 +298,15 @@ func compileGroup(key string, fields map[string]resolvedField,
 		// on one of these would show every task under its FIRST value
 		// and say nothing — which is a board that is quietly wrong
 		// rather than one that is differently shaped.
-		pin := " AND gv.seq = 0"
+		pin := " AND " + alias + ".seq = 0"
 		if field.Multi {
 			pin = ""
 		}
 		return groupAxis{
-			Expr: "gv." + column,
-			Join: " LEFT JOIN tracker_field_values gv ON gv.task_id = t.id" +
-				" AND gv.field_id = ? AND " +
-				strings.ReplaceAll(liveFieldValue, "v.", "gv.") + pin,
+			Expr: alias + "." + column,
+			Join: " LEFT JOIN tracker_field_values " + alias + " ON " + alias +
+				".task_id = t.id AND " + alias + ".field_id = ? AND " +
+				strings.ReplaceAll(liveFieldValue, "v.", alias+".") + pin,
 			JoinArgs: []any{field.ID},
 			Multi:    field.Multi,
 			Unset:    "(not set)",
@@ -924,7 +944,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
 	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
-	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow(), q.Units)
+	inner, err := compileLane(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1197,7 +1217,7 @@ func dueFilterRange(filter DateFilter) dueRange {
 // asks for it, and the overdue alias ANDs the open condition back on whatever
 // `show_closed` said.
 func admittedStatuses(q Query) []Status {
-	finished := q.ShowClosed.All || q.ShowClosed.Recent > 0
+	finished := q.ShowClosed.Finished()
 	for _, filter := range q.Dates {
 		if filter.Overdue {
 			finished = false

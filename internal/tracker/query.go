@@ -159,6 +159,14 @@ const (
 )
 
 // ShowClosed is how finished work is included.
+//
+// THREE WAYS TO ASK, and at most one of them per query: every finished task,
+// the ones finished within a DURATION of now (`show_closed=recent:168h`), and
+// the ones finished at or after a CALENDAR BOUNDARY (`closed_since=sow`). The
+// last two look alike and are not: "the last seven days" slides with the clock
+// and "this week" starts on Monday at the company's own midnight, which is the
+// Board's Recent scope — a Done lane that empties itself at 00:00 on Monday in
+// the company's zone, rather than dropping one task an hour for a week.
 type ShowClosed struct {
 	All bool
 
@@ -167,6 +175,22 @@ type ShowClosed struct {
 	// exactly as one done inside it is — which is what the group stamp
 	// buys.
 	Recent time.Duration
+
+	// Since is the same bound as an INSTANT, resolved from a date token on
+	// the company's clock by [ParseQuery] — `closed_since=sow` is the first
+	// instant of this ISO week in the company's zone, never the reader's.
+	// NIL IS UNSET, and it is a pointer because the zero instant is a
+	// value a caller can write — `closed_since=0001-01-01T00:00:00Z` is
+	// every finished task — and must not read as "no bound", which
+	// excludes them all.
+	Since *time.Time
+}
+
+// Finished reports whether any finished work is in the answer — the one
+// question [compileWhere] and [admittedStatuses] both ask of this, stated
+// once so a fourth way to ask cannot reach one of them and not the other.
+func (s ShowClosed) Finished() bool {
+	return s.All || s.Recent > 0 || s.Since != nil
 }
 
 // ArchivedMode is how archived work is included.
@@ -362,6 +386,20 @@ type Query struct {
 
 	Totals []string
 
+	// RowFields are the OPT-IN row facts a caller asked for with
+	// `fields=` — see [RowField]. Empty for every caller that named none,
+	// which keeps [TaskRow] exactly the shape a seat's `list_work_items`
+	// has always read.
+	RowFields []RowField
+
+	// Around is one task — its id, its key or a former key, resolved the
+	// way a task page resolves its own address — whose place in THIS
+	// answer's drawing order the caller wants: `around=ENG-7`, so a task
+	// page opened from a board can say "3 of 18" and step to its
+	// neighbours without holding the board. Empty is not asked. See
+	// [Around].
+	Around string
+
 	// DayStart is midnight today in the COMPANY's zone, resolved once by
 	// [ParseQuery] and carried so that every answer about "today" agrees.
 	//
@@ -470,16 +508,17 @@ type Params interface {
 // The one shape not in it is a custom field, `f.<ref>`, whose refs are a
 // company's own and cannot be enumerated here — see [Query.parseFields].
 var QueryKeys = []string{
-	"any", "archived", "archived_at", "asked_by", "asked_of", "assignee", "batch",
-	"blocked", "blocking", "checklist_assignee", "closed", "collaborator",
+	"any", "archived", "archived_at", "around", "asked_by", "asked_of", "assignee",
+	"batch", "blocked", "blocking", "checklist_assignee", "closed",
+	"closed_since", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
-	"finished", "flag", "group", "group_by", "group_by2",
+	"fields", "finished", "flag", "group", "group_by", "group_by2",
 	"group_limit", "has_children", "has_dependencies", "has_open_asks",
 	"has_parent", "key", "limit", "linked_page",
 	"max_lag_seconds", "max_lag_seq", "min_position", "parent", "points", "preset",
 	"priorities", "priority", "q", "read_level", "references", "removed",
 	"reporter",
-	"root", "routing_unit", "show_closed", "sort", "spend",
+	"root", "routing_unit", "show_closed", "sort", "spend_tokens",
 	"start", "status", "status_entered", "status_group", "subgroup",
 	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
 	"watcher",
@@ -624,7 +663,7 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err := q.parseText(p); err != nil {
 		return Query{}, err
 	}
-	if err := q.parseShowClosed(p); err != nil {
+	if err := q.parseShowClosed(p, now, loc); err != nil {
 		return Query{}, err
 	}
 	if err := q.parseArchived(p); err != nil {
@@ -639,6 +678,10 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err := q.parseTotals(p); err != nil {
 		return Query{}, err
 	}
+	if err := q.parseRowFields(p); err != nil {
+		return Query{}, err
+	}
+	q.Around = strings.TrimSpace(p.String("around"))
 	if err := q.parseLevel(p); err != nil {
 		return Query{}, err
 	}
@@ -788,7 +831,9 @@ func (q *Query) parseNumbers(p Params) error {
 	for key, target := range map[string]**NumFilter{
 		"estimate": &q.Estimate,
 		"points":   &q.Points,
-		"spend":    &q.Spend,
+		// NAMED AFTER THE COLUMN, as the sort beside it is — see
+		// [sortKeys] for why `spend` alone stopped naming one number.
+		"spend_tokens": &q.Spend,
 	} {
 		value := strings.TrimSpace(p.String(key))
 		if value == "" {
@@ -943,8 +988,31 @@ func (q *Query) parseText(p Params) error {
 	return nil
 }
 
-func (q *Query) parseShowClosed(p Params) error {
+func (q *Query) parseShowClosed(p Params, now time.Time, loc *time.Location) error {
 	value := strings.TrimSpace(p.String("show_closed"))
+	since := strings.TrimSpace(p.String("closed_since"))
+	if since != "" {
+		// ONE ANSWER TO ONE QUESTION. `closed_since` is a bound on the
+		// finished set and `show_closed` is the other spelling of the
+		// same decision, so a query naming both says two things about
+		// which finished work is in the answer — refused naming the pair
+		// rather than resolved by whichever this function read last.
+		if value != "" {
+			return fmt.Errorf("tracker: closed_since and show_closed both say "+
+				"which finished work is in the answer — closed_since=%s is "+
+				"open work plus what finished since then, so drop "+
+				"show_closed=%s", since, value)
+		}
+		// A DATE TOKEN ON THE COMPANY'S CLOCK, through the same calendar
+		// every `due=` bound resolves on, so `closed_since=sow` begins
+		// the week the `due:bucket` bands and `due=range:sow..eow` mean.
+		at, err := ResolveDate(since, now, loc)
+		if err != nil {
+			return fmt.Errorf("closed_since: %w", err)
+		}
+		q.ShowClosed.Since = &at.At
+		return nil
+	}
 	switch value {
 	case "", "false":
 		return nil
@@ -1059,9 +1127,14 @@ func (q *Query) parseGrouping(p Params) error {
 }
 
 // sortKeys are the orderings a caller may ask for.
+//
+// `spend_tokens` IS THE COLUMN'S OWN NAME, as a total's is (`totals=
+// spend_tokens:sum`). It was `spend`, which stopped naming one number the day
+// a row could carry `fields=spend` — an object of five — and a sort on "spend"
+// would have had to pick which of them it meant without saying so.
 var sortKeys = []string{
 	"rank", "updated", "due", "start", "priority", "created", "title",
-	"estimate", "points", "spend", "reopens", "status_entered", "removed",
+	"estimate", "points", "spend_tokens", "reopens", "status_entered", "removed",
 }
 
 func (q *Query) parseSort(p Params) error {
@@ -1102,6 +1175,74 @@ func (q *Query) parseTotals(p Params) error {
 	// one could fail on a store.
 	return nil
 }
+
+// RowField is one opt-in fact a row carries when a caller asks for it with
+// `fields=`.
+//
+// # Why these are opt-in rather than on every row
+//
+// [TaskRow] is what a SEAT reads through `list_work_items`, and every byte on
+// it is a byte in a model's context on every listing — so a fact only a board
+// card draws (its labels, "blocks 3", an open question, what it has cost) is
+// asked for by the surface that draws it and by nobody else. Each is a batched
+// read over the page's ids inside the answer's own transaction, never a column
+// of the row statement: a join per fact would multiply the one statement every
+// listing shares, and a read outside the transaction would decorate the rows
+// with a different snapshot from the one they were read at.
+type RowField string
+
+// The four row facts.
+const (
+	// RowFieldTags is the task's labels, sorted, and an empty list when it
+	// has none — present because it was asked for.
+	RowFieldTags RowField = "tags"
+
+	// RowFieldDependentsCount is how many live tasks wait on this one: the
+	// AUTHORED edges (`waiting_on` on the dependent, the ones `blocking=`
+	// filters on), never the mirrored list, which lags them for as long
+	// as a one-sided edge is unrepaired.
+	RowFieldDependentsCount RowField = "dependents_count"
+
+	// RowFieldOpenAsks is how many questions on the task are still waiting
+	// for an answer — the predicate `has_open_asks=` filters on, so the
+	// count and the filter cannot disagree about one task.
+	RowFieldOpenAsks RowField = "open_asks"
+
+	// RowFieldSpend is what the task has cost — see [RowSpend].
+	RowFieldSpend RowField = "spend"
+)
+
+// RowFieldNames are the four, in the order a refusal lists them.
+var RowFieldNames = []RowField{
+	RowFieldTags, RowFieldDependentsCount, RowFieldOpenAsks, RowFieldSpend,
+}
+
+// Valid reports whether this is one of the four.
+func (f RowField) Valid() bool { return slices.Contains(RowFieldNames, f) }
+
+// parseRowFields reads `fields=`, refusing a name it does not know rather
+// than ignoring it: a card that asked for `spend` spelled wrong would draw
+// every task as having cost nothing.
+func (q *Query) parseRowFields(p Params) error {
+	for _, name := range csv(p.String("fields")) {
+		field := RowField(name)
+		if !field.Valid() {
+			names := make([]string, len(RowFieldNames))
+			for i, f := range RowFieldNames {
+				names[i] = string(f)
+			}
+			return fmt.Errorf("tracker: %q is not a row field — the four are %s",
+				name, strings.Join(names, ", "))
+		}
+		if !slices.Contains(q.RowFields, field) {
+			q.RowFields = append(q.RowFields, field)
+		}
+	}
+	return nil
+}
+
+// Wants reports whether the caller asked for one row fact.
+func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, field) }
 
 // ParseFreshness reads the four freshness keys — `read_level`,
 // `max_lag_seconds`, `max_lag_seq` and `min_position` — and is the ONE place
@@ -1249,7 +1390,8 @@ func (q *Query) parseAny(p Params, now time.Time, loc *time.Location) error {
 		for _, forbidden := range []string{
 			"any", "limit", "cursor", "group_by", "group_by2", "group",
 			"subgroup", "group_limit", "sort", "view", "preset", "totals",
-			"removed", "archived", "show_closed", "subtasks",
+			"removed", "archived", "show_closed", "closed_since", "subtasks",
+			"fields", "around",
 			"read_level", "max_lag_seconds", "max_lag_seq", "min_position",
 		} {
 			if _, present := branch[forbidden]; present {

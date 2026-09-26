@@ -90,10 +90,13 @@ var Presets = []string{
 // `min_position` because how fresh an answer must be is a property of the
 // SURFACE asking, and a saved row that carried one would let a board silently
 // downgrade a seat's own read — or, for the floor, pin every later reader to
-// a position from the day the view was saved.
+// a position from the day the view was saved. `around` for the reason
+// `cursor` is: which task a caller is standing on is the caller's own, and a
+// view that carried one would answer every reader's "3 of 18" about a task
+// they never opened.
 var expansionRefused = []string{
-	"view", "preset", "cursor", "read_level", "max_lag_seconds", "max_lag_seq",
-	"min_position",
+	"view", "preset", "cursor", "around", "read_level", "max_lag_seconds",
+	"max_lag_seq", "min_position",
 }
 
 // Viewer is who is asking, as much as an expansion needs to know.

@@ -251,6 +251,14 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if answer.Preset != "" {
 		out["preset"] = answer.Preset
 	}
+	if q.Around != "" {
+		// NULL RATHER THAN ABSENT when the task is not in this answer: the
+		// caller asked, and "not on this board" is the answer — a task
+		// page that just watched its task move off the board reads it and
+		// drops "3 of 18" rather than waiting for a field that will never
+		// come.
+		out["around"] = answer.Around
+	}
 	if answer.Incomplete != nil {
 		// WHAT THE ANSWER COULD NOT ACCOUNT FOR, rendered rather than
 		// dropped: "this company has no work" is a thing a person acts

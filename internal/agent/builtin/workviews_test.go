@@ -189,3 +189,38 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 		}
 	}
 }
+
+// A BOARD'S ROW FACTS NEVER REACH A MODEL'S ROWS.
+//
+// `fields=` is a board card's opt-in — labels, "blocks 3", an open question,
+// what the task cost — and a saved view built on a board carries it. A seat
+// running that view through list_work_items reads the same rows it reads
+// without it: every byte a fact adds is a byte in the model's context on every
+// listing, and none of it was asked for. So the answer is byte-identical to
+// the one the same query gets with no view at all.
+func TestTheBoardGetsSpendWithoutTheModelRowGrowing(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.views = map[string]map[string]any{
+		"v-board": {"fields": "spend,tags,dependents_count,open_asks"},
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	plain := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{})
+	if plain.Failed {
+		t.Fatalf("the plain list failed: %s", plain.Output)
+	}
+	viaView := callWork(t, reg, builtin.ListWorkItemsTool,
+		map[string]any{"view": "v-board"})
+	if viaView.Failed {
+		t.Fatalf("the list through the board's view failed: %s", viaView.Output)
+	}
+	if len(trk.query.RowFields) != 0 {
+		t.Errorf("the tool read with fields=%v from the board's view — a "+
+			"model's rows would carry a card's facts", trk.query.RowFields)
+	}
+	if viaView.Output != plain.Output {
+		t.Errorf("the list through a board's view is not the plain list:\n"+
+			"view:  %s\nplain: %s", viaView.Output, plain.Output)
+	}
+}

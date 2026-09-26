@@ -799,6 +799,58 @@ func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
 	}
 }
 
+// A CALLER THAT ASKED WHERE A TASK SITS IS ANSWERED, NULL INCLUDED.
+//
+// `around=` is a task page asking "3 of what": a task that has moved off the
+// board answers `null`, and the key has to be ON the payload for a page to
+// tell that from a server that never understood the question — while a caller
+// that did not ask gets no key at all, so every other board's payload is
+// unchanged.
+func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
+	position := 3
+	next := "ENG-4"
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+		answer tracker.Answer
+		held   bool
+		want   any
+	}{
+		{"placed", map[string]any{"container": "project:eng", "around": "ENG-3"},
+			tracker.Answer{Complete: true, Around: &tracker.Around{
+				Position: &position, Next: &next, TotalHint: 18}}, true, nil},
+		{"absent", map[string]any{"container": "project:eng", "around": "ENG-9"},
+			tracker.Answer{Complete: true}, true, (*tracker.Around)(nil)},
+		{"not asked", map[string]any{"container": "project:eng"},
+			tracker.Answer{Complete: true}, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := askNative(t, queries.Sources{Work: &stubWork{
+				answer: tc.answer}}, "work_items", tc.params)
+			if err != nil {
+				t.Fatalf("work_items: %v", err)
+			}
+			payload, _ := got.(map[string]any)
+			value, held := payload["around"]
+			if held != tc.held {
+				t.Fatalf("the payload carries around=%v (held %v), want held %v",
+					value, held, tc.held)
+			}
+			switch {
+			case !held:
+			case tc.answer.Around != nil:
+				if value != tc.answer.Around {
+					t.Errorf("around is %v, want the reader's own answer", value)
+				}
+			default:
+				if value != tc.want {
+					t.Errorf("around is %#v, want a typed null", value)
+				}
+			}
+		})
+	}
+}
+
 // EVERY QUESTION ON THIS SURFACE RESOLVES THE CALLER'S OWN FRESHNESS, and the
 // one that did not was twelve of the thirteen.
 //

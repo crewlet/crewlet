@@ -117,7 +117,7 @@ func registeredQueries() map[string]map[string]any {
 		"my queue":          {"assignee": "ana", "status_group": "active"},
 		"the children":      {"container": "project:P01", "parent": "t-00001"},
 		"one subtree":       {"container": "project:P01", "root": "t-00001"},
-		"by spend":          {"container": "project:P01", "sort": "-spend"},
+		"by spend":          {"container": "project:P01", "sort": "-spend_tokens"},
 		"by estimate":       {"container": "project:P01", "estimate": "gt:30"},
 		"by points":         {"container": "project:P01", "points": "gt:1"},
 		"one batch":         {"batch": "b-1"},
@@ -160,7 +160,7 @@ func registeredQueries() map[string]map[string]any {
 		"by points everywhere":    {"points": "gt:1"},
 		"the children everywhere": {"parent": "t-00001"},
 		"one subtree everywhere":  {"root": "t-00001"},
-		"by spend everywhere":     {"sort": "-spend"},
+		"by spend everywhere":     {"sort": "-spend_tokens"},
 	}
 }
 

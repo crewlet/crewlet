@@ -1193,3 +1193,35 @@ func TestAColumnFilterWithNoAxisIsRefusedEmptyToo(t *testing.T) {
 			"missing", err)
 	}
 }
+
+// TWO CUSTOM FIELDS MAKE A SWIMLANE BOARD.
+//
+// A lane is read in one statement with its column's join, and both field axes
+// joined `tracker_field_values` under one alias — a statement the engine
+// refuses — so a board grouped on one field with lanes on another failed its
+// read on every poll. The lane axis carries its own alias.
+func TestTwoFieldAxesDrawASwimlaneBoard(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+	seedWithFields(t, r, "t-1", map[string]any{
+		"f-impact": "o-high", "f-areas": []string{"o-api"}})
+	seedWithFields(t, r, "t-2", map[string]any{
+		"f-impact": "o-high", "f-areas": []string{"o-ui"}})
+	seedWithFields(t, r, "t-3", map[string]any{
+		"f-impact": "o-low", "f-areas": []string{"o-ui"}})
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "f.impact",
+		"group_by2": "f.areas",
+	})
+	high := groupOf(t, answer, "o-high")
+	lanes := map[string]int{}
+	for _, lane := range high.Subgroups {
+		lanes[lane.Key] = lane.Count
+	}
+	if lanes["o-api"] != 1 || lanes["o-ui"] != 1 || len(lanes) != 2 {
+		t.Fatalf("the high column's lanes are %v, want one task each in api "+
+			"and ui", lanes)
+	}
+}
