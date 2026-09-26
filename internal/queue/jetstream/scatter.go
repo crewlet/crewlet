@@ -60,31 +60,48 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	// an answerer that keeps answering after it withdrew is a registration
 	// that never really ended.
 	var stopped atomic.Bool
+
+	// ONE GOROUTINE PER ANSWER, never the callback's own. A core NATS
+	// subscription delivers its messages one at a time on one goroutine, so
+	// an answer run inside the callback held every later request behind it
+	// — every asker in the fleet waited for the sum of the answers ahead of
+	// it — while the in-memory twin answered them in parallel and certified
+	// the contract clean. The slots bound it ([queue.MaxConcurrentAnswers]),
+	// and a request past them waits in the callback, which is backpressure
+	// on this one subscription rather than a dropped request.
+	gate := queue.NewAnswerGate()
 	sub, err := q.nc.Subscribe(subject, func(msg *nats.Msg) {
 		if stopped.Load() || msg.Reply == "" {
 			return
 		}
-		// THE PROCESS'S OWN CONTEXT, not a request's: a core NATS
-		// callback carries none, and the answerer's deadline is the
-		// ASKER's — enforced there, because only the asker knows it.
-		// What bounds this side is the asker walking away, which frees
-		// the reply mailbox and makes the respond below a no-op.
-		reply, err := answer(serving, subject, h, msg.Data)
-		if err != nil {
-			// AN ERROR ANSWERS NOTHING — see [queue.AnswerFunc].
-			// Nothing is published, so the asker counts this
-			// server as one that did not answer, which is the
-			// same fact as a server that was not running.
-			q.log.Debug("scatter_answer_failed",
-				"subject", subject, "error", err.Error())
+		if !gate.Enter(serving) {
 			return
 		}
-		if err := msg.Respond(reply); err != nil {
-			q.log.Debug("scatter_reply_failed",
-				"subject", subject, "error", err.Error(),
-				"detail", "the asker's reply mailbox is gone, which is what "+
-					"a deadline that passed looks like from here")
-		}
+		go func() {
+			defer gate.Leave()
+			// THE PROCESS'S OWN CONTEXT, not a request's: a core NATS
+			// callback carries none, and the answerer's deadline is the
+			// ASKER's — enforced there, because only the asker knows it.
+			// What bounds this side is the asker walking away, which
+			// frees the reply mailbox and makes the respond below a
+			// no-op.
+			reply, err := answer(serving, subject, h, msg.Data)
+			if err != nil {
+				// AN ERROR ANSWERS NOTHING — see [queue.AnswerFunc].
+				// Nothing is published, so the asker counts this
+				// server as one that did not answer, which is the
+				// same fact as a server that was not running.
+				q.log.Debug("scatter_answer_failed",
+					"subject", subject, "error", err.Error())
+				return
+			}
+			if err := msg.Respond(reply); err != nil {
+				q.log.Debug("scatter_reply_failed",
+					"subject", subject, "error", err.Error(),
+					"detail", "the asker's reply mailbox is gone, which is what "+
+						"a deadline that passed looks like from here")
+			}
+		}()
 	})
 	if err != nil {
 		retire()
@@ -105,14 +122,21 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	}
 	q.log.Debug("scatter_server_added", "subject", subject)
 
-	return func(context.Context) error {
+	return func(ctx context.Context) error {
 		stopped.Store(true)
-		retire()
+		var unsubErr error
 		if err := sub.Unsubscribe(); err != nil && !q.isClosed() {
-			return fmt.Errorf("stop serving %s: %w", subject, err)
+			unsubErr = fmt.Errorf("stop serving %s: %w", subject, err)
+		}
+		// CANCELLED BEFORE THE WAIT, so an answer watching its context
+		// returns now rather than finishing work nobody will read.
+		retire()
+		if err := gate.Close(ctx); err != nil {
+			return errors.Join(unsubErr,
+				fmt.Errorf("stop serving %s: answers still in flight: %w", subject, err))
 		}
 		q.log.Debug("scatter_server_removed", "subject", subject)
-		return nil
+		return unsubErr
 	}, nil
 }
 

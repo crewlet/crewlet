@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,11 +103,14 @@ func (s *suite) runScatter(t *testing.T) {
 		// leaves when the asker does, so a collection loop that never
 		// looks at its deadline still ends and the case passes.
 		released := make(chan struct{})
-		t.Cleanup(func() { close(released) })
 		serve(ctx, t, q, subject, func(context.Context, []byte) ([]byte, error) {
 			<-released
 			return []byte("late"), nil
 		})
+		// RELEASED BEFORE THE WITHDRAWAL, which waits for the answers in
+		// flight: cleanups run last-registered first, so this one is
+		// registered after the serve whose stop it has to precede.
+		t.Cleanup(func() { close(released) })
 
 		deadline, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 		defer cancel()
@@ -263,6 +267,97 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	t.Run("one_slow_answer_does_not_hold_the_next_request", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		// THE FIRST REQUEST IS HELD until the case ends; every later one
+		// is answered at once. An answerer run one request at a time
+		// cannot answer the second while it holds the first, which is a
+		// registration that makes every asker in the fleet wait for the
+		// sum of everybody else's latency.
+		held := make(chan struct{})
+		holding := make(chan struct{})
+		var first sync.Once
+		serve(ctx, t, q, subject, func(_ context.Context, req []byte) ([]byte, error) {
+			hold := false
+			first.Do(func() { hold = true })
+			if hold {
+				close(holding)
+				<-held
+			}
+			return req, nil
+		})
+		t.Cleanup(func() { close(held) })
+
+		slow, cancelSlow := context.WithTimeout(ctx, 10*time.Second)
+		defer cancelSlow()
+		go func() { _, _ = q.Ask(slow, subject, []byte("slow"), 1) }()
+		// UNTIL THE HELD REQUEST IS IN, so the second is not simply
+		// answered first.
+		select {
+		case <-holding:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the first request never reached the answerer")
+		}
+
+		deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		started := time.Now()
+		replies, err := q.Ask(deadline, subject, []byte("next"), 1)
+		if err != nil {
+			t.Fatalf("ask: %v", err)
+		}
+		if got := replyTexts(replies); !sameSet(got, []string{"next"}) {
+			t.Fatalf("a request behind a held answer got %v after %s — one "+
+				"registration answering one request at a time", got,
+				time.Since(started))
+		}
+	})
+
+	t.Run("a_withdrawal_waits_for_the_answers_in_flight", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var finished atomic.Bool
+		stop, err := q.Serve(ctx, subject, func(context.Context, []byte) ([]byte, error) {
+			close(entered)
+			// IGNORES ITS CONTEXT, which is what makes the wait visible:
+			// one that watched it would return the moment the withdrawal
+			// cancelled it and the case could not tell a wait from none.
+			<-release
+			finished.Store(true)
+			return []byte("done"), nil
+		})
+		if err != nil {
+			t.Fatalf("serve: %v", err)
+		}
+		asked, cancelAsk := context.WithTimeout(ctx, 10*time.Second)
+		defer cancelAsk()
+		go func() { _, _ = q.Ask(asked, subject, []byte("q"), 1) }()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the answerer was never called")
+		}
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			close(release)
+		}()
+		bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := stop(bounded); err != nil {
+			t.Fatalf("stop serving: %v", err)
+		}
+		if !finished.Load() {
+			t.Fatal("the withdrawal returned with an answer still running — a " +
+				"caller that closes what the answerer reads straight after " +
+				"withdrawing would close it under that answer")
+		}
+	})
+
 	if s.caps.Peer != nil {
 		t.Run("a_scatter_reaches_a_peer_process", func(t *testing.T) {
 			t.Parallel()
@@ -313,7 +408,16 @@ func serve(ctx context.Context, t *testing.T, q queue.EventQueue, subject string
 	if err != nil {
 		t.Fatalf("serve %s: %v", subject, err)
 	}
-	t.Cleanup(func() { _ = stop(context.WithoutCancel(ctx)) })
+	t.Cleanup(func() {
+		// BOUNDED, because a withdrawal waits for the answers in flight
+		// and a case that forgot to release one must fail rather than
+		// hang the suite.
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := stop(bounded); err != nil {
+			t.Errorf("stop serving %s: %v", subject, err)
+		}
+	})
 }
 
 // ask scatters with a bounded deadline and fails the test on an error.

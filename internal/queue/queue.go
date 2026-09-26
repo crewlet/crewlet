@@ -99,6 +99,19 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 // in-flight event and not a disk number.
 const MaxPayloadBytes = 8 << 20
 
+// MaxConcurrentAnswers is how many requests one [EventQueue.Serve]
+// registration answers at once.
+//
+// SIXTY-FOUR, which is twice the default `node.max_concurrent`: every turn a
+// node runs can be inside one tool call that asks a peer, so a registration
+// answering one node's full complement of turns and a second node's beside it
+// never queues a request behind another. The cap bounds goroutines and
+// buffered payloads rather than throughput — a request past it waits for a
+// slot, it is never dropped — and the answers this engine serves are
+// kilobytes, far under [MaxPayloadBytes], so sixty-four in flight is memory
+// nobody notices.
+const MaxConcurrentAnswers = 64
+
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
 //
 // The linger counts against the broker ack-timeout budget that bounds a
@@ -444,6 +457,18 @@ type EventQueue interface {
 	// An answerer that returns an error answers NOTHING. Its asker sees a
 	// server that did not answer, which is the same fact as a server that
 	// was not running — see AnswerFunc.
+	//
+	// ANSWERS RUN CONCURRENTLY, up to [MaxConcurrentAnswers] per
+	// registration, and a request beyond that waits for a slot rather
+	// than being dropped. One slow answer must never hold the next
+	// request behind it: an answerer serves every asker in the fleet, and
+	// a registration that answered one at a time made each of them wait
+	// for the sum of everybody else's latency.
+	//
+	// The returned Unsubscribe cancels the answerer's context and then
+	// WAITS for the answers in flight, bounded by the context it is given
+	// — so a caller that withdraws and then closes what the answerer
+	// reads never closes it under an answer still reading.
 	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
 
 	// Start connects the backend and begins consuming.
