@@ -1076,11 +1076,56 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Mailboxes
+	ObjectMaps
 	PositionRegister
 	HoldRegister
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+}
+
+// ObjectMapRecord is the fleet's object placement map as the store holds it.
+//
+// THE VALUE IS OPAQUE BYTES here, the way a sandbox run's record is: the map's
+// shape and every rule about it belong to internal/objstore/placement, and a
+// coordination package that decoded it would be a second place to decide what
+// a valid map is.
+type ObjectMapRecord struct {
+	Value []byte
+
+	// Version is the store's version as read. OPAQUE, like
+	// [Record.Version]: pass back exactly what a read or a write handed you.
+	Version uint64
+}
+
+// ObjectMaps holds the ONE placement map every node places objects by.
+//
+// # Why coordination, and why one record
+//
+// Which data nodes hold which objects is a question the whole company has to
+// answer the same way NOW — a node that placed a group on different holders
+// from its peers would write an object where nobody reads it — which is the
+// definition of a coordination record (ADR-0003). It is one record because it
+// is one value: a placement is a function of the WHOLE map, so a map split
+// across keys could be read half-changed.
+//
+// # COMPARE-AND-SET, and no retention
+//
+// One duty maintains it, and a duty can move between nodes mid-write, so every
+// change is conditioned on the version its writer read and a false answer is a
+// lost race to re-read. The bucket has no age: the map is standing state, and
+// one that expired would read as a fleet with nowhere to put anything.
+type ObjectMaps interface {
+	// ObjectMap reads the map, reporting false when none was ever written.
+	ObjectMap(ctx context.Context) (ObjectMapRecord, bool, error)
+
+	// CreateObjectMap writes the first map, reporting false when one
+	// already exists — the second writer re-reads and updates instead.
+	CreateObjectMap(ctx context.Context, value []byte) (ObjectMapRecord, bool, error)
+
+	// UpdateObjectMap writes value at version, reporting false when that
+	// version no longer holds.
+	UpdateObjectMap(ctx context.Context, value []byte, version uint64) (ObjectMapRecord, bool, error)
 }
 
 // Follows is which chat threads each seat is following.

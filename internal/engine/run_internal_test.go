@@ -57,8 +57,8 @@ func TestConfiguredRolesAreTheOnesTaken(t *testing.T) {
 // bootstrap's own accessor, which is the only parse of node.roles there is.
 func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 	t.Helper()
-	node := config.Node{Roles: roles}
-	return node.Profile("n1")
+	boot := config.Bootstrap{Node: config.Node{Roles: roles}}
+	return boot.Profile("n1")
 }
 
 // engineOn wires just enough engine for the park and pause hooks: they reach

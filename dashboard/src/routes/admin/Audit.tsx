@@ -162,6 +162,17 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       return { subject: id, path: ["company", "people", id] };
     case "project":
       return { subject: id, path: ["work", id] };
+    case "file": {
+      // A FILE'S ID IS ITS ADDRESS'S TOKEN, never its path — the path is in
+      // the change's own fields, whichever side of it is not empty — and
+      // the page that holds it is its project's.
+      const project = id.split(".")[0] ?? id;
+      const path = record.fields?.path?.to || record.fields?.path?.from;
+      return {
+        subject: path ? `${project}/${path}` : `file in ${project}`,
+        path: ["work", project],
+      };
+    }
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
       // tag set, an alias. Named by its kind rather than linked,

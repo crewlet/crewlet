@@ -48,7 +48,7 @@ func TestALoneWorkerNodeGetsNoDutyFunctionAtAll(t *testing.T) {
 // existing deployment into one that sweeps nothing.
 func TestAnUnconfiguredNodeRunsWorkerDuties(t *testing.T) {
 	t.Parallel()
-	e := &Engine{profile: (&config.Node{}).Profile("n1")}
+	e := &Engine{profile: (&config.Bootstrap{}).Profile("n1")}
 	if !e.profile.RunsWorkers() {
 		t.Fatal("a node that declared no roles does not run worker duties")
 	}
@@ -69,7 +69,7 @@ func TestDeclaredRolesAreResolvedAsWritten(t *testing.T) {
 		{names: []string{"ingress"}, ingress: true},
 		{names: []string{"seats", "ingress"}, seats: true, ingress: true},
 	} {
-		p := (&config.Node{Roles: tc.names}).Profile("n1")
+		p := (&config.Bootstrap{Node: config.Node{Roles: tc.names}}).Profile("n1")
 		if p.RunsSeats() != tc.seats || p.RunsWorkers() != tc.workers ||
 			p.RunsIngress() != tc.ingress {
 			t.Errorf("%v: seats=%v workers=%v ingress=%v, want %v/%v/%v",

@@ -194,6 +194,15 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// "who moved this" or "what is waiting on me".
 		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
 		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
+		// AND THE PROJECT'S FILES, which need the object store as well as
+		// the tracker — a file is a row naming chunks, and a surface
+		// holding one half could only record content it cannot store. See
+		// workfiles.go.
+		{&listProjectFiles{deps: deps.Work}, deps.Work.Files != nil},
+		{&readProjectFile{deps: deps.Work}, deps.Work.Files != nil && deps.Work.Objects != nil},
+		{&writeProjectFile{deps: deps.Work},
+			deps.Work.FileWriter != nil && deps.Work.Objects != nil},
+		{&removeProjectFile{deps: deps.Work}, deps.Work.FileWriter != nil},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
@@ -317,7 +326,8 @@ func annotationsFor(name string) tools.Annotations {
 		tracker.TaskActivityTool, tracker.MyWorkTool,
 		tracker.SearchWorkItemsTool,
 		tracker.GetPersonTool, tracker.WorkInboxTool,
-		tracker.ListWorkViewsTool:
+		tracker.ListWorkViewsTool,
+		tracker.ListProjectFilesTool, tracker.ReadProjectFileTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -372,6 +382,26 @@ func annotationsFor(name string) tools.Annotations {
 		// NOT idempotent. A second fold of the same pair is refused —
 		// the duplicate is already cancelled and already linked — and a
 		// fold of a DIFFERENT pair after it is another item closed.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case tracker.WriteProjectFileTool:
+		// A WRITE EVERYBODY ON THE PROJECT SEES, so OpenWorld is Yes and
+		// [mcp.WritesToSharedSurface] reads true, which keeps it away from
+		// a sub-agent acting under its parent's name.
+		//
+		// DESTRUCTIVE: a put over an existing path REPLACES it, and the
+		// content it replaced is collected — the flag asks whether a call
+		// can undo somebody else's work, and this one can. IDEMPOTENT: the
+		// same content at the same path leaves the same file, which is
+		// what makes a retry after a lost answer safe.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case tracker.RemoveProjectFileTool:
+		// DESTRUCTIVE and shared for the put's reason: the file leaves the
+		// project and its content is collected. NOT idempotent — a second
+		// removal is refused, the file being gone.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}

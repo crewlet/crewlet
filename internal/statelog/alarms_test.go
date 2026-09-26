@@ -135,6 +135,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
 			"sized for",
 		},
+		"chunks no member holds": {
+			statelog.KindObjectsMissing,
+			statelog.Reading{ObjectsMissing: 2},
+			"held by no member",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)

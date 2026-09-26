@@ -1,5 +1,5 @@
 /**
- * One project: the facts a container has that its rows do not, and the three
+ * One project: the facts a container has that its rows do not, and the four
  * lenses over them.
  *
  * The screen used to open with the same four-number strip and stacked census
@@ -186,18 +186,19 @@ test("a project whose work was all removed still opens its trash", async () => {
 // holds. Overview is a description rather than a collection and History is
 // paged, so neither takes one — a count of a loaded page would read as a count
 // of the lens.
-test("the Items lens carries the open count, and the other two carry none", async () => {
+test("the Items lens carries the open count, and the other three carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
   // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
   // whether or not anybody has saved a view, so "every tab on the screen" is
-  // more than these three and is not what this case is about.
+  // more than these four and is not what this case is about.
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
   const tabs = within(screen.getByRole("tablist", { name: "Lens" })).getAllByRole("tab");
-  expect(tabs.length).toBe(3);
+  expect(tabs.length).toBe(4);
   expect(tabs[0]?.textContent).toBe("Items12");
   expect(tabs[1]?.textContent).toBe("Overview");
   expect(tabs[2]?.textContent).toBe("History");
+  expect(tabs[3]?.textContent).toBe("Files");
 });
 
 // A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
@@ -238,7 +239,7 @@ test("the work is the lens a project opens on, scoped to this project", async ()
     within(lenses)
       .getAllByRole("tab")
       .map((el) => el.textContent),
-  ).toEqual(["Items12", "Overview", "History"]);
+  ).toEqual(["Items12", "Overview", "History", "Files"]);
   expect(screen.getByRole("tab", { name: "All in this project" })).toBeTruthy();
 });
 

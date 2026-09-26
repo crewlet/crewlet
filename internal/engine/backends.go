@@ -498,7 +498,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // stream.store_dir.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
-	// sequence actually is: eighteen replicated buckets across two calls,
+	// sequence actually is: nineteen replicated buckets across two calls,
 	// each of which would otherwise discover a wedged cluster on its own
 	// budget. Without it the real bound is the PRODUCT rather than the
 	// term — a number nobody declared, which is the shape of a limit that
@@ -665,5 +665,5 @@ func holdsData(b *config.Bootstrap) bool {
 	if b == nil {
 		return true
 	}
-	return b.Node.Profile("").HoldsData()
+	return b.Profile("").HoldsData()
 }

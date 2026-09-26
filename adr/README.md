@@ -118,3 +118,4 @@ six false statements by the time anybody checked.
 | [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |
 | [0017](0017-a-turn-id-names-one-run.md) | A turn id names one RUN; the work key names the unit of work | `TestARedeliveredTriggerRunsUnderItsOwnIdentity` |
 | [0018](0018-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md) | A node without data reaches the estate through a node that holds it | `TestASeatOnAStatelessNodeWritesThroughADataNode` |
+| [0019](0019-the-estate-names-an-object-and-a-map-places-its-bytes.md) | The estate names an object, and a map places its bytes | `TestEveryTableThatNamesAChunkIsDeclared` |

@@ -40,6 +40,7 @@ var dutyTTLs = map[string]struct {
 	"maintenanceDutyTTL":      {maintenanceDutyTTL, true},
 	"retentionDutyTTL":        {retentionDutyTTL, true},
 	"embedDutyTTL":            {embedDutyTTL, true},
+	"objectMapDutyTTL":        {objectMapDutyTTL, true},
 	"integrationDutyTTL":      {integrationDutyTTL, true},
 	"learningDutyTTL":         {learningDutyTTL, true},
 	"setup.LeaseTTL":          {setup.LeaseTTL, true},

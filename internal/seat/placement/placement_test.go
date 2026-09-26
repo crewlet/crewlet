@@ -327,9 +327,10 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 	t.Parallel()
 
 	me := NodeProfile{
-		ID:     "n1",
-		Roles:  Roles(RoleSeats, RoleWorkers),
-		Labels: map[string]string{"zone": "eu"},
+		ID:           "n1",
+		Roles:        Roles(RoleSeats, RoleWorkers, RoleData),
+		Labels:       map[string]string{"zone": "eu"},
+		ObjectWeight: 3,
 	}
 
 	back := FromMeta("n1", me.Meta())
@@ -814,5 +815,34 @@ func assertProfile(t *testing.T, got, want NodeProfile) {
 		if !maps.Equal(got.Labels, want.Labels) {
 			t.Fatalf("labels = %v, want %v", got.Labels, want.Labels)
 		}
+	}
+	if got.ObjectWeight != want.ObjectWeight {
+		t.Fatalf("object weight = %d, want %d", got.ObjectWeight, want.ObjectWeight)
+	}
+}
+
+// A PEER THAT WROTE NO OBJECT WEIGHT HOLDS NO OBJECTS, and so does one whose
+// weight is not a positive whole number: a node read as holding objects is one
+// writers send chunks to and count toward a quorum, so the safe misreading is
+// the opposite of the roles' one.
+func TestAnUnreadableObjectWeightIsNoShare(t *testing.T) {
+	t.Parallel()
+	for name, raw := range map[string]any{
+		"absent":   nil,
+		"a string": "2",
+		"a half":   1.5,
+		"zero":     float64(0),
+		"negative": float64(-2),
+	} {
+		meta := map[string]any{"roles": []any{"data"}}
+		if raw != nil {
+			meta["object_weight"] = raw
+		}
+		if got := FromMeta("n", meta).ObjectWeight; got != 0 {
+			t.Errorf("%s: object weight %d, want 0", name, got)
+		}
+	}
+	if got := FromMeta("n", map[string]any{"object_weight": float64(4)}).ObjectWeight; got != 4 {
+		t.Errorf("a JSON round-tripped weight read as %d, want 4", got)
 	}
 }

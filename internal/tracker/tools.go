@@ -92,6 +92,19 @@ const (
 	// could see a task in `assigned` that had already moved out of it by
 	// the time `priorities` was read.
 	MyWorkTool = "my_work"
+
+	// The FILE tools: a project's shared files, which are the WORK's own
+	// artefacts — the report a task asked for, the spec it is built from,
+	// the dataset a run produced. A seat's, all four, because keeping a
+	// project's files in order is part of doing its work: a seat that
+	// could write a report and never replace or tidy one would fill the
+	// project with `report-final-2.md`. Every write names its author in the
+	// file's history, so nothing here is invisible the way a removed task
+	// is.
+	ListProjectFilesTool  = "list_project_files"
+	ReadProjectFileTool   = "read_project_file"
+	WriteProjectFileTool  = "write_project_file"
+	RemoveProjectFileTool = "remove_project_file"
 )
 
 // The OPERATOR-ONLY tools, which no seat is given.
@@ -158,14 +171,16 @@ func OperatorOnlyTools() []string {
 	}
 }
 
-// Tools are the fourteen a seat holds, so a caller registering them names one
+// Tools are the ones a seat holds, so a caller registering them names one
 // thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool, MoveWorkItemTool,
 		SearchWorkItemsTool, GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
 		WriteProjectTool,
-		TaskActivityTool, MyWorkTool}
+		TaskActivityTool, MyWorkTool,
+		ListProjectFilesTool, ReadProjectFileTool, WriteProjectFileTool,
+		RemoveProjectFileTool}
 }
 
 // WriteTools are the five that count as a DELIVERY.

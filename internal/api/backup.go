@@ -79,8 +79,16 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// would be the wrong instruction.
 		answer := map[string]string{"error": "backup_failed"}
 		status := backupStatus(err)
-		if status == http.StatusBadRequest {
+		switch status {
+		case http.StatusBadRequest:
 			answer["detail"] = err.Error()
+		case http.StatusServiceUnavailable:
+			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
+			// fixed hint, never the chunk list, which is the log's.
+			answer["error"] = "objects_unreachable"
+			answer["hint"] = "the company's files name chunks no reachable data " +
+				"node could supply; bring back any data node that is down, check " +
+				"the objects_missing alarm, and take the backup again"
 		}
 		writeJSON(w, status, answer)
 		return
@@ -96,9 +104,17 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 // the node, the request named somewhere it cannot write, and answering 500
 // would send an operator looking at the engine instead of at their own
 // command.
+//
+// A copy naming chunks no data node could supply is a 503: this node is
+// sound and so is the command, and what fails is the fleet holding the
+// company's files — which clears when the node holding them returns, so it is
+// the one failure here that trying again later can fix.
 func backupStatus(err error) int {
-	if errors.Is(err, backup.ErrBadDestination) {
+	switch {
+	case errors.Is(err, backup.ErrBadDestination):
 		return http.StatusBadRequest
+	case errors.Is(err, backup.ErrObjectsUnreachable):
+		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError
 }

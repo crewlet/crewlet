@@ -51,6 +51,7 @@ var sentinels = []sentinel{
 	{"tracker.ErrIndexBuilding", tracker.ErrIndexBuilding},
 	{"tracker.ErrNoChartActivation", tracker.ErrNoChartActivation},
 	{"tracker.ErrNoComment", tracker.ErrNoComment},
+	{"tracker.ErrNoFile", tracker.ErrNoFile},
 	{"tracker.ErrNoProject", tracker.ErrNoProject},
 	{"tracker.ErrNoTask", tracker.ErrNoTask},
 	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},

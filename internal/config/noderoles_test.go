@@ -108,6 +108,15 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 		{"a leaf listener on an in-memory stream",
 			"stream:\n  leaf:\n    port: 7422\ncoordination:\n  type: embedded-kv\n",
 			"stream.store_dir", ErrMissing},
+		{"a stateless node holding objects",
+			"node:\n  roles: [seats]\nstore:\n  scratch: true\n  objects:\n    weight: 2\n" +
+				"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
+				"coordination:\n  type: embedded-kv\n",
+			"store.objects", ErrConflict},
+		{"an object weight past the ceiling",
+			"store:\n  objects:\n    weight: 65\n", "store.objects.weight", ErrOutOfRange},
+		{"a negative object weight",
+			"store:\n  objects:\n    weight: -1\n", "store.objects.weight", ErrOutOfRange},
 		{"a stateless node on local coordination",
 			"node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
 				"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n",
@@ -121,5 +130,41 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.kind, err)
 			}
 		})
+	}
+}
+
+// A DATA NODE OFFERS AN OBJECT SHARE ON ITS PRESENCE LEASE — the default one
+// when it names none — and a node without `data` offers none, which is what
+// keeps writers from sending it chunks it will not keep.
+func TestOnlyADataNodeOffersAnObjectShare(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		boot Bootstrap
+		want int
+	}{
+		{"every role, no block", Bootstrap{}, DefaultObjectWeight},
+		{"a weight named", Bootstrap{Store: Store{Objects: StoreObjects{Weight: 5}}}, 5},
+		{"no data role", Bootstrap{Node: Node{Roles: []string{"seats"}}}, 0},
+	} {
+		if got := tc.boot.Profile("n1").ObjectWeight; got != tc.want {
+			t.Errorf("%s: object weight %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// THE CHUNK DIRECTORY RESOLVES AGAINST THE STORE, for the reason the snapshot
+// directory does: the same file is run from a container and from a shell.
+func TestTheObjectsDirectoryResolvesAgainstTheStore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ dir, want string }{
+		{"", "/var/lib/crewlet/objects"},
+		{"chunks", "/var/lib/crewlet/chunks"},
+		{"/mnt/objects/", "/mnt/objects"},
+	} {
+		s := Store{Path: "/var/lib/crewlet/crewlet.db", Objects: StoreObjects{Dir: tc.dir}}
+		if got := s.ObjectsDirFor(); got != tc.want {
+			t.Errorf("dir %q resolves to %q, want %q", tc.dir, got, tc.want)
+		}
 	}
 }

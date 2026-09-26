@@ -219,6 +219,16 @@ func documentDeltas(ctx context.Context, tx *sql.Tx, s Subject,
 			return nil, err
 		}
 		return tagSetDeltas(before, after), nil
+	case KindFile:
+		before, _, err := readFile(ctx, tx, s)
+		if err != nil {
+			return nil, err
+		}
+		var after File
+		if err := decode(&after); err != nil {
+			return nil, err
+		}
+		return fileDeltas(before, after), nil
 	case KindCatalogue:
 		switch s.ID {
 		case CatalogueTypes:
@@ -312,6 +322,22 @@ func viewDeltas(before, after View) map[string]Delta {
 	// commonest edit a saved view gets.
 	from, to := paramsText(before.Params, after.Params)
 	moved.add("params", from, to)
+	return moved.done()
+}
+
+// fileDeltas is what changed on one file.
+//
+// THE CONTENT BY ITS HASH AND ITS SIZE, never by its chunks: the chunk list is
+// up to [MaxFileChunks] entries and says nothing a person reading the feed
+// can use, while "the hash moved and the size went from 12 KiB to 40 KiB" is
+// the whole of "somebody rewrote the report".
+func fileDeltas(before, after File) map[string]Delta {
+	moved := deltaSet{}
+	moved.add("path", scalarText(before.Path), scalarText(after.Path))
+	moved.add("content_type", scalarText(before.ContentType), scalarText(after.ContentType))
+	moved.add("hash", string(before.Hash), string(after.Hash))
+	moved.add("size", strconv.FormatInt(before.Size, 10), strconv.FormatInt(after.Size, 10))
+	moved.add("removed", boolText(before.Removed()), boolText(after.Removed()))
 	return moved.done()
 }
 

@@ -116,7 +116,9 @@ func everySeam(t *testing.T) queries.Sources {
 		Pages:    emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
-		WorkSearch:     emptyWork{},
+		WorkSearch: emptyWork{},
+		// A PROJECT'S FILES, their own seam for the same reason.
+		Files:          emptyFiles{},
 		Conversations:  emptyConversations{},
 		Counterparties: emptyCounterparties{},
 		// THE RETENTION DOCUMENT, which the Fleet screen's replication
@@ -125,6 +127,17 @@ func everySeam(t *testing.T) queries.Sources {
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
 	}
+}
+
+// emptyFiles is a project with no files.
+type emptyFiles struct{}
+
+func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
+	return tracker.FileListing{}, nil
+}
+
+func (emptyFiles) File(context.Context, string, string, statelog.Freshness) (tracker.FileDetail, error) {
+	return tracker.FileDetail{}, tracker.ErrNoFile
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on

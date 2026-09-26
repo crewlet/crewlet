@@ -264,6 +264,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "objects": {
+          "$ref": "#/$defs/StoreObjects"
+        },
         "path": {
           "description": "Local database file this node owns exclusively.",
           "type": "string"
@@ -279,6 +282,22 @@
         "snapshot_dir": {
           "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StoreObjects": {
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "description": "Where this node keeps its share of the object store; empty is \u003cdir of store.path\u003e/objects.",
+          "type": "string"
+        },
+        "weight": {
+          "description": "This node's share of the object store relative to the other data nodes, 1..64; 0 is the default, 1.",
+          "maximum": 64,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"

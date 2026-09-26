@@ -34,12 +34,13 @@ at the cluster (`nats account backup`) from the same moment.
 
 ## What state exists, and where
 
-A deployment's durable state lives in five places:
+A deployment's durable state lives in six places:
 
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
 | **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — today the work tracker and the knowledge embeddings — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The object store** | `store.objects.dir` on each data node | The bytes of the company's [files](../concepts/object-store.md), cut into chunks. **Placed rather than replicated**: each node holds only the chunks the placement map puts on it, `stream.replicas` copies of each across the fleet, so no one node's directory is the whole of it. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -55,6 +56,10 @@ Classify before you size the job:
   new node — so a store file lost with the stream estate intact costs at most
   the last sync cycle, and the seat re-hydrates the rest on its next
   acquisition.
+- **Placed, a few copies each:** the object store's chunks. A lost data node's
+  share is rebuilt from the other copies by repair; a chunk whose **every**
+  holder is lost is gone, and the `objects_missing` alarm names it. Only a
+  backup covers that case.
 - **Derived, and rebuildable *only within the replay window*:** everything in
   the replicated estate. A node that loses that file replays the domain logs
   from the beginning and arrives at exactly the same rows — but only if the
@@ -80,6 +85,8 @@ why the manifest is written last.
 ├── manifest.json                          what was captured, from which node
 ├── store.db                               the node estate, self-contained
 ├── store-replicated.db                    the replicated estate, self-contained
+├── objects/                               every chunk that copy names, in a
+│   └── 3f/3f9c…                             data node's own layout
 └── streams/
     ├── CREWLET_AGENT.snapshot             a mailbox stream
     ├── KV_crewlet_secrets.snapshot        a coordination bucket
@@ -102,6 +109,16 @@ Three properties worth knowing:
   one alone, and it must not carry the donor's audit log or the bootstrap half
   of its secret store. Restoring one without the other gives a company whose
   halves are from different moments.
+- **The chunks come from the whole fleet, not from this node.** A data node
+  holds only its share of the [object store](../concepts/object-store.md), so a
+  copy of its directory is a fraction of the company's files. The backup reads
+  every chunk the replicated copy **names** — read from the copy itself, for
+  the position's reason below — from this node where it holds one and from a
+  peer where it does not, and verifies each against its hash. A chunk it cannot
+  read from anybody fails the backup: a restore would bring back files whose
+  bytes are nowhere, and nothing would say so until somebody opened one. The
+  manifest's `objects` records how many chunks and bytes it carries; a copy
+  naming no file has none.
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
@@ -334,6 +351,14 @@ each copy is self-contained, and a stale sidecar from the old database is the
 one thing that would corrupt it. **Both, from the same backup set**: they are
 one node's state, and a restore holding one of them has an audit log and a
 tracker from different moments.
+The object half is one directory copy: copy the backup's `objects/` into the
+`store.objects.dir` of **any one** data node — it is laid out as that
+directory is, so the copy is a plain `cp -r` merged into whatever is there.
+That node then holds every chunk, repair on the others fetches their shares
+from it, and its collection drops the copies the map does not place on it once
+their holders confirm theirs (see
+[Object Store](../concepts/object-store.md#keeping-the-copies-where-the-map-says)).
+Copying into every data node is harmless and only slower to settle.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:

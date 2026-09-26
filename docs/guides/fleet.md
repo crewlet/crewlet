@@ -130,10 +130,10 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Holds the company's durable state: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), a member's share of the broker's replicas and a vote in its quorums, and the event log. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data) |
+| `data` | Holds the company's durable state: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), a member's share of the broker's replicas and a vote in its quorums, the event log, and a share of the [object store](../concepts/object-store.md) where the company's files are kept. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's placement map, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -173,10 +173,15 @@ node's seats do, and each of those tools asks a data node over the broker:
 - **Its audit trail is kept by a data node.** What it publishes about its
   turns is handed to a data node's event log, where `GET /events` on that node
   shows it.
+- **Its files are kept by the data nodes.** A seat on it reads and writes a
+  project's files as any seat does, and the bytes travel to and from the data
+  nodes the [placement map](../concepts/object-store.md) puts them on; none
+  are kept on the stateless node, and `store.objects` is refused there.
 - **It is never counted as a copy.** The trim waits on the positions of data
   nodes only, the search fan-out divides its buckets between data nodes only,
-  and a capacity operation asks data nodes only to acknowledge — a stateless
-  node publishes to no state log.
+  a capacity operation asks data nodes only to acknowledge, and the object
+  store places chunks on data nodes only — a stateless node publishes to no
+  state log.
 
 Seat admission on a stateless node asks a data node whether its copy is
 established, so a stateless node claims no seat until one is. While no data

@@ -114,6 +114,11 @@ type retention struct {
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
 
+	// objectsMissing is how many chunks placed on this node its last
+	// repair found on no member. Nil on a node that runs no object store,
+	// which reads as nothing missing.
+	objectsMissing func() int
+
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
 	mu sync.Mutex
@@ -158,19 +163,20 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		return
 	}
 	r := &retention{
-		fleet:       e.backends.Fleet,
-		leases:      e.backends.Coord,
-		state:       s,
-		db:          e.backends.Store,
-		cfg:         boot.Stream.TrackerRetention,
-		backupOwner: boot.Retention.BackupOwner,
-		metrics:     e.metrics,
-		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
-		nodeID:      s.nodeID,
-		alarms:      statelog.NewTracker(e.metrics, nil),
-		coverage:    e.vectorCoverage,
-		pooled:      map[string]poolCounters{},
-		done:        make(chan struct{}),
+		fleet:          e.backends.Fleet,
+		leases:         e.backends.Coord,
+		state:          s,
+		db:             e.backends.Store,
+		cfg:            boot.Stream.TrackerRetention,
+		backupOwner:    boot.Retention.BackupOwner,
+		metrics:        e.metrics,
+		claim:          e.workerDuty(retentionDutyName, retentionDutyTTL),
+		nodeID:         s.nodeID,
+		alarms:         statelog.NewTracker(e.metrics, nil),
+		coverage:       e.vectorCoverage,
+		objectsMissing: e.objectsMissing,
+		pooled:         map[string]poolCounters{},
+		done:           make(chan struct{}),
 	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at

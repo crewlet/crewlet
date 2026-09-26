@@ -353,6 +353,10 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// one replica a publish is durable on the member that took it, and a
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
+	// A TOKEN, because a write over HTTP is attributed to the operator it
+	// names and a member with none refuses every one — the file uploads
+	// cross the fleet through the API.
+	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
 
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,

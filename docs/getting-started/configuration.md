@@ -711,6 +711,25 @@ store:
                                     #   lock. Raise it on a node doing bulk
                                     #   applies, where `store_tx_retry` in the
                                     #   log names it; see guides/replication.md
+  # objects:                        # this node's share of the OBJECT STORE,
+                                    #   where a company's file bytes live — see
+                                    #   concepts/object-store.md. Every data
+                                    #   node holds a share, so there is nothing
+                                    #   to switch on; REFUSED on a node without
+                                    #   `data`, which holds none
+  #   dir: "./crewlet-data/objects" #   where the chunks placed on this node are
+                                    #   kept. Absolute, or relative to the
+                                    #   store's directory; empty is `objects`
+                                    #   beside `path`. A separate volume is the
+                                    #   production shape once files outgrow the
+                                    #   database's. One engine per directory:
+                                    #   a second is refused rather than letting
+                                    #   it delete the first one's chunks
+  #   weight: 1                     #   this node's share relative to the other
+                                    #   data nodes', 1..64 — a node of weight 2
+                                    #   holds about twice what a weight-1 node
+                                    #   does. Set it in proportion to the space
+                                    #   `dir` has. 0 is the default, 1
 
 coordination:
   type: local                       # one node holding its own seat leases;

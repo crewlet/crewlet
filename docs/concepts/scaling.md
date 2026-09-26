@@ -99,6 +99,14 @@ there is no routing decision to get wrong. What it costs is that the corpus is
 held once per data node, so the storage forecast scales with the data nodes
 rather than with the fleet — see [Retention](../guides/retention.md).
 
+**Files are the exception, and the only one.** The content of a company's files
+grows without bound, so it is *placed* rather than held whole: each chunk is
+kept by `stream.replicas` data nodes chosen by a weighted map, and a data node
+added to the fleet adds space instead of another copy of everything. The row
+that names a file is still an ordinary replicated row, so listing a project's
+files is as local as any other read; only reading the bytes may cross to a
+peer. See [Object Store](object-store.md).
+
 **The node id must be distinct and stable across restarts.** It comes from the
 deployment (`CREWLET_NODE_ID`, or `node.id` in the Tier A file) rather than
 being generated, because a fresh value per boot orphans whatever the previous

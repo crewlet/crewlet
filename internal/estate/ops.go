@@ -39,6 +39,8 @@ type TrackerReader interface {
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (tracker.MyWork, error)
 	Projects(ctx context.Context, q tracker.ProjectQuery) (tracker.ProjectListing, error)
 	Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracker.ProjectDetail, error)
+	Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error)
+	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
 }
 
 // TrackerWriter is the tracker's write side, as ONE actor — see [Actor].
@@ -60,6 +62,8 @@ type TrackerWriter interface {
 		authority tracker.TagAuthority) (tracker.WriteResult, error)
 	EnsureTags(ctx context.Context, opID, project string, tags []string) (
 		[]string, []string, error)
+	PutFile(ctx context.Context, opID string, put tracker.FilePut) (tracker.WriteResult, error)
+	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (tracker.WriteResult, error)
 }
 
 // WorkSearcher is the tracker's ranked search.
@@ -311,6 +315,62 @@ var opWorkSearch = define("tracker.search", opRead, "", false,
 // ---- the tracker's writes ------------------------------------------------ //
 
 // writerFor is the tracker writer acting as the request's actor.
+// A PROJECT'S FILES, as rows: the listing, one file with its manifest, and
+// the two writes. The BYTES never cross here — a stateless node uploads and
+// downloads chunks through its own object client, straight to the data nodes
+// that hold them, and asks this service only for the row that names them.
+var opFiles = define("tracker.files", opRead, trackerStream, false,
+	func(ctx context.Context, b Backend, _ *Actor, q tracker.FileQuery) (tracker.FileListing, error) {
+		if b.Tracker == nil {
+			return tracker.FileListing{}, errNoHalf
+		}
+		return b.Tracker.Files(ctx, q)
+	})
+
+type fileArgs struct {
+	Project string
+	Path    string
+	Fresh   statelog.Freshness
+}
+
+var opFile = define("tracker.file", opRead, trackerStream, false,
+	func(ctx context.Context, b Backend, _ *Actor, a fileArgs) (tracker.FileDetail, error) {
+		if b.Tracker == nil {
+			return tracker.FileDetail{}, errNoHalf
+		}
+		return b.Tracker.File(ctx, a.Project, a.Path, a.Fresh)
+	})
+
+type putFileArgs struct {
+	OpID string
+	Put  tracker.FilePut
+}
+
+var opPutFile = define("tracker.put_file", opIdempotentWrite, trackerStream, true,
+	func(ctx context.Context, b Backend, actor *Actor, a putFileArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.PutFile(ctx, a.OpID, a.Put)
+	})
+
+type removeFileArgs struct {
+	OpID    string
+	Project string
+	Path    string
+	IfMatch uint64
+}
+
+var opRemoveFile = define("tracker.remove_file", opIdempotentWrite, trackerStream, true,
+	func(ctx context.Context, b Backend, actor *Actor, a removeFileArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.RemoveFile(ctx, a.OpID, a.Project, a.Path, a.IfMatch)
+	})
+
 func writerFor(b Backend, actor *Actor) (TrackerWriter, error) {
 	if b.Writer == nil {
 		return nil, errNoHalf

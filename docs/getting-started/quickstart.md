@@ -422,7 +422,7 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker and knowledge-base tools a seat holds — fourteen over
+It gets the same tracker and knowledge-base tools a seat holds — eighteen over
 the tracker and five over the pages — and ten more that no seat is given: the
 saved views, the catalogue write, a person's own queue and inbox, and the
 trash. Its writes are attributed to the token's own name rather than to a

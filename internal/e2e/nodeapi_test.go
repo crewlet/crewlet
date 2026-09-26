@@ -60,7 +60,8 @@ func serveAPI(
 //
 // What it leaves out is what a case here never reaches: the operator MCP
 // surface and the native tracker and knowledge readers, each of which has its
-// own suite.
+// own suite. The file byte routes are IN, because a file's bytes crossing
+// between members is something only a fleet here can exercise.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -125,6 +126,7 @@ func wireAPI(
 	copier, err := backup.New(backup.Options{
 		Store: backends.Store, Conn: backends.Conn(), API: backends.API(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
+		Objects: &backup.Objects{Get: e.GetChunk},
 	})
 	if err != nil {
 		return fail("backup", err)
@@ -146,6 +148,10 @@ func wireAPI(
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,
+		// THE FILE BYTE ROUTES, through the adapter `crewlet run` uses, so
+		// an upload on one member and a download from another cross the
+		// object store the way a deployment's do.
+		Files: api.EngineFiles(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

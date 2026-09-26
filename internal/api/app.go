@@ -77,6 +77,11 @@ type App struct {
 	// serve it: an operator who cannot purge must not be told they can.
 	purger TaskPurger
 
+	// files serves a project's file bytes — the streamed download and
+	// upload, and the removal. Nil leaves the routes unmounted, on a build
+	// with no native tracker or no object store.
+	files ProjectFiles
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
@@ -219,6 +224,10 @@ type Options struct {
 	// purge route unmounted.
 	Purger TaskPurger
 
+	// Files serves a project's file bytes. Nil leaves the byte routes
+	// unmounted; the listing is [queries.Sources.Files].
+	Files ProjectFiles
+
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
 
@@ -321,6 +330,7 @@ func New(opts Options) (*App, error) {
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
+	a.files = opts.Files
 	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
@@ -343,6 +353,7 @@ func New(opts Options) (*App, error) {
 	// writing and letting it write again are not reads, whatever the
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
+	a.mountFiles(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,
 	// and it is why the verb can run at all on a topology whose broker

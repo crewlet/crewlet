@@ -102,6 +102,8 @@ func documentTable(s Subject) (table, key string, err error) {
 		return "tracker_views", s.ID, nil
 	case KindPerson:
 		return "tracker_persons", s.ID, nil
+	case KindFile:
+		return "tracker_files", s.ID, nil
 	}
 	return "", "", fmt.Errorf("tracker: %s is not a whole-document object", s.Kind)
 }
@@ -244,6 +246,40 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
 			store.EncodeTime(person.PrioritiesSetAt), c.packed)
+	case "tracker_files":
+		var file File
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := decodePayload(c.record.Mutation, &file); err != nil {
+			return 0, fmt.Errorf("tracker: decode the file at %s: %w", c.position, err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := fileMatches(c, key, file); err != nil {
+			return 0, err
+		}
+		var removedAt any
+		if file.RemovedAt != nil {
+			removedAt = store.EncodeTime(*file.RemovedAt)
+		}
+		res, err = tx.ExecContext(ctx, `
+			INSERT INTO tracker_files
+				(id, project_key, path, content_type, hash, size, chunks,
+				 created_by, created_at, updated_by, updated_at,
+				 removed_by, removed_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT (id) DO UPDATE SET
+				project_key = excluded.project_key, path = excluded.path,
+				content_type = excluded.content_type, hash = excluded.hash,
+				size = excluded.size, chunks = excluded.chunks,
+				created_by = excluded.created_by, created_at = excluded.created_at,
+				updated_by = excluded.updated_by, updated_at = excluded.updated_at,
+				removed_by = excluded.removed_by, removed_at = excluded.removed_at,
+				version = excluded.version, document = excluded.document
+			WHERE excluded.version > tracker_files.version`,
+			key, file.Project, file.Path, file.ContentType, string(file.Hash),
+			file.Size, len(file.Chunks), file.CreatedBy,
+			store.EncodeTime(file.CreatedAt), file.UpdatedBy,
+			store.EncodeTime(file.UpdatedAt), file.RemovedBy, removedAt,
+			c.packed, []byte(c.record.Mutation))
 	default:
 		return 0, fmt.Errorf("tracker: %s has no upsert", table)
 	}

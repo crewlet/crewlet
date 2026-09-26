@@ -293,6 +293,11 @@ type Engine struct {
 	// where it serves none. See [Engine.serveEstate].
 	stopEstate queue.Unsubscribe
 
+	// objects is this node's part in the fleet's object store: its own
+	// chunks on a data node, and on every node the map it places by and
+	// the client it writes and reads through. See objects.go.
+	objects *objectStore
+
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
 	// company at an apply brings the state log up then, and the log's
@@ -797,6 +802,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.serveEstate(ctx); err != nil {
 		return nil, err
 	}
+	// AND THE OBJECT STORE, on the same terms: a data node answers for its
+	// chunks from boot, whatever mode it started in, because a reader on
+	// another node may need the only copy it holds.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.startObjects(ctx, opts.Bootstrap); err != nil {
+		return nil, err
+	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before
 	// the epoch below builds the chat transports, so nothing is matching an
@@ -879,7 +891,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the same thing: it parses the roles with the validator that already
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
-	e.profile = opts.Bootstrap.Node.Profile(nodeID)
+	e.profile = opts.Bootstrap.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a
@@ -1023,6 +1035,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
+	// AND THE OBJECT STORE'S MAP, a singleton on the same terms: two nodes
+	// maintaining it at once would each read the other's write as a lost
+	// race, which is safe and is a map that moves twice as often.
+	if err := e.startObjectMap(ctx, opts.Bootstrap); err != nil {
+		return nil, err
+	}
 	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
 	// the same reason: its duty is claimed under the node's incarnation,
 	// and a trim that ran before the lease existed would run on every node
@@ -1413,6 +1431,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
+	// THE OBJECT STORE, whole — the passes and the map duty first, then
+	// the chunk server, then the directory — and BEFORE the native runtime
+	// below, whose tracker reader the passes read the references through.
+	// The server goes with it for the estate's reason above: a node that
+	// is going away stops being asked for chunks before it stops being
+	// able to answer them.
+	e.stopObjects(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the

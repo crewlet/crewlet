@@ -24,11 +24,12 @@ import (
 //   - 1: every shape this domain has.
 //   - 2: a task patch may carry the cross-project move's marker
 //     ([TaskPatch.Moving]).
+//   - 3: the file kind ([KindFile]).
 //
 // A record is WRITTEN at the lowest version a reader can apply without
 // losing anything it says, never simply at this constant — see
 // [recordVersionOf] for why that matters to a node still on the older build.
-const RecordVersion = 2
+const RecordVersion = 3
 
 // baseRecordVersion is the version a record whose shape no later version
 // changed is written at: 1, which every build there has ever been reads.
@@ -45,6 +46,10 @@ const baseRecordVersion = 1
 // moveMarkVersion is the version a task patch carrying [TaskPatch.Moving] is
 // written at. See [recordVersionOf].
 const moveMarkVersion = 2
+
+// fileVersion is the version a file record is written at. See
+// [recordVersionOf].
+const fileVersion = 3
 
 // recordVersionOf is the version a record carrying payload is written at: the
 // lowest whose reader applies it without losing anything.
@@ -64,9 +69,21 @@ const moveMarkVersion = 2
 // A domain that raised every record to its newest version would stall an
 // older node's whole tracker for the length of the upgrade. And a gate is
 // pinned at [GateRecordVersion] for ever, which this function never raises.
+//
+// A FILE IS WRITTEN AT 3, for the opposite reason with the same outcome. A
+// build reading only 2 knows every field of the record and not its KIND, so
+// its applier would reach the end of its dispatch and fault — a node wedged
+// at that position for as long as the record is in the log. At 3 it retains
+// the record instead, and a retained file record holds back only that file's
+// own address until the node upgrades.
 func recordVersionOf(payload any) int {
-	if patch, ok := payload.(TaskPatch); ok && patch.Moving != nil {
-		return moveMarkVersion
+	switch p := payload.(type) {
+	case TaskPatch:
+		if p.Moving != nil {
+			return moveMarkVersion
+		}
+	case File:
+		return fileVersion
 	}
 	return baseRecordVersion
 }
@@ -469,6 +486,17 @@ func subjectPath(s Subject, container string) string {
 		// records on every subject, so anything narrower would be a
 		// claim the record does not make.
 		return pathDomain
+	case KindFile:
+		// THE PROJECT IS IN THE SUBJECT, so a file's path is computed
+		// from it alone — under its project's container, which is what
+		// makes an archive block a write into it — and the token is the
+		// object. A token is lower-case hex and a task's id is a uuid,
+		// so the two never name one path.
+		project, token, ok := SplitFileID(s.ID)
+		if !ok {
+			return pathDomain
+		}
+		return ScopeTerm{Kind: TermObject, Container: project, ID: token}.Path()
 	default:
 		return ScopeTerm{Kind: TermObject, Container: container, ID: s.ID}.Path()
 	}
@@ -883,7 +911,7 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // kind has variants.
 type ChangeKind string
 
-// The twenty-seven, and each constant IS its wire value: a kind is written into
+// Each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
@@ -932,14 +960,22 @@ const (
 	// [ChangePrioritised] — the one person write that announces itself,
 	// because somebody else reordered your day.
 	ChangePersonUpdated ChangeKind = "person_updated"
+
+	// ChangeFileWritten is a file put at its path — created, or its content
+	// replaced — and ChangeFileRemoved is one taken away. Two kinds rather
+	// than one with a flag, for the task's own reason: "a report appeared"
+	// and "a report is gone" are two different lines in a project's
+	// account of itself.
+	ChangeFileWritten ChangeKind = "file_written"
+	ChangeFileRemoved ChangeKind = "file_removed"
 )
 
-// ChangeKinds are the twenty-seven.
+// ChangeKinds are every change kind this build writes.
 //
-// TWENTY-SEVEN AGAINST THIRTEEN SUBJECTS, and the gap is not an
-// inconsistency: five commit classes carry no notification at all — a turn, a
-// generation, an eviction, a rank move and a barrier — because a reposition is
-// not history and a barrier writes no rows whatever.
+// MORE KINDS THAN SUBJECTS, and some subjects have none: five commit classes
+// carry no notification at all — a turn, a generation, an eviction, a rank
+// move and a barrier — because a reposition is not history and a barrier
+// writes no rows whatever.
 var ChangeKinds = []ChangeKind{
 	ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 	ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
@@ -948,7 +984,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
-	ChangePrioritised, ChangePersonUpdated,
+	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.

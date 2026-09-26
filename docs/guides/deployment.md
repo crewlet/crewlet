@@ -398,10 +398,10 @@ uses, on every start and idempotently: the six engine streams
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and fifteen in the fleet store holding the
-shared records. A credential
+leases and the fencing epochs, and sixteen in the fleet store holding the
+shared records — the object store's placement map among them. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 

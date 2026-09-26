@@ -28,6 +28,8 @@
 package tracker
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -44,7 +46,7 @@ import (
 // make the writer's own deferral probe miss the record it is meant to see.
 type ObjectKind string
 
-// The thirteen kinds.
+// The kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -116,13 +118,29 @@ const (
 	// left out: a kind that writes nothing must not be able to slip
 	// through the completeness walk by writing nothing.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindFile is one file in a project: where it lives, what it is and
+	// which chunks of the object store make it up. The bytes are NOT here —
+	// see internal/objstore and ADR-0019 — and neither is anything that
+	// would need them: the record carries the manifest, and the manifest is
+	// what keeps the chunks alive.
+	//
+	// ITS SUBJECT IS ITS ADDRESS — the project and a token of the path —
+	// rather than a uuid, which is what makes a path one file: two writers
+	// putting the same path contend on one subject and exactly one wins,
+	// with no claim table and no second append. A move is a put at the new
+	// address and a removal at the old one, and costs no bytes, because the
+	// chunks are named by their content.
+	KindFile ObjectKind = "file"
 )
 
-// ObjectKinds are the thirteen, in the order they are documented.
+// ObjectKinds are every kind this build writes, in the order they are
+// documented.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
+	KindFile,
 }
 
 // KindSprint and KindGoal are RETIRED, and they are constants for the reason
@@ -181,7 +199,7 @@ func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// ELEVEN OF THIRTEEN DO. A turn is ADDITIVE — it records spend that happened
+// EVERY KIND BUT TWO DOES. A turn is ADDITIVE — it records spend that happened
 // and races nobody — and a barrier is arbitrated by nothing at all: every
 // barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
@@ -303,6 +321,34 @@ func GenerationSubject(gen uint32) Subject {
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 
+// FileSubject names one file by its address: the project it is in and the
+// path it has there, which is what two writers of one path contend on.
+//
+// THE PATH IS A TOKEN, for the reason a page title is one: a subject is a
+// broker path and may carry no space, `*` or `>`, and a scope id may carry no
+// `/`, while a file path routinely carries all of them. The record carries
+// the path itself, the applier recomputes the token from it, and a record
+// whose path and subject disagree is refused rather than applied. The path is
+// NORMALISED first ([NormalizeFilePath]), so one file has one token however a
+// caller spelled it.
+func FileSubject(project, path string) Subject {
+	return Subject{Kind: KindFile, ID: ProjectKey(project) + "." + FileToken(path)}
+}
+
+// FileToken is the address a path is arbitrated on: the first sixteen bytes of
+// SHA-256 over the normalised path, in lower-case hex. internal/pages'
+// TitleToken made the same trade for a title, and prices the collision.
+func FileToken(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:16])
+}
+
+// SplitFileID takes a file subject's id apart: the project and the token.
+func SplitFileID(id string) (project, token string, ok bool) {
+	project, token, ok = strings.Cut(id, ".")
+	return project, token, ok && project != "" && token != ""
+}
+
 // String renders the subject's own path — what the framework appends to the
 // domain's subject prefix, and what a scope term names.
 func (s Subject) String() string {
@@ -421,7 +467,7 @@ func (k ObjectKind) Routable() bool {
 // edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
 // is a [ChangeKind] any filter can name.
 //
-// The five document kinds and the task are exactly the kinds [Applier.apply]
+// The document kinds, the file and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an
 // eviction, a generation, an alias, a rank order, a counter — is machinery
 // with no audience and no entry in anybody's account of what happened, so a
@@ -433,7 +479,7 @@ func (k ObjectKind) Routable() bool {
 func (k ObjectKind) RecordsHistory() bool {
 	switch k {
 	case KindTask, KindProject, KindTags, KindCatalogue,
-		KindView, KindPerson:
+		KindView, KindPerson, KindFile:
 		return true
 	}
 	return false
@@ -441,7 +487,7 @@ func (k ObjectKind) RecordsHistory() bool {
 
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
-	return k == KindTask || k == KindTurn
+	return k == KindTask || k == KindTurn || k == KindFile
 }
 
 // ProjectKey normalises what somebody typed into what the column stores.

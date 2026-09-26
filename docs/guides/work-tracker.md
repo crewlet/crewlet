@@ -726,9 +726,10 @@ correct board.
 
 ## What a seat can do
 
-Fourteen tools, and they are deliberately few — nine that act on a task,
+Eighteen tools, and they are deliberately few — nine that act on a task,
 three that read the container it is filed into, one that writes the one part of
-that container a seat owns, and one about CHANGE rather than about state:
+that container a seat owns, one about CHANGE rather than about state, and four
+over the project's [files](#a-projects-files):
 
 | Tool | What it does |
 |---|---|
@@ -747,6 +748,10 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
+| `list_project_files` | a project's files in path order, a page at a time; `folder` narrows to the paths under one |
+| `read_project_file` | one file's text, at most 48 KiB from `offset` with `next_offset` to continue; a file that is not text is described unless `encoding: base64` asks for its bytes |
+| `write_project_file` | put a file at a path — created, or its content replaced — with `if_version` to refuse the write if somebody changed it since you read it |
+| `remove_project_file` | take a file out of a project; its content is deleted from storage |
 
 ### When a task is due and how big it is
 
@@ -1476,6 +1481,43 @@ That is deliberate: an assignment is an ownership transfer down a chart of
 known height, not a nested ask, so bounding it by delegation depth would bound
 the wrong thing. What it catches is the loop where two seats hand one task back
 and forth, which is the failure mode that actually happens.
+
+## A project's files
+
+A project keeps **files** beside its work — the report a task asked for, the
+spec it is built from, the notes a seat left for the next one. A file lives at a
+**path** inside its project (`reports/2026/q3.md`), and a path is one file: two
+writers putting the same path contend, and exactly one wins.
+
+Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
+a person reaches them on the dashboard's project page, through their own
+assistant (the same four tools), or over REST —
+[`/work/files`](../reference/api-endpoints.md#project-files) takes an upload and
+streams a download without either passing through a model.
+
+**The bytes are not in the tracker.** A file is a row saying where it lives,
+what it is and which **chunks** make it up; the chunks are in the
+[object store](../concepts/object-store.md), placed on a few data nodes rather
+than copied to every one. So a project can hold far more than any one node's
+disk, and a node that holds no data at all reads and writes files as any other
+node does. Every upload stores its bytes **before** it writes the row naming
+them, so a file that is listed is always a file that can be read.
+
+| | |
+|---|---|
+| Largest file | 1 GiB — larger artefacts belong in a store built for them, with a link in the project |
+| Path | up to 1 024 bytes, `/` between folders; no empty folder, no `.` or `..`, no backslash or control character. A leading `/` and surrounding spaces are dropped |
+| Version | every write moves it; `if_version` (tools) or `If-Match` (REST) refuses a write when the file has changed since it was read |
+| Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage within the object store's collection pass (hourly), so write it again to bring it back |
+
+A file's changes are history rows like any other — `file_written` and
+`file_removed` — naming who made them. They wake nobody: a file is read from its
+project rather than delivered to an inbox, so a seat that finished a report
+comments on the task that asked for it.
+
+**A move is a write and a removal.** There is no rename: write the file at its
+new path and remove the old one. The content is not copied — the new row names
+the same chunks — so a move costs two small records whatever the file's size.
 
 ## Removing, deleting and purging
 

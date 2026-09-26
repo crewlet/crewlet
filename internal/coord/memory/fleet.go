@@ -43,6 +43,7 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
+	objectMap    *coord.ObjectMapRecord
 	positions    map[string]coord.NodePositions
 	holds        map[string]coord.TrimHold
 	floors       map[string]coord.TrimFloor

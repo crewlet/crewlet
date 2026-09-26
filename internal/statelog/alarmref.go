@@ -75,6 +75,9 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "This company is doing more than twice the reads its " +
 		"log was sized for, so every sizing decision under it is stale.",
+	KindObjectsMissing: "Parts of the company's files that the placement map " +
+		"puts on this node are held by no member of the fleet, so those files " +
+		"cannot be read in full.",
 }
 
 const alarmHeader = `# Alarms

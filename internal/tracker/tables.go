@@ -41,25 +41,27 @@ var SpendColumns = []string{
 // row. A sixth, the binary vector table, is DERIVED — a pure function of a
 // table that is itself outside the identity claim.
 var ReproducibleTables = []string{
-	// The fourteen object tables.
+	// The object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
 	"tracker_task_keys", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_tags", "tracker_views",
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
-	"tracker_evictions",
+	"tracker_evictions", "tracker_files",
 
-	// The ten exploded child tables. Each one exists because a FILTER
-	// or a FIGURE reads it: a collection inside a document cannot be
-	// indexed, and a query that decodes every row's document is a full
-	// scan wearing an index's name.
+	// The exploded child tables. Each one exists because a FILTER or a
+	// FIGURE reads it: a collection inside a document cannot be indexed,
+	// and a query that decodes every row's document is a full scan wearing
+	// an index's name. A file's chunks are the sharpest case — the object
+	// store reads one placement group's references at a time, and a
+	// manifest inside a document is every file decoded to find them.
 	"tracker_task_closure",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
 	"tracker_relations", "tracker_task_deps", "tracker_task_dependents",
-	"tracker_references", "tracker_checklist_items",
+	"tracker_references", "tracker_checklist_items", "tracker_file_chunks",
 
-	// The three history tables.
+	// The history tables.
 	"tracker_history", "tracker_turns",
 	"tracker_notifications",
 

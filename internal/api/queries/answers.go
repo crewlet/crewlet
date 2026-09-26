@@ -185,6 +185,13 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// Files is a project's files — the rows, never the bytes, which the
+	// download route streams. SEPARATE from [Sources.Work] for the reason
+	// [Sources.WorkSearch] is: a node can answer one and not the other,
+	// and a screen needs to know which. Nil leaves `work_files`
+	// unregistered.
+	Files FileReader
+
 	// WorkSearch is the ranked item search, and it is SEPARATE from
 	// [Sources.Work] because the two fail independently: the rows are the
 	// fleet's and the lexical index is this node's own, so a node still
@@ -476,6 +483,13 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
+	}
+	if s.Files != nil {
+		// A PROJECT'S FILES, a page at a time in path order. The bytes are
+		// not an answer on this channel — a download streams from its own
+		// route — so this is everything a file list draws and nothing a
+		// reader opens.
+		r.Register("work_files", s.workFiles)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is

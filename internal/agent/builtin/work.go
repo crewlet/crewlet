@@ -197,6 +197,14 @@ type WorkDeps struct {
 	// is resolved per call rather than per surface.
 	ProjectWriter func(actor Actor) ProjectWriter
 
+	// Files reads a project's files, FileWriter writes them for one actor,
+	// and Objects stores and reads their bytes. All three or no file tool:
+	// a file is a row naming chunks, and a surface holding one half could
+	// only record content it cannot store, or store content nothing names.
+	Files      FileReader
+	FileWriter func(actor Actor) FileWriter
+	Objects    ObjectStore
+
 	// TrashWriter resolves the removal and restore side for one actor, and
 	// is the operator surface's alone: a removal hides a task from every
 	// list in the company, and a seat that could hide work it did not want

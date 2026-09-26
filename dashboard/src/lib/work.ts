@@ -125,8 +125,8 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
 }
 
 /**
- * The engine's twenty-seven change kinds, each with the mark it is drawn as and
- * the phrase a person reads.
+ * The engine's change kinds, each with the mark it is drawn as and the phrase a
+ * person reads.
  *
  * A MARK RATHER THAN A HUE, which is this file's own rule for a task type a few
  * declarations above: a kind is identity, and identity is carried by a name, a
@@ -181,6 +181,8 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
   { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
+  { kind: "file_written", mark: "description", phrase: "wrote a file" },
+  { kind: "file_removed", mark: "delete", phrase: "removed a file" },
 ];
 
 const BY_KIND = new Map(CHANGES.map((change) => [change.kind, change]));

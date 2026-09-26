@@ -642,9 +642,11 @@ func TestAWriteAnswersWithThePositionItLandedAt(t *testing.T) {
 func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
+	files := newFakeFiles()
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
+		Files:         files, FileWriter: files.as, Objects: newFakeObjects(),
 	})
 	for _, name := range builtin.WorkTools() {
 		entry, ok := reg.Lookup(name)
@@ -1181,6 +1183,9 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Inbox:           trk,
+			Files:           newFakeFiles(),
+			FileWriter:      func(builtin.Actor) builtin.FileWriter { return newFakeFiles() },
+			Objects:         newFakeObjects(),
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},

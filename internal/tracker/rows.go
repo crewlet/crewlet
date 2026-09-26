@@ -32,8 +32,9 @@ func NewRows(db *store.DB) (statelog.Rows, error) {
 // and is what makes the removal irreversible.
 //
 // Only a task has either. Every other object in this domain is created by its
-// first record and removed by nothing, so answering false for both is the
-// correct answer rather than an omission.
+// first record and removed by nothing — or, a file, removed by a stamp that the
+// next put at its path lifts, since its address is meant to be used again —
+// so answering false for both is the correct answer rather than an omission.
 func taskGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 

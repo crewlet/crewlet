@@ -164,6 +164,7 @@ const (
 	KindWALLarge         Kind = "wal_large"
 	KindPoolStarved      Kind = "pool_starved"
 	KindCensusDrift      Kind = "census_drift"
+	KindObjectsMissing   Kind = "objects_missing"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -263,6 +264,13 @@ type Reading struct {
 	// LinearizableReads and LinearizableReadsExpected are the observed and
 	// designed-for daily read rates.
 	LinearizableReads, LinearizableReadsExpected int
+
+	// ObjectsMissing is how many chunks the estate names, and the map
+	// places on this node, that its last repair pass found on NO member —
+	// parts of files nobody can read in full. Any value above zero is an
+	// alarm, for the gated record's reason: there is no threshold below
+	// which a file that cannot be opened is acceptable.
+	ObjectsMissing int
 }
 
 // Alarm is one condition currently true on this node.
@@ -568,6 +576,18 @@ var table = []rule{
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
 			"rate. See `stream.tracker_retention` in " +
 			"docs/getting-started/configuration.md.",
+	},
+	{
+		kind: KindObjectsMissing,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d chunk(s) placed on this node are held by no "+
+				"member of the fleet", r.ObjectsMissing), r.ObjectsMissing > 0
+		},
+		remedy: "Bring back any data node that is down: a chunk whose every copy " +
+			"is on nodes that are gone reads as missing until one of them returns, " +
+			"and repair copies it here the next pass. If none is coming back, " +
+			"restore the chunks from a backup's objects/ directory into this " +
+			"node's store.objects.dir — see docs/guides/backup.md.",
 	},
 }
 

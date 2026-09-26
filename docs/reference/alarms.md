@@ -35,6 +35,7 @@ below.
 | `wal_large` | The write-ahead log has grown past a gibibyte, which means a checkpoint is not happening. | A checkpoint is not happening, which usually means a reader is holding a snapshot open. It has no other symptom until the volume fills. |
 | `pool_starved` | Callers are queuing for a database connection before their query starts. | Raise `store.max_open_conns`, or find the caller holding one. Every read on this node is queuing before it starts. |
 | `census_drift` | This company is doing more than twice the reads its log was sized for, so every sizing decision under it is stale. | Re-derive the log's ceiling and the trim's cadence from the real rate. See `stream.tracker_retention` in docs/getting-started/configuration.md. |
+| `objects_missing` | Parts of the company's files that the placement map puts on this node are held by no member of the fleet, so those files cannot be read in full. | Bring back any data node that is down: a chunk whose every copy is on nodes that are gone reads as missing until one of them returns, and repair copies it here the next pass. If none is coming back, restore the chunks from a backup's objects/ directory into this node's store.objects.dir — see docs/guides/backup.md. |
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already

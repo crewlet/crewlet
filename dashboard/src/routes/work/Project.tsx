@@ -18,13 +18,14 @@
  * nothing has ever been filed into says so from its own record rather than
  * falling through to a grid reporting that no item matched filters nobody set.
  *
- * # Three lenses, and each is a different question
+ * # Four lenses, and each is a different question
  *
  * ITEMS is the work, which is why it is the default and why it is the same
  * component the company-wide list is. OVERVIEW is what the CONTAINER is — its
  * vocabulary, its tags, its census, the findings on its own record — which a
  * board can say none of. HISTORY is what has happened, ordered by the log
- * rather than by anything the rows sort on.
+ * rather than by anything the rows sort on. FILES is what the work produced
+ * and keeps beside it.
  *
  * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
  * Overview → History and pressed Back three times walks out through them.
@@ -60,12 +61,13 @@ import { describeChange } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
+import { ProjectFiles } from "./Files.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
 /** The lenses, in the order the strip draws them; the first is the default. */
-const LENSES = ["items", "overview", "history"] as const;
+const LENSES = ["items", "overview", "history", "files"] as const;
 
 export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
@@ -126,6 +128,7 @@ export function Project({ projectKey }: { projectKey: string }) {
                 { value: "items", label: "Items", count: detail.task_counts.open },
                 { value: "overview", label: "Overview" },
                 { value: "history", label: "History" },
+                { value: "files", label: "Files" },
               ]}
             />
 
@@ -143,6 +146,7 @@ export function Project({ projectKey }: { projectKey: string }) {
               ))}
             {lens === "overview" && <ProjectOverview detail={detail} chrome={chrome} />}
             {lens === "history" && <HistoryView container={`project:${projectKey}`} embedded />}
+            {lens === "files" && <ProjectFiles project={projectKey} />}
           </div>
         )}
       </QueryState>

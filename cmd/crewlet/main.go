@@ -1407,7 +1407,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// its box can reach. Gating the bridge on ingress as well took agent mode
 	// away from every node without that role, with the box launching and
 	// every one of its tool calls finding nothing listening.
-	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
+	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
 		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a
@@ -1513,6 +1513,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// raw field is empty on a node named through CREWLET_NODE_ID, and
 		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
+		// Every chunk the store copy names, read from whichever node
+		// holds it: this node holds only its share, and a backup of the
+		// company carries all of them.
+		Objects: &backup.Objects{Get: e.GetChunk},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.
@@ -1647,6 +1651,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// A PROJECT'S FILES, the rows only: the bytes stream from
+			// the download route, which reads them through this node's
+			// object client.
+			Files: nativeFiles(e),
 			// RANKED SEARCH, gated on its own index rather than on
 			// the tracker: the rows are the fleet's and the lexical
 			// index is this node's own, so a node still building one
@@ -1696,6 +1704,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// all until this line: no verb, no route, no tool. A company
 		// could not destroy a task under any circumstances.
 		Purger: nativePurger(e),
+		// A PROJECT'S FILE BYTES, streamed: the download and the upload
+		// read and write chunks through this node's object client and
+		// the rows through its tracker, attributed to the operator.
+		Files: api.EngineFiles(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -2403,6 +2415,15 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 // would satisfy its `!= nil` registration check and then panic on the first
 // question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
 // place where the check is a registration rather than a call.
+// nativeFiles is a project's file rows, or nil — converted for [nativeWork]'s
+// reason.
+func nativeFiles(e *engine.Engine) queries.FileReader {
+	if r := e.Tracker(); r != nil {
+		return r
+	}
+	return nil
+}
+
 func nativeWork(e *engine.Engine) queries.WorkReader {
 	if r := e.Tracker(); r != nil {
 		return r
@@ -2538,6 +2559,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Moves: func(actor builtin.Actor) builtin.WorkMover {
 				return operatorWriter(writer, actor)
 			},
+			// AND THE PROJECT'S FILES — the rows through this node's
+			// tracker, the bytes through its object client.
+			Files: reader,
+			FileWriter: func(actor builtin.Actor) builtin.FileWriter {
+				return operatorWriter(writer, actor)
+			},
+			Objects: e.ObjectStore(),
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
 			// to attribute — and without it the operator catalogue

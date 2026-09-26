@@ -113,6 +113,10 @@ node means nothing was done.
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — the maintained `open`/`done`/`closed` columns, never an aggregate per poll — its `last_change` (when the project's work last changed and who changed it, ABSENT for a project nothing has been filed into), its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose and `?unit=` to the projects one unit owns — **named by the unit's `id` or by its name, in any case**, since a stored unit carries whichever was current when the row was written. `?archived=` SELECTS a set rather than widening one — `false` (the default) for the live projects, `only` for the retired ones alone, `true` for both — so "what did we retire" is a query rather than a caller's own filter over a wider answer. `?sort=` orders the whole selected set before the page is taken: one of `key`, `name`, `unit`, `open`, `done`, `closed`, `last_change`, each optionally with a leading `-` for descending, defaulting to `key`, with the key breaking every tie. An `archived` or `sort` value that is neither is a **400** naming the parameter and what it accepts. `?limit=` caps at 200, which is also the default. The answer carries a `census` — `{active, archived}`, the same question under the same `q` and `unit` MINUS its archival term — so a caller that selected one set can still tell an empty set from an empty company; `total` is the census of the mode that was asked for. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three |
+| `GET` | `/work/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, max 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
+| `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and no copy of its content could be read (see [below](#project-files)) |
+| `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and `?op_id=` how an `unknown` answer is retried. **Always needs an operator token** — the write is attributed to the person (see [below](#project-files)) |
+| `DELETE` | `/work/files/{project}/{path...}` | Remove a file. Same credential, `If-Match` and `?op_id=` as the write |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}` — for every kind and not only the ones about a task: a project reconcile names the purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary; a collection is cut at a whole member and ends with `+N more`. The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list, plus `(<n> promoted)` where an item became a sub-item. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field the project no longer declares The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
 | `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's handle is operator-only |
 | `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of eighteen it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?include_snoozed=` (a snooze means *not now*, so they are hidden by default), `?reasons=` (comma-separated, refused naming the eighteen), `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
@@ -1706,6 +1710,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
+| `work_files` | `{project, folder, removed, limit, after}` | `GET /work/files`. Answers `{project, files, next}` plus the coverage half. Each file carries its `path`, `content_type`, `size`, `hash` (the SHA-256 of its whole content), `version`, who created and last wrote it and when, and — only with `removed` — who removed it and when. `next` is absent on the last page. The listing is rows only: the bytes are read through the byte route, never through the socket |
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
@@ -2227,6 +2232,79 @@ An unknown enum value is refused naming the closed set — `?status=finished`
 answers `400` saying which statuses exist — rather than matching nothing. A
 listing that answered empty for a typo would send somebody looking for items
 that were never missing.
+
+### Project files
+
+A project holds **files** beside its work: a report a seat wrote, a spreadsheet
+an operator uploaded, the output of a run somebody wants to keep. Each is a row
+in the tracker — a path, a type, a size, a version and who wrote it — and its
+content lives in the [object store](../concepts/object-store.md), split into
+chunks placed across the fleet rather than copied onto every node. See
+[A project's files](../guides/work-tracker.md#a-projects-files) for what a seat
+does with them.
+
+The listing is an ordinary read (`GET /work/files`, the `work_files` query).
+What the three byte routes add is what a question cannot carry: a download
+**streams** the content back and an upload streams it in, neither holding the
+file in memory.
+
+```bash
+# upload, replacing version 3 and nothing newer
+curl -X PUT -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Content-Type: text/csv" -H 'If-Match: "3"' \
+  --data-binary @q3.csv "http://localhost:8080/work/files/ENG/reports/q3.csv"
+
+# download
+curl -OJ -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/work/files/ENG/reports/q3.csv"
+```
+
+```json
+{
+  "project": "ENG", "path": "reports/q3.csv", "size": 48213,
+  "hash": "9f2c…", "content_type": "text/csv",
+  "outcome": "applied", "op_id": "…", "position": "…", "version": 4
+}
+```
+
+**The content goes first.** An upload writes every chunk before it records the
+file, so a file that is listed is a file whose content the fleet holds. A write
+cut off halfway leaves chunks nothing names, which the collector removes a day
+later; it never leaves a row pointing at content that is not there.
+
+**A write names the version it replaces.** `If-Match` carries the `ETag` the
+download answered. Absent, the write creates the path or overwrites whatever is
+there; present, a file that moved since is `412 version_moved` and nothing is
+written. Unlike a work item, a file has no per-field merge — two people editing
+one spreadsheet would lose one of them.
+
+**A write is attributed to the operator on the request.** A token with no
+operator identity is refused `403 operator_required`: an upload names the
+person who made it in the file's history, never the process that relayed it.
+
+**The answer is three-valued.** `outcome` is `applied`, `pending` or
+`unknown`, as every tracker write's is (see
+[Read Consistency](../guides/consistency.md)), and `position` and `version` are
+present only where the write is known to have landed. An `unknown` is retried
+by sending the same request again with the `op_id` it answered.
+
+**A download is served as an attachment**, with the file's own type and the
+same `default-src 'none'` policy every non-dashboard response carries, so a file
+somebody uploaded as HTML downloads rather than running on the dashboard's
+origin.
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_path` | The path is empty, longer than 1024 bytes, not UTF-8, ends in `/`, has an empty folder or a `.` or `..` in it, or carries a control character or a backslash. A leading `/` is dropped rather than refused |
+| `400` | `bad_if_match` | `If-Match` is not a version |
+| `403` | `operator_required` | A write whose credential names no operator |
+| `404` | `no_project` / `no_file` | No such project, or no file at that path |
+| `412` | `version_moved` | `If-Match` names a version the file has moved past |
+| `413` | `too_large` | The content is over 1 GiB |
+| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or no copy of the content could be read |
+
+The byte routes are mounted only where the tracker is native **and** the node
+runs the object store. A company on Jira has no project files to serve.
 
 ### `GET /work/retention` — what the log is holding
 
@@ -2845,9 +2923,9 @@ opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
-Copies this node's durable state — both of its store files, and every
-JetStream stream and coordination bucket — into `?dir=`, a directory **on the
-engine's host**.
+Copies this node's durable state — both of its store files, every JetStream
+stream and coordination bucket, and every chunk of the company's files that
+the store copy names — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -2867,6 +2945,7 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],
+  "objects": {"dir": "objects", "chunks": 40, "bytes": 41943040},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
      "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}
@@ -2892,7 +2971,7 @@ being copied. The work is safe to be cut off, since the store copy is renamed
 into place only after it verifies and the manifest is written last, so a
 client that gives up leaves an unfinished directory rather than a false one.
 
-Three refusals, each pointing somewhere different:
+Four refusals, each pointing somewhere different:
 
 - **401 without a token.** `allow_anonymous_read` is on by default and opens
   the read surface; this writes every credential the company holds to a path
@@ -2901,6 +2980,12 @@ Three refusals, each pointing somewhere different:
   or a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix.
+- **503 `objects_unreachable`** — the store copy names chunks of the
+  company's files that no reachable data node could supply. Nothing is wrong
+  with this node or the command: a data node holding them is down. Bring it
+  back (the [`objects_missing`](alarms.md) alarm names the condition) and take
+  the backup again. A backup without those chunks is refused rather than
+  written, because a restore would bring back files whose bytes are nowhere.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest

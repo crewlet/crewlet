@@ -136,7 +136,7 @@ func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 		switch kind {
 		case tracker.KindTask, tracker.KindProject,
 			tracker.KindTags, tracker.KindCatalogue, tracker.KindView,
-			tracker.KindPerson:
+			tracker.KindPerson, tracker.KindFile:
 			if !records {
 				t.Errorf("%s writes a history row and says it does not", kind)
 			}

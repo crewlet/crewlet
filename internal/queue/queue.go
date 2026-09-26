@@ -107,9 +107,13 @@ const MaxPayloadBytes = 8 << 20
 // answering one node's full complement of turns and a second node's beside it
 // never queues a request behind another. The cap bounds goroutines and
 // buffered payloads rather than throughput — a request past it waits for a
-// slot, it is never dropped — and the answers this engine serves are
-// kilobytes, far under [MaxPayloadBytes], so sixty-four in flight is memory
-// nobody notices.
+// slot, it is never dropped. What it costs in memory is sixty-four of the
+// largest answer a registration serves: most answers here are kilobytes, and
+// the largest is the object store's, one chunk per answer — a mebibyte
+// (internal/objstore) — so a data node answering chunks at the cap holds 64
+// MiB of them in flight, and no more however many peers are repairing from
+// it. Past the cap a chunk request waits for a slot like any other, which is
+// back-pressure on a repair or an upload rather than a failure.
 const MaxConcurrentAnswers = 64
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.

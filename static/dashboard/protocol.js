@@ -929,6 +929,60 @@ async function request(method, path, options = {}) {
 async function bodyOf(method, path, options) {
 	return (await request(method, path, options)).body;
 }
+/**
+* How long a download may take, from its request to its last byte.
+*
+* FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+* gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+* sized for a JSON answer would abandon every large download part way.
+*/
+var DOWNLOAD_TIMEOUT_MS = 9e5;
+/**
+* A file's bytes, fetched with the operator's token.
+*
+* NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
+* guards its reads it would download the refusal instead of the file — the
+* bytes are fetched here, where the token is, and handed to the caller as a
+* blob. A refusal is read as the engine's JSON, like every other.
+*/
+async function blob(path, signal) {
+	const token = apiToken();
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	try {
+		let response;
+		try {
+			response = await fetch(location.origin + path, {
+				method: "GET",
+				cache: "no-store",
+				headers: token ? { Authorization: "Bearer " + token } : {},
+				signal: controller.signal
+			});
+		} catch (err) {
+			if (signal?.aborted) throw signal.reason;
+			throw offline(err);
+		}
+		if (!response.ok) {
+			let body = {};
+			try {
+				body = await response.json();
+			} catch {
+				body = { error: "unreadable_body" };
+			}
+			throw new RestError(response.status, body);
+		}
+		try {
+			return await response.blob();
+		} catch (err) {
+			throw offline(err);
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
+	}
+}
 var rest = {
 	/**
 	* The whole answer: status, entity-tag and body. For a caller that sends a
@@ -964,7 +1018,9 @@ var rest = {
 	del: (path, body, headers) => bodyOf("DELETE", path, {
 		body,
 		headers
-	})
+	}),
+	/** A file's bytes — see [blob]. */
+	blob
 };
 //#endregion
 //#region src/protocol/gate.ts

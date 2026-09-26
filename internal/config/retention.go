@@ -340,3 +340,21 @@ func (s Store) SnapshotDirFor() string {
 
 // defaultSnapshotDirName is the snapshot directory beside the store.
 const defaultSnapshotDirName = "snapshots"
+
+// ObjectsDirFor is where the chunks are kept, with the default applied and a
+// relative value resolved against the store's directory — see
+// [Store.SnapshotDirFor] for why the store's and not the working directory.
+func (s Store) ObjectsDirFor() string {
+	dir := strings.TrimSpace(s.Objects.Dir)
+	base := filepath.Dir(s.Path)
+	if dir == "" {
+		return filepath.Join(base, defaultObjectsDirName)
+	}
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(base, dir)
+}
+
+// defaultObjectsDirName is the chunk directory beside the store.
+const defaultObjectsDirName = "objects"

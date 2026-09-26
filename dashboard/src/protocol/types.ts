@@ -2069,6 +2069,38 @@ export interface WorkView {
   params?: Record<string, string>;
 }
 
+/** One file kept in a project, as a listing draws it — everything but its
+ *  chunks, which only a download reads. */
+export interface WorkFile {
+  project: string;
+  path: string;
+  content_type?: string;
+  hash?: string;
+  size: number;
+  /** What `If-Match` takes back, as the download's ETag carries it. */
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_by?: string;
+  updated_at: string;
+  /** Set on a removed file, which only a listing asking for them returns. */
+  removed_by?: string;
+  removed_at?: string;
+}
+
+export interface WorkFilesAnswer {
+  project: string;
+  files: WorkFile[];
+  /** The path to pass as `after` for the next page; absent on the last. */
+  next?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkViewsAnswer {
   views: WorkView[];
   read_level?: ReadLevel;
@@ -3564,6 +3596,7 @@ export interface QueryMap {
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_views: WorkViewsAnswer;
+  work_files: WorkFilesAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_workload: WorkloadAnswer;

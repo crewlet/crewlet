@@ -38,6 +38,17 @@ func (w Work) Task(ctx context.Context, idOrKey string, want tracker.DetailWants
 	return call(ctx, w.c, opTask, nil, taskArgs{IDOrKey: idOrKey, Want: want, Fresh: fresh})
 }
 
+// Files answers a page of a project's files.
+func (w Work) Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error) {
+	return call(ctx, w.c, opFiles, nil, q)
+}
+
+// File answers one file with its manifest.
+func (w Work) File(ctx context.Context, project, path string,
+	fresh statelog.Freshness) (tracker.FileDetail, error) {
+	return call(ctx, w.c, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
+}
+
 // Views answers the saved views.
 func (w Work) Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
 	return call(ctx, w.c, opViews, nil, q)
@@ -186,6 +197,25 @@ func (w WorkWriter) EnsureTags(ctx context.Context, opID, project string, tags [
 		OpID: opID, Project: project, Tags: tags,
 	})
 	return out.Created, out.Warnings, err
+}
+
+// PutFile writes a project's file — its row, naming chunks the caller has
+// already uploaded through its own object client.
+func (w WorkWriter) PutFile(ctx context.Context, opID string, put tracker.FilePut) (
+	tracker.WriteResult, error) {
+	out, err := call(ctx, w.c, opPutFile, &w.actor, putFileArgs{OpID: opID, Put: put})
+	w.settled(out.Result)
+	return out, err
+}
+
+// RemoveFile takes a file out of its project.
+func (w WorkWriter) RemoveFile(ctx context.Context, opID, project, path string,
+	ifMatch uint64) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.c, opRemoveFile, &w.actor, removeFileArgs{
+		OpID: opID, Project: project, Path: path, IfMatch: ifMatch,
+	})
+	w.settled(out.Result)
+	return out, err
 }
 
 // Pages is the knowledge base, read and written.

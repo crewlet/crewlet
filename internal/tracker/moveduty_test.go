@@ -412,8 +412,9 @@ func TestALeafsMoveIsOneRecord(t *testing.T) {
 // retained record holds back every later record nested under its scope.
 func TestTheMoveMarkIsWrittenAtTheVersionThatAddedIt(t *testing.T) {
 	t.Parallel()
-	if got := (tracker.Domain{}).RecordVersion(); got != 2 {
-		t.Fatalf("this build reads record version %d, want 2", got)
+	if got := (tracker.Domain{}).RecordVersion(); got < 2 {
+		t.Fatalf("this build reads record version %d, want at least the 2 "+
+			"that added the mark", got)
 	}
 	r := moveFixture(t, "m-kid")
 	start := r.logEnd(t)

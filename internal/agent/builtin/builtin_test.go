@@ -208,6 +208,13 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// WritesToSharedSurface reads as TRUE — so a worker granted it
 		// was refused it, while list_work_items beside it was admitted.
 		tracker.SearchWorkItemsTool: false,
+
+		// A PROJECT'S FILES: reading one is a read, and writing or
+		// removing one changes what everybody on the project opens.
+		tracker.ListProjectFilesTool:  false,
+		tracker.ReadProjectFileTool:   false,
+		tracker.WriteProjectFileTool:  true,
+		tracker.RemoveProjectFileTool: true,
 	}
 
 	reg := tools.NewRegistry()
@@ -816,6 +823,12 @@ func fullDeps(t *testing.T) builtin.Deps {
 			// shared-write verdict was checked by nothing.
 			Moves:  newFakeTracker().moves,
 			Search: newFakeTracker(),
+			// AND THE PROJECT FILES, both halves and the store their
+			// bytes live in — the four file tools register only with all
+			// three.
+			Files:      newFakeFiles(),
+			FileWriter: newFakeFiles().as,
+			Objects:    newFakeObjects(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
 	}

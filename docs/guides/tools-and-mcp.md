@@ -26,15 +26,15 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 ### The native tracker and knowledge base
 
-Nineteen more, registered **only where the company runs the engine's own backends**
+Twenty-three more, registered **only where the company runs the engine's own backends**
 (`tracker.backend: native` / `knowledge.backend: native`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
-learns to distrust the whole catalogue. The thirteen below are the item and page
+learns to distrust the whole catalogue. The seventeen below are the item, file and page
 tools; the other six read the catalogue, the projects and the activity feed,
 and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists the tracker's
-fourteen in full.
+eighteen in full.
 
 | Tool | Description |
 |------|-------------|
@@ -46,6 +46,10 @@ fourteen in full.
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
+| `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
+| `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |
+| `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version` |
+| `remove_project_file` | Take a file out of a project; its content is deleted from storage |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
 | `write_page` | Create one. Titles are addresses and are unique per container |

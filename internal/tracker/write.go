@@ -34,13 +34,14 @@ import (
 // caller retries a write that landed — and collapsing them into "succeeded" is
 // how a caller reports work that was never recorded.
 
-// ErrStaleVersion reports an update conditioned on a version that has moved.
+// ErrStaleVersion reports an update conditioned on a version that has moved —
+// a task's, or a file's.
 //
 // ITS OWN SENTINEL because the caller's answer differs from every other
 // refusal: nothing is wrong with the request, somebody else simply got there
 // first, and the correct next move is to re-read and decide again — never to
 // retry the same patch, which is what a generic failure invites.
-var ErrStaleVersion = errors.New("tracker: the task has changed since it was read")
+var ErrStaleVersion = errors.New("tracker: it has changed since it was read")
 
 // ErrReassignmentBudget reports a hand-off past [ReassignmentBudget].
 var ErrReassignmentBudget = errors.New("tracker: this task has been handed on too many times")

@@ -272,6 +272,11 @@ type NodeProfile struct {
 	ID     string
 	Roles  RoleSet
 	Labels map[string]string
+
+	// ObjectWeight is the share of the object store this node offers to
+	// hold, 0 for a node that holds none — a node without `data`, or a
+	// peer whose build predates the object store and so serves no chunks.
+	ObjectWeight int
 }
 
 // RunsSeats reports whether this node claims seats at all. It is the
@@ -301,10 +306,14 @@ func (n NodeProfile) HoldsData() bool { return n.Roles.Has(RoleData) }
 // [coord.AcquireOptions].Meta takes. Roles are written resolved and sorted,
 // so a reader never has to know what this build's default was.
 func (n NodeProfile) Meta() map[string]any {
-	return map[string]any{
+	meta := map[string]any{
 		"roles":  n.Roles.Names(),
 		"labels": maps.Clone(n.Labels),
 	}
+	if n.ObjectWeight > 0 {
+		meta["object_weight"] = n.ObjectWeight
+	}
+	return meta
 }
 
 // FromMeta reads a peer's profile back off its presence lease.
@@ -322,10 +331,32 @@ func (n NodeProfile) Meta() map[string]any {
 // rolling upgrade puts in front of the new nodes.
 func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 	return NodeProfile{
-		ID:     nodeID,
-		Roles:  rolesFromMeta(meta["roles"]),
-		Labels: labelsFromMeta(meta["labels"]),
+		ID:           nodeID,
+		Roles:        rolesFromMeta(meta["roles"]),
+		Labels:       labelsFromMeta(meta["labels"]),
+		ObjectWeight: weightFromMeta(meta["object_weight"]),
 	}
+}
+
+// weightFromMeta reads an object weight back, as the int this build writes
+// or the float64 a JSON round trip returns.
+//
+// ANYTHING ELSE IS NO SHARE AT ALL — the opposite of the roles' fallback, and
+// for the same reason turned around: a node read as holding every role is at
+// worst asked for something it declines, while a node read as holding objects
+// is one writers send chunks to and count toward a quorum. A peer that wrote
+// no weight is a build that serves no chunks.
+func weightFromMeta(raw any) int {
+	switch v := raw.(type) {
+	case int:
+		return max(v, 0)
+	case float64:
+		if v < 1 || v != float64(int(v)) {
+			return 0
+		}
+		return int(v)
+	}
+	return 0
 }
 
 // FromLease reads a peer's profile off a presence lease, reporting false for

@@ -52,7 +52,7 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 		}[table]
 		return `SELECT document, version FROM ` + table +
 			` WHERE ` + column + ` = ?`, []any{key}, nil
-	case "tracker_views":
+	case "tracker_views", "tracker_files":
 		return `SELECT document, version FROM ` + table + ` WHERE id = ?`,
 			[]any{key}, nil
 	}

@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objstore/references"
+	"github.com/crewlet/crewlet/internal/objstore/upkeep"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -376,9 +378,40 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
 	started = true
+	// AND THIS DATA NODE'S OBJECT PASSES, which measure the chunks on its
+	// disk against the files the tracker's rows name: without a tracker
+	// there are no files, and nothing to repair or collect against.
+	//
+	// THE DECLARED LIST, read through each domain's estate — never a source
+	// written here — so the tables the collector keeps alive are the ones
+	// the backup carries and the schema gate holds.
+	if estates := n.objectEstates(); len(estates) > 0 {
+		refs, err := upkeep.Sources(references.All, estates...)
+		if err == nil {
+			err = e.startObjectPasses(ctx, refs)
+		}
+		if err != nil {
+			log.WarnContext(ctx, "object_passes_not_started", "error", err)
+		}
+	}
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
 	return nil
+}
+
+// objectEstates is every domain of this runtime whose rows may name chunks,
+// as the object store's passes read them — empty where it runs none.
+//
+// EVERY DOMAIN A DECLARATION NAMES must be here: [upkeep.Sources] refuses a
+// declared table whose domain has no estate, and the engine's own test builds
+// the sources from this list against internal/objstore/references, so a
+// consumer declaring a table in a new domain fails the build here rather
+// than leaving the passes unstarted in production.
+func (n *native) objectEstates() []upkeep.Estate {
+	if n.trackerReader == nil {
+		return nil
+	}
+	return []upkeep.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
 }
 
 // startNativeFor brings the native runtime up for a company an APPLY hands a
@@ -1307,6 +1340,15 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		Moves: func(actor builtin.Actor) builtin.WorkMover {
 			return halves.as(actor)
 		},
+		// AND THE PROJECT'S FILES: the rows through the same halves, the
+		// bytes through this node's own object client — which on a node
+		// holding no data still writes to and reads from the data nodes
+		// directly, never through the estate service.
+		Files: halves.files,
+		FileWriter: func(actor builtin.Actor) builtin.FileWriter {
+			return halves.as(actor)
+		},
+		Objects: e.ObjectStore(),
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to
 		// attribute. Nil where this node has no index, and the tool is
@@ -1353,12 +1395,14 @@ type trackerWriter interface {
 	builtin.WorkDepender
 	builtin.WorkMerger
 	builtin.WorkMover
+	builtin.FileWriter
 }
 
 // trackerSeams are the tracker halves a seat's tools are handed: this node's
 // own reader and writer where it holds data, a data node's otherwise.
 type trackerSeams struct {
 	reader builtin.WorkReader
+	files  builtin.FileReader
 	as     func(builtin.Actor) trackerWriter
 	await  func(ctx context.Context, at statelog.Position) error
 }
@@ -1376,6 +1420,7 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 		}
 		return trackerSeams{
 			reader: r.client.Work(),
+			files:  r.client.Work(),
 			as: func(actor builtin.Actor) trackerWriter {
 				return r.client.WriterAs(remoteActor(actor))
 			},
@@ -1391,6 +1436,7 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 	}
 	return trackerSeams{
 		reader: n.trackerReader,
+		files:  n.trackerReader,
 		as: func(actor builtin.Actor) trackerWriter {
 			return n.writer.As(actor.Handle, actor.Kind, provenanceOf(actor))
 		},

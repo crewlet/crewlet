@@ -87,6 +87,11 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			Migrations []string `json:"migrations"`
 		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
+		Objects *struct {
+			Dir    string `json:"dir"`
+			Chunks int    `json:"chunks"`
+			Bytes  int64  `json:"bytes"`
+		} `json:"objects"`
 	}
 	if err := client.patiently(*wait).post(context.Background(),
 		"/backup?dir="+url.QueryEscape(*dir), &manifest); err != nil {
@@ -108,6 +113,11 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	for _, st := range manifest.Stores {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
+	}
+	// THE CHUNKS ARE THE COMPANY'S, not this node's share: absent only where
+	// the copy names no file at all.
+	if o := manifest.Objects; o != nil {
+		fmt.Fprintf(w, "objects\t%s/\t%s\t%d chunks\n", o.Dir, humanBytes(o.Bytes), o.Chunks)
 	}
 	streams := manifest.Streams
 	slices.SortFunc(streams, func(a, b streamRow) int { return cmp.Compare(a.Name, b.Name) })

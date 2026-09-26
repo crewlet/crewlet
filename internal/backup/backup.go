@@ -97,6 +97,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -167,6 +168,10 @@ type Manifest struct {
 	// Absent on a node that dialled an external NATS cluster, whose streams
 	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
+
+	// Objects describes the chunks the store copy names, carried beside it
+	// — absent when it names none.
+	Objects *ObjectArtifact `json:"objects,omitempty"`
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
 	// keyed by domain stream.
@@ -266,6 +271,11 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
+	// Objects is how the chunks the copy names are read. Nil is a node that
+	// runs no object store, which is refused only when the copy names a
+	// chunk — see [ErrObjectsUnreachable].
+	Objects *Objects
+
 	// Metrics is where the copy's duration is recorded. Nil records
 	// nothing, which is a legal deployment and leaves the `backup_taken`
 	// log line as the only account of how long it took.
@@ -283,6 +293,7 @@ type Service struct {
 	holds   coord.HoldRegister
 	backups coord.BackupRegister
 	nodeID  string
+	objects *Objects
 	metrics *metrics.Recorder
 	now     func() time.Time
 }
@@ -333,8 +344,8 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{store: opts.Store, conn: opts.Conn, api: opts.API, holds: opts.Holds,
-		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
-		now: now}, nil
+		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
+		metrics: opts.Metrics, now: now}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -432,6 +443,18 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		manifest.Domains = make(map[string]statelog.Position, len(cursors))
 		for stream, cursor := range cursors {
 			manifest.Domains[stream] = cursor.Position
+		}
+		// THE CHUNKS THE COPY NAMES, read from the copy for the reason
+		// the positions are: the rows a restore brings back are the
+		// ones in this file, and a file created after the copy is one
+		// whose record the restore replays and whose bytes the fleet
+		// still holds.
+		hashes, err := referencedIn(ctx, path, references.All)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if manifest.Objects, err = copyObjects(ctx, dir, hashes, s.objects); err != nil {
+			return Manifest{}, err
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
