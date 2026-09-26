@@ -36,7 +36,11 @@ type WorkloadQuery struct {
 
 	// Units resolves that reference — see [Units]. Nil matches it
 	// literally, which is the honest answer for a surface with no chart.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position

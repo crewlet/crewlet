@@ -90,7 +90,11 @@ type DetailWants struct {
 	// It is not one of the wants above: resolving costs no query, and a
 	// flag would be one more thing a surface can forget while rendering
 	// an id where a person expects their team's name.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	// Comment names ONE comment to read WHOLE, and REPLACES the page.
 	//
