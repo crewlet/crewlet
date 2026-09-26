@@ -3396,9 +3396,31 @@ trace anywhere except the provider's own delivery UI.
       "coalesced": 2,
       "last_at": "2026-06-08T07:31:10+00:00"
     }
+  ],
+  "tools": [
+    {
+      "key": "gitlab", "surfaces": ["gitlab"],
+      "state": "attention", "label": "Credential expiring",
+      "reason": "the group Owner token this integration runs on expires on 2026-06-20, …",
+      "surface": "gitlab"
+    }
   ]
 }
 ```
+
+`tools` is **one roll-up per tool** this build serves — `slack`, `mattermost`,
+`atlassian` (the organization, Confluence, Jira and the Forge relay),
+`github`, `gitlab`, `datadog` — whether or not the company configured it, so a
+reader never invents a state for a missing one. `state` is `attention` (a
+person has to act), `not_connected` (configured and not working yet, with
+nobody owing anything — or this node could not read the status),
+`connected` or `not_in_use` (no block, or every block switched off; `label`
+says which). `label` is the state in a reader's words, `reason` one sentence
+on why, and `surface` the surface it was taken from. The rules are
+[One state per tool](../concepts/integration-reconcile.md#one-state-per-tool).
+
+A reconcile finding of kind `credential_expiring` carries `expires_at`, the
+instant the credential stops working.
 
 `inbound`, `skipped` and `coalesced` answer one question together and are
 misleading apart. `inbound` counts deliveries the edge accepted; `skipped`

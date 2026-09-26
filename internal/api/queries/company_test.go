@@ -1144,6 +1144,12 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					Remedy:    "grant maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
 					Subjects:  []string{"ceo", "cto"},
+				}, {
+					// The one kind with a date, so `expires_at` is sent.
+					Kind:      integration.FindingCredentialExpiring,
+					Subject:   "integrations.gitlab.provisioning.admin_token",
+					Detail:    "the group Owner token expires on 2026-10-01",
+					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
 				}},
 				Outcome:       integration.OutcomeBlocked,
 				Attempts:      2,
@@ -1170,6 +1176,73 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	}
 	holdShape(t, "ReconcileStatus", reports, false)
 	holdShape(t, "ReconcileFinding", findings, false)
+	// AND THE ROLL-UP, one per tool, which is what a card's header draws.
+	holdShape(t, "IntegrationTool", rowsOf(t, body["tools"]), false)
+}
+
+// EVERY TOOL IS ROLLED UP BY THE ENGINE, from the rows beside it.
+//
+// The answer carries one roll-up per catalogue tool whether or not the company
+// configured it, so a screen never invents a state for a missing one; and the
+// roll-up is taken from the same values the rows carry, so the header of a card
+// cannot disagree with the row it names. Slack is the case that needs the
+// build's own answer about which surfaces a pass converges: without it an
+// unreported Slack would read "connecting" for as long as it was configured.
+func TestTheIntegrationsAnswerRollsEveryToolUp(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.Slack = &config.Slack{}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Converges: func(kind integration.Kind) bool {
+			return kind != integration.KindSlack
+		},
+		Reconciles: func(context.Context) []integration.State {
+			return []integration.State{{
+				Kind:   integration.KindGitLab,
+				Report: integration.Report{Phase: integration.PhaseReady},
+				Findings: []integration.Finding{{
+					Kind:      integration.FindingCredentialExpiring,
+					Detail:    "the group Owner token expires on 2026-10-01",
+					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
+				}},
+				Outcome: integration.OutcomeSettled,
+			}}
+		},
+	}, "integrations", nil))
+
+	tools := map[string]map[string]any{}
+	var order []string
+	for _, tool := range rowsOf(t, body["tools"]) {
+		key, _ := tool["key"].(string)
+		tools[key] = tool
+		order = append(order, key)
+	}
+	var want []string
+	for _, tool := range integration.Tools {
+		want = append(want, tool.Key)
+	}
+	if !slices.Equal(order, want) {
+		t.Fatalf("the answer rolls up %v, want every catalogue tool in order %v", order, want)
+	}
+	for key, state := range map[string]string{
+		// Ready, and a credential about to lapse: a person's deadline.
+		"gitlab": "attention",
+		// Configured, and no pass converges it: judged on its ingress,
+		// which nothing here says is broken.
+		"slack": "connected",
+		// Configured, a pass converges it, and it has not reported yet.
+		"mattermost": "not_connected",
+		// Nothing configured.
+		"datadog": "not_in_use",
+	} {
+		if got := tools[key]["state"]; got != state {
+			t.Errorf("%s rolled up as %v, want %s (%v)", key, got, state, tools[key])
+		}
+	}
+	if got := tools["gitlab"]["label"]; got != "Credential expiring" {
+		t.Errorf("gitlab's label = %v, want the expiry named", got)
+	}
 }
 
 // rowsOf is a JSON array of objects, as a client decodes it.

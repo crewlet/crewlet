@@ -27,6 +27,7 @@ import { destinationsOf } from "../nav.ts";
 import { href } from "~/app/router.tsx";
 import type { SidebarSection, SidebarRow } from "../frame/WorkspaceSidebar.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import type { IntegrationToolState } from "~/contract/integrations.ts";
 import { unfinished } from "~/lib/work.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib/seats.ts";
@@ -272,17 +273,20 @@ export function useAdminSidebar(here: boolean): SidebarSection[] {
       path: ["admin", "fleet", n.id],
       count: { value: n.seats, of: "seats this node holds" },
     }));
-    // UNCONFIGURED IS NOT A FAULT, so it draws no dot at all. A surface
-    // nobody has wired is a decision rather than a failure, and a neutral
-    // dot beside a green one reads as "something is wrong here".
-    const kinds: SidebarRow[] = (integrations.data?.integrations ?? []).map((i) => ({
-      key: i.key,
-      // The key, because it is all the row carries: a `label` was read here
-      // that the engine has never sent.
-      label: i.key,
-      path: ["admin", "integrations", i.key],
-      tone: i.configured ? ("positive" as const) : undefined,
-    }));
+    // ONE ROW PER TOOL THIS COMPANY CONFIGURED, dotted by the engine's
+    // roll-up. It was one row per SURFACE, each dotted green for being
+    // configured — so a GitLab refusing every credential sat under a green
+    // dot, and Atlassian was four rows. Unconfigured tools draw no row: a
+    // surface nobody wired is a decision rather than a failure.
+    const configured = new Set((integrations.data?.integrations ?? []).map((i) => i.key));
+    const kinds: SidebarRow[] = (integrations.data?.tools ?? [])
+      .filter((tool) => tool.surfaces.some((surface) => configured.has(surface)))
+      .map((tool) => ({
+        key: tool.key,
+        label: tool.key,
+        path: ["admin", "integrations", tool.key],
+        tone: TOOL_DOT[tool.state],
+      }));
     // THE NODES, THEN THE DOMAINS. A node is a machine and a domain is a log,
     // and the trim's floor is the minimum across every node's position in one
     // domain — so the two belong under Infrastructure together and neither is
@@ -304,6 +308,17 @@ export function useAdminSidebar(here: boolean): SidebarSection[] {
     return [{ key: "fixed", rows }];
   }, [fleet.data, integrations.data, retention.data]);
 }
+
+/**
+ * An integration tool's dot. Only a person's work is caution; the engine
+ * mid-flight is info; a tool switched off draws none.
+ */
+const TOOL_DOT: Record<IntegrationToolState, SidebarRow["tone"]> = {
+  attention: "caution",
+  not_connected: "info",
+  connected: "positive",
+  not_in_use: undefined,
+};
 
 /** The seat tone vocabulary, as the sidebar's one-word dot. */
 function toneOf(tone: string): SidebarRow["tone"] {

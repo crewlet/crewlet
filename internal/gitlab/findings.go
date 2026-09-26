@@ -2,6 +2,7 @@ package gitlab
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -70,6 +71,25 @@ func (r *Result) Findings() []integration.Finding {
 			Kind:    integration.FindingIngressBlocked,
 			Subject: "integrations.public_base_url",
 			Detail:  r.NoIngress,
+		})
+	}
+
+	// THE CREDENTIAL THIS PASS RUNS ON IS ABOUT TO LAPSE. Advisory — it
+	// works today — and the operator's, because the replacement is a value
+	// in this deployment's secret store whoever mints it at GitLab. Named
+	// by its config path, the same way every other finding here names what
+	// to change, and by the date GitLab published.
+	if !r.CredentialExpires.IsZero() {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCredentialExpiring,
+			Subject: "integrations.gitlab.provisioning.admin_token",
+			Detail: fmt.Sprintf("the group Owner token this integration runs on "+
+				"expires on %s, and from then on no pass can provision or repair "+
+				"an agent", r.CredentialExpires.Format(time.DateOnly)),
+			Remedy: "create a new personal access token with the api scope for " +
+				"a group owner at GitLab and store it as the integration's " +
+				"admin token",
+			ExpiresAt: r.CredentialExpires,
 		})
 	}
 

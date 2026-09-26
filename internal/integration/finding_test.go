@@ -13,7 +13,7 @@ import (
 // integration rather than something blocking it. They are listed rather than
 // derived so a kind added without deciding whether it blocks fails a test.
 var advisories = []FindingKind{
-	FindingGrantExcess, FindingRegistrationOrphaned, FindingCoveragePartial,
+	FindingCredentialExpiring, FindingGrantExcess, FindingRegistrationOrphaned, FindingCoveragePartial,
 }
 
 // isAdvisory reports a kind from the list above.
@@ -22,6 +22,7 @@ func isAdvisory(kind FindingKind) bool { return slices.Contains(advisories, kind
 var knownKinds = []FindingKind{
 	FindingCredentialMissing,
 	FindingCredentialRejected,
+	FindingCredentialExpiring,
 	FindingApprovalRequired,
 	FindingIngressBlocked,
 	FindingIngressPending,
@@ -331,6 +332,9 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingGrantPending,
 		FindingUnknownTier,
 		FindingGrantShort,
+		// THE ADVISORIES, the expiring credential first because it is the
+		// only note with a deadline on it.
+		FindingCredentialExpiring,
 		FindingGrantExcess,
 		FindingRegistrationOrphaned,
 		FindingCoveragePartial,
@@ -351,10 +355,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// report a healthy company as broken; ranked below the advisory, one
 	// spare permission would hide a finding this binary cannot read.
 	unknown := FindingKind("a-kind-from-a-newer-build").severity()
-	if unknown <= FindingGrantShort.severity() || unknown >= FindingGrantExcess.severity() {
-		t.Errorf("an unknown kind ranks %d, want between %s (%d) and %s (%d)",
+	if unknown <= FindingGrantShort.severity() || unknown >= FindingCredentialExpiring.severity() {
+		t.Errorf("an unknown kind ranks %d, want between %s (%d) and the first advisory %s (%d)",
 			unknown, FindingGrantShort, FindingGrantShort.severity(),
-			FindingGrantExcess, FindingGrantExcess.severity())
+			FindingCredentialExpiring, FindingCredentialExpiring.severity())
 	}
 }
 

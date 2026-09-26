@@ -59,3 +59,20 @@ func TestTheConvergerReportsThePassesKind(t *testing.T) {
 		t.Errorf("Kind() = %q, want %q", got, integration.KindDatadog)
 	}
 }
+
+// WHICH SURFACES A PASS CONVERGES IS A PROPERTY OF THE BUILD, answered on a
+// node with no coordination store as on any other. The roll-up reads it to
+// tell a surface waiting for its first report from one that will never get
+// one: Slack alone is the second, and every other surface is the first.
+func TestConvergesIsTheBuildsPassList(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	for _, kind := range integration.Kinds {
+		if got, want := e.Converges(kind), kind != integration.KindSlack; got != want {
+			t.Errorf("Converges(%s) = %v, want %v", kind, got, want)
+		}
+	}
+	if e.Converges("forge") {
+		t.Error("the Forge relay is a delivery path no pass converges")
+	}
+}

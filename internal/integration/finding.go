@@ -3,6 +3,7 @@ package integration
 import (
 	"fmt"
 	"slices"
+	"time"
 )
 
 // FindingKind is one thing a pass observed that is not "fine".
@@ -33,6 +34,24 @@ const (
 	// refused identically until a person changes the credential, so reporting
 	// it as a wait leaves an operator watching a retry that cannot succeed.
 	FindingCredentialRejected FindingKind = "credential_rejected"
+
+	// FindingCredentialExpiring is a credential that WORKS TODAY and stops on
+	// a date the third-party app has already published: a personal access
+	// token with an `expires_at` inside [ExpiryWarning]. [Finding.ExpiresAt]
+	// carries the date.
+	//
+	// ADVISORY, and the only advisory with a deadline. Nothing is broken, so
+	// the integration is ready — but it is the one ready note that turns
+	// into [FindingCredentialRejected] on its own, with every agent on the
+	// surface going quiet at once, and no retry and no pass can prevent it:
+	// only a person issuing a new token can. That is why it is reported
+	// weeks early rather than on the morning it lapses, and why the tool
+	// roll-up ([Rollup]) reads it as needing attention although the phase
+	// says ready.
+	//
+	// The OPERATOR's, like a rejected credential: the fix is a new value in
+	// this deployment's own secret store, whoever mints it at the vendor.
+	FindingCredentialExpiring FindingKind = "credential_expiring"
 
 	// FindingApprovalRequired is an app or scope a person must install or
 	// approve at the third-party app. ActionURL carries where.
@@ -182,22 +201,29 @@ func (f FindingKind) severity() int {
 		return 8
 	case FindingGrantShort:
 		return 9
-	case FindingGrantExcess:
-		// The FIRST of the two advisories, and the reason is the whole
-		// comment above: its verdict is ready, so anything it outranks is
-		// a problem it hides.
+	case FindingCredentialExpiring:
+		// THE FIRST ADVISORY, and the reason is the whole comment above:
+		// its verdict is ready, so anything it outranks is a problem it
+		// hides — which is why it sits below every real problem and below
+		// a kind this build cannot read. First among the notes because it
+		// is the only one with a date on it: the others are loose ends,
+		// and this one becomes an outage if nobody reads it.
 		return 11
+	case FindingGrantExcess:
+		// Beneath the expiring credential: a spare permission is a note
+		// that stays a note.
+		return 12
 	case FindingRegistrationOrphaned:
-		// Beneath the other advisory. Both report ready; this one is the
+		// Beneath the excess grant. Both report ready; this one is the
 		// more purely informational of the two, because what it names is
 		// still working.
-		return 12
+		return 13
 	case FindingCoveragePartial:
 		// LAST OF ALL, because it is the only one naming nothing wrong.
 		// The two above it are loose ends somebody may want to tidy; this
 		// is a decision already taken, reported so a reader does not have
 		// to infer it from silence. Anything else present outranks it.
-		return 13
+		return 14
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -221,6 +247,11 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// it is of an absent one. And the OPERATOR's, not the engine's:
 		// no retry fixes a token the third-party app will not accept.
 		return PhaseUnconfigured, ActorOperator
+	case FindingCredentialExpiring:
+		// READY, because the credential works today, and the OPERATOR's,
+		// because the replacement lands in this deployment's secret store.
+		// An advisory with a deadline; see [Rollup] for how a tool reads it.
+		return PhaseReady, ActorOperator
 	case FindingApprovalRequired:
 		return PhaseAwaitingAdmin, ActorAdmin
 	case FindingIngressBlocked:
@@ -280,6 +311,8 @@ func (f FindingKind) sentence(subject string) string {
 		return "this integration has no usable credential" + about
 	case FindingCredentialRejected:
 		return "the third-party app refused this integration's credential" + about
+	case FindingCredentialExpiring:
+		return "this integration's credential expires soon" + about
 	case FindingApprovalRequired:
 		return "an administrator must approve this integration at the third-party app" + about
 	case FindingIngressBlocked:
@@ -375,6 +408,16 @@ type Finding struct {
 	// coordination store, so a peer on an older build reads the Detail it
 	// always read.
 	Subjects []string `json:"subjects,omitempty"`
+
+	// ExpiresAt is when the credential a [FindingCredentialExpiring] is
+	// about stops working, in UTC; zero on every other kind.
+	//
+	// A FIELD RATHER THAN A PHRASE IN [Detail], because a reader needs to
+	// do arithmetic on it — "in 9 days", sorted against another tool's —
+	// and a date inside prose can only be re-parsed. Additive on a struct
+	// written to the coordination store: a peer on an older build ignores
+	// it and reads the Detail it always read.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // Same reports two findings that say the same thing.
@@ -391,6 +434,7 @@ func (f Finding) Same(other Finding) bool {
 		f.Detail == other.Detail &&
 		f.ActionURL == other.ActionURL &&
 		f.Remedy == other.Remedy &&
+		f.ExpiresAt.Equal(other.ExpiresAt) &&
 		slices.Equal(f.Subjects, other.Subjects)
 }
 

@@ -1696,6 +1696,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				}
 				return states
 			},
+			// Which surfaces a pass converges, so the roll-up can tell a
+			// surface waiting for its first report from one that will
+			// never get one.
+			Converges: e.Converges,
 			// The DURABLE record of detached coding runs, whole: the
 			// board needs the row's own facts (the branch, the pause
 			// TTL, the bridge's call log) that the live panel, which

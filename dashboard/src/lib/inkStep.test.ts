@@ -23,8 +23,7 @@
  *
  * READ AS TEXT, and the screens deliberately are not imported: this runs in
  * the node environment, and importing them would pull a React module graph
- * into it to answer a question about a string. The same argument
- * `lib/phaseOrder.test.ts` makes for the same shape.
+ * into it to answer a question about a string.
  */
 
 import { describe, expect, test } from "vitest";

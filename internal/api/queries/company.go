@@ -168,6 +168,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	}
 
 	out := []map[string]any{}
+	// WHAT THE ROLL-UP READS, one per row, built from the same values the
+	// row carries so the tool's state and the row it names cannot disagree.
+	surfaces := map[string]integration.SurfaceStatus{}
 	// CONFIGURED and ENABLED are different facts and the answer sends both.
 	// A block present with `enabled: false` is a deliberate pause an operator
 	// can see; an absent block is an integration nobody set up. Folding them
@@ -208,13 +211,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["last_at"] = nil
 		}
+		var routes, secretUsable, endpointCurrent *bool
 		if sources := deliversAs(kind); known && len(sources) > 0 {
-			row["routes"] = slices.ContainsFunc(sources, func(source string) bool {
+			routes = boolPtr(slices.ContainsFunc(sources, func(source string) bool {
 				return slices.Contains(routed, source)
-			})
-		} else {
-			row["routes"] = nil
+			}))
 		}
+		row["routes"] = routes
 		// THREE-VALUED, and the third value is the point: null means this
 		// surface uses no secret at all, false means a route is refusing
 		// every delivery, and only an operator can tell those apart.
@@ -230,12 +233,10 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// every delivery is refused with nothing anywhere naming the
 		// variable. Null when this node cannot say (nothing has resolved
 		// yet) or when the surface has no secret to resolve, as above.
-		switch {
-		case secret == nil || !verifiableKnown:
-			row["secret_usable"] = nil
-		default:
-			row["secret_usable"] = boolPtr(slices.Contains(verifiable, kind))
+		if secret != nil && verifiableKnown {
+			secretUsable = boolPtr(slices.Contains(verifiable, kind))
 		}
+		row["secret_usable"] = secretUsable
 		// THREE-VALUED again, and the third value is the one that took a
 		// subsystem to be able to say at all: null means nothing is
 		// checking this surface from here, an absent entry means the loop
@@ -276,13 +277,25 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// and comparing that against the reference itself would report
 		// every such company as moved for ever. A process that cannot
 		// resolve says null rather than false, for the reason above.
-		row["endpoint"], row["endpoint_current"] = nil, nil
+		row["endpoint"] = nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint
 			if s.PublicBase != nil {
-				row["endpoint_current"] = state.Endpoint == s.PublicBase()
+				endpointCurrent = boolPtr(state.Endpoint == s.PublicBase())
 			}
 		}
+		row["endpoint_current"] = endpointCurrent
+		status := integration.SurfaceStatus{
+			Key: kind, Enabled: enabled, Known: reconcileKnown,
+			SecretUsable: secretUsable, Routes: routes, EndpointCurrent: endpointCurrent,
+		}
+		if state, checked := reconciled[kind]; reconcileKnown && checked {
+			status.State = &state
+		}
+		if s.Converges != nil {
+			status.Converges = boolPtr(s.Converges(integration.Kind(kind)))
+		}
+		surfaces[kind] = status
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.
@@ -399,8 +412,25 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	slices.SortFunc(out, func(a, b map[string]any) int {
 		return cmp.Compare(a["key"].(string), b["key"].(string))
 	})
+	// ONE ROLL-UP PER TOOL, decided here rather than on the client: which
+	// surface's word wins, and when a ready phase still needs a person, are
+	// rules — and a second copy of them in the dashboard is how a card came
+	// to disagree with the surface it named. Every tool is present, a tool
+	// nobody configured included, so a reader never has to invent a state
+	// for a missing one.
+	tools := make([]integration.ToolRollup, 0, len(integration.Tools))
+	for _, tool := range integration.Tools {
+		var present []integration.SurfaceStatus
+		for _, surface := range tool.Surfaces {
+			if status, ok := surfaces[surface.Key]; ok {
+				present = append(present, status)
+			}
+		}
+		tools = append(tools, integration.Rollup(tool, present))
+	}
 	body := map[string]any{
 		"integrations": out,
+		"tools":        tools,
 		// Whether the counts above are a MEASUREMENT. Without this a
 		// store that could not be read reports every integration at zero
 		// inbound, which reads as "nothing is arriving" — the alarming
@@ -1027,6 +1057,11 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		// list at all.
 		if len(f.Subjects) > 0 {
 			row["subjects"] = f.Subjects
+		}
+		// WHEN IT LAPSES, as an instant a reader can count down to, on the
+		// one kind that has a date. Absent everywhere else.
+		if !f.ExpiresAt.IsZero() {
+			row["expires_at"] = f.ExpiresAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, row)
 	}

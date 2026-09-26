@@ -115,6 +115,9 @@ var contract = []Entry{
 	{"IntegrationsAnswer", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"ReconcileStatus", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"ReconcileFinding", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
+	{"IntegrationTool", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
+	{"IntegrationToolState", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheRollupStates"},
+	{"INTEGRATION_TOOLS", ReadLiteral, "internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes"},
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},

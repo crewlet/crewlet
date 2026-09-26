@@ -91,6 +91,19 @@ type Result struct {
 	// anywhere but [Reconcile] must not invent an ingress problem.
 	NoIngress string
 
+	// CredentialExpires is when the credential this run authenticated with
+	// stops working, set ONLY when that is inside
+	// [integration.ExpiryWarning] of the run's clock; zero otherwise, and
+	// zero where GitLab published no expiry or the run could not read it.
+	//
+	// THE ONE CREDENTIAL HERE NOTHING ROTATES. Every seat's token is minted
+	// by this pass with a lifetime and replaced by it; the group Owner token
+	// the pass itself runs on was pasted in by a person, and the day it
+	// lapses every pass is refused, no seat is provisioned again, and the
+	// card goes from Connected to Failed with no warning at all. GitLab
+	// publishes the date, so the warning is a read away.
+	CredentialExpires time.Time
+
 	// NoKeyring is a pass this node could not run at all because it has
 	// nowhere to seal what provisioning creates.
 	//
@@ -318,6 +331,20 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res := &Result{
 		Notes:       notesOf(opts.Plan),
 		AccountsURL: accountsURL(opts),
+	}
+
+	// THE CREDENTIAL JUST PROVED IT WORKS, so this is the moment to ask
+	// how long it will go on working. A NOTE, never a failure, when GitLab
+	// cannot say: `/personal_access_tokens/self` answers only for a
+	// personal (or group or project) access token and only on GitLab 15.5
+	// and later, and a pass that stopped over a forecast would lose every
+	// observation it exists to make.
+	if self, serr := opts.Client.SelfToken(ctx); serr != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"could not read when this pass's own token expires, so no expiry "+
+				"warning can be given: %v", serr))
+	} else if integration.ExpiresSoon(self.ExpiresAt.Time, clock(opts)) {
+		res.CredentialExpires = self.ExpiresAt.UTC()
 	}
 
 	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS MUTATED, and a missing one

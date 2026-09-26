@@ -11,8 +11,9 @@
  * A row is the tool, not the engine's plumbing for it. Atlassian is one row
  * although the engine reaches it over three surfaces (Jira, Confluence and
  * the Forge relay), because that is how the company thinks of it; the row's
- * state is the least ready of its surfaces and its status line names the
- * surface that is not. The counts, the inbound paths and the reconcile
+ * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
+ * the answer's `tools`), and its status line names the surface that is not
+ * ready. The counts, the inbound paths and the reconcile
  * findings are still here, folded under a per-row disclosure, so an operator
  * who needs to know why can open it without the screen leading with it.
  *
@@ -71,7 +72,14 @@ import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
-import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/contract/integrations.ts";
+import {
+  INTEGRATION_TOOLS,
+  type IntegrationRow,
+  type IntegrationTool,
+  type IntegrationToolState,
+  type ReconcileFinding,
+  type ReconcileStatus,
+} from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -99,9 +107,35 @@ export interface Entry {
 }
 
 /**
- * The catalogue: every tool this build serves, in the console's own words,
- * with the engine surfaces that make it up. The surface keys match the
- * `integrations` answer's rows, so the two join by name.
+ * How a sentence on this screen names each surface.
+ *
+ * WHICH surfaces make up a tool, and in what order, is the engine's
+ * (`INTEGRATION_TOOLS`, held against `integration.Tools`); only the words are
+ * this screen's. Atlassian's organization is first because it is where an
+ * agent's account is created, and the two products are what that account
+ * then works in.
+ */
+const SURFACE_NAMES: Record<string, string> = {
+  slack: "Slack",
+  mattermost: "Mattermost",
+  atlassian: "Organization",
+  confluence: "Confluence",
+  jira: "Jira",
+  forge: "Forge relay",
+  github: "GitHub",
+  gitlab: "GitLab",
+  datadog: "Datadog",
+};
+
+/** One tool's surfaces, in the engine's grouping, named for this screen. */
+function surfacesOf(tool: keyof typeof INTEGRATION_TOOLS): Surface[] {
+  return INTEGRATION_TOOLS[tool].map((key) => ({ key, name: SURFACE_NAMES[key] ?? key }));
+}
+
+/**
+ * The catalogue: every tool this build serves, in the console's own words.
+ * The surface keys match the `integrations` answer's rows and the tool keys
+ * its `tools`, so the three join by name.
  */
 export const CATALOG: Entry[] = [
   {
@@ -109,55 +143,42 @@ export const CATALOG: Entry[] = [
     name: "Slack",
     description: "Team communication",
     vendor: "slack",
-    surfaces: [{ key: "slack", name: "Slack" }],
+    surfaces: surfacesOf("slack"),
   },
   {
     key: "mattermost",
     name: "Mattermost",
     description: "Self-hosted team chat",
     vendor: "mattermost",
-    surfaces: [{ key: "mattermost", name: "Mattermost" }],
+    surfaces: surfacesOf("mattermost"),
   },
   {
     key: "atlassian",
     name: "Atlassian",
     description: "Issue tracking and documentation",
     vendor: "atlassian",
-    surfaces: [
-      // THE ORGANIZATION FIRST, because it is where an agent's account is
-      // created and the two products are what that account then works in.
-      // It is not a third product: Jira and Confluence are sites this
-      // engine reads and writes AS an account, and this is the only place
-      // an account can be made at all.
-      { key: "atlassian", name: "Organization" },
-      // THEN ALPHABETICALLY. The two products are peers, so any other order
-      // is a claim about which matters more, and this order is the one the
-      // rest of the screen already sorts by.
-      { key: "confluence", name: "Confluence" },
-      { key: "jira", name: "Jira" },
-      { key: "forge", name: "Forge relay" },
-    ],
+    surfaces: surfacesOf("atlassian"),
   },
   {
     key: "github",
     name: "GitHub",
     description: "Code and pull requests",
     vendor: "github",
-    surfaces: [{ key: "github", name: "GitHub" }],
+    surfaces: surfacesOf("github"),
   },
   {
     key: "gitlab",
     name: "GitLab",
     description: "Code and merge requests",
     vendor: "gitlab",
-    surfaces: [{ key: "gitlab", name: "GitLab" }],
+    surfaces: surfacesOf("gitlab"),
   },
   {
     key: "datadog",
     name: "Datadog",
     description: "Monitoring and observability",
     vendor: "datadog",
-    surfaces: [{ key: "datadog", name: "Datadog" }],
+    surfaces: surfacesOf("datadog"),
   },
 ];
 
@@ -204,40 +225,6 @@ export function phaseTone(phase: string): Tone {
       // that is certainly wrong.
       return "neutral";
   }
-}
-
-/**
- * The engine's own phase order, "furthest-from-working to working": the
- * `Phases` slice in internal/integration/report.go. Duplicated here because a
- * TypeScript screen cannot import a Go slice, and kept in that file's order so
- * the two cannot say different things about which of two surfaces is worse.
- * `degraded` sits ABOVE `activating` deliberately: a degraded integration is
- * still working, and one still coming up is not.
- */
-const PHASE_ORDER = [
-  // A teardown wins, the same precedence the console gives it: showing a
-  // tool as connected while one of its surfaces is being removed invites a
-  // reader to act on something that is going away.
-  "disconnecting",
-  "unconfigured",
-  "awaiting_admin",
-  "provisioning",
-  "activating",
-  "degraded",
-  "ready",
-];
-
-/**
- * How far from working a phase is, lowest first, so the least ready surface
- * behind a tool is the one its row reports.
- *
- * Doubled so a phase this build does not know can sit BETWEEN the worst phase
- * it knows and ready: such a phase is never presented as the ready one, and
- * never allowed to mask a surface this build knows is broken.
- */
-function distance(phase: string): number {
-  const at = PHASE_ORDER.indexOf(phase);
-  return at >= 0 ? at * 2 : PHASE_ORDER.length * 2 - 3;
 }
 
 /** Who has to act, phrased for the person reading it. */
@@ -289,6 +276,10 @@ export interface EntryState {
    * a card whose state is about to change under them.
    */
   busy?: boolean;
+  /** The engine's one sentence on why, about `surface`. */
+  reason?: string;
+  /** The surface the state was taken from. */
+  surface?: string;
 }
 
 type Present = { surface: Surface; row: IntegrationRow };
@@ -300,157 +291,60 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
 }
 
 /**
- * The state of one tool from the rows of its surfaces.
+ * A tool's card state, from the ENGINE's roll-up of it.
  *
- * The reconcile phase wins when the loop has one, because it is a measured
- * claim, and the LEAST READY surface is the one reported: a tool whose Jira is
- * degraded and whose Confluence is fine is degraded, and the status names
- * Jira so the reader knows which. Without a phase the tag says only what the
- * config says. "Connected" is deliberately not a word used here; a configured
- * tool whose every delivery is refused is not connected, and the status line
- * is what says so.
+ * NO RULE LIVES HERE. Which surface's word wins, when a ready phase still
+ * needs a person and what a surface no pass converges reads as are decided
+ * once, in `integration.Rollup`, and arrive as `tools` on the answer. This
+ * screen used to decide them itself — its own copy of the phase order, its own
+ * ingress override, its own reading of the setup listing — and the copy had
+ * drifted: a card being disconnected drew neutral while the surface it named
+ * drew amber. What is left is presentation: which tone and outline a state
+ * takes, and that a tool with no configured surface gets no badge at all (the
+ * Connect button beside it is the whole message, and a chip saying "not in
+ * use" on every unconfigured row reads as a fault list).
  */
-export function rollUp(
+export function entryState(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
-  tools: SetupToolState[] = [],
+  tools: IntegrationTool[] | undefined,
 ): EntryState {
-  const present = presentSurfaces(entry, rows);
-  if (present.length === 0) {
-    // NO BADGE. The Connect button is the whole message.
+  if (presentSurfaces(entry, rows).length === 0) {
     return { tag: "", tone: "neutral", outline: true };
   }
-
-  // THE TWO INGRESS FAULTS ARE READ WHATEVER THE PHASE SAYS, because the
-  // reconcile loop does not look at ingress at all: the Jira and GitHub
-  // passes run with no webhook base and report nothing about deliveries
-  // (internal/engine/integrations.go), while `secret_usable` is computed
-  // separately from what this process actually resolved. So `ready` and "every
-  // delivery is refused" are not contradictory answers, they are answers to
-  // different questions, and a card that stopped at the phase was drawn green
-  // over a surface nothing could reach.
-  //
-  // IT COLOURS THE TAG RATHER THAN WRITING A SENTENCE. The sentence used to
-  // replace the tool's name in the header, which put a complaint where an
-  // identity belongs; what is wrong is a note in the body, where the surface
-  // that has the fault says which one it is and names it. What the collapsed
-  // card owes a reader is that something is off, and the tone is that.
-  const ingress = present.some(
-    (p) =>
-      p.row.secret_usable === false ||
-      p.row.routes === false ||
-      // THE ADDRESS MOVED. A registration made against the old public base
-      // keeps pointing at somewhere that no longer answers, and the surface
-      // goes on reporting ready because nothing it can see is wrong. Where a
-      // pass registers the hook this is true again within a tick; where
-      // nothing does, it stays until a person changes it at the app.
-      p.row.endpoint_current === false,
-  );
-
-  // A TEARDOWN OUTRANKS EVERY OTHER ANSWER. The engine reports the phase as
-  // disconnecting the moment one is asked for, but a build that does not know
-  // the word would fall through to whatever the last reconcile concluded and
-  // show the tool connected — so the intent is read directly too.
-  const going = present.find((p) => p.row.reconcile?.disconnecting);
-  if (going) {
-    return {
-      tag: going.row.reconcile?.phase_label || "Disconnecting",
-      tone: "neutral",
-      outline: false,
-      busy: true,
-    };
+  const tool = tools?.find((t) => t.key === entry.key);
+  if (!tool) {
+    // AN ANSWER WITH NO ROLL-UP FOR A TOOL IT HAS ROWS FOR cannot be judged
+    // here, and inventing a state is the one thing this screen must not do.
+    return { tag: "Status unavailable", tone: "neutral", outline: true, busy: true };
   }
-
-  // A ROW WITH NO PHASE IS NOT A REPORT, and reading one as the card's status
-  // drew an EMPTY tag: the phase became the label, the label was "", and the
-  // Slack card carried no state at all while its address had moved. The
-  // engine no longer sends such a row (internal/api/queries/company.go), and
-  // this is the same rule on the client, for a node that still does.
-  const worst = present
-    .filter((p) => p.row.reconcile?.phase)
-    .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];
-  if (worst?.row.reconcile) {
-    const { phase } = worst.row.reconcile;
-    // CONNECTED IS ONLY EVER GREEN, and a surface nothing can reach is not
-    // connected. The loop does not look at ingress at all, so it goes on
-    // reporting `ready` over a route that refuses every delivery: the two are
-    // answers to different questions rather than a contradiction.
-    //
-    // Drawn as the engine's word in a colour that disagreed with it, the card
-    // said "Connected" in amber, a word and a colour saying opposite things,
-    // and left a reader to work out which to believe. What is true of that
-    // card is that somebody has to act, so the tag says so, in the word this
-    // screen uses everywhere else for exactly that.
-    //
-    // ONLY OVER `ready`. Every other phase is either more specific about what
-    // is wrong, where the engine's word is the better one, or a state the
-    // engine is still working through, where telling a person to act would be
-    // asking them to interrupt it.
-    if (ingress && phase === "ready") {
-      return { tag: "Action needed", tone: "warning", outline: false };
-    }
-    return {
-      // The ENGINE's word for the phase, not this screen's. `phase_label`
-      // is derived once, in Go, from a vocabulary the client does not have
-      // to know; the raw phase is the fallback for a node too old to send
-      // one, and opening its underscores is all this build can honestly do
-      // with a value it may not recognise.
-      tag: worst.row.reconcile.phase_label || phase.replace(/_/g, " "),
-      tone: phaseTone(phase),
-      outline: false,
-    };
-  }
-  // PAUSED IS A CLAIM ABOUT SOMEBODY'S INTENT, so it is read off a block that
-  // says so and nothing else. That is a property of the rows rather than of
-  // this rule: a row is emitted for a surface whose block is present, and
-  // `enabled` is that block's own switch, or true where the surface has none
-  // (internal/api/queries/company.go).
-  //
-  // Two rows used to reach here without anybody intending anything. Slack and
-  // GitHub were reported on per-seat secrets AS WELL as on the company block,
-  // and took `enabled` from the block alone — so an absent block and a paused
-  // one were the same row. A disconnect produces the first one every time: the
-  // block goes, the seats keep their sealed credentials, and the card an
-  // operator had just disconnected settled on Paused and stayed there.
-  if (present.every((p) => p.row.enabled === false)) {
-    return { tag: "Paused", tone: "neutral", outline: true };
-  }
-  // A SURFACE NO PASS CONVERGES NEVER REPORTS, so "the loop has not got to
-  // it yet" is a permanent claim about it rather than a window.
-  //
-  // Slack's apps are created by hand, so the loop registers it for teardown
-  // alone and writes no status row for it, ever. The card sat on Connecting
-  // for as long as it was configured, in amber, beside its own roster
-  // reporting every agent ready: one screen, two answers, and the wrong one
-  // was the louder.
-  //
-  // Reported from what this screen CAN see instead, which is the same ingress
-  // the phase branch above reads: a route that refuses every delivery, or one
-  // that turns none of them into work for a seat, is not connected, and
-  // anything else is.
-  if (tools.length > 0 && !tools.some((t) => t.can_provision)) {
-    return ingress
-      ? { tag: "Action needed", tone: "warning", outline: false }
-      : { tag: "Connected", tone: "success", outline: false };
-  }
-  // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
-  // reconcile interval after connecting, not a resting state, so the word is
-  // the one the console uses for it.
-  //
-  // It read "Not checked", which was true of an engine that would not run a
-  // pass until somebody pressed Run setup: nothing was going to check it, and
-  // the tag was telling the operator so. The loop provisions now, so the same
-  // tag would be reporting an absence that resolves itself in seconds, next
-  // to a Connect button that had already gone.
   return {
-    tag: "Connecting",
-    // Amber for the same reason every in-progress phase is: this is the
-    // window before the loop's first report, and it is not yet working.
-    tone: "warning",
-    outline: true,
-    busy: true,
+    tag: tool.label,
+    tone: TOOL_TONE[tool.state] ?? "neutral",
+    outline: tool.state === "not_in_use",
+    // NOT CONNECTED IS THE ENGINE MID-FLIGHT, or a node that cannot say:
+    // nothing a person does moves the card, so it offers nothing.
+    busy: tool.state === "not_connected",
+    reason: tool.reason,
+    surface: tool.surface,
   };
 }
+
+/**
+ * The tone each state is drawn in.
+ *
+ * CONNECTED IS ONLY EVER GREEN, and nothing else is: the engine never sends
+ * `connected` over a surface nothing can reach. `not_connected` is AMBER for the
+ * reason every in-progress phase is — an integration that does not work yet,
+ * which is not the neutral this screen keeps for a state nobody needs to come
+ * back to. `not_in_use` is that neutral.
+ */
+const TOOL_TONE: Record<IntegrationToolState, Tone> = {
+  attention: "warning",
+  not_connected: "warning",
+  connected: "success",
+  not_in_use: "neutral",
+};
 
 // ---------------------------------------------------------------------------
 // What an integration IS, in facts
@@ -1335,6 +1229,7 @@ export function SeatStep({
 export function EntryRow({
   entry,
   rows,
+  rollups,
   sections,
   publicBase,
   titled,
@@ -1343,6 +1238,8 @@ export function EntryRow({
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
+  /** The answer's `tools`: the engine's roll-up of every tool. */
+  rollups?: IntegrationTool[];
   /**
    * The address third-party apps reach this deployment on right now, for the
    * row that has to say what a moved registration should be changed to.
@@ -1373,9 +1270,7 @@ export function EntryRow({
   // they all carry the same tool. Counting it once per section made a
   // roster of one agent render four rows on the Atlassian card.
   const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
-  // THE TAG NEEDS THEM TOO: whether anything converges this tool decides
-  // whether a missing reconcile row is a window or a resting state.
-  const state = rollUp(entry, rows, tools);
+  const state = entryState(entry, rows, rollups);
   const action = actionFor(state, tools, !absent);
   // ONE ROW PER AGENT, whatever the card is made of.
   //
@@ -2719,11 +2614,8 @@ export function IntegrationPeek({ kind }: { kind: string }) {
     pollMs: 60_000,
     refetchOnFocus: true,
   });
-  // THE SECOND HALF, for the same reason the screen reads it: whether anything
-  // CONVERGES a surface decides whether a missing reconcile row is a window or
-  // a resting state, and without it Slack — whose apps are made by hand and
-  // whose loop writes no status row, ever — reports "Connecting" for as long
-  // as it is configured. See [rollUp].
+  // THE SECOND HALF, for the roster and the sections the peek lays out; the
+  // tool's state itself is the engine's roll-up, on the answer.
   const setup = useSetup();
   const rows = useMemo(
     () => new Map((data?.integrations ?? []).map((row) => [row.key, row])),
@@ -2743,12 +2635,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   }
 
   const present = presentSurfaces(entry, rows);
-  // BY KEY, because a per-seat app contributes one section per agent and they
-  // all carry the same tool — see [EntryRow], which counts them the same way.
-  const tools = [
-    ...new Map(sectionsFor(entry, setup.byKey).map((s) => [s.tool.key, s.tool])).values(),
-  ];
-  const state = rollUp(entry, rows, tools);
+  const state = entryState(entry, rows, data?.tools);
   const findings = openFindings(present);
 
   return (
@@ -2990,13 +2877,10 @@ export function Integrations({ kind }: { kind?: string }) {
   const focus = kind
     ? CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind))
     : undefined;
-  // THE HEADER'S OWN ROLL-UP, derived exactly as a card derives its own — the
-  // state of a tool is the least ready of its surfaces, and a page and a card
-  // disagreeing about that would be two answers to one question on one screen.
-  const focusTools = focus
-    ? [...new Map(sectionsFor(focus, setup.byKey).map((s) => [s.tool.key, s.tool])).values()]
-    : [];
-  const focusState = focus ? rollUp(focus, rows, focusTools) : undefined;
+  // THE HEADER'S OWN STATE, out of the same roll-up a card draws — a page and
+  // a card disagreeing about a tool would be two answers to one question on
+  // one screen.
+  const focusState = focus ? entryState(focus, rows, data?.tools) : undefined;
   // WHICH SURFACES OF THIS TOOL A PASS CAN EVEN RUN AGAINST, which is what the
   // runs route is keyed on: `integration.Kinds`, the same set the setup
   // listing carries and the same set `DELETE /setup/integrations/{kind}`
@@ -3209,6 +3093,7 @@ export function Integrations({ kind }: { kind?: string }) {
                 key={entry.key}
                 entry={entry}
                 rows={rows}
+                rollups={data?.tools}
                 sections={sectionsFor(entry, setup.byKey)}
                 publicBase={setup.base?.value}
                 titled={Boolean(focus)}

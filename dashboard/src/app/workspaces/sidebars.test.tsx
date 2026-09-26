@@ -14,10 +14,10 @@
  * half of it.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { useWorkSidebar } from "./sidebars.tsx";
+import { useAdminSidebar, useWorkSidebar } from "./sidebars.tsx";
 import { WorkspaceSidebar } from "../frame/WorkspaceSidebar.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
@@ -84,4 +84,49 @@ test("a listing with no census leaves the rail on the plain sentence", async () 
   serving({ work_projects: { projects: [], total: 0, complete: true }, work_views: { views: [] } });
   mount();
   expect(await screen.findByText("No project has been created yet.")).toBeTruthy();
+});
+
+// AN INTEGRATION'S DOT IS THE ENGINE'S ROLL-UP, one per configured TOOL.
+//
+// It was one row per SURFACE, each dotted green for being configured: a GitLab
+// refusing every credential sat under a green dot, and Atlassian was four rows.
+test("an integration row is one tool, dotted by what the engine concluded", async () => {
+  serving({
+    fleet: { nodes: [] },
+    retention: { domains: [] },
+    integrations: {
+      integrations: [
+        { key: "gitlab", configured: true },
+        { key: "jira", configured: true },
+        { key: "confluence", configured: true },
+      ],
+      tools: [
+        { key: "slack", surfaces: ["slack"], state: "not_in_use", label: "Not in use", reason: "" },
+        {
+          key: "atlassian",
+          surfaces: ["atlassian", "confluence", "jira", "forge"],
+          state: "connected",
+          label: "Connected",
+          reason: "",
+        },
+        {
+          key: "gitlab",
+          surfaces: ["gitlab"],
+          state: "attention",
+          label: "Credential expiring",
+          reason: "the token expires",
+        },
+      ],
+    },
+  });
+  const { result } = renderHook(() => useAdminSidebar(true), { wrapper: Router });
+  await waitFor(() => {
+    const row = result.current[0]!.rows.find((r) => r.key === "integrations");
+    expect(row?.children?.length).toBe(2);
+  });
+  const children = result.current[0]!.rows.find((r) => r.key === "integrations")!.children!;
+  expect(children.map((c) => [c.key, c.tone])).toEqual([
+    ["atlassian", "positive"],
+    ["gitlab", "caution"],
+  ]);
 });

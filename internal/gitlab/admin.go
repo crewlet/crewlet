@@ -480,11 +480,13 @@ type Token struct {
 	Active  bool   `json:"active"`
 	// ExpiresAt is a DATE, not a timestamp — GitLab serves "2026-01-31".
 	//
-	// Read for the record rather than for a decision: whether a token
+	// Read for a FORECAST rather than for a decision: whether a token
 	// still authenticates is answered by USING it, not by comparing this
 	// to a clock. A calendar check here would be a second opinion that
 	// can disagree with the instance — over a timezone, a grace period,
-	// or a token revoked before its date.
+	// or a token revoked before its date. What it does answer is the
+	// question using the token cannot: how long it will GO ON working,
+	// which is what [Result.CredentialExpires] warns about.
 	ExpiresAt Date `json:"expires_at"`
 	// Value is the plaintext, present on a mint response only.
 	Value string `json:"token"`
@@ -522,6 +524,21 @@ func (d *Date) UnmarshalJSON(raw []byte) error {
 	}
 	d.Time = parsed
 	return nil
+}
+
+// SelfToken is the access token this client authenticates with, as GitLab
+// describes it — never its value.
+//
+// `/personal_access_tokens/self` answers for a personal, group or project
+// access token on GitLab 15.5 and later, and refuses anything else (an OAuth
+// token, a job token, an older instance) with a 4xx the caller reads as "no
+// date to warn about" rather than as a fault.
+func (c *Client) SelfToken(ctx context.Context) (Token, error) {
+	var out Token
+	if err := c.get(ctx, "/personal_access_tokens/self", nil, &out); err != nil {
+		return Token{}, err
+	}
+	return out, nil
 }
 
 // tokenPath is where an account's tokens live, and it follows who owns the
