@@ -123,7 +123,7 @@ func (w *Writer) PublishGeneration(ctx context.Context, gen uint32,
 		Session:  w.after,
 		Decide: func(*sql.Tx) (statelog.Decision, error) {
 			return w.decide(subject, OpGeneration, "", scope, opID, Generation{
-				V:                   GateRecordVersion,
+				V:                   DocumentVersion,
 				Gen:                 gen,
 				PrevStreamCreatedAt: in.PrevStreamCreatedAt.UTC(),
 				NewStreamCreatedAt:  in.StreamCreatedAt.UTC(),

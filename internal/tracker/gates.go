@@ -232,7 +232,8 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 	return statelog.AdoptedAt(ctx, g.db)
 }
 
-// GateRecordVersion is the version the eviction record carries, FOR EVER.
+// GateRecordVersion is the version the eviction record carries, FOR EVER — on
+// its envelope ([recordVersionOf]) and in its payload ([Eviction.V]).
 //
 // # Why this one number never moves
 //
@@ -248,14 +249,22 @@ func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
 // only ever grow by addition, never by reshaping, for the life of the
 // deployment, and a semantic change takes a new record kind.
 //
-// # The purge is a gate too, and it did not stay at one
+// # The purge is a gate too, and it is not at one
 //
-// Its apply changed, and it is written at [PurgeRecordVersion] because of
-// that: kept at one, a build that reads one would apply the new purge by the
-// rule it replaced. A new kind was not open to it the way it is to the
-// eviction — a purge's subject is the task it destroys, which is what
-// arbitrates it against every other write to that task. So an older build
-// stops at a purge it cannot read, and that stop is the price.
+// A purge at [PurgeRecordVersion] applies by a different rule from one at
+// [RecordVersion], and is written at its own version for that reason: at one,
+// a build that reads one would apply it by the first version's rule. A new
+// kind is not open to it the way it is to the eviction — a purge's subject is
+// the task it destroys, which is what arbitrates it against every other write
+// to that task. So a build that reads below it stops at a purge it cannot
+// read, and that stop is the price.
+//
+// # The generation record is NOT at this version
+//
+// A reanchor's record ([Generation]) installs no gate ([ObjectKind.InstallsGate]
+// is the eviction alone), so nothing here binds it: its envelope is at
+// [RecordVersion] and its payload states [DocumentVersion], as every other
+// object's does.
 const GateRecordVersion = 1
 
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
@@ -470,7 +479,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: recordVersionOf(subject, OpPurge), Reason: reason},
+			}{V: recordVersionOf(subject, OpPurge, nil), Reason: reason},
 				purgeWake(current, reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err

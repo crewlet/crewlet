@@ -44,10 +44,10 @@ the tracker's fourteen in full.
 | `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
 | `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
-| `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
+| `merge_work_item` | Fold a duplicate into the item that survives — linked (replacing any `duplicate_of` link it had), its subtasks re-parented, and closed as `cancelled`. Refused before anything is written when the survivor is purged or in the trash, or while another merge of the same item runs; stops part-way, reported as landed in part, when the survivor is purged or put in the trash while it runs (the merge is given up, the duplicate left open) or another writer has ended the merge, or purged the duplicate, before this call closes it. One interrupted part-way is finished by the engine's sweep into the item the merge named — see [Merging a duplicate](work-tracker.md#merging-a-duplicate) |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
-| `list_pages` | Browse the knowledge base by container, parent or title. A `truncated` answer is one page of the container — `offset` reaches the rest |
-| `get_page` | One page's body, breadcrumb, children and history. `children_truncated` says the page has more children than the read carries; `list_pages` with `parent` lists them all |
+| `list_pages` | Browse the knowledge base's published pages by container, parent, title or label. A `truncated` answer is one page of the listing: pass its `next_cursor` back as `after`, with the same filters, for the next. An argument the tool does not take (`offset`, say) is refused by name rather than ignored, because an ignored continuation would answer the first page again |
+| `get_page` | One page's body, comments, breadcrumb, children and history, by id or `CONTAINER/Title`. `children` are the first of its published children; when `children_truncated` is set it has more, and `list_pages` with `parent` set to the page and `after` set to the answer's `children_cursor` lists the rest |
 | `write_page` | Create one. Titles are addresses and are unique per container |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |

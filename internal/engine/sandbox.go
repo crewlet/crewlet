@@ -349,22 +349,9 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Company: company,
-		Run:     req.Run,
-		State:   state,
-		Turn: &turnctx.Turn{
-			// THE SAME RUN AND THE SAME UNIT OF WORK the suspended
-			// turn had, both read off the row: the resume re-enters
-			// that run, and its writes stay idempotent against the
-			// trigger the run was dispatched for.
-			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
-			// Off the row as well: the launching turn's own instant
-			// where the row carries it, its first launch where it does
-			// not ([sandbox.PendingRun.TriggerInstant]).
-			TriggeredAt: req.Run.TriggerInstant(),
-			Seat:        seat, Org: company.Org,
-			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
-		},
+		Company:       company,
+		Run:           req.Run,
+		State:         state,
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
@@ -408,16 +395,23 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 }
 
 // resumeInput is one re-entry, assembled.
+//
+// IT CARRIES NO TURN IDENTITY, because the resumed turn's identity has ONE
+// derivation: [Engine.describeResume] reads the run, the unit of work, the
+// instant and the seat off Run, and [turnTelemetry.runnerTurn] builds the
+// runner's turn from that — the same function the dispatch path builds its
+// turn with from [Engine.describeTurn]. A turn assembled here as well would be
+// a second answer to the same question that nothing reads, free to drift from
+// the one the runner is handed.
 type resumeInput struct {
 	// Company is the epoch the resume was admitted under: the one whose
-	// organization holds Turn's seat. The resumed turn runs in it rather than
+	// organization holds Run's seat. The resumed turn runs in it rather than
 	// reading the engine's company again, because that read is the NEXT epoch
 	// once an apply lands between the two, and the seat the admission found
 	// may not be in it.
 	Company *Company
 	Run     sandbox.PendingRun
 	State   execstate.State
-	Turn    *turnctx.Turn
 	Answer  string
 	Success bool
 	Trigger *events.Event
@@ -457,8 +451,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	ctx = tracing.WithRemote(ctx, events.TraceContext{
 		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
 	})
+	// The seat the run belongs to, which the admission found in Company.
+	handle := in.Run.AgentHandle
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
-		attribute.String("crewlet.seat", in.Turn.Handle()),
+		attribute.String("crewlet.seat", handle),
 		attribute.String("crewlet.turn_id", in.Run.TurnID),
 		// The unit of work beside the run, so the two halves of a
 		// suspended turn answer the same trace query as the dispatch
@@ -486,8 +482,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
-	r, err := company.RunnerFor(in.Turn.Handle(),
-		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
+	r, err := company.RunnerFor(handle,
+		e.seatRegistry(company, handle), RunnerInput{
 			Task: resumeTask(in),
 			// THE RUNNER NEEDS IT TOO, not just the loop below. This
 			// field reaches runner.Config.Reply, which is what
@@ -503,13 +499,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// being re-entered was agentic is the state's own answer (see
 			// [execstate.State.AgentRun]), but a turn that loops to another
 			// iteration must run that one the same way it ran the first.
-			AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
-			Budget:   e.meterFor(company, in.Turn.Handle()),
+			AgentRun: e.agentRunFor(company, handle, turnIdentity.Context),
+			Budget:   e.meterFor(company, handle),
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
-			Judge:     e.judgeFor(company, in.Turn.Handle()),
-			Remaining: e.remainingFor(company, in.Turn.Handle()),
+			Judge:     e.judgeFor(company, handle),
+			Remaining: e.remainingFor(company, handle),
 			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
 			// more than a fresh turn does: this loop was parked across a
 			// coding run that may have taken an hour, and the node that
@@ -517,7 +513,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// grant it closes on is the one THIS node holds now — which
 			// is the correct anchor, since the resume is what this node is
 			// admitted for.
-			Fence: e.seatFence(in.Turn.Handle()),
+			Fence: e.seatFence(handle),
 			// THE SKILL REGISTRY, which this call site omitted. With nil
 			// Skills the runner's guardFor returns nil, so the load-before-use
 			// gate was disarmed for every resumed turn: a seat could call a
@@ -628,7 +624,7 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// re-enters the run that suspended, so the entry names that one rather
 	// than a fresh id, and it dedupes against the same trigger the dispatch
 	// that launched it did.
-	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
+	e.dispatch.RecordSession(ctx, in.Run.AgentHandle, in.Run.ConversationKey,
 		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
 }
 

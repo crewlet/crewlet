@@ -38,13 +38,12 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	return n
 }
 
-// THE ONE OPERATION NOTHING UNDOES HAD NO CALLER AT ALL.
+// THE ONE OPERATION NOTHING UNDOES IS REACHED FROM HERE.
 //
-// `PurgeTask` existed, its record applied, its marker stopped a redelivery
-// resurrecting anything — and no CLI verb, no route and no tool reached it. A
-// company could not destroy a task under any circumstances: an erasure request
-// had no mechanism, and a credential pasted into a task body stayed in the
-// durable rows of every node for ever.
+// No seat tool reaches `PurgeTask`, so this verb and the route behind it are how
+// a company destroys a task at all — an erasure request needs a mechanism, and a
+// credential pasted into a task body is otherwise in the durable rows of every
+// node for ever.
 func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	node := newFakePurgeNode(t)
 	stdout, stderr, err := cli(t, "work", "purge", "t-1",
@@ -90,8 +89,8 @@ func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
 	}
 }
 
-// A REASON IS REQUIRED because the rows are destroyed and the reason is the
-// only account of why.
+// A REASON IS REQUIRED because the content is destroyed and the reason is the
+// account of why.
 func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 	node := newFakePurgeNode(t)
 	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",

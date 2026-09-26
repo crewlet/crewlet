@@ -104,8 +104,8 @@ type InboxNotice struct {
 	// about what the change was. The kind, the reason and who made it are
 	// what is left. The project lead's notice of the purge itself is not
 	// marked — its excerpt is the purge's line, kept whole — and neither is
-	// a notice whose purge was written before purges emptied anything
-	// ([PurgeRecordVersion]), which still says what it said.
+	// a notice whose purge is at [RecordVersion], whose rule empties nothing,
+	// so it says what it said.
 	ContentPurged bool `json:"content_purged,omitempty"`
 
 	// Actor is who made the change, joined from the history row. A notice

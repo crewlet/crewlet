@@ -353,31 +353,35 @@ func companyResolver(ctx context.Context, bootstrapPath, api string, notes io.Wr
 		return &fleetRead{env: config.EnvOnly(), absent: why}, nil
 	}
 	// A NAMED NODE NEEDS NO BOOTSTRAP HERE: it holds its own keyring, and a
-	// machine that is not a node has no Tier A of its own. What this one
-	// can still supply is the bearer token.
-	boot := &config.Bootstrap{}
-	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
-		if api == "" {
-			return envOnly("no " + bootstrapPath)
-		}
-	} else {
-		loaded, err := loadBootstrapForStore(bootstrapPath)
-		if err != nil {
-			return nil, err
-		}
-		boot = loaded
-		if api == "" && len(boot.Secrets.Keys) == 0 {
-			return envOnly(bootstrapPath + " declares no secrets.keys")
-		}
+	// machine that is not a node has no Tier A of its own. What one here
+	// can still supply is the bearer token; with none, the node is reached
+	// with CREWLET_API_TOKEN alone (see [nodeAPIToken]).
+	boot, err := optionalBootstrap(bootstrapPath)
+	switch {
+	case err != nil:
+		return nil, err
+	case boot == nil && api == "":
+		return envOnly("no " + bootstrapPath)
+	case boot != nil && api == "" && len(boot.Secrets.Keys) == 0:
+		return envOnly(bootstrapPath + " declares no secrets.keys")
 	}
 	var node *secretsClient
-	var err error
 	if api != "" {
 		node, err = newSecretsClient(boot, api)
 	} else {
 		node, err = runningNode(ctx, boot, bootstrapPath)
 	}
 	return resolveThrough(ctx, bootstrapPath, node, err, notes)
+}
+
+// optionalBootstrap is the Tier A config at path, or nil when there is no file
+// there — a machine that is not a node, which a command naming one with -api
+// may run from. A file that is there and does not load is an error.
+func optionalBootstrap(path string) (*config.Bootstrap, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return loadBootstrapForStore(path)
 }
 
 // resolveThrough is the chain [companyResolver] builds once it has asked for a

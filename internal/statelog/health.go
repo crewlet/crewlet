@@ -214,8 +214,9 @@ type Health struct {
 	// reporting nothing pending.
 	LastSeq *uint64
 
-	// StreamRecreated is a live stream that is not the one this node's applier
-	// started against — a delete and a rebuild under the same name.
+	// StreamRecreated is a live stream that is not the one this node's
+	// checkpoint for the domain counts on — a delete and a rebuild under the
+	// same name.
 	//
 	// # Why it is observed rather than derived
 	//

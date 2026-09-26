@@ -206,6 +206,13 @@ func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeCallPage) map[stri
 		"command_id":       run.CommandID,
 		"delegation_chain": run.DelegationChain,
 	}
+	// AN ANSWER HELD FOR THE RUN, which changes what the row means: a run
+	// parked on its question whose reply is held is waiting on the seat's
+	// token budget, not on a person, and a running run whose result is held
+	// has a job that finished. Both keys always present, empty for a run
+	// holding none.
+	held, at := heldAnswerOf(run)
+	row["answer_held"], row["answer_held_at"] = string(held), at
 	// LEFT OUT ON A RUN THAT MADE NO BRIDGED CALLS: the board draws no
 	// tool-call panel at all for a run nothing called through a bridge.
 	if calls.Total > 0 {
@@ -229,6 +236,52 @@ func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeCallPage) map[stri
 		row["bridge_calls_next"] = calls.Next
 	}
 	return row
+}
+
+// HeldAnswerKind is what a run's held answer is, as the board is told it
+// (`answer_held`): the empty value for a run holding none.
+type HeldAnswerKind string
+
+const (
+	// HeldReply is a person's reply to the question a run is parked on,
+	// held while the seat's token budget has no room for the turn it
+	// resumes: the question has its answer, and the run waits on the budget.
+	HeldReply HeldAnswerKind = "reply"
+
+	// HeldResult is a finished job's result, held on a run still running
+	// for the same reason: the job is over, its box paused, and the run
+	// waits on the budget.
+	HeldResult HeldAnswerKind = "result"
+)
+
+// Valid reports whether k is a kind this build names; the empty value, a run
+// holding no answer, is valid.
+func (k HeldAnswerKind) Valid() bool {
+	switch k {
+	case "", HeldReply, HeldResult:
+		return true
+	}
+	return false
+}
+
+// heldAnswerOf is the kind of answer a run holds and when it was held, or
+// nothing for a run holding none waiting to be resumed.
+//
+// THE KIND IS THE STATUS THE ANSWER WAS HELD IN, since a hold keeps the status
+// the run had ([sandbox.HeldAnswer]): a reply is held on a run waiting on its
+// question, a result on a running one. A run already claimed to resume its
+// held answer is resuming, not waiting, and reads as holding none.
+func heldAnswerOf(run sandbox.PendingRun) (HeldAnswerKind, string) {
+	held, ok := run.Held()
+	switch {
+	case !ok:
+		return "", ""
+	case slices.Contains(sandbox.Awaiting, run.Status):
+		return HeldReply, isoOrEmpty(held.At)
+	case run.Status == sandbox.StatusRunning:
+		return HeldResult, isoOrEmpty(held.At)
+	}
+	return "", ""
 }
 
 // answerableInChat reports whether a reply on a chat surface could ever reach

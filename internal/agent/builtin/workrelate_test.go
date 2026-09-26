@@ -234,3 +234,36 @@ func askable() []colleague.Seat {
 		{Handle: "eng", Name: "Evan Engineer", Kind: "agent"},
 	}
 }
+
+// DUPLICATE_OF STATES ONE EDGE AND LEAVES THE REPLACEMENT TO THE WRITER.
+//
+// An item duplicates one other, so a second `duplicate_of` replaces the first
+// edge — and the writer does that inside the write's own snapshot
+// ([tracker.RelationKind.Single]), against the edges the item holds when the
+// write lands. A removal composed here would name the edge this tool READ, and
+// leave beside the new one any edge written in between.
+func TestDuplicateOfAddsOneEdgeAndRemovesNothing(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	detail := trk.tasks["ENG-1"]
+	detail.Task.Relations = []tracker.Relation{
+		{Kind: tracker.RelationDuplicates, Other: "id-2"},
+	}
+	trk.tasks["ENG-1"] = detail
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "duplicate_of": "ENG-3",
+	})
+	if got.Failed {
+		t.Fatalf("duplicate_of failed: %s", got.Output)
+	}
+	if len(trk.patched) != 1 || trk.patched[0].Relate == nil {
+		t.Fatalf("the call wrote %+v, want one patch carrying the edge", trk.patched)
+	}
+	intent := trk.patched[0].Relate
+	want := []tracker.Relation{{Kind: tracker.RelationDuplicates, Other: "id-3"}}
+	if !slices.Equal(intent.Add, want) || len(intent.Remove) != 0 {
+		t.Errorf("the gesture adds %+v and removes %+v, want the new edge alone "+
+			"and no removal", intent.Add, intent.Remove)
+	}
+}

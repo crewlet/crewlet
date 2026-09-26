@@ -183,10 +183,10 @@ func (a *App) mountRetention(mux *http.ServeMux) {
 	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
 	// THE PURGE, and it lives beside the eviction because they are the
 	// two gestures on this engine that DESTROY rather than change: one
-	// stops a machine's records applying, the other removes a task and
-	// every row it produced. Both are guarded, both echo their subject
-	// back as a confirmation, and both answer the three-valued write
-	// outcome whole.
+	// stops a machine's records applying, the other deletes a task's rows
+	// and every row naming it and empties its history. Both are guarded,
+	// both echo their subject back as a confirmation, and both answer the
+	// three-valued write outcome whole.
 	if a.purger != nil {
 		mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
 	}
@@ -197,12 +197,11 @@ func (a *App) mountRetention(mux *http.ServeMux) {
 // # Why this route exists at all
 //
 // `tracker.Writer.PurgeTask` is the one operation in this engine with no
-// inverse, restricted in the write path to a person or an operator token — and
-// nothing anywhere called it. No CLI verb, no route, no tool. So a company
-// could not destroy a task under any circumstances: an erasure request had no
-// mechanism, and a credential pasted into a task body stayed in the durable
-// rows of every node for ever, where `remove` only hides it and `delete` only
-// stops later records about it.
+// inverse, restricted in the write path to a person or an operator token, and
+// no seat tool reaches it. This route, and `crewlet work purge` over it, are how
+// a company destroys a task at all: an erasure request needs a mechanism, and a
+// credential pasted into a task body is otherwise in the durable rows of every
+// node for ever, where `remove` only hides it.
 //
 // # The confirmation is the task's KEY, not its id
 //
@@ -224,9 +223,10 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	case id == "" || key == "":
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "confirm_required",
-			"detail": "repeat the task's KEY in ?confirm= — a purge removes the " +
-				"task and every row it produced on every node, and there is " +
-				"nothing that undoes it",
+			"detail": "repeat the task's KEY in ?confirm= — a purge deletes the " +
+				"task's rows and every row naming it on every node, empties the " +
+				"content of its history and moves its subtasks onto its parent, " +
+				"and there is nothing that undoes it",
 		})
 		return
 	case project == "":
@@ -238,15 +238,16 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case reason == "":
-		// A REASON IS REQUIRED, unlike every other gesture here: the rows
-		// are destroyed, so the reason is the only account of why. It is
-		// logged below beside the task's key, and when the project has a
-		// lead it travels whole on the notification the lead receives
-		// (tracker.purgeExcerpt).
+		// A REASON IS REQUIRED, unlike every other gesture here: the
+		// content is destroyed, so the reason is the account of why. It is
+		// logged below beside the task's key, and it travels whole on the
+		// purge's own line in the activity feed — the line the project's
+		// lead is notified with, when there is one (tracker.purgeExcerpt).
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "reason_required",
-			"detail": "state why in ?reason= — the rows are destroyed and the " +
-				"reason is the only account of why",
+			"detail": "state why in ?reason= — the content is destroyed and " +
+				"the reason, kept on the line the purge leaves in the activity " +
+				"feed, is the account of why",
 		})
 		return
 	}

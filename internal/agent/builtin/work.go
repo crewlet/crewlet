@@ -2370,15 +2370,27 @@ func jsonResult(v any) (tools.Result, error) {
 	return jsonAnswer(v, "Narrow what you asked for.")
 }
 
-// readFailure explains a read that could not be served.
-//
-// IT NEVER SAYS "NOTHING FOUND". A projection that has not caught up must not
-// be able to tell a seat the company has no work — it would file a duplicate,
-// or abandon work it was told to do.
+// readFailure explains a read of the TRACKER that could not be served. The
+// knowledge base's is [pageReadFailure]; both are [unservedRead].
 func readFailure(name string, err error) string {
-	return fmt.Sprintf("%s could not read the tracker right now (%v). This is "+
-		"NOT an empty result — do not conclude the item or the list does not "+
-		"exist. Try again, or say you could not check.", name, err)
+	return unservedRead(name, "the tracker", "the item or the list", err)
+}
+
+// unservedRead explains a read that could not be served, naming what was
+// read.
+//
+// IT NEVER SAYS "NOTHING FOUND". A node whose applied rows have not caught up
+// must not be able to tell a seat the company has none of what it asked for —
+// it would write a duplicate, or abandon work it was told to do.
+//
+// AND IT NAMES THE STORE, because what the seat does next is say it could not
+// check: a seat told the tracker is unreadable when it was the knowledge base
+// reports an outage nobody has, and goes looking for its answer in a store
+// that was never down.
+func unservedRead(name, store, what string, err error) string {
+	return fmt.Sprintf("%s could not read %s right now (%v). This is NOT an "+
+		"empty result — do not conclude %s does not exist. Try again, or say "+
+		"you could not check.", name, store, err, what)
 }
 
 // writeFailure explains a write that did not land, in terms the model can act

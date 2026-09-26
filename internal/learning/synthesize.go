@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -269,7 +268,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		return nil, nil
 	}
 
-	member, err := s.models.Head(t.Role, phase.Auxiliary)
+	member, err := auxiliary(s.models, t.Role, t.attribution(SynthesizerSource))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill synthesis: %w", err)
 	}

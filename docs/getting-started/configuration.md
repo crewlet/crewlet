@@ -148,9 +148,9 @@ learning:                               # optional — agent-learning subsystem
     max_versions_kept: 10               # history retention per skill (older pruned)
   skill_promotion:
     enabled: true                       # daily cross-agent promotion pass. Needs a
-                                        #   knowledge base (integrations.confluence)
-                                        #   — a promoted skill is a draft
-                                        #   page a unit lead reviews
+                                        #   knowledge base (the engine's own by
+                                        #   default, or Confluence) — a promoted
+                                        #   skill is a draft page a unit lead reviews
     min_sibling_count: 3                # distinct SEATS that must converge. One seat
                                         #   with four similar skills is a catalogue
                                         #   to curate, not a team practice

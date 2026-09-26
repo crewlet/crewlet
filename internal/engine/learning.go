@@ -636,7 +636,7 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has no such role", role)
 		}
-		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
+		member, err := e.auxiliaryModelsFor(c, learning.Attribution{Worker: learning.CompactionWorker}).Head(seat, phase.Auxiliary)
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction for %q: %w", role, err)
 		}

@@ -21,11 +21,15 @@ import (
 // one has to answer the same two questions first: which address, and which
 // token.
 //
-// ONE PLACE FOR ALL OF THEM. This rule was written twice — once in
-// [nodeClient] and once inside the secrets client — and the two had already
-// drifted on what to do when Tier A lists no token at all, so the same
-// deployment got a clear refusal from one command and a bare 401 from the
-// other. A third copy was one `crewlet config -api` away.
+// ONE PLACE FOR ALL OF THEM, so the same deployment gets the same answer from
+// every command that reaches a node: which address it dials, which token it
+// sends, and — when there is no token — one refusal naming the fix, rather
+// than one command refusing and another sending nothing and meeting a bare
+// 401 from the far end.
+//
+// A NIL BOOTSTRAP IS A MACHINE WITH NO TIER A: a command naming a node with
+// -api from a machine that is not one. Its address is the one named, and the
+// only token it can send is the one in [apiTokenEnv].
 
 // apiTokenEnv is where every node client reads a bearer token that is not in
 // Tier A.
@@ -47,6 +51,11 @@ const apiTokenEnv = "CREWLET_API_TOKEN"
 func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, error) {
 	base := strings.TrimSpace(override)
 	if base == "" {
+		if boot == nil {
+			return "", fmt.Errorf("there is no Tier A config here to find a "+
+				"node's address in, so there is no way to reach %s: name the "+
+				"node with -api", surface)
+		}
 		if boot.API.Port == 0 {
 			return "", fmt.Errorf(
 				"this node's api.port is 0, so it serves no HTTP surface and "+
@@ -80,7 +89,7 @@ func nodeTokenOrEmpty(boot *config.Bootstrap) string {
 	if fromEnv := strings.TrimSpace(os.Getenv(apiTokenEnv)); fromEnv != "" {
 		return fromEnv
 	}
-	if len(boot.API.Auth.Tokens) > 0 {
+	if boot != nil && len(boot.API.Auth.Tokens) > 0 {
 		return boot.API.Auth.Tokens[0].Token
 	}
 	return ""
@@ -93,9 +102,18 @@ func nodeTokenOrEmpty(boot *config.Bootstrap) string {
 // have to diagnose from the far end. Saying so here names the fix instead.
 // The lenient form stays for the routes a node may legitimately serve with
 // `api.auth.disabled`.
+//
+// WITH NO TIER A HERE the refusal names the one place a token can come from:
+// a machine that is not a node has no api.auth.tokens to add one to.
 func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
 	if token := nodeTokenOrEmpty(boot); token != "" {
 		return token, nil
+	}
+	if boot == nil {
+		return "", fmt.Errorf(
+			"there is no Tier A config here to read an api.auth.tokens entry "+
+				"from, so nothing can authenticate to the node's %s surface: "+
+				"export %s with a token that node accepts", surface, apiTokenEnv)
 	}
 	if boot.API.Auth.Disabled {
 		return "", nil

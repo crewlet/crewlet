@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -211,6 +212,31 @@ func TestANodeNamedWithAPIIsReadWhereNoEngineRuns(t *testing.T) {
 			t.Errorf("%s: a run that read the named node says it could not: "+
 				"%v %q", name, fleet.recordable(), notes.String())
 		}
+	}
+}
+
+// A NAMED NODE WITH NO TOKEN HERE IS REFUSED NAMING THE ONE PLACE ONE CAN COME
+// FROM. On a machine with no Tier A there is no api.auth.tokens list to add a
+// token to, so a refusal telling the operator to add one sends them to edit a
+// file that does not exist; CREWLET_API_TOKEN is the whole remedy. On a
+// machine whose Tier A lists none, both remedies are real.
+//
+// Mutation: refuse a machine with no Tier A with the node's own sentence, and
+// this fails.
+func TestANamedNodeWithNoTokenHereNamesWhereOneComesFrom(t *testing.T) {
+	t.Setenv(apiTokenEnv, "")
+	node := newFakeSecretsNode(t)
+	absent := filepath.Join(t.TempDir(), "absent.yaml")
+
+	_, err := companyResolver(t.Context(), absent, node.server.URL, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) ||
+		strings.Contains(err.Error(), "add one") {
+		t.Fatalf("with no Tier A here the refusal is %v, want it to name %s alone", err, apiTokenEnv)
+	}
+
+	_, err = companyResolver(t.Context(), bootstrapWithKeyring(t, "k1"), node.server.URL, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) || !strings.Contains(err.Error(), "add one") {
+		t.Errorf("with a Tier A listing no token the refusal is %v, want both remedies", err)
 	}
 }
 

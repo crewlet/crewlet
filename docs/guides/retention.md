@@ -428,9 +428,10 @@ checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — and the
 position heartbeat, which runs at boot and every ten seconds after, names the
 rebuild too: the node's reads refuse `wrong_stream` (`stalled`, on the stop,
-until that first beat), its seats move to a peer, and `crewlet retention
-status` shows the log as deleted and rebuilt. A checkpoint past the log's end
-is caught the same way, as `wrong_stream`, because a position the log has never
+until that first beat), its seats move to a peer, and the heartbeat logs
+`statelog_stream_recreated`, naming the creation instant the node's checkpoint
+counts on (`checkpoint_on`) and the live stream's (`live`). A checkpoint past
+the log's end is caught the same way, as `wrong_stream`, because a position the log has never
 reached is a position on another stream.
 
 Until it follows the live stream, the node goes on **stating the deleted one**

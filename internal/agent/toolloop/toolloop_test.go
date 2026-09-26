@@ -3,6 +3,7 @@ package toolloop_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1366,5 +1367,99 @@ func TestACutRoundIsReportedToThePhase(t *testing.T) {
 					res.Truncated, tc.cut)
 			}
 		})
+	}
+}
+
+// A PHASE TWO MODELS SERVED BILLS EACH WHAT IT SERVED.
+//
+// The Result's Model latches on the first completion that names one, which is
+// right for naming the phase and wrong for billing it: a fallback chain moves a
+// phase between models round by round, and the per-model breakdown built from
+// the first name alone bills every later round to a model that did not serve
+// it. A completion that names no model counts under the configured model of the
+// provider the loop called.
+func TestEveryRoundIsBilledToTheModelThatServedIt(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Model: "first", InputTokens: 100, OutputTokens: 10, ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Model: "fallback", InputTokens: 40, OutputTokens: 4, ToolCalls: []llm.ToolCall{toolCall("2", "read")}},
+		{InputTokens: 7, OutputTokens: 1, ToolCalls: []llm.ToolCall{toolCall("3", "read")}},
+		{Model: "first", InputTokens: 20, OutputTokens: 2, Content: "done"},
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read")}}, MaxRounds: 6,
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Model != "first" {
+		t.Errorf("Model = %q, want the first model that answered", res.Model)
+	}
+	want := []toolloop.ModelTokens{
+		{Model: "first", InputTokens: 120, OutputTokens: 12},
+		{Model: "fallback", InputTokens: 40, OutputTokens: 4},
+		{Model: "scripted", InputTokens: 7, OutputTokens: 1},
+	}
+	if !slices.Equal(res.Models, want) {
+		t.Errorf("Models = %+v, want %+v", res.Models, want)
+	}
+	sumIn, sumOut := 0, 0
+	for _, m := range res.Models {
+		sumIn, sumOut = sumIn+m.InputTokens, sumOut+m.OutputTokens
+	}
+	if sumIn != res.InputTokens || sumOut != res.OutputTokens {
+		t.Errorf("the split sums to %d/%d, the phase billed %d/%d",
+			sumIn, sumOut, res.InputTokens, res.OutputTokens)
+	}
+}
+
+// THE FAILURE VIEW CARRIES THE SPLIT TOO. A phase that died publishes its
+// snapshot, and the tokens on it are split by model exactly as a finished
+// phase's are — the rounds it billed before dying served somebody.
+func TestTheFailureViewCarriesThePerModelSplit(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{
+		turns: []llm.Completion{
+			{Model: "first", InputTokens: 9, OutputTokens: 1, ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+			{Model: "fallback", InputTokens: 5, OutputTokens: 2, ToolCalls: []llm.ToolCall{toolCall("2", "read")}},
+		},
+		failAt: 3,
+	}
+	prog := &toolloop.Progress{}
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read")}}, MaxRounds: 5, Progress: prog,
+	}); err == nil {
+		t.Fatal("Run succeeded against a failing provider")
+	}
+	want := []toolloop.ModelTokens{
+		{Model: "first", InputTokens: 9, OutputTokens: 1},
+		{Model: "fallback", InputTokens: 5, OutputTokens: 2},
+	}
+	if got := prog.Snapshot().Models; !slices.Equal(got, want) {
+		t.Errorf("snapshot Models = %+v, want %+v", got, want)
+	}
+}
+
+// TWO INVOCATIONS OF ONE PHASE FOLD THEIR SPLITS the way they fold their token
+// counts: the earlier's models first, a model both served summed, and neither
+// argument written through.
+func TestFoldingTwoInvocationsKeepsEveryModelOnce(t *testing.T) {
+	t.Parallel()
+	done := []toolloop.ModelTokens{{Model: "a", InputTokens: 10, OutputTokens: 1}}
+	live := []toolloop.ModelTokens{
+		{Model: "a", InputTokens: 2, OutputTokens: 2},
+		{Model: "b", InputTokens: 5, OutputTokens: 5},
+	}
+	got := toolloop.FoldModelTokens(done, live)
+	want := []toolloop.ModelTokens{
+		{Model: "a", InputTokens: 12, OutputTokens: 3},
+		{Model: "b", InputTokens: 5, OutputTokens: 5},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("FoldModelTokens = %+v, want %+v", got, want)
+	}
+	if done[0].InputTokens != 10 {
+		t.Errorf("the earlier invocation's list was written through: %+v", done)
 	}
 }

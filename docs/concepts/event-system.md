@@ -217,6 +217,11 @@ sandbox_run_started, sandbox_clarification_requested
 sandbox_run_completed, sandbox_run_failed
 scheduled_task_fired
 
+# not stored: a command to one seat's node that its token budget has room for
+# the answer held on its coding run. Published to that seat's control topic
+# alone, never to crewlet.events.*
+sandbox_answer_ready
+
 # a2a: one ask, one answer, then closed. The ask and the answer also travel
 #      as inbox wakes (a2a_request, a2a_message), which are not stored
 a2a_channel_opened, a2a_message_sent, a2a_channel_closed
@@ -244,6 +249,11 @@ skill_synthesized, skill_refined, skill_promoted, skill_used
 skill_staled, skill_archived, skill_revived
 prefetch_summary
 compaction_requested, compaction_completed
+auxiliary_call_completed   # one completion on a seat's auxiliary model — a
+                           # learning worker's, a background pass's or the
+                           # prefetch's — with the worker, the model and the
+                           # tokens; the spend rollups fold it beside the
+                           # phase records
 
 # system: the engine talking about itself
 agent_turn_completed       # full LLM reasoning cycle with tokens and tools
@@ -299,8 +309,12 @@ live-only per-round signal whose durable record is `agent_phase_completed`),
 by every node on a fixed tick, which the next report supersedes; the live
 projection reads it), `raw_webhook` (the delivery is already a row), and the two
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
-already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
-exclusions table in the Deployment page above.
+already rows as `a2a_channel_opened` and `a2a_message_sent`), and
+`sandbox_answer_ready` (a command to one seat's node on its control topic,
+never published to `crewlet.events.*`: the wait it ends was said when the
+answer was held — a `budget_exhausted` naming the scope at its cap, or a log
+line when the budget could not be read — and what the resumed turn does is in
+its own phase records). See the exclusions table in the Deployment page above.
 
 **Stored and never listed**: `agent_phase_record_part`, a piece of the whole
 of a phase record the transport refused as too large. The record is published

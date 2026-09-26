@@ -718,13 +718,18 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		return
 	}
 	ev := types.AgentPhaseCompleted{
-		Agent:          e.turn.AgentID,
-		RoleName:       e.role,
-		TurnID:         e.turn.RunID,
-		WorkKey:        e.turn.WorkKey,
-		Iteration:      rec.Iteration,
-		Phase:          types.Phase(rec.Phase),
-		Model:          rec.Result.Model,
+		Agent:     e.turn.AgentID,
+		RoleName:  e.role,
+		TurnID:    e.turn.RunID,
+		WorkKey:   e.turn.WorkKey,
+		Iteration: rec.Iteration,
+		Phase:     types.Phase(rec.Phase),
+		Model:     rec.Result.Model,
+		// WHAT EACH MODEL SERVED, beside the one name the record carries: a
+		// fallback chain can move a phase between models round by round,
+		// and a breakdown keyed on Model alone bills every round to the
+		// model that served the first.
+		Models:         modelSpend(rec.Result.Models),
 		Trigger:        e.turn.Trigger,
 		SystemPrompt:   rec.System,
 		UserPrompt:     rec.User,
@@ -783,6 +788,20 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.ErrorKind = classifyError(rec.Err)
 	}
 	e.publishPhase(ctx, ev)
+}
+
+// modelSpend is a loop's per-model tokens as a phase record carries them. Nil
+// for a loop that recorded none, which a record then says by omitting the list
+// — the reading internal/tokens gives a record without one.
+func modelSpend(models []toolloop.ModelTokens) []types.ModelSpend {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]types.ModelSpend, len(models))
+	for i, m := range models {
+		out[i] = types.ModelSpend{Model: m.Model, InputTokens: m.InputTokens, OutputTokens: m.OutputTokens}
+	}
+	return out
 }
 
 // classifyError names a failure's CLASS, for the one-word reason a dashboard

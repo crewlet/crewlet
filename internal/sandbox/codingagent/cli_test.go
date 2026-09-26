@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -96,6 +97,57 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	}
 	if len(res.DeliveredRefs) != 1 {
 		t.Fatalf("the pull request was not scraped: %v", res.DeliveredRefs)
+	}
+}
+
+// THE PER-MODEL ACCOUNT IS THE WHOLE RUN. `modelUsage` covers every model call
+// the run made — its subagents and its own internal calls included — and its
+// input is counted with what the cache served and wrote, as the engine counts
+// its own completions: a cached run billed as its uncached remainder is billed
+// a sliver of what it spent.
+func TestTheClaudeParserReadsThePerModelAccount(t *testing.T) {
+	res := claude().Parse(`{"type":"result","subtype":"success","is_error":false,
+		"result":"done","total_cost_usd":0.9,
+		"usage":{"input_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"output_tokens":5},
+		"modelUsage":{
+			"claude-sonnet":{"inputTokens":100,"outputTokens":40,"cacheReadInputTokens":800,
+				"cacheCreationInputTokens":60,"webSearchRequests":0,"costUSD":0.75},
+			"claude-haiku":{"inputTokens":30,"outputTokens":6,"cacheReadInputTokens":0,
+				"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.15}}}`)
+	if !res.UsageWhole {
+		t.Fatal("a per-model account was not reported as the whole run")
+	}
+	want := []types.ModelSpend{
+		{Model: "claude-haiku", InputTokens: 30, OutputTokens: 6, CostUSD: 0.15},
+		{Model: "claude-sonnet", InputTokens: 960, OutputTokens: 40, CostUSD: 0.75},
+	}
+	if !slices.Equal(res.Models, want) {
+		t.Errorf("models = %+v, want %+v", res.Models, want)
+	}
+	if res.InputTokens != 990 || res.OutputTokens != 46 || res.CostUSD != 0.9 {
+		t.Errorf("totals = %d/%d/$%v, want the split's 990/46/$0.90",
+			res.InputTokens, res.OutputTokens, res.CostUSD)
+	}
+}
+
+// WITHOUT A PER-MODEL ACCOUNT, THE MAIN LOOP IS A FLOOR. `usage` counts the
+// run's main loop and none of its subagents, so it is reported — cache
+// included — and the run says the figures are not its whole spend. The sample
+// is a real answer's usage, whose uncached remainder is two tokens of 42,823.
+func TestTheClaudeMainLoopUsageIsAFloor(t *testing.T) {
+	res := claude().Parse(`{"is_error":false,"subtype":"success","result":"PONG",
+		"total_cost_usd":0.0373944,
+		"usage":{"input_tokens":2,"cache_creation_input_tokens":7319,
+		"cache_read_input_tokens":35502,"output_tokens":5,"service_tier":"standard"}}`)
+	if res.InputTokens != 42823 || res.OutputTokens != 5 {
+		t.Errorf("tokens = %d/%d, want 42823/5 — the cache is input the run was billed for",
+			res.InputTokens, res.OutputTokens)
+	}
+	if res.UsageWhole {
+		t.Error("the main loop's usage was reported as the whole run")
+	}
+	if res.CostUSD != 0.0373944 {
+		t.Errorf("cost = %v, want the envelope's total", res.CostUSD)
 	}
 }
 
@@ -483,11 +535,61 @@ func TestTheOpenCodeParserRebuildsTheAnswer(t *testing.T) {
 }
 
 // An invented token count in the spend rollup is worse than a missing one,
-// because a reader cannot tell it is invented.
+// because a reader cannot tell it is invented — and a missing one must SAY it
+// is missing, or it reads as a run that cost nothing.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
 	if res.InputTokens != 0 || res.OutputTokens != 0 || res.CostUSD != 0 {
 		t.Fatalf("tokens were invented: %+v", res)
+	}
+	if res.UsageWhole {
+		t.Fatal("a stream that reported no step's spend claims to account for the whole run")
+	}
+}
+
+// EACH STEP REPORTS ITS OWN SPEND, and a step that carries the provider's own
+// total is counted exactly: its input with what the cache served and wrote,
+// and its output as the rest of the total — reasoning included, which a
+// release that reports `output` without it would otherwise leave out. A step
+// reported twice is billed once.
+func TestOpenCodeCountsEveryStepsSpendOnce(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"step_finish","part":{"id":"p1","reason":"tool-calls","cost":0.25,` +
+			`"tokens":{"total":1100,"input":100,"output":40,"reasoning":10,"cache":{"read":900,"write":50}}}}`,
+		`{"type":"step_finish","part":{"id":"p1","reason":"tool-calls","cost":0.25,` +
+			`"tokens":{"total":1100,"input":100,"output":40,"reasoning":10,"cache":{"read":900,"write":50}}}}`,
+		`{"type":"text","part":{"text":"done"}}`,
+		`{"type":"step_finish","part":{"id":"p2","reason":"stop","cost":0.5,` +
+			`"tokens":{"total":230,"input":200,"output":30,"reasoning":0,"cache":{"read":0,"write":0}}}}`,
+	}, "\n")
+	res := opencode().Parse(stream)
+	if res.InputTokens != 1250 || res.OutputTokens != 80 {
+		t.Errorf("tokens = %d/%d, want 1250/80 — each step once, cache counted as input, "+
+			"reasoning inside the output", res.InputTokens, res.OutputTokens)
+	}
+	if res.CostUSD != 0.75 {
+		t.Errorf("cost = %v, want the two steps' 0.75", res.CostUSD)
+	}
+	if !res.UsageWhole {
+		t.Error("a run whose every step carried its total is not reported whole")
+	}
+}
+
+// A STEP WITHOUT A TOTAL IS A FLOOR. What `input` and `output` include has
+// moved across OpenCode releases, and those two alone overstate nothing in any
+// of them — so they are counted, and the run says its figures are not the
+// whole.
+func TestAnOpenCodeStepWithoutATotalIsCountedAsAFloor(t *testing.T) {
+	res := opencode().Parse(strings.Join([]string{
+		`{"type":"step_finish","part":{"id":"p1","reason":"stop","cost":0.1,` +
+			`"tokens":{"input":300,"output":20,"reasoning":5,"cache":{"read":700,"write":0}}}}`,
+		`{"type":"text","part":{"text":"done"}}`,
+	}, "\n"))
+	if res.InputTokens != 300 || res.OutputTokens != 20 {
+		t.Errorf("tokens = %d/%d, want the step's own 300/20", res.InputTokens, res.OutputTokens)
+	}
+	if res.UsageWhole {
+		t.Error("a step with no total was reported as the run's whole spend")
 	}
 }
 

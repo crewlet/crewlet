@@ -392,13 +392,68 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 }
 
+// A WRITE THROUGH A NAMED NODE NEEDS NO KEYRING HERE, AND NO TIER A AT ALL.
+//
+// The node seals the value under its own keyring, so requiring one on the
+// machine the command runs from would mean copying the fleet's root of trust
+// onto every laptop that rotates a credential — the one thing the keyring
+// being Tier A on the node exists to prevent. What a Tier A here can still
+// supply is the bearer token; with none, CREWLET_API_TOKEN is it.
+//
+// Mutation: check for the keyring before the -api branch, and both fail.
+func TestAWriteThroughANamedNodeNeedsNoKeyringHere(t *testing.T) {
+	t.Setenv(apiTokenEnv, "ops-token")
+	noKeys := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(noKeys, []byte("node:\n  id: laptop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, cfg := range map[string]string{
+		"a Tier A with no keyring": noKeys,
+		"no Tier A at all":         filepath.Join(t.TempDir(), "absent.yaml"),
+	} {
+		node := newFakeSecretsNode(t)
+		var out, errs bytes.Buffer
+		err := run([]string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
+			"-config", cfg, "-api", node.server.URL}, &out, &errs)
+		if err != nil {
+			t.Fatalf("%s: set: %v\n%s", name, err, errs.String())
+		}
+		if node.last.method != http.MethodPut || node.last.body != "glpat-x" {
+			t.Errorf("%s: the node saw %s %s with %q", name, node.last.method, node.last.path, node.last.body)
+		}
+	}
+}
+
+// A REKEY NEEDS THE KEY IT REKEYS ONTO, through a node as on this node's own
+// table: the dry run counts the rows sealed under any other key, and the
+// node refuses a rekey onto a key its keyring does not make active. With no
+// keyring here there is nothing to judge either by, so the run is refused
+// naming the setting before the node is asked anything.
+func TestARekeyWithNoActiveKeyHereIsRefused(t *testing.T) {
+	t.Setenv(apiTokenEnv, "ops-token")
+	noKeys := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(noKeys, []byte("node:\n  id: laptop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	node := newFakeSecretsNode(t)
+	var out, errs bytes.Buffer
+	err := run([]string{"secrets", "rekey", "-config", noKeys, "-api", node.server.URL}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "secrets.active_key_id") {
+		t.Fatalf("rekey = %v, want a refusal naming secrets.active_key_id", err)
+	}
+	if node.last.method != "" {
+		t.Errorf("the node was asked %s %s before the refusal", node.last.method, node.last.path)
+	}
+}
+
 // A NODE-LOCAL WRITE SAYS SO, and says when it will and will not reach the
 // fleet.
 //
 // An operator who wrote a value while the engine was stopped and saw nothing
-// propagate would reasonably conclude the write failed. And the next start
-// copies it onto the fleet only when the fleet holds no value under that name,
-// so a rotation written here is discarded — which nothing else would say.
+// propagate would reasonably conclude the write failed. And where the fleet
+// already holds the name, the next start keeps whichever value was written
+// later, so a peer's rotation since this write outranks it and this one is
+// discarded — which nothing else here would say.
 func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
@@ -413,8 +468,8 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 		// The note, whose phrasing is distinct from the store's own
 		// description on purpose: dropping it while keeping the path
 		// would still leave an operator without the way forward.
-		"already holds GL_TOKEN", // the write the next start discards
-		"-api",                   // and the way a rotation does arrive
+		"already holds GL_TOKEN, the value written later is kept", // the rule the next start applies
+		"-api", // and the way a running fleet gets it now
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output omits %q: %q", want, out.String())

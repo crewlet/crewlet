@@ -289,18 +289,15 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedAfter(writeFailure(tracker.WriteWorkGoalTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	answer := map[string]any{
+	// NO UPDATE IS DROPPED BY A SAVE THAT LANDS. A goal stores at most
+	// tracker.MaxGoalUpdates of them and a save that would add one past
+	// that is REFUSED by the writer, naming the cap, with nothing saved
+	// ([tracker.ErrGoalUpdatesFull]) — so the refusal above is where the
+	// caller hears about it, and a receipt only ever describes a save
+	// that kept every update the goal held.
+	return receipt(map[string]any{
 		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	}
-	// WHAT THE WRITE DID THAT THE CALLER DID NOT ASK FOR. A goal keeps a
-	// rolling window of updates, so a save can evict the oldest — and an
-	// update is the stored value rather than a preview of one, so what
-	// falls off the front is not readable anywhere. It used to go in
-	// silence under `outcome: applied`.
-	if len(result.Warnings) > 0 {
-		answer["warnings"] = result.Warnings
-	}
-	return receipt(answer, op)
+	}, op)
 }
 
 // goalParties is who a stored goal already names.

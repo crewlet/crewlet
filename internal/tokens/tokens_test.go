@@ -497,3 +497,291 @@ func TestACappedTurnTableSaysHowManyTurnsThereWere(t *testing.T) {
 			len(small.ByTurn), small.TurnsTotal)
 	}
 }
+
+// A PHASE TWO MODELS SERVED IS COUNTED UNDER EACH, BY WHAT EACH BILLED.
+//
+// A fallback chain can move a phase between models round by round, and the
+// record's own `model` names only the first. Keyed on that alone, every round
+// the second model served is billed to the first — the per-model breakdown
+// names a model that did not do the work.
+func TestAPhaseTwoModelsServedCountsUnderEach(t *testing.T) {
+	t.Parallel()
+	phase := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 150, 15)
+	phase.Models = []tokens.ModelSpend{
+		{Model: "sonnet", InputTokens: 100, OutputTokens: 10},
+		{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+	}
+
+	got := tokens.Aggregate([]tokens.Record{phase}, tokens.Options{})
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range got.ByModel {
+		byModel[row.Model] = row
+	}
+	if len(got.ByModel) != 2 || byModel["sonnet"].TotalTokens != 110 || byModel["haiku"].TotalTokens != 55 {
+		t.Fatalf("by_model = %+v, want sonnet 110 and haiku 55 — each model's own rounds", got.ByModel)
+	}
+	if byModel["sonnet"].Calls != 1 || byModel["haiku"].Calls != 1 {
+		t.Errorf("calls = %d and %d, want the record counted once under each model",
+			byModel["sonnet"].Calls, byModel["haiku"].Calls)
+	}
+	// THE TOTALS ARE THE RECORD'S, once: the split reapportions, it never adds.
+	if got.Totals.TotalTokens != 165 || got.Totals.Calls != 1 {
+		t.Errorf("totals = %+v, want the one record's 165 over one call", got.Totals)
+	}
+}
+
+// A RECORD WITHOUT A SPLIT COUNTS UNDER ITS ONE MODEL — which is every record
+// a build that wrote no split published, and so the rule a mixed fleet's
+// rollup needs.
+func TestARecordWithoutASplitCountsUnderItsOneModel(t *testing.T) {
+	t.Parallel()
+	got := tokens.Aggregate([]tokens.Record{
+		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 90, 30),
+	}, tokens.Options{})
+	if len(got.ByModel) != 1 || got.ByModel[0].Model != "sonnet" || got.ByModel[0].TotalTokens != 120 {
+		t.Errorf("by_model = %+v, want the whole record under its model", got.ByModel)
+	}
+}
+
+// WHAT A SPLIT DOES NOT COVER COUNTS UNDER THE RECORD'S MODEL, so a record
+// whose split names part of its spend — rounds carried across a suspension by
+// a build that kept no split for them — loses none of the rest, and `by_model`
+// still sums to the totals.
+func TestWhatASplitDoesNotCoverCountsUnderTheRecordsModel(t *testing.T) {
+	t.Parallel()
+	phase := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 300, 40)
+	phase.Models = []tokens.ModelSpend{{Model: "haiku", InputTokens: 100, OutputTokens: 10}}
+
+	got := tokens.Aggregate([]tokens.Record{phase}, tokens.Options{})
+	byModel := map[string]int{}
+	sum := 0
+	for _, row := range got.ByModel {
+		byModel[row.Model] = row.TotalTokens
+		sum += row.TotalTokens
+	}
+	if byModel["haiku"] != 110 || byModel["sonnet"] != 230 {
+		t.Errorf("by_model = %v, want haiku's 110 and the uncovered 230 under sonnet", byModel)
+	}
+	if sum != got.Totals.TotalTokens {
+		t.Errorf("by_model sums to %d, the totals say %d", sum, got.Totals.TotalTokens)
+	}
+}
+
+// A SPLIT THAT CLAIMS MORE THAN ITS RECORD IS NOT A SPLIT. Counted, it would
+// make `by_model` sum past the totals beside it; the record counts whole under
+// its model instead, as one with no split does.
+func TestASplitThatExceedsItsRecordIsIgnored(t *testing.T) {
+	t.Parallel()
+	for name, split := range map[string][]tokens.ModelSpend{
+		"more tokens than the record": {{Model: "haiku", InputTokens: 500, OutputTokens: 0}},
+		"a negative entry":            {{Model: "haiku", InputTokens: -5, OutputTokens: 1}},
+		"a price past the record's":   {{Model: "haiku", InputTokens: 1, OutputTokens: 1, CostUSD: 3}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			phase := priced(rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 90, 30), 1)
+			phase.Models = split
+			got := tokens.Aggregate([]tokens.Record{phase}, tokens.Options{})
+			if len(got.ByModel) != 1 || got.ByModel[0].Model != "sonnet" || got.ByModel[0].TotalTokens != 120 {
+				t.Errorf("by_model = %+v, want the whole record under its own model", got.ByModel)
+			}
+		})
+	}
+}
+
+// A PRICE SPLIT BY MODEL FOLLOWS ITS MODEL. A coding run that quotes each
+// model's cost separately is priced per model, and the part of a record's price
+// no entry claims stays with the record's own model rather than vanishing.
+func TestAPriceSplitByModelFollowsItsModel(t *testing.T) {
+	t.Parallel()
+	phase := priced(rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 1000, 100), 0.75)
+	phase.Models = []tokens.ModelSpend{
+		{Model: "opus", InputTokens: 600, OutputTokens: 60, CostUSD: 0.5},
+		{Model: "haiku", InputTokens: 100, OutputTokens: 10, CostUSD: 0.05},
+	}
+	got := tokens.Aggregate([]tokens.Record{phase}, tokens.Options{})
+	cost := map[string]float64{}
+	for _, row := range got.ByModel {
+		cost[row.Model] = row.CostUSD
+	}
+	if cost["opus"] != 0.5 || cost["haiku"] != 0.05 {
+		t.Errorf("costs = %v, want each entry's own price", cost)
+	}
+	if d := cost["sonnet"] - 0.2; d > 1e-9 || d < -1e-9 {
+		t.Errorf("sonnet's cost = %v, want the unclaimed 0.20", cost["sonnet"])
+	}
+	if got.Totals.CostUSD != 0.75 || got.Totals.PricedCalls != 1 {
+		t.Errorf("totals = %+v, want the record's own price once", got.Totals)
+	}
+}
+
+// AN UNREPORTED RUN IS A FLOOR, NEVER A ZERO. A coding run whose agent gave no
+// account of its own spend reads, in tokens, as nothing — and a rollup that
+// added it as nothing would state "this cost 40 tokens" about work that cost an
+// unknown amount more. Every bucket the record reaches counts it as a call
+// whose spend went unreported, and the per-model breakdown files the unmeasured
+// part under no model's name rather than inside the executor model's measured
+// figures.
+func TestAnUnreportedRunIsCountedAsAFloorNotAZero(t *testing.T) {
+	t.Parallel()
+	phase := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 30, 10)
+	phase.Unreported = true
+	measured := rec("CEO", "review", "sonnet", "t1", "2026-06-14T12:00:05Z", 20, 5)
+
+	got := tokens.Aggregate([]tokens.Record{phase, measured}, tokens.Options{})
+	if got.Totals.UnreportedCalls != 1 || got.Totals.TotalTokens != 65 {
+		t.Errorf("totals = %+v, want 65 tokens with one call unreported", got.Totals)
+	}
+	for _, row := range got.ByPhase {
+		want := map[string]int{"execute": 1, "review": 0}[row.Phase]
+		if row.UnreportedCalls != want {
+			t.Errorf("the %s row counts %d unreported calls, want %d", row.Phase, row.UnreportedCalls, want)
+		}
+	}
+	if got.ByTurn[0].UnreportedCalls != 1 || got.ByAgent[0].UnreportedCalls != 1 {
+		t.Errorf("turn %+v and agent %+v must both say part of their spend is unknown",
+			got.ByTurn[0].Bucket, got.ByAgent[0].Bucket)
+	}
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range got.ByModel {
+		byModel[row.Model] = row
+	}
+	if byModel["sonnet"].UnreportedCalls != 0 || byModel["sonnet"].TotalTokens != 65 {
+		t.Errorf("sonnet = %+v, want its measured 65 and no unreported call", byModel["sonnet"].Bucket)
+	}
+	if u := byModel["unknown"]; u.UnreportedCalls != 1 || u.TotalTokens != 0 {
+		t.Errorf("unknown = %+v, want the unmeasured part as its own call of no tokens", u.Bucket)
+	}
+}
+
+// ONE ENCODING ON BOTH SIDES OF THE LEAF. The event catalogue writes a phase
+// record's split and this package reads it back with a type of its own; a tag
+// that drifted between them would decode every split as empty, and every phase
+// would count under its first model again with nothing failing.
+func TestTheSplitDecodesAsTheCatalogueWritesIt(t *testing.T) {
+	t.Parallel()
+	written := types.AgentPhaseCompleted{Models: []types.ModelSpend{
+		{Model: "sonnet", InputTokens: 100, OutputTokens: 10, CostUSD: 0.25},
+		{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+	}}
+	raw, err := json.Marshal(written)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload struct {
+		Models json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []tokens.ModelSpend{
+		{Model: "sonnet", InputTokens: 100, OutputTokens: 10, CostUSD: 0.25},
+		{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+	}
+	if got := tokens.DecodeModels(payload.Models); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("DecodeModels = %+v, want %+v", got, want)
+	}
+
+	// And the live projection's route, from a payload already decoded into
+	// Go values, reaches the same list.
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := tokens.ModelsOf(decoded["models"]); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("ModelsOf = %+v, want %+v", got, want)
+	}
+
+	// A list that does not decode is no split, never a partial one.
+	if got := tokens.DecodeModels([]byte(`{"not":"a list"}`)); got != nil {
+		t.Errorf("a malformed list decoded as %+v", got)
+	}
+}
+
+// recordOf reads a phase record's payload the way a producer hands it to the
+// fold: the token columns, the split through DecodeModels, and the flag.
+func recordOf(t *testing.T, ev types.AgentPhaseCompleted) tokens.Record {
+	t.Helper()
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload struct {
+		Model        string          `json:"model"`
+		Phase        string          `json:"phase"`
+		InputTokens  int             `json:"input_tokens"`
+		OutputTokens int             `json:"output_tokens"`
+		TotalTokens  int             `json:"total_tokens"`
+		CostUSD      float64         `json:"cost_usd"`
+		Models       json.RawMessage `json:"models"`
+		Unreported   bool            `json:"run_spend_unreported"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return tokens.Record{
+		EventID: "e1", Timestamp: "2026-06-14T12:00:00Z", AgentRole: "Dev", TurnID: "t1",
+		Phase: payload.Phase, Model: payload.Model,
+		InputTokens: payload.InputTokens, OutputTokens: payload.OutputTokens, TotalTokens: payload.TotalTokens,
+		CostUSD: payload.CostUSD, Models: tokens.DecodeModels(payload.Models), Unreported: payload.Unreported,
+	}
+}
+
+// A CODING RUN'S OWN SPEND REACHES THE ROLLUP THROUGH ITS PHASE'S RECORD. The
+// agent in the box spends on models the engine never called; the record that
+// collects the run takes its tokens in beside the rounds this process ran, and
+// every model the run named gets its own row with its own price.
+func TestACollectedRunsSpendReachesTheRollup(t *testing.T) {
+	t.Parallel()
+	ev := types.AgentPhaseCompleted{
+		Phase: types.PhaseExecute, Model: "exec-model", CostUSD: 0.4,
+		InputTokens: 100, OutputTokens: 10, TotalTokens: 110,
+		Models: []types.ModelSpend{{Model: "exec-model", InputTokens: 100, OutputTokens: 10}},
+	}
+	ev.AddRun(types.RunSpend{Collected: true, Whole: true, Models: []types.ModelSpend{
+		{Model: "claude-sonnet", InputTokens: 600, OutputTokens: 60, CostUSD: 0.3},
+		{Model: "claude-haiku", InputTokens: 300, OutputTokens: 40, CostUSD: 0.1},
+	}})
+	got := tokens.Aggregate([]tokens.Record{recordOf(t, ev)}, tokens.Options{})
+	if got.Totals.TotalTokens != 1110 || got.Totals.UnreportedCalls != 0 {
+		t.Errorf("totals = %+v, want the rounds' 110 and the run's 1000, all of it reported", got.Totals)
+	}
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range got.ByModel {
+		byModel[row.Model] = row
+	}
+	if byModel["exec-model"].TotalTokens != 110 || byModel["claude-sonnet"].TotalTokens != 660 ||
+		byModel["claude-haiku"].TotalTokens != 340 {
+		t.Errorf("by_model = %+v, want each model's own part", got.ByModel)
+	}
+	if byModel["claude-sonnet"].CostUSD != 0.3 || byModel["exec-model"].PricedCalls != 0 {
+		t.Errorf("sonnet $%v, exec-model priced %d: the run's price belongs to the models it named",
+			byModel["claude-sonnet"].CostUSD, byModel["exec-model"].PricedCalls)
+	}
+}
+
+// A RUN WHOSE AGENT GAVE NO WHOLE ACCOUNT MARKS ITS RECORD. Whatever part of its
+// spend was reported is counted, and the record says the rest is not known, so
+// the rollup reads the figure as a floor.
+func TestARunWithoutAWholeAccountMarksItsRecordAFloor(t *testing.T) {
+	t.Parallel()
+	ev := types.AgentPhaseCompleted{
+		Phase: types.PhaseExecute, Model: "exec-model", InputTokens: 100, OutputTokens: 10, TotalTokens: 110,
+	}
+	ev.AddRun(types.RunSpend{Collected: true, Models: []types.ModelSpend{{InputTokens: 30, OutputTokens: 5}}})
+	if !ev.RunSpendUnreported || ev.TotalTokens != 145 {
+		t.Fatalf("record = %d tokens, unreported %v; want the floor's 145 marked unreported",
+			ev.TotalTokens, ev.RunSpendUnreported)
+	}
+	got := tokens.Aggregate([]tokens.Record{recordOf(t, ev)}, tokens.Options{})
+	if got.Totals.UnreportedCalls != 1 || got.ByPhase[0].UnreportedCalls != 1 {
+		t.Errorf("totals %+v, by_phase %+v: the floor must say it is one", got.Totals, got.ByPhase)
+	}
+
+	// AND A RECORD THAT COLLECTED NO RUN SAYS NOTHING ABOUT ONE.
+	quiet := types.AgentPhaseCompleted{Phase: types.PhaseExecute, InputTokens: 5, TotalTokens: 5}
+	quiet.AddRun(types.RunSpend{})
+	if quiet.RunSpendUnreported || quiet.TotalTokens != 5 || quiet.Models != nil {
+		t.Errorf("a record that collected no run = %+v, want it unchanged", quiet)
+	}
+}

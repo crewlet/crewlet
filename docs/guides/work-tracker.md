@@ -388,8 +388,9 @@ without it the one tab whose job is "what did my assistant delete" would hide
 every deletion of anything already done. It is ordered by **when work was
 removed**, newest first, and `sort=removed` asks for the other end of it — a
 removed task's rank is its position on a board it has left, so ordering the
-trash by rank orders it by a stale number. What a removal, a deletion and a
-purge each mean is [below](#removing-deleting-and-purging).
+trash by rank orders it by a stale number. What a removal and a purge each
+mean, and the deletion marker a purge leaves, is
+[below](#removing-deleting-and-purging).
 
 **A view is a set of defaults, never a lock.** Opening one loads its
 parameters and every key you then set overrides them, so picking a different
@@ -530,11 +531,11 @@ CHANGE rather than about state:
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. A view that **groups** answers as the same list too: a grouped answer draws a bounded number of columns and a bounded slice of each and mints no cursor, so through this tool the rest of a column could not be reached at all — flattened, the view's filter and order come back as rows with a `next_cursor`, and nothing is cut. A view that **pins one column** (`group=`, or a `subgroup=` lane) is refused naming the column, because dropping the axis would drop the narrowing with it; pass the filter the column stands for instead. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. `duplicate_of` links the item as a duplicate of one other: an item duplicates one thing, so the link **replaces** any `duplicate_of` link it already had, resolved against the item's links inside the write's own transaction. It is a link and nothing more — `merge_work_item` is what closes the duplicate and moves its work |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
-| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. A subtask in the **trash** is not moved — it stays in the trash under the duplicate, and comes back there if restored — and one somebody moves elsewhere while the merge runs stays where they put it. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Every step of a merge checks that the item it folds into is still there, so a merge into an item that has been **purged** is refused before anything is written, and one whose target is purged while it runs is **given up** at its next step: the duplicate is left open with no merge marker, keeping the subtasks that had not moved yet, and the tool says the target was purged. **One merge of an item runs at a time**: a second merge of the same item, from any seat on any node, is refused while the first is running. A merge interrupted part-way — its node went away, or one of its steps failed — is finished by the engine's own sweep once nothing is running it, and the sweep gives it up the same way, with a `tracker_merge_target_purged` warning, when its target has been purged meanwhile |
+| `merge_work_item` | fold a duplicate into the item that survives — see [Merging a duplicate](#merging-a-duplicate) for what happens when something else moves while it runs. The duplicate is linked to it (replacing any `duplicate_of` link it had), its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
@@ -631,21 +632,32 @@ names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
 its own reasons.
 
-Nothing can be filed or moved under an item in the trash. A create or a
-re-parent naming a removed parent is refused, and the refusal says who removed
-it and when — restore it first. A removed item is frozen besides: a comment or
-an edit on it is refused until it is restored.
+Nothing can be filed, moved or **restored** under an item in the trash. A
+create, a re-parent, a promotion of a checklist item or a merge naming a
+removed item is refused, and the refusal says who removed it and when —
+restore it first. A restore of an item whose parent is still in the trash is
+refused the same way, naming the parent to restore first, and nothing is
+written. A removed item is frozen besides: a comment or an edit on it is
+refused until it is restored. And an item that is being **merged** cannot be
+put in the trash until its merge has finished.
 
 A subtree leaves and comes back one item at a time, parent first, so a removal
 or a restore can stop part-way, with its root done and some of what goes with
-it not. The answer says so rather than that nothing happened, and calling the
-same tool again finishes it: each item already where the gesture puts it is
-passed over. `restore_work_item` on an item that is already out of the trash
-is how a stopped restore is finished — it brings back whatever that item's
-removal took that is still in there, and writes nothing else.
+it not. The answer says so rather than that nothing happened. When the gesture
+was interrupted, calling the same tool again finishes it: each item already
+where the gesture puts it is passed over. `restore_work_item` on an item that
+is already out of the trash is how a stopped restore is finished — it brings
+back whatever that item's removal took that is still in there, and writes
+nothing else.
 
-Neither of the two is `purge`, which destroys every row on every node and has
-no inverse. That one is `crewlet work purge`, with a typed confirmation and a
+One stop is not an interruption. A restore that meets an item whose parent is
+in the trash **on its own account** — removed by another gesture before this
+one took the rest — passes over it, and over everything below it, brings back
+everything else, and names that parent. Calling the same tool again changes
+nothing until that parent is restored; restore it, then call again.
+
+Neither of the two is `purge`, which destroys a task's content on every node
+and has no inverse. That one is `crewlet work purge`, with a typed confirmation and a
 required reason, and it is deliberately not a tool at all.
 
 Three of those count as a **delivery**: create, update and comment. A turn
@@ -919,8 +931,8 @@ says rather than what it is about:
 |---|---|---|
 | `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
 
-`purge_task` is the one operation in this engine with no inverse, so the
-person accountable for the project is told it happened. The wake names the
+A purge (`crewlet work purge`) is the one operation in this engine with no
+inverse, so the person accountable for the project is told it happened. The wake names the
 key, who ran it and their stated reason — and nothing else. It quotes neither
 the title nor the body, because the record outlives the rows: an excerpt of
 what was purged would keep a copy of exactly that, on the log, for its whole
@@ -1069,9 +1081,58 @@ known height, not a nested ask, so bounding it by delegation depth would bound
 the wrong thing. What it catches is the loop where two seats hand one task back
 and forth, which is the failure mode that actually happens.
 
+## Merging a duplicate
+
+`merge_work_item` is several writes rather than one — it marks the duplicate as
+being merged, moves its subtasks one at a time, and closes it last — so other
+writes can land between its steps. Each step reads what it depends on at the
+moment it is written rather than trusting what the merge saw when it started:
+
+- **The item it folds into is checked at every step.** If it has been
+  **purged**, or is in the **trash**, before the merge begins, the merge is
+  refused before anything is written — a purge naming the purge, the trash
+  naming the restore that would make the merge possible. If it is purged or
+  put in the trash while the merge runs, the merge is **given up** at its next
+  step: the duplicate is left open with no merge marker, keeping the subtasks
+  that had not moved yet. A subtask that had already moved went where the
+  purge moved the purged item's children, or stays under the item in the trash.
+  The tool reports that the merge landed only in part, and calling it again
+  does not finish it.
+- **A subtask is checked as it is moved.** One somebody moved elsewhere, put in
+  the trash or purged since the merge read it is passed over; one in the trash
+  stays there under the duplicate, and comes back there if restored.
+- **One merge of an item runs at a time.** A second merge of the same item,
+  from any seat on any node, is refused while the first is running, and
+  nothing is written.
+- **A merge ended by another writer is not closed over.** If the merge's marker
+  was cleared by somebody else by the time this call comes to close it — the
+  engine's own sweep, once this call had lost its hold on the merge — or the
+  duplicate was purged, this call closes nothing. The subtasks it moved stay
+  where it moved them, and the tool reports that the merge landed only in part.
+
+A merge interrupted part-way — its node went away, or one of its steps failed —
+is finished by the engine's own **sweep** once nothing is running it. The merge
+names the item it folds into on the duplicate itself, and that is what the
+sweep finishes it into, whatever the duplicate's links say by then. The sweep
+reads the duplicate only after taking the merge over, and only once its node
+holds every change the log had accepted by then — so a merge that already
+closed, or was given up, on another node is left alone rather than finished a
+second time. It gives a merge up the same way a running one does when the item
+it folds into has gone: with a `tracker_merge_target_purged` warning for a
+purge, and a `tracker_merge_target_removed` warning for the trash — restore
+that item, and the merge can be asked for again. A merge the sweep cannot
+finish is logged `tracker_merge_finish_failed`, keeps its marker for the next
+sweep, and does not stop the sweep finishing the others.
+
+The writes that raise and lower the merge marker carry the marker's target —
+the item being merged into, and empty once the marker is down — in a record
+format a build older than the one that writes it cannot read. During a rolling upgrade a node on such a build holds those writes back,
+with every later change to the duplicate, until it is upgraded — see
+[what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks).
+
 ## Removing, deleting and purging
 
-Three different gestures, and the difference matters:
+Two different gestures, and the difference matters:
 
 - **Remove** hides a task. Its rows stay and a restore brings it back — and
   `removed=true` is how you find one to restore: every other query excludes
@@ -1079,14 +1140,13 @@ Three different gestures, and the difference matters:
   than a screen. It is a filter every container ships a **tab** for
   ([Views](#views)), because the one thing a person needs after an assistant
   removes the wrong subtree is to see what was removed.
-- **Delete** writes a marker. Every node drops every record about that task for
-  ever, which is what stops a redelivery months later resurrecting it.
-- **Purge** removes the rows. Its report comes back in **three groups**: what
-  was purged, what could not be reached, and what is stale.
+- **Purge** destroys the task's content and writes a **deletion marker** in its
+  place. Every node drops every later record about that task for ever, which
+  is what stops a redelivery months later resurrecting it.
 
-Only the first two are a seat's. A purge is an **operator gesture** — a person
-or an operator token, never an agent and never the engine — because it is the
-one operation with no inverse and nothing else can be asked to confirm it:
+Only the first is a seat's. A purge is an **operator gesture** — a person or an
+operator token, never an agent and never the engine — because it is the one
+operation with no inverse and nothing else can be asked to confirm it:
 
 ```
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
@@ -1098,9 +1158,9 @@ task was one. Destroying the subtree would destroy work nobody confirmed. A
 subtask that **crossed** the purge — filed under the task, or moved onto it, by
 a write decided on a node that had not applied the purge yet — lands in the same
 place, whichever of the two writes reached the log first. Once a node has
-applied the purge, a write from it that would file something under the purged
-task, move something onto it or merge something into it is refused before it
-reaches the log.
+applied the purge, a write from it that names the purged task is refused before
+anything is appended: a create or a move under it, a promotion of one of its
+checklist items, and a merge into it.
 
 **The project's lead is told**, and nobody else. There is no assignee left to
 tell and no watcher list worth carrying — a notification naming them would be

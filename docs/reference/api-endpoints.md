@@ -118,7 +118,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/schedules/{scope_type}/{scope_id}/{name}/runs` | ONE schedule's dispatch history, newest first (the [`schedule_runs`](#ws-wsstream) question) |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
-| `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
+| `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and when each scope's cap last refused a charge (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
@@ -1386,9 +1386,10 @@ completed record when the phase finishes. Progress envelopes carry
 stream-only and never persisted to the event store.
 
 The **spend rollup** is maintained by the projection too. It HOLDS the
-per-phase records for its own 24-hour window (the newest 8 000 of them, so a
-company past that many phases in a day sees a rollup covering slightly less
-than a day rather than a wrong total — and headed with what it covers: once
+spend records — each phase's, and each auxiliary call's — for its own 24-hour
+window (the newest 8 000 of them, so a company past that many in a day sees a
+rollup covering slightly less than a day rather than a wrong total — and
+headed with what it covers: once
 the cap has dropped a record, or the startup seed's read reports that the
 window held more records than it kept, the rollup's `since` is the earliest
 record it kept rather than the start of the window; a seed that exactly fills
@@ -1398,7 +1399,7 @@ explicit `since` folds the window from there whole) and folds them with
 `internal/tokens`, which is the same aggregation the event store's wider
 windows are folded with, so changing the window on screen cannot change
 what a phase is counted as. It ships in the snapshot and is re-pushed on
-the shared 5-second tick after any phase completed, so the Spend screen
+the shared 5-second tick after any spend record arrived, so the Spend screen
 and the overview widget stay live without a fetch and without a second
 implementation of the aggregation in the browser. What a seat has spent
 is that rollup's per-agent row: the projection keeps no second total of
@@ -1679,14 +1680,17 @@ one in as it arrives. A company with no cap anywhere publishes none.
   **earlier** than the held one is dropped, and a gap is closed by the next
   report rather than replayed.
 - `refused_at` is when the cap last turned a charge away, in UTC, and empty
-  while the scope is not refusing. The stamp is kept in the shared counter
-  beside the spend, so every node reports the same one, and it clears on the
-  scope's next admitted charge (or a reset). "Exhausted" is either that stamp
-  or `used >= max`: a round the cap refuses has already been billed and is
-  counted all the same, so the counter reads past the cap after a refusal, and
-  a coding run's tokens, counted when the run is collected, can take it past
-  the cap with no refusal at all. Either way the scope's next round is refused
-  before it is sent.
+  for a scope with no refusal on record. The stamp is kept in the shared
+  counter beside the spend, so every node reports the same one, and it clears
+  on the scope's next admitted charge or a reset — nothing else. It **dates a
+  refusal; it does not say the scope is refusing now**: a revision that raises
+  the cap leaves it standing until the next admitted charge, and the gate never
+  reads it. "Exhausted" is `used >= max` for a non-zero `max`, and only that.
+  The counter can read past the cap: a round the cap refuses has already been
+  billed and is counted all the same, and a coding run's tokens, counted when
+  the run is collected, can take it past the cap with no refusal at all. While
+  it reads at or past the cap, the scope's next round is refused before it is
+  sent.
 - `{}` means no report has arrived yet. Per-agent, `budget: null` means the
   same, or that the seat has no per-agent cap at all: the engine meters a seat
   only for a non-zero `token_budget`.
@@ -1809,7 +1813,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
-| `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `tokens`   | On the shared 5-second tick, when a spend record — a completed phase's or an auxiliary call's — arrived since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per record. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | `{ status, in_flight, shutting_down }`, cut from the [health envelope](#the-health-envelope)'s read. The whole envelope is the `stream` query. |
@@ -2864,14 +2868,15 @@ two numbers that share a span, and one stamp:
 - **`refused_at`** is when that scope last turned a charge away, kept in the
   same counter and cleared by the scope's next admitted charge — or by
   [`POST /budgets/reset`](#post-budgetsreset), which drops the counter and the
-  stamp together, since an operator who zeroes a counter has made room.
+  stamp together, since an operator who zeroes a counter has made room. It
+  dates the last refusal and nothing more: a revision that raises the cap
+  leaves it standing until the scope's next admitted charge.
 
 What a seat *spent over a window* is not here: that is the per-agent row of the
 [spend breakdown](#get-tokensbreakdown), a different span that must not be
 divided into a cap. The cap and the durable counter are the pair that can be,
 which is how this screen can say "this seat has burned 94% of its cap across two
-restarts". That was reachable only from `crewlet budgets show` before, which is
-itself a client of this route.
+restarts". `crewlet budgets show` is a client of this route.
 
 ```json
 {
@@ -2898,15 +2903,18 @@ without the flag a coordination blip renders every seat at the bottom of its
 cap, which is the most reassuring possible picture drawn at the moment nothing
 is known. Human seats have no row, because they spend nothing.
 
-Exhaustion is `refused_at` set or `durable_used >= max_tokens`. The gate
-refuses a charge that would exceed the cap, and the round it refuses has been
-billed already — a round is charged once its model call has answered — so its
-tokens are counted all the same and `durable_used` reads past `max_tokens` by
-that round. A coding run's tokens are counted when the run is collected, with
-no gate at all, and can take `durable_used` past `max_tokens` without a refusal
-being stamped. Either way the engine reads the counter before every round's
-model call and sends none while a scope is at or past its cap, and `refused_at`
-clears on the scope's next admitted charge.
+Exhaustion is `durable_used >= max_tokens` with a non-zero `max_tokens`, and
+nothing else: a `max_tokens` of 0 is no cap, and `refused_at` is never read to
+decide it. The gate refuses a charge that would exceed the cap, and the round
+it refuses has been billed already — a round is charged once its model call has
+answered — so its tokens are counted all the same and `durable_used` reads past
+`max_tokens` by that round. A coding run's tokens are counted when the run is
+collected, with no gate at all, and can take `durable_used` past `max_tokens`
+without a refusal being stamped. Either way the engine reads the counter before
+every round's model call and sends none while a scope is at or past its cap.
+`refused_at` stands until the scope's next admitted charge, so after a revision
+raises a cap it still dates the last refusal while `durable_used` is back under
+the cap — a scope in that state is not exhausted.
 
 ### `POST /budgets/reset`
 
@@ -3231,11 +3239,11 @@ Disabled schedules return an empty `next_run`.
 
 ### `GET /tokens/breakdown`
 
-Rolls up per-phase LLM spend across the whole org so the dashboard's
-**Tokens** view can render every breakdown from a single fetch.
-Reads `agent_phase_completed` events via
-the event store's phase-token query and groups them by phase, model,
-worker, agent, and turn.
+Rolls up LLM spend across the whole org so the dashboard's **Tokens** view
+can render every breakdown from a single fetch. Reads the spend records — an
+`agent_phase_completed` per phase, and an `auxiliary_call_completed` per
+auxiliary completion — via the event store's phase-token query, and groups
+them by phase, model, worker, agent, and turn.
 
 **Query parameters**
 
@@ -3260,33 +3268,36 @@ beside it.
   "agent_role": "",
   "totals": {
     "input_tokens": 17700, "output_tokens": 2750,
-    "total_tokens": 20450, "calls": 6
+    "total_tokens": 20450, "calls": 6,
+    "cost_usd": 0, "priced_calls": 0, "unreported_calls": 0
   },
   "by_phase": [
     { "phase": "execute", "input_tokens": 14000, "output_tokens": 2000,
-      "total_tokens": 16000, "calls": 2 },
-    { "phase": "plan", "input_tokens": 1700, "output_tokens": 450,
-      "total_tokens": 2150, "calls": 2 },
+      "total_tokens": 16000, "calls": 2, ... },
+    { "phase": "auxiliary", "input_tokens": 1700, "output_tokens": 450,
+      "total_tokens": 2150, "calls": 2, ... },
     ...
   ],
   "by_model": [
     { "model": "claude-sonnet-5", "input_tokens": 16700,
-      "output_tokens": 2600, "total_tokens": 19300, "calls": 4 },
+      "output_tokens": 2600, "total_tokens": 19300, "calls": 4, ... },
     ...
   ],
   "by_worker": [
     { "phase": "subagent", "worker": "researcher", "input_tokens": 800,
-      "output_tokens": 100, "total_tokens": 900, "calls": 1 }
+      "output_tokens": 100, "total_tokens": 900, "calls": 1, ... },
+    { "phase": "auxiliary", "worker": "persist_decider", "input_tokens": 1500,
+      "output_tokens": 400, "total_tokens": 1900, "calls": 1, ... }
   ],
   "by_agent": [
     { "role": "PM", "handle": "pm", "agent_id": "<runtime uuid>",
       "input_tokens": 17500, "output_tokens": 2700,
-      "total_tokens": 20200, "calls": 5,
+      "total_tokens": 20200, "calls": 5, ...,
       "by_phase": {
-        "plan":      { "input_tokens": 1500, "output_tokens": 400,  "total_tokens": 1900, "calls": 1 },
-        "execute":   { "input_tokens": 14000,"output_tokens": 2000, "total_tokens": 16000,"calls": 2 },
-        "review":    { "input_tokens": 1200, "output_tokens": 200,  "total_tokens": 1400, "calls": 1 },
-        "subagent":  { "input_tokens": 800,  "output_tokens": 100,  "total_tokens": 900,  "calls": 1 }
+        "auxiliary": { "input_tokens": 1500, "output_tokens": 400,  "total_tokens": 1900, "calls": 1, ... },
+        "execute":   { "input_tokens": 14000,"output_tokens": 2000, "total_tokens": 16000,"calls": 2, ... },
+        "review":    { "input_tokens": 1200, "output_tokens": 200,  "total_tokens": 1400, "calls": 1, ... },
+        "subagent":  { "input_tokens": 800,  "output_tokens": 100,  "total_tokens": 900,  "calls": 1, ... }
       }
     },
     ...
@@ -3296,8 +3307,8 @@ beside it.
       "agent_id": "<runtime uuid>",
       "started_at": "...", "ended_at": "...",
       "input_tokens": 17500, "output_tokens": 2700,
-      "total_tokens": 20200, "calls": 5,
-      "by_phase": { "plan": {...}, "execute": {...}, ... } },
+      "total_tokens": 20200, "calls": 5, ...,
+      "by_phase": { "auxiliary": {...}, "execute": {...}, ... } },
     ...
   ],
   "aggregated_through": "2026-06-21T10:00:30+00:00"
@@ -3309,23 +3320,38 @@ Notes:
 - `by_phase` covers every phase emitted by the
   [Turn Engine](../concepts/turn-engine.md): `onboarding`, `execute`,
   `review`, `subagent` (a delegated worker), and `judge` (the round-cap
-  extension judge). A store that predates the two-stage redesign also holds
-  `plan` rows, and they still roll up.
-- **Auxiliary calls are in no row.** The calls the learning workers and a
-  turn's context prefetch make on the `llm_auxiliary` model publish no phase
-  record, so this rollup never counts them. Where a cap is set they are
-  charged to the budget counter all the same, so
-  [`GET /budgets`](#get-budgets) counts spend that nothing here does. A
-  [coding run's](../concepts/code-sandbox.md#budgets) own tokens are in no
-  row either: the resumed phase's record carries the executor's rounds and
-  what the run reported it cost (`cost_usd`), and the run's tokens reach the
-  budget counter alone.
+  extension judge) — plus `auxiliary`. A phase value this build does not
+  publish rolls up under its own name like any other.
+- **Auxiliary calls are rows of their own.** Every completion the learning
+  workers, the background learning passes and a turn's context prefetch make
+  on the `llm_auxiliary` model publishes an `auxiliary_call_completed`
+  record, and it rolls up under phase `auxiliary`, the model the completion
+  reported, the seat, the turn it served (a background pass serves none) and
+  the worker that made it. It is recorded whether or not a cap is set, and it
+  is the same spend a cap charges to [`GET /budgets`](#get-budgets)' counter.
+- **A [coding run's](../concepts/code-sandbox.md#budgets) own spend is on
+  the Execute phase's record** that collects the run: its tokens join the
+  phase's own, under the models its agent named, and its price is that
+  record's `cost_usd`. A run whose agent gave no complete account of its
+  spend marks the record `run_spend_unreported`, and its tokens there are
+  what was reported — a floor.
 - `by_worker` covers the rows that name one: a `subagent` row's worker is
   the `workers:` template it ran — empty on a delegation that wrote its
   prompt inline, which therefore counts toward `by_phase` but toward no
-  worker. A worker row is keyed on its **`phase` and its name together**.
-- `by_model` names the model each completion reported, never a provider's
-  configured name, so the members of a fallback chain are separate rows.
+  worker — and an `auxiliary` row's is the learning worker or the prefetch
+  that made the call. A worker row is keyed on its **`phase` and its name
+  together**, since a template may share a learning worker's name.
+- `by_model` splits each record by the model each completion reported
+  serving it, never by a provider's configured name alone: a phase whose
+  rounds two members of a fallback chain served counts under both, each with
+  what it billed — and as a call of each, so the rows' `calls` can sum past
+  `totals.calls` while their tokens sum to exactly `totals`. A completion that
+  named no model counts under the configured model of the provider that
+  served it (a fallback chain names its answering member's). A record that
+  carries no per-model split, and the part of a record's tokens its split
+  does not cover, count under the one `model` the record names. The part of
+  a record's spend nobody reported is a row of its own, `unknown`, holding no
+  tokens and counting it in `unreported_calls`.
 - All lists are sorted by `total_tokens` descending; `by_turn` is
   sorted by `ended_at` descending and capped at `recent_turns`.
   `turns_total` is how many turns the window actually held, so a full
@@ -3339,9 +3365,9 @@ Notes:
   baseline a client folds onto: the whole rollup is re-folded and pushed
   by the server, which is what keeps one aggregation rather than a second
   one in the browser.
-- Returns the same skeleton with zero totals (and an empty
-  `aggregated_through`) when the event store is unavailable rather than
-  erroring.
+- Answers the same skeleton with zero totals (and an empty
+  `aggregated_through`) on a node whose query registry was built without the
+  event store. A store that fails the read is an error, never a quiet zero.
 - Every bucket — the totals, each row, and each nested `by_phase` entry —
   also carries `cost_usd` and `priced_calls`. **Two numbers, because zero
   dollars is two different facts**: only a subscription coding CLI reports
@@ -3350,6 +3376,11 @@ Notes:
   Rendering the first as `$0.00` states a price nobody quoted. Only a
   POSITIVE price is summed — a negative one is a bad payload, not a
   rebate, and summing it would silently reduce a company's reported spend.
+- Every bucket also carries `unreported_calls`: how many of its calls carry
+  spend nobody reported — a coding run whose agent gave no complete account.
+  **Above zero, the bucket's tokens are a floor**, and a renderer states them
+  as "at least" or says how many calls went unmeasured; drawing them as the
+  whole states an unknown as a known.
 
 ### `GET /tokens/series`
 
@@ -3379,7 +3410,7 @@ window, each split into bands on one dimension.
     { "at": "2026-06-14T12:00:00Z",
       "input_tokens": 60, "output_tokens": 20, "total_tokens": 80,
       "calls": 1, "cost_usd": 0, "priced_calls": 0,
-      "groups": { "plan": { "total_tokens": 80, "calls": 1, ... } },
+      "groups": { "review": { "total_tokens": 80, "calls": 1, ... } },
       "other":  { "total_tokens": 0, "calls": 0, ... } },
     { "at": "2026-06-14T13:00:00Z", "total_tokens": 0, "calls": 0,
       "groups": {}, "other": { "total_tokens": 0, ... }, ... },
@@ -3419,8 +3450,11 @@ Notes:
   is what the bands do cover, so the gap is a number rather than an
   inference a reader has to make by subtracting.
 - A `worker` band's `group` is **`<phase>/<name>`** — `subagent/researcher`
-  for a `workers:` template — for the reason a `by_worker` row carries its
-  `phase`.
+  for a `workers:` template, `auxiliary/persist_decider` for a learning
+  worker's calls — for the reason a `by_worker` row carries its `phase`.
+- A `model` band counts what its `by_model` row counts: a record two models
+  served lands in both bands, each with its own part, so by model the bands'
+  `calls` can sum past `grouped.calls` while their tokens do not.
 - `at` is the bucket's **start**, never its middle or its end. A bucket
   reaches from `at` to `at` plus one hour or one day.
 - A window longer than 1000 buckets keeps the **newest** of them and

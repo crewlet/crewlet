@@ -15,9 +15,11 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -177,10 +179,29 @@ type Result struct {
 	Text    string
 	Success bool
 
+	// InputTokens, OutputTokens and CostUSD are the run's own model spend
+	// as its agent reported it: the input counting what a prompt cache
+	// served and wrote, as the engine's own completions count it, and the
+	// price the agent put on the run. The shared budget counter is charged
+	// the two token counts once per launch.
 	InputTokens  int
 	OutputTokens int
 	CostUSD      float64
-	SessionID    string
+
+	// Models splits the three figures above by the model the agent named
+	// for each part of them, where it names one. Nil where it reports
+	// totals only, and the totals then stand as one part under no model's
+	// name — see [Result.spend].
+	Models []types.ModelSpend
+
+	// UsageWhole says the figures above account for EVERY model call the
+	// run made. False where they are a floor — the agent reported only part
+	// of its spend, or none — which is also what a result reads as when its
+	// parser claims nothing: a run nobody measured must not read as a run
+	// that cost what the figures say.
+	UsageWhole bool
+
+	SessionID string
 
 	// NeedsInput means the agent asked a question and stopped. Question and
 	// AskTo say what it asked and who should answer: "requester", "team",
@@ -195,6 +216,113 @@ type Result struct {
 
 	Error string
 }
+
+// spend is the run's own model spend as the phase that collects it takes it in:
+// its split, whole or not, with whatever part of its figures the split does
+// not name as one part under no model's name.
+func (r Result) spend() types.RunSpend {
+	out := types.RunSpend{Collected: true, Whole: r.UsageWhole}
+	rest := types.ModelSpend{InputTokens: r.InputTokens, OutputTokens: r.OutputTokens, CostUSD: r.CostUSD}
+	for _, m := range r.Models {
+		out.Models = append(out.Models, m)
+		rest.InputTokens -= m.InputTokens
+		rest.OutputTokens -= m.OutputTokens
+		rest.CostUSD -= m.CostUSD
+	}
+	// Only a positive remainder is a part: a split that claims as much as
+	// the totals, or more, leaves nothing unnamed to add.
+	rest.InputTokens, rest.OutputTokens = max(rest.InputTokens, 0), max(rest.OutputTokens, 0)
+	if rest.CostUSD < costNoise {
+		rest.CostUSD = 0
+	}
+	if rest.InputTokens > 0 || rest.OutputTokens > 0 || rest.CostUSD > 0 {
+		out.Models = append(out.Models, rest)
+	}
+	return out
+}
+
+// HeldSpend is a finished job's own model spend, held with its result for the
+// phase the resume will re-enter: [Result]'s figures, in the shape the row keeps.
+//
+// ON THE ROW, so its members are a contract between builds, and it carries what
+// it does not know for the reason every object on the row does (carry.go).
+type HeldSpend struct {
+	// InputTokens, OutputTokens, CostUSD and Models are [Result.InputTokens],
+	// [Result.OutputTokens], [Result.CostUSD] and [Result.Models].
+	InputTokens  int         `json:"input_tokens,omitempty"`
+	OutputTokens int         `json:"output_tokens,omitempty"`
+	CostUSD      float64     `json:"cost_usd,omitempty"`
+	Models       []HeldModel `json:"models,omitempty"`
+
+	// Whole is [Result.UsageWhole].
+	Whole bool `json:"whole,omitempty"`
+
+	// Extra is every member of the held spend this build does not know.
+	// Never set by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// HeldModel is one model's part of a [HeldSpend]: a [types.ModelSpend], in the
+// shape the row keeps.
+type HeldModel struct {
+	Model        string  `json:"model"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+
+	// Extra is every member of the part this build does not know. Never
+	// set by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// heldSpendOf is a result's spend as a held answer keeps it.
+func heldSpendOf(r Result) *HeldSpend {
+	held := &HeldSpend{
+		InputTokens: r.InputTokens, OutputTokens: r.OutputTokens, CostUSD: r.CostUSD, Whole: r.UsageWhole,
+	}
+	for _, m := range r.Models {
+		held.Models = append(held.Models, HeldModel{
+			Model: m.Model, InputTokens: m.InputTokens, OutputTokens: m.OutputTokens, CostUSD: m.CostUSD,
+		})
+	}
+	return held
+}
+
+// runSpend is the held spend as the resumed phase takes it in: the spend of a
+// run that finished, whether its result or the question it stopped to ask is
+// what the phase resumes with.
+//
+// A NIL SPEND IS A RUN NOBODY ACCOUNTED FOR, not a run that cost nothing: it
+// is what a result or a question a build that kept no spend recorded reads
+// as, and the record then says its run's spend went unreported.
+func (h *HeldSpend) runSpend() types.RunSpend {
+	if h == nil {
+		return types.RunSpend{Collected: true}
+	}
+	r := Result{InputTokens: h.InputTokens, OutputTokens: h.OutputTokens, CostUSD: h.CostUSD, UsageWhole: h.Whole}
+	for _, m := range h.Models {
+		r.Models = append(r.Models, types.ModelSpend{
+			Model: m.Model, InputTokens: m.InputTokens, OutputTokens: m.OutputTokens, CostUSD: m.CostUSD,
+		})
+	}
+	return r.spend()
+}
+
+// askedSpend is the spend of the run that asked the question this row waits on,
+// as the phase the answer resumes takes it in — and a run nobody accounted for
+// where the row holds no spend for its own launch (see [PendingRun.AskedSpend]).
+func (r PendingRun) askedSpend() (float64, types.RunSpend) {
+	if r.AskedSpend == nil || r.AskedLaunch != r.LaunchID {
+		return 0, types.RunSpend{Collected: true}
+	}
+	return r.AskedSpend.CostUSD, r.AskedSpend.runSpend()
+}
+
+// costNoise is the largest difference between a run's price and the sum of its
+// split's prices that is floating-point summation rather than a part of the
+// price the split does not name: half a micro-dollar, far below any price an
+// agent quotes and far above what adding a few dozen doubles loses.
+const costNoise = 5e-7
 
 // Sandbox is one live, isolated execution environment.
 type Sandbox interface {

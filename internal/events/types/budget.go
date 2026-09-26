@@ -24,17 +24,19 @@ const (
 	BudgetScopeOrg   BudgetScope = "org"
 )
 
-// BudgetExhausted fires when an agent or the org exceeds its token budget. Its
-// type is in FailureEventTypes: a refused charge is a failure whatever the
-// payload says.
+// BudgetExhausted fires when a token budget stops a seat's work: a charge the
+// gate refused, a round not sent because a scope was already at or past its
+// cap, or an answer a detached coding run's resume holds until the budget has
+// room. Its type is in FailureEventTypes: a refused charge is a failure
+// whatever the payload says.
 type BudgetExhausted struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
-	// TurnID is the RUN whose charge was refused, and WorkKey the unit of
-	// work behind it. Neither was here, and this is one of the three types
-	// a seat goes AFK on — so the only failure record that could be
-	// attributed to no turn at all was the one an operator opens the turn
-	// to understand. See ADR-0017.
+	// TurnID is the RUN whose work was stopped, and WorkKey the unit of
+	// work behind it. Both, because this is one of the three types a seat
+	// goes AFK on, and a failure record that could be attributed to no turn
+	// would be the one an operator opens the turn to understand. See
+	// ADR-0017.
 	TurnID     string      `json:"turn_id,omitempty"`
 	WorkKey    string      `json:"work_key,omitempty"`
 	BudgetType BudgetScope `json:"budget_type"`
@@ -74,17 +76,21 @@ type BudgetMeter struct {
 	UsedTokens int    `json:"used_tokens"`
 	MaxTokens  int    `json:"max_tokens"`
 	// RefusedAt is when the cap last turned a charge away, as RFC 3339 in UTC,
-	// and empty while the scope is not refusing. It is the shared counter's
-	// own stamp (coord.Usage.RefusedAt), cleared by the scope's next admitted
-	// charge, so every node reports the same one.
+	// and empty for a scope with no refusal on record. It is the shared
+	// counter's own stamp (coord.Usage.RefusedAt), so every node reports the
+	// same one, and it is cleared by the scope's next ADMITTED charge or by a
+	// reset of the counter — by nothing else.
 	//
-	// EXHAUSTED IS EITHER this stamp or UsedTokens at or past MaxTokens. A
-	// round the cap refuses has been billed — it is charged once its model
-	// call has answered — and is counted all the same, so after a refusal the
-	// counter reads past the cap by that round; and spend counted after it
-	// happened, a coding run's, can take a counter past its cap with no
-	// refusal at all. Either way the next round the seat asks for is refused
-	// before it is sent.
+	// IT DATES A REFUSAL; IT DOES NOT SAY THE SCOPE IS REFUSING NOW. A
+	// revision that raises the cap leaves it standing until the scope's next
+	// admitted charge, and the gate never reads it: a scope is exhausted
+	// when UsedTokens is at or past MaxTokens, and only then. Refused or
+	// not, the counter can read past the cap — a round the cap refuses has
+	// been billed, because it is charged once its model call has answered,
+	// and it is counted all the same; and spend counted after it happened,
+	// a coding run's, can take a counter past its cap with no refusal at
+	// all. While it reads at or past the cap, the next round the seat asks
+	// for is refused before it is sent.
 	RefusedAt string `json:"refused_at"`
 }
 
@@ -121,7 +127,9 @@ type BudgetReported struct {
 	Seq           int `json:"seq"`
 	OrgUsedTokens int `json:"org_used_tokens"`
 	OrgMaxTokens  int `json:"org_max_tokens"`
-	// OrgRefusedAt is [BudgetMeter.RefusedAt] for the company-wide scope.
+	// OrgRefusedAt is [BudgetMeter.RefusedAt] for the company-wide scope,
+	// which is exhausted when OrgUsedTokens is at or past a non-zero
+	// OrgMaxTokens — a zero OrgMaxTokens is no company-wide cap.
 	OrgRefusedAt string        `json:"org_refused_at"`
 	Agents       []BudgetMeter `json:"agents,omitempty"`
 }

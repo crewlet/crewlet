@@ -11,20 +11,21 @@ import (
 //
 // TWO SPANS, and they are the two that belong together. The cap is config; the
 // counter is every node's spend since the last deliberate reset, which is what
-// the gate actually refuses against, and the refusal stamp beside it is the
-// gate's own record of saying no. The live meter a dashboard is pushed is this
-// same counter, so it is not a third figure here.
+// the gate actually refuses against. The live meter a dashboard is pushed is
+// this same counter, so it is not a third figure here. What a seat spent over a
+// stated window is not here either: that is the spend rollup's per-agent row,
+// a different span, and one that must not be divided into a cap.
 //
-// There used to be a third, `live_used`, labelled as "this process": the
-// per-seat token totals the live projection summed from the turns it happened
-// to have seen since it started. It shared a span with nothing an operator
-// could name, and its org half summed an empty list and was null on every
-// node. What a seat spent over a stated window is the spend rollup's per-agent
-// row, which is one aggregation for every screen that shows spend.
+// EXHAUSTED IS THE COUNTER AT OR PAST A NON-ZERO CAP, and nothing else — a cap
+// of zero is no cap. `refused_at` beside it is the gate's own record of the
+// last time it said no: it dates a refusal and does not report one in
+// progress. A revision that raises the cap leaves it standing until the
+// scope's next admitted charge, or a reset of the counter, clears it, and the
+// gate never reads it (see coord.Usage.RefusedAt).
 //
-// So `durable: false` means UNREADABLE, never zero: a company drawn at 0% of
-// its budget when the truth is that nobody looked is the lie this shape exists
-// to avoid.
+// `durable: false` means UNREADABLE, never zero: a company drawn at 0% of its
+// budget when the truth is that nobody looked is the lie this shape exists to
+// avoid.
 
 // Budgets answers the whole budget surface.
 //

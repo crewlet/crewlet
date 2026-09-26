@@ -419,9 +419,10 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 // own complaint alone reads as though the local store were never an option.
 // An operator needs to know that the engine is holding the file AND why the
 // route to it did not work. Neither this node's own table nor the environment
-// is a way round: the next start keeps the fleet's copy of a name it already
-// holds and deletes the local one, and the store is read before the
-// environment, so either would look like a rotation and change nothing.
+// is a way round: the running engine holds the table's file and a row there
+// reaches the fleet only at the engine's next start, and the store is read
+// before the environment, so either would look like a rotation and change
+// nothing while the fleet is serving.
 func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	t.Parallel()
 	// api.port 0 is a node that serves no HTTP at all, which is the one

@@ -94,6 +94,10 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
 					DB: e.backends.Store, Writer: e.native.writer,
 					NodeID: e.native.nodeID,
+					// The merge repair decides from a LINEARIZABLE read,
+					// so a lagging applier cannot act on a merge that
+					// closed before the tick ([tracker.DutyDeps.Reader]).
+					Reader: e.native.trackerReader,
 					// AND THE LEAD MAP, for the one repair whose
 					// commit carries a wake. Read per call against
 					// the epoch current when the job runs, for the

@@ -1,17 +1,25 @@
 package engine
 
 import (
+	"context"
 	"reflect"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -84,45 +92,117 @@ func TestADispatchedTurnCarriesItsEarliestTriggersInstant(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN CARRIES THE INSTANT ITS ROW RECORDS, the one the resumer
-// derives it from, and not the run's first launch alone.
+// turnProbe is a seat tool that keeps the turn each call is handed.
+type turnProbe struct {
+	mu     sync.Mutex
+	handed []*turnctx.Turn
+}
+
+func (*turnProbe) Name() string               { return "probe_turn" }
+func (*turnProbe) Description() string        { return "Reports nothing; the test reads the turn." }
+func (*turnProbe) Parameters() map[string]any { return map[string]any{"type": "object"} }
+
+func (*turnProbe) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "no turn"}, nil
+}
+
+func (p *turnProbe) CallForTurn(_ context.Context, t *turnctx.Turn, _ map[string]any) (tools.Result, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.handed = append(p.handed, t)
+	return tools.Result{Output: "seen"}, nil
+}
+
+func (p *turnProbe) turns() []*turnctx.Turn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.handed)
+}
+
+// probesThenSubmits calls probe_turn once in the executor's resumed round,
+// then submits, and fails the review: the turn the probe is handed is the
+// whole of what this reads.
+type probesThenSubmits struct{}
+
+func (probesThenSubmits) Model() string { return "probes-then-submits" }
+
+func (probesThenSubmits) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	for _, def := range req.Tools {
+		if def.Name == runner.SubmitReviewTool {
+			return unavailableModel{}.Complete(ctx, req)
+		}
+	}
+	for _, m := range req.Messages {
+		if m.Name == "probe_turn" {
+			return submitsThenReviewFails{}.Complete(ctx, req)
+		}
+	}
+	return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "p", Name: "probe_turn",
+		Arguments: map[string]any{}}}}, nil
+}
+
+// A RESUMED TURN'S IDENTITY IS THE ONE ITS ROW RECORDS, from the resumer to
+// the writer.
 //
 // The resume re-enters the turn that launched the run with no trigger to
-// re-read, and a write it made before the suspend and makes again after the
-// resume derives the same id: the launch bounds only what the turn minted
-// after it. The row carries the launching turn's own instant for that, and
-// the resumed turn's context — which is what its tools hand every writer —
-// has to carry it.
+// re-read, so everything that names it comes off the run's row: the run it
+// continues, the unit of work its writes are idempotent against, and the
+// instant its operation ids can first have been minted at — the launching
+// turn's own, which the launch writes onto the row, rather than the run's
+// first launch, because a write the turn made before that launch and makes
+// again after the resume derives the same id. Driven through the resumer a
+// completion reaches, and read where a seat's tools read it: a tool's call is
+// handed the turn the runner was built with.
 //
-// Mutation: describe the resumed turn with the run's first launch, and its
-// writes read as minted after an adoption the launching turn predates.
-func TestAResumedTurnCarriesTheInstantItsRowRecords(t *testing.T) {
+// Mutation: describe the resumed turn with the run's first launch, a run id
+// of its own or no unit of work, and this fails.
+func TestAResumedTurnsIdentityIsTheOneItsRowRecords(t *testing.T) {
 	t.Parallel()
-	company := instantCompany()
+	ctx := t.Context()
+	company, seat := resumableCompany(t, probesThenSubmits{}, 0)
+	company.Config.TurnEngine = config.DefaultTurnEngine()
+	probe := &turnProbe{}
+	if err := company.Tools.Register(probe, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	e, _ := resumingEngine(t)
+	e.backends = &Backends{Queue: q}
+	e.epoch.current.Store(company)
+
+	state, err := execstate.Encode(execstate.State{
+		Version: execstate.Version,
+		Messages: []llm.Message{{Role: "assistant",
+			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "run_sandbox"}}}},
+		PendingCallID: "call-1", PendingCallName: "run_sandbox",
+		ActiveTools: []string{probe.Name()}, Round: 1, Task: "fix the flaking test",
+	})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
 	triggered := time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)
 	run := sandbox.PendingRun{
-		TurnID: "run-1", WorkKey: "wk-1", AgentHandle: "eng",
+		TurnID: "run-1", WorkKey: "wk-1", AgentHandle: seat.Handle(), Role: seat.Name,
 		TriggeredAt: triggered, CreatedAt: triggered.Add(10 * time.Minute),
-	}
-	in := resumeInput{
-		Company: company, Run: run,
-		// AS THE RESUMER BUILDS IT, off the same row.
-		Turn: &turnctx.Turn{
-			RunID: run.TurnID, WorkKey: run.UnitOfWork(),
-			TriggeredAt: run.TriggerInstant(),
-			Seat:        company.Org.AgentSeatByHandle("eng"), Org: company.Org,
-		},
+		ExecuteState: state, Reply: "tool",
 	}
 
-	tel := (&Engine{}).describeResume(t.Context(), company, in)
-	got := tel.runnerTurn(company, 0, nil, "", turn.NoReply()).Context
-	if got == nil {
-		t.Fatal("the resumed turn carries no context")
+	_ = (&resumer{engine: e}).Resume(ctx, sandbox.ResumeRequest{Run: run, Answer: "done", Success: true})
+	handed := probe.turns()
+	if len(handed) != 1 || handed[0] == nil {
+		t.Fatalf("the probe was handed %d turns, want the resumed round's one", len(handed))
+	}
+	got := handed[0]
+	if got.RunID != run.TurnID || got.WorkKey != run.UnitOfWork() {
+		t.Errorf("the resumed turn names run %q and unit of work %q, want the row's %q and %q",
+			got.RunID, got.WorkKey, run.TurnID, run.UnitOfWork())
 	}
 	if !got.TriggeredAt.Equal(triggered) {
-		t.Fatalf("the resumed turn's context carries %v, want the launching "+
-			"turn's %v off the row — describeResume stamps something other "+
-			"than the instant the resumer derived", got.TriggeredAt, triggered)
+		t.Errorf("the resumed turn's writes are stamped %v, want the launching turn's %v off the row",
+			got.TriggeredAt, triggered)
 	}
 }
 

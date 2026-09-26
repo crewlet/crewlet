@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -92,8 +91,10 @@ type PromotionUnit struct {
 	// Handles are the unit's agent seats, whose catalogues are pooled.
 	Handles []string
 
-	// Container is the unit's configured knowledge container (a Confluence
-	// space key). Empty when it has none.
+	// Container is the unit's configured knowledge container — its `space`,
+	// which is a Confluence space key or a container of the engine's own
+	// pages, whichever knowledge base the company runs. Empty when it has
+	// none.
 	Container string
 
 	// Hint names what an operator must set when Container is empty. A unit
@@ -109,11 +110,10 @@ type PromotionUnit struct {
 //
 // ONE METHOD, and cross-tick dedup is behind it. The pass re-clusters the
 // same persisted rows every tick, so without dedup one converging team would
-// yield one draft per day forever. Each backend already has the mechanism —
-// Confluence refuses a duplicate title in a space — so the honest place for
-// it is the writer, which
-// returns the EXISTING page rather than an error when the draft is already
-// there.
+// yield one draft per day forever. Each backend already has the mechanism — a
+// title is unique within a Confluence space and within a container of the
+// engine's own pages — so the honest place for it is the writer, which returns
+// the EXISTING page rather than an error when the draft is already there.
 type PromotionWriter interface {
 	// CreateDraft creates the draft under the container's auto-drafted
 	// parent, or returns the one already there for this name.
@@ -131,19 +131,22 @@ type PromotionWriter interface {
 // promoting into a space the company has moved off.
 type PromotionUnits func() []PromotionUnit
 
-// PromotionWriterFor resolves the knowledge base to draft into, or nil.
+// PromotionWriterFor resolves the knowledge base to draft into, or nil and why
+// there is none.
 //
 // A FUNCTION, for the reason [PromotionUnits] is one: the answer is a
 // function of the live epoch, and a writer captured when the pass was built
-// is a writer captured before the knowledge backend was wired. That is not
-// hypothetical — the background passes are armed after the node exists and
-// BEFORE the inbound service builds its integration clients, so a captured
-// writer was nil for every company, and the only symptom was one boot line
-// saying no knowledge base was configured while one was.
+// is a writer captured before the knowledge backend was wired — the
+// background passes are armed after the node exists and BEFORE the inbound
+// service builds its integration clients.
 //
-// Nil is an ordinary answer — the company has no knowledge base — and the
-// pass says so once rather than failing.
-type PromotionWriterFor func() PromotionWriter
+// Nil is an ordinary answer and the pass says so once rather than failing.
+// THE REASON TRAVELS WITH IT because only the resolver knows which reason it
+// is: a company that runs no knowledge base, one whose knowledge base this
+// node is not serving, and one whose connection did not build are three
+// different things for an operator to fix, and a pass that guessed would send
+// the second and the third to configure a setting that is already right.
+type PromotionWriterFor func() (PromotionWriter, string)
 
 // Promoter distils what several seats in a unit independently learned.
 type Promoter struct {
@@ -228,14 +231,13 @@ func (p *Promoter) Pass(ctx context.Context) []events.Payload {
 	// RESOLVED ONCE, before the walk: which knowledge base a company drafts
 	// into cannot change inside one pass, and asking per unit would ask the
 	// engine for the same answer once per team.
-	writer := p.writer()
+	writer, unserved := p.writer()
 	if writer == nil {
 		log.InfoContext(ctx, "skill_promotion_idle",
-			"reason", "no knowledge base is configured",
+			"reason", unserved,
 			"detail", "a promoted skill is a draft page a unit lead reviews, "+
-				"and there is nowhere to put one; configure "+
-				"integrations.confluence, or set "+
-				"learning.skill_promotion.enabled: false")
+				"and there is nowhere to put one; the reason says what to "+
+				"fix, or set learning.skill_promotion.enabled: false")
 		return nil
 	}
 	var out []events.Payload
@@ -285,7 +287,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		return nil, nil
 	}
 
-	member, err := p.models.Head(unit.Lead, phase.Auxiliary)
+	member, err := auxiliary(p.models, unit.Lead, Attribution{Worker: PromotionWorker})
 	if err != nil {
 		return nil, fmt.Errorf("no auxiliary model for promotion: %w", err)
 	}
@@ -460,7 +462,7 @@ func renderPromotion(unit PromotionUnit, c SiblingCluster, draft skillDraft) str
 	var b strings.Builder
 	fmt.Fprintf(&b, "> **Auto-drafted, not reviewed.** %d agents in %s "+
 		"independently arrived at this procedure. Publish it by moving this "+
-		"page out of %q; until then no agent can find it.\n\n",
+		"page out of %q; until then no agent's knowledge search returns it.\n\n",
 		c.DistinctAgents(), unit.ID, knowledge.AutoDraftedParent)
 	fmt.Fprintf(&b, "%s\n\n## Procedure\n\n%s\n\n## Where it came from\n\n",
 		draft.Description, draft.Content)

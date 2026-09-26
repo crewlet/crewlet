@@ -1103,3 +1103,49 @@ func TestAMoveRetriedAfterItsSubtreeGrewMintsAFreshRange(t *testing.T) {
 		seen[key] = true
 	}
 }
+
+// A PROMOTION OUT OF A PURGED TASK IS REFUSED AS A PURGE, AND TAKES NO NUMBER.
+//
+// A purged task is absent from this node's rows exactly as one this node has
+// not applied yet is, and the two call for different things: one is never
+// coming back, the other is a node still catching up. So the purge is asked
+// first, inside the mint's own decide — refused there, the promotion takes no
+// key from the project's counter, where an absence answered as unavailable is
+// a refusal a caller retries for ever.
+//
+// Mutation: drop PromoteItem's refusePurged and the promotion answers
+// unavailable rather than purged.
+func TestAPromotionOutOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	parent := newTask("t-1")
+	parent.Checklists = []tracker.Checklist{{
+		ID: "l-1", Name: "steps",
+		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
+	}}
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", parent, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	purgeNow(t, r, "t-1")
+	counter := func() string {
+		t.Helper()
+		got := r.strings(`SELECT CAST(last AS TEXT) FROM tracker_counters
+			WHERE project_key = 'ENG'`)
+		return strings.Join(got, ",")
+	}
+	before, appended := counter(), r.consumed
+
+	_, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", newTask("t-2"), nil)
+	if !errors.Is(err, tracker.ErrPurged) {
+		t.Fatalf("a promotion out of a purged task answered %v, want the purge "+
+			"named", err)
+	}
+	r.drain()
+	if got := counter(); got != before {
+		t.Errorf("the refused promotion moved the counter from %s to %s", before, got)
+	}
+	if r.consumed != appended {
+		t.Errorf("the refused promotion appended %d record(s)", r.consumed-appended)
+	}
+}

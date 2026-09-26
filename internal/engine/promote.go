@@ -6,50 +6,69 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // Wiring cross-agent skill promotion: which knowledge base a draft lands in,
 // and which unit's seats are pooled.
 //
 // The ENTANGLEMENT the rest of the subsystem is written to avoid. The pass in
-// internal/learning knows nothing about Confluence or org units; the third-party app
-// writer knows nothing about units. Both facts meet here, which is what this
-// package is for.
+// internal/learning knows nothing about a knowledge backend or an org unit,
+// and neither writer knows what a unit is. Both facts meet here, which is
+// what this package is for.
 
-// promotionWired reports whether a knowledge base is wired to draft into.
+// promotionWriter is the writer for the knowledge base this company's search
+// reads, or nil and why there is none.
 //
-// It mirrors [Engine.Knowledge] deliberately: the pages a lead reviews must
-// land in the same place the company's search reads, and asking one question
-// in two ways is how those two drift apart.
-func (e *Engine) promotionWired() bool {
-	e.notify.mu.Lock()
-	defer e.notify.mu.Unlock()
-	return e.notify.confluence.pages != nil
-}
-
-// promotionWriter builds the writer for the wired knowledge base.
+// IT ASKS [Engine.KnowledgeServed] AND READS THE BACKEND OFF ITS ANSWER, so
+// the decision is made once and in one place. A draft's only protection is
+// that the company's search leaves out the auto-drafted subtree; a writer that
+// chose its backend by a second rule could file drafts in a wiki the search is
+// not reading — or file none at all, silently, while the company's search runs
+// on the other backend. Each backend has exactly one writer, built beside the
+// searcher it answers for, so the served searcher names the writer.
 //
 // READ AT PASS TIME, never captured — it is handed to the pass as the
 // resolver [learning.PromotionWriterFor], because the background passes are
-// armed BEFORE the inbound service builds its third-party app clients. A writer read
-// at arm time is nil for every company, and the symptom is one boot line
-// saying no knowledge base is configured while one is.
+// armed BEFORE the inbound service builds its third-party app clients, and a
+// writer read at arm time would be nil for every company on Confluence.
 //
-// Nil means no backend is wired, which disables promotion rather than failing
-// it. A company with no wiki has nowhere to put a page a person reviews, and
-// there is no fallback worth having — writing the draft into an agent's own
-// catalogue would be exactly the unreviewed cross-agent skill the review step
-// exists to prevent.
-func (e *Engine) promotionWriter() learning.PromotionWriter {
-	e.notify.mu.Lock()
-	defer e.notify.mu.Unlock()
-	// The concrete pointer is checked before conversion: a typed nil
-	// assigned into the interface is not nil, so NewPromoter's
-	// `Writer == nil` guard would pass and the first draft would panic.
-	if c := e.notify.confluence.pages; c != nil {
-		return confluence.NewPromotionWriter(c)
+// Nil disables promotion rather than failing it, and the reason is the
+// knowledge search's own ([knowledge.Refusal.Detail]), so the pass's idle line
+// names what the search would. A company with no knowledge base has nowhere to
+// put a page a person reviews, and there is no fallback worth having — writing
+// the draft into an agent's own catalogue would be exactly the unreviewed
+// cross-agent skill the review step exists to prevent.
+func (e *Engine) promotionWriter() (learning.PromotionWriter, string) {
+	searcher, refusal := e.KnowledgeServed()
+	switch served := searcher.(type) {
+	case nil:
+		return nil, refusal.Detail
+	case *pages.Searcher:
+		// BUILT IN THE SAME STEP AS THE SEARCHER ([Engine.startNative]),
+		// so a node serving one holds the other.
+		return e.native.drafts, ""
+	case *confluence.Searcher:
+		// THE CLIENT THAT BELONGS TO THE SEARCHER THE DECISION RETURNED.
+		// An apply replaces the Confluence wiring whole, and between the
+		// decision and this read it may have: a client read from the
+		// newer wiring would draft through a connection the decision
+		// never looked at. Both are read under one hold of the lock, and
+		// a mismatch waits for the next pass rather than guessing. A
+		// matching searcher never stands beside a nil client:
+		// [Engine.startConfluence] builds the searcher from that client.
+		e.notify.mu.Lock()
+		held, client := e.notify.confluence.searcher, e.notify.confluence.pages
+		e.notify.mu.Unlock()
+		if held != served {
+			return nil, "the Confluence connection was rebuilt while this pass " +
+				"resolved it; the next pass drafts through whichever is current then"
+		}
+		return confluence.NewPromotionWriter(client), ""
+	default:
+		return nil, fmt.Sprintf("the company's knowledge base (%s) has no "+
+			"promotion writer in this build", served.Backend())
 	}
-	return nil
 }
 
 // promotionUnits is every unit whose seats could converge, read FRESH.
@@ -62,17 +81,18 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 	if company == nil || company.Org == nil {
 		return nil
 	}
-	// ASKED ONCE, before the walk: whether a draft has anywhere to go at
-	// all cannot change inside one walk, and asking per unit would take
-	// the mutex once per unit for the same answer.
-	wired := e.promotionWired()
+	// WHETHER A DRAFT HAS ANYWHERE TO GO IS NOT ASKED HERE. The pass
+	// resolves its writer before it reads this roster and stops when there
+	// is none ([learning.Promoter.Pass]), so a container blanked here for a
+	// company with no knowledge base would be a second answer to that
+	// question which nothing reads.
 	var out []learning.PromotionUnit
 	for unit := range company.Org.AllUnits() {
 		handles := agentHandlesIn(unit)
 		if len(handles) == 0 {
 			continue
 		}
-		container, hint := promotionContainer(unit, wired)
+		container, hint := promotionContainer(unit)
 		out = append(out, learning.PromotionUnit{
 			ID: unit.Name, Lead: company.Org.EffectiveLead(unit),
 			Handles: handles, Container: container, Hint: hint,
@@ -110,14 +130,7 @@ func agentHandlesIn(unit *org.Unit) []string {
 // The HINT is not decoration: a unit with no container is soft-skipped, and
 // without the field name in the log an operator sees a team that never
 // promotes anything and nothing saying why.
-func promotionContainer(unit *org.Unit, wired bool) (container, hint string) {
-	if !wired {
-		// No knowledge base at all. buildPromoter refuses the pass before
-		// any unit is walked, so this is only reached by a caller
-		// inspecting the roster; say what is actually missing.
-		return "", "no knowledge base is configured for this company, so " +
-			"there is nowhere to file a draft at all"
-	}
+func promotionContainer(unit *org.Unit) (container, hint string) {
 	if unit.Space != "" {
 		return unit.Space, ""
 	}
@@ -157,8 +170,11 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	return promoter
 }
 
-// Compile-time proof that the integration writer satisfies the pass's seam. The
-// interface is declared by the consumer, so nothing else would notice a
-// signature drift until the wiring above failed to build — which is later
-// than a reader of the integration package would want to find out.
-var _ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)
+// Compile-time proof that both writers satisfy the pass's seam. The interface
+// is declared by the consumer, so nothing else would notice a signature drift
+// until the wiring above failed to build — which is later than a reader of
+// either writer would want to find out.
+var (
+	_ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)
+	_ learning.PromotionWriter = (*nativeDrafts)(nil)
+)

@@ -60,7 +60,7 @@ func promoter(t *testing.T, db *store.DB, w *fakeWriter, answer string,
 ) (*learning.Promoter, *auxProvider) {
 	t.Helper()
 	p := &auxProvider{replies: []llm.Completion{{Content: answer}}}
-	opts.Writer = func() learning.PromotionWriter { return w }
+	opts.Writer = func() (learning.PromotionWriter, string) { return w, "" }
 	opts.Skills, opts.Models = learning.NewSkills(db), &stubModels{p: p}
 	opts.Units = func() []learning.PromotionUnit { return []learning.PromotionUnit{unit} }
 	built, err := learning.NewPromoter(opts)
@@ -255,8 +255,8 @@ func TestAFailedDraftCostsOneUnitNotThePass(t *testing.T) {
 	failing := &fakeWriter{err: errors.New("the wiki is down")}
 	fine := &fakeWriter{}
 	p, err := learning.NewPromoter(learning.PromoterOptions{
-		Writer: func() learning.PromotionWriter {
-			return splitWriter{broken: failing, ok: fine}
+		Writer: func() (learning.PromotionWriter, string) {
+			return splitWriter{broken: failing, ok: fine}, ""
 		},
 		Skills: learning.NewSkills(db),
 		Models: &stubModels{p: &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}},
@@ -349,7 +349,7 @@ func TestAPromoterNeedsEveryHalf(t *testing.T) {
 	t.Parallel()
 	db := newStore(t)
 	full := learning.PromoterOptions{
-		Writer: func() learning.PromotionWriter { return &fakeWriter{} },
+		Writer: func() (learning.PromotionWriter, string) { return &fakeWriter{}, "" },
 		Skills: learning.NewSkills(db),
 		Models: &stubModels{p: &auxProvider{}},
 		Units:  func() []learning.PromotionUnit { return nil },
@@ -407,7 +407,12 @@ func TestThePassResolvesItsWriterEachTime(t *testing.T) {
 	var writer learning.PromotionWriter // nil until the backend "wires"
 	w := &fakeWriter{}
 	p, err := learning.NewPromoter(learning.PromoterOptions{
-		Writer: func() learning.PromotionWriter { return writer },
+		Writer: func() (learning.PromotionWriter, string) {
+			if writer == nil {
+				return nil, "the knowledge base has not wired yet"
+			}
+			return writer, ""
+		},
 		Skills: learning.NewSkills(db),
 		Models: &stubModels{p: &auxProvider{
 			replies: []llm.Completion{{Content: promotionDraft}},

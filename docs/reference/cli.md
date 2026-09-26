@@ -24,7 +24,7 @@ subcommand below is served by it.
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Follow a recreated stream from its head: move that one log's checkpoint into the next generation, declaring every position below it comparable and safely stale. The node running it follows the live stream without a restart |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task's content on every node: its own rows and every row naming it are deleted, its history is kept with its content emptied, and the purge's own line — key, who and why — is what the feed shows. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -61,7 +61,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config` and `-api`** (defaults `./crewlet.yaml` and this host's engine), and resolves its `${VAR}` references the way the engine does: **the fleet's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already in the store — and for a webhook signing secret such as `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working secret at the third-party app. The fleet's store is read **through a running node** — the engine on this host, which its lock on the store file says is running, or the node `-api URL` names, which needs no Tier A on the machine, only `CREWLET_API_TOKEN` — in one `GET /secrets?reveal=true` that the node logs as `secrets_revealed`, naming every name it returned and the operator; a read that fails fails the command. This node's own secret table is never read in its place: it holds only rows written while the engine was stopped. With **no engine running** on a host whose bootstrap declares `secrets.keys`, and no `-api`, the fleet's values cannot be read from there: the command resolves from the environment alone and says so, a value only the store holds resolves empty, and a real run that records a credential — through `-secret-store`, `-env-file` or `-print` — is refused before it checks any value and before it creates or mints anything at the third-party app; start `crewlet run`, or pass `-api` naming a node that is up. A `-dry-run` still runs, and a refusal over a value that resolved empty names the unread store. Where the store was read, `-env-file` and `-print` answer a name the fleet holds from the store, and a run that would record a new credential under such a name fails rather than write it where no node reads it — `-secret-store` is the sink that replaces the fleet's copy. With no bootstrap at that path, or one declaring no `secrets.keys`, there is no fleet store and the run resolves from the environment alone, saying so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-reads-the-fleets-values).
+> **Every command that reads the Tier B company document takes `-config` and `-api`** (defaults `./crewlet.yaml` and this host's engine), and resolves its `${VAR}` references the way the engine does: **the fleet's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already in the store — and for a webhook signing secret such as `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working secret at the third-party app. The fleet's store is read **through a running node** — the engine on this host, which its lock on the store file says is running, or the node `-api URL` names, which needs no Tier A on the machine, only `CREWLET_API_TOKEN` — in one `GET /secrets?reveal=true` that the node logs as `secrets_revealed`, naming every name it returned and the operator; a read that fails fails the command. This node's own secret table is never read in its place: it holds only rows written while the engine was stopped. With **no engine running** on a host whose bootstrap declares `secrets.keys`, and no `-api`, the fleet's values cannot be read from there: the command resolves from the environment alone and says so, a value only the store holds resolves empty, and a real run that records a credential — through `-secret-store`, `-env-file` or `-print` — is refused before it checks any value and before it creates or mints anything at the third-party app; start `crewlet run`, or pass `-api` naming a node that is up. A `-dry-run` still runs, and a refusal over a value that resolved empty names the unread store. Where the store was read, `-env-file` and `-print` answer a name the fleet holds from the store, and a run that would record a new credential under such a name fails rather than write it where no node reads it — `-secret-store` is the sink that replaces the fleet's copy. With no bootstrap at that path, or one declaring no `secrets.keys`, there is no fleet store and the run resolves from the environment alone, saying so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -337,7 +337,7 @@ The remaining subcommands operate on the [secret store](../concepts/secret-store
 
 **Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start. Where the fleet also holds a name, the migration keeps **whichever value was written later**, so a value written here loses to a rotation made through a running node after it — write a rotation for a live fleet through a node that is up (`-api`). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
-`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config; the token's id is recorded as the author of the write.
+`-api URL` names the node to write through, for running the command from a machine that is not the node. That machine needs no keyring and no Tier A config — the node seals every value under its own keyring — except for `rekey`, which reads the key it expects to rekey onto (`secrets.active_key_id`) from `-config` and is refused without one. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config when there is one; with neither, the command is refused naming whichever of the two that machine can supply. The token's id is recorded as the author of the write.
 
 ### `crewlet secrets set`
 
@@ -652,28 +652,37 @@ perform.
 
 ### `crewlet work purge`
 
-Destroys a task and every row it produced: its own row, its comments, its body
-revisions, its checklist, its field values, its watchers, its relations, its
-dependencies, and every inbound
-reference and key alias that made it resolvable. A marker is written in their
-place, and every later record about that task is dropped for ever — which is
-what stops a redelivery months afterwards resurrecting any of it.
+Destroys a task's content on every node that applies it:
 
-`remove` hides a task and `delete` stops later records about it. Neither takes
-the body out of a single database, which is why this verb exists: an erasure
-request and a credential pasted into a task description both need the rows
-gone.
+- **Deleted:** the task's own row, its comments, its body revisions, its
+  checklists, its field values, its tags, watchers and collaborators, every key
+  it was known by and its place in the ancestry — and every row through which
+  another task refers to it: relations, dependencies in both directions and
+  their mirror, and references.
+- **Kept, emptied:** its history. Every change it had stays in the activity
+  feed — who made it, when, what kind of change and in which project — with its
+  text, its field changes and the record it was written from removed, and the
+  feed marks each such row `content_purged`. The inbox notices about it keep
+  who was told and why and lose their excerpt.
+- **Written:** the purge's own line on its history row — the task's key, who
+  purged it and the reason — and a deletion marker with the task's id and key,
+  who purged it, when and why. The marker is what drops every later record
+  about the task, so a redelivery months afterwards resurrects none of it.
+
+`remove` hides a task and keeps every row, which is why this verb exists: an
+erasure request and a credential pasted into a task description both need the
+content gone.
 
 **The confirmation is the task's key**, not its id. The id is on the command
 line already, so repeating it confirms nothing; the key has to be looked up.
-**The reason is required** because the rows are destroyed and it is what
-explains the gap. The node that takes the purge logs it beside the key
-(`task_purged`), and when the project has a lead it travels **whole** on the
-lead's notification — whose excerpt the purge's row in the activity feed
-carries — beside the task's key and who purged it. It is never cut to fit that
-line: a reason too long for it is refused (`400 reason_too_long`, naming how
-many bytes fit), whether or not the project has a lead, and nothing is purged.
-It is also written to the deletion marker.
+**The reason is required** because the content is destroyed and the reason is
+what explains the gap. The node that takes the purge logs it beside the key
+(`task_purged`), and it travels **whole** on the purge's own line in the
+activity feed, beside the task's key and who purged it — the line that is also
+the notification the project's lead receives, when the project has one. It is
+never cut to fit that line: a reason too long for it is refused
+(`400 reason_too_long`, naming how many bytes fit), whether or not the project
+has a lead, and nothing is purged. It is also written to the deletion marker.
 
 **Its children are moved, not destroyed.** Each direct child re-parents onto
 the purged task's own parent, or becomes a root when the purged task was one.
@@ -1305,7 +1314,7 @@ See [Slack Integration](../integrations/slack.md#automated-setup-crewlet-slack-p
 
 ```
 crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
-    [-config PATH] [-dry-run]
+    [-config PATH] [-api URL] [-dry-run]
 ```
 
 Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `knowledge.skills_container` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
@@ -1328,6 +1337,7 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | — | Frontmatter on a knowledge doc may declare `parent:` (the title of a page in the same space to nest under) and `labels:` (the author's own, lower-cased and de-duplicated because that is what Confluence stores). See below. |
 | `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
+| `-api URL` | The running node to read the fleet's secret store through, for those `${VAR}`s. Default is the engine running on this host (`api.host:port` in `-config`); named, it needs no Tier A here, only `CREWLET_API_TOKEN` — see [the note under Commands](#commands). The plan is walked and printed first, so a `-dry-run` reads no store. |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
 A company that has turned tool skills off (`knowledge.skills_container: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.

@@ -23,6 +23,9 @@ type stubSearcher struct {
 	failed  bool
 	queries []knowledge.Query
 
+	// truncated reports an answer the backend cut short of its ranking.
+	truncated bool
+
 	// building reports this node's index as still on its first build. A
 	// backend that keeps no index answers false, which is the zero value.
 	building bool
@@ -36,7 +39,7 @@ func (s *stubSearcher) Building(context.Context) bool { return s.building }
 
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Answer {
 	s.queries = append(s.queries, q)
-	return knowledge.Answer{Hits: s.hits, Partial: s.partial, Failed: s.failed}
+	return knowledge.Answer{Hits: s.hits, Partial: s.partial, Failed: s.failed, Truncated: s.truncated}
 }
 
 // A NODE STILL INDEXING SAYS SO, whatever its search found.
@@ -99,6 +102,39 @@ func TestASearchOnABuildingIndexSaysSo(t *testing.T) {
 		hits: []knowledge.Hit{{Title: "Key rotation", Container: "ENG", PageID: "p-1"}}}
 	if got := ask(t, whole); strings.Contains(got, partialKnowledgeNote) {
 		t.Errorf("a built index's answer carries the building caveat: %q", got)
+	}
+}
+
+// A TRUNCATED ANSWER SAYS SO, in the turn-start block's own sentence.
+//
+// A backend that read its ranking to a depth, and whose exclusions took places
+// among what it read, answers fewer pages than it was asked for while it ranks
+// more — and a seat reading the short list as everything that matched
+// concludes a page it was not shown does not exist. Found or not, and on a
+// node still indexing too, where the index's build explains a missing share
+// but not a cut the backend made to its own ranking.
+func TestATruncatedSearchSaysSo(t *testing.T) {
+	t.Parallel()
+	hit := []knowledge.Hit{{Title: "Key rotation", Container: "ENG", PageID: "p-1"}}
+	for name, backend := range map[string]*stubSearcher{
+		"found":                  {truncated: true, hits: hit},
+		"found nothing":          {truncated: true},
+		"found while indexing":   {truncated: true, building: true, hits: hit},
+		"nothing while indexing": {truncated: true, building: true},
+	} {
+		res, err := (&searchKnowledge{search: backend}).CallForTurn(context.Background(), searchTurn(),
+			map[string]any{"query": "signing key rotation"})
+		if err != nil || res.Failed {
+			t.Fatalf("%s: CallForTurn = %+v, %v", name, res, err)
+		}
+		if !strings.Contains(res.Output, prefetch.TruncatedKnowledgeNote) {
+			t.Errorf("%s: the answer does not say it was cut short: %q", name, res.Output)
+		}
+	}
+	res, err := (&searchKnowledge{search: &stubSearcher{hits: hit}}).CallForTurn(context.Background(),
+		searchTurn(), map[string]any{"query": "signing key rotation"})
+	if err != nil || strings.Contains(res.Output, prefetch.TruncatedKnowledge) {
+		t.Errorf("a whole answer says it was cut short: %q (%v)", res.Output, err)
 	}
 }
 

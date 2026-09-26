@@ -333,6 +333,15 @@ var RelationKinds = []RelationKind{
 // may be is this list rather than a switch somewhere that forgot a case.
 func (k RelationKind) Valid() bool { return slices.Contains(RelationKinds, k) }
 
+// Single reports a kind a task holds at most one edge of: an edge of it that a
+// gesture adds REPLACES the one already there ([RelationIntent]).
+//
+// `duplicates` is the one. A task is a duplicate of ONE other — the item that
+// survives it — so a second edge beside the first would leave "which one?"
+// with two answers, and a merge folding the task into one of them could not
+// be told from a link somebody wrote to the other.
+func (k RelationKind) Single() bool { return k == RelationDuplicates }
+
 // Relation is one edge, authored on ONE end.
 type Relation struct {
 	Kind      RelationKind `json:"kind"`
@@ -473,20 +482,23 @@ type Task struct {
 
 	Archived bool `json:"archived,omitempty"`
 
-	// Merging is true while this task's merge walk is running, and
-	// MergeReparent is what that walk INTENDS to do with the subtree. See
-	// [TaskPatch.Merging].
+	// Merging is true while this task's merge walk is running,
+	// MergeReparent is what that walk INTENDS to do with the subtree, and
+	// MergeInto is the task it folds into. See [TaskPatch.Merging].
 	//
-	// THE INTENT IS DURABLE BECAUSE THE REPAIR NEEDS IT. The duty that
-	// finishes an abandoned walk cannot otherwise tell a merge that
-	// deliberately left the children where they were from one that
-	// crashed before it moved the first — and re-parenting on the second
-	// guess silently overrides a `move_subtasks: false` somebody typed.
-	// It rides the DOCUMENT rather than a column of its own: nothing
-	// selects on it, and what the duty selects on is `merging`, which
-	// already has its partial index.
+	// THE INTENT AND THE TARGET ARE DURABLE BECAUSE THE REPAIR NEEDS
+	// THEM. The duty that finishes an abandoned walk cannot otherwise
+	// tell a merge that deliberately left the children where they were
+	// from one that crashed before it moved the first — and re-parenting
+	// on the second guess silently overrides a `move_subtasks: false`
+	// somebody typed. Nor can the task's relations tell it what the merge
+	// was folding into ([MergeRecordVersion] says why). Both ride the
+	// DOCUMENT rather than a column of their own: nothing selects
+	// on them, and what the duty selects on is `merging`, which already
+	// has its partial index.
 	Merging       bool       `json:"merging,omitempty"`
 	MergeReparent bool       `json:"merge_reparent,omitempty"`
+	MergeInto     string     `json:"merge_into,omitempty"`
 	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
 	ArchivedBy    string     `json:"archived_by,omitempty"`
 
@@ -511,6 +523,9 @@ type Task struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
+	// Extra is every key of the stored document this build has no field
+	// for, kept by the decode and written back by the encode — see
+	// extra.go, which every type here with an Extra shares.
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -631,10 +646,10 @@ type Placement struct {
 
 // Eviction is a node's eviction or its readmission.
 //
-// ITS VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER, because
-// this record INSTALLS A GATE: a build that cannot decode a gate must not
-// apply anything above it. The shape evolves additively — an old reader drops
-// an unknown key — and a semantic change takes a new record kind rather than a
+// ITS VERSION IS [GateRecordVersion], because this record INSTALLS A GATE: a
+// build that cannot decode a gate must not apply anything above it. The shape
+// evolves additively — a reader acts on no key it does not know, and carries
+// it in Extra — and a semantic change takes a new record kind rather than a
 // version bump.
 type Eviction struct {
 	V          int       `json:"v"`
@@ -723,14 +738,23 @@ type TaskPatch struct {
 	// walk whose holder died.
 	//
 	// MergeReparent rides the same append and says what that walk is for.
-	// TWO FIELDS RATHER THAN ONE RESHAPED VALUE because the record is a
-	// payload two builds share across a rolling upgrade, and evolution
-	// there is additive-only: an older node reading a newer merge mark
-	// ignores the intent and clears the marker, which is what it did
-	// before this existed. The applier clears it whenever the marker goes
-	// down, so the pair cannot drift into "not merging, but re-parenting".
-	Merging       *bool `json:"merging,omitempty"`
-	MergeReparent *bool `json:"merge_reparent,omitempty"`
+	// The applier clears it whenever the marker goes down, at every record
+	// version, so the pair cannot drift into "not merging, but
+	// re-parenting".
+	//
+	// MergeInto is the task the merge folds into, on every patch that
+	// touches the marker: the target on the mark, and empty on every patch
+	// that lowers it. [Writer.UpdateTask] refuses a patch that raises the
+	// marker without one, and writes the empty one onto a patch that
+	// lowers it, so the three travel together. A patch carrying it is
+	// written at [MergeRecordVersion], which says why.
+	//
+	// SEPARATE FIELDS RATHER THAN ONE RESHAPED VALUE because the record is
+	// a payload two builds share across a rolling upgrade, and evolution
+	// there is additive-only.
+	Merging       *bool   `json:"merging,omitempty"`
+	MergeReparent *bool   `json:"merge_reparent,omitempty"`
+	MergeInto     *string `json:"merge_into,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
 	// decided by the WRITER inside its own snapshot — see
@@ -762,9 +786,9 @@ type TaskPatch struct {
 	//
 	// [TaskPatch.Relations] and [TaskPatch.Dependents] are carried whole,
 	// so a tool that read the set in one transaction and wrote it in
-	// another discards every edge that arrived in between — which is
-	// exactly what the merge sequence did before this existed, composing
-	// `append(task.Relations, …)` from a read outside the decide. Worse
+	// another discards every edge that arrived in between — a sequence
+	// composing `append(task.Relations, …)` from a read outside the
+	// decide is that shape exactly. Worse
 	// for these two than for the watchers: [MaxWaitingOn],
 	// [MaxOtherRelations] and [MaxDependents] are the bounds the sets are
 	// declared under, and a whole-set write has nothing to count against.
@@ -867,7 +891,8 @@ type RelationIntent struct {
 
 	// Add and Remove are the delta. Remove matches on (Kind, Other) —
 	// a note is not part of an edge's identity, so removing an edge does
-	// not require quoting the note somebody wrote on it.
+	// not require quoting the note somebody wrote on it. An Add of a
+	// [RelationKind.Single] kind replaces the task's edge of that kind.
 	Add    []Relation
 	Remove []Relation
 

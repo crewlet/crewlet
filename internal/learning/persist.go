@@ -294,7 +294,7 @@ func (d *PersistDecider) Reflect(ctx context.Context, t Turn) ([]events.Payload,
 // the tier still reports what was concluded before the failure, so a caller
 // can tell a LONG that failed to land from a turn with nothing in it.
 func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
-	member, err := d.models.Head(t.Role, phase.Auxiliary)
+	member, err := auxiliary(d.models, t.Role, t.attribution(PersistSource))
 	if err != nil {
 		return Decision{Tier: types.PersistNOOP}, fmt.Errorf("learning: no auxiliary model: %w", err)
 	}

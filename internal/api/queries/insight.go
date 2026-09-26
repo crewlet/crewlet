@@ -662,6 +662,9 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		// What the ranking behind `hits` did not cover, or null for a
 		// whole one — see [knowledge.Partial].
 		"partial": nil,
+		// Whether the backend cut `hits` short of its own ranking — see
+		// [knowledge.Answer.Truncated].
+		"truncated": false,
 	}
 	unavailable := func(reason KnowledgeReason, note string) (any, error) {
 		out["available"] = false
@@ -722,14 +725,23 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// A SEARCH THAT STARTED AND DEGRADED, which is what `note` beside the
 	// zero reason is for: the answer is still the answer, and the note says
 	// what a reader must not conclude from it.
-	switch {
-	case answer.Failed:
+	// A PARTIAL ANSWER AND A TRUNCATED ONE ARE TWO FACTS, and an answer can
+	// be both, so each is flagged and the note says every one that holds.
+	if answer.Failed {
 		out["note"] = "the search failed on this node, so its empty answer " +
 			"says nothing about what the knowledge base holds — this node's " +
 			"log says why"
-	case answer.Partial != nil:
-		out["partial"] = answer.Partial
-		out["note"] = partialNote(answer.Partial, "pages")
+	} else {
+		var notes []string
+		if answer.Partial != nil {
+			out["partial"] = answer.Partial
+			notes = append(notes, partialNote(answer.Partial, "pages"))
+		}
+		if answer.Truncated {
+			out["truncated"] = true
+			notes = append(notes, prefetch.TruncatedKnowledge)
+		}
+		out["note"] = strings.Join(notes, "; ")
 	}
 	rows := make([]map[string]any, 0, len(answer.Hits))
 	for _, hit := range answer.Hits {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -100,11 +100,11 @@ func TestAResumeOnANodeWithNoCompanyIsUnavailableHere(t *testing.T) {
 // A RESUME RUNS UNDER THE EPOCH ITS SEAT WAS FOUND IN.
 //
 // The resumer resolves the seat and its org from one read of the epoch, and
-// resumeTurn used to read the epoch again to build the runner, its registry,
-// its meter and its judge. An apply landing between the two resumed a seat of
-// one revision with the tools and caps of the next. The epoch now travels on
-// the resume: this engine holds a live company, and a resume handed none is
-// refused rather than quietly served from a second read.
+// the epoch travels on the resume to build the runner, its registry, its meter
+// and its judge: a second read would be the next revision once an apply
+// landed between the two, resuming a seat of one revision with the tools and
+// caps of the next. This engine holds a live company, and a resume handed none
+// is refused rather than quietly served from a second read.
 func TestAResumeIsNotRebuiltFromASecondReadOfTheEpoch(t *testing.T) {
 	t.Parallel()
 	company, seat := modeCompany(t, "claude-code", true, "")
@@ -112,8 +112,7 @@ func TestAResumeIsNotRebuiltFromASecondReadOfTheEpoch(t *testing.T) {
 	e.epoch.current.Store(company)
 
 	err := e.resumeTurn(context.Background(), resumeInput{
-		Run:  sandbox.PendingRun{TurnID: "t-3", AgentHandle: "swe"},
-		Turn: &turnctx.Turn{RunID: "t-3", Seat: seat, Org: company.Org},
+		Run: sandbox.PendingRun{TurnID: "t-3", AgentHandle: seat.Handle()},
 	})
 	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
 		t.Fatalf("err = %v, want ErrResumeUnavailable: a resume with no pinned "+

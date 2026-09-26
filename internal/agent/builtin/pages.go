@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -243,6 +245,9 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Reader == nil {
 		return unconfiguredKB(ListPagesTool), nil
 	}
+	if refusal := t.unknownArgs(args); refusal != "" {
+		return failed(refusal), nil
+	}
 	// PUBLISHED ONLY, and not a parameter: a draft is somebody's
 	// unfinished thought, and an agent given the option to list drafts
 	// would act on one.
@@ -262,7 +267,7 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		// and the read failure's "try again" would send the same value back.
 		return failed(fmt.Sprintf("%s refused that: %v", ListPagesTool, err)), nil
 	case err != nil:
-		return failed(readFailure(ListPagesTool, err)), nil
+		return failed(pageReadFailure(ListPagesTool, err)), nil
 	}
 	// "NOTHING MATCHES" ONLY FROM A COMPLETE ANSWER. An empty listing over
 	// a deferred scope is one that could not account for everything, and
@@ -294,6 +299,53 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		out["next_cursor"] = got.NextCursor
 	}
 	return jsonResult(out)
+}
+
+// unknownArgs is the refusal of an argument list_pages does not read, or empty
+// when it reads every one it was given.
+//
+// REFUSED RATHER THAN IGNORED, on the rule the tracker's query grammar holds
+// ([tracker.QueryKeys]): an argument nothing parsed answers a different
+// question from the one asked, and nothing in the answer says so. For a
+// listing that is sharper than a wider answer — a continuation passed under a
+// name this tool does not read hands back the FIRST page, which looks exactly
+// like the next one, and a caller walking the listing reads page one for ever.
+//
+// THE KNOWN SET IS THE SCHEMA'S OWN PROPERTIES, read off [listPages.Parameters]
+// rather than listed beside it, so an argument added there is accepted with no
+// second edit. Named sorted, so one refusal reads the same on every call.
+func (t *listPages) unknownArgs(args map[string]any) string {
+	known, _ := t.Parameters()["properties"].(map[string]any)
+	var unknown []string
+	continuing := false
+	for key := range args {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		unknown = append(unknown, "`"+key+"`")
+		continuing = continuing || continuationArgs[key]
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	slices.Sort(unknown)
+	out := fmt.Sprintf("%s refused that: it takes no %s, and an argument it "+
+		"ignored would answer a different listing from the one you asked for.",
+		ListPagesTool, strings.Join(unknown, " or "))
+	if continuing {
+		out += " To continue a listing, pass its `next_cursor` back as " +
+			"`after`, with the same filters — or a get_page answer's " +
+			"`children_cursor` as `after`, with `parent` set to that page."
+	}
+	return out + " Its arguments are: " +
+		strings.Join(slices.Sorted(maps.Keys(known)), ", ") + "."
+}
+
+// continuationArgs are the names a caller reaches for to walk a listing that
+// list_pages does not take, each answered by naming the one it does: `after`.
+var continuationArgs = map[string]bool{
+	"offset": true, "cursor": true, "next_cursor": true,
+	"children_cursor": true, "page_token": true, "skip": true,
 }
 
 // ---- get_page ---------------------------------------------------------- //
@@ -352,7 +404,7 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
 			"title, or use search_knowledge to find it.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(GetPageTool, err)), nil
+		return failed(pageReadFailure(GetPageTool, err)), nil
 	}
 	return jsonResult(detail)
 }
@@ -534,7 +586,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(SavePageTool, err)), nil
+		return failed(pageReadFailure(SavePageTool, err)), nil
 	}
 	// A CHANGE IS A WRITE TOO. Reserving a container against creates alone
 	// would leave every page already in it open to a seat's edit — a
@@ -681,7 +733,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnPageTool, err)), nil
+		return failed(pageReadFailure(CommentOnPageTool, err)), nil
 	}
 
 	// AN EDIT IS THE SAME GESTURE, which is why it is this tool rather than
@@ -718,6 +770,13 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,
 	})
+}
+
+// pageReadFailure explains a read of the knowledge base that could not be
+// served — see [unservedRead], which is the rule the tracker's tools follow
+// too.
+func pageReadFailure(name string, err error) string {
+	return unservedRead(name, "the knowledge base", "the page or the list", err)
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can

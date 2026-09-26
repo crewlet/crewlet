@@ -366,7 +366,7 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 
 // placeTask writes one placement onto the task it names — the `rank` column
 // AND the document. It is how a rank order at [RankOrderRecordVersion] places a
-// task; [placeByColumn] is how one at [RecordVersion] still does.
+// task; [placeByColumn] is how one at [RecordVersion] does.
 //
 // # The document, because the document is what every later commit starts from
 //

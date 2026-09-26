@@ -337,13 +337,14 @@ func TestADuplicateAtTheTopIsRepairedBelowTheNextCreate(t *testing.T) {
 	}
 }
 
-// A MARKER WHOSE RELATION NEVER LANDED IS CLEARED AND NOTHING ELSE.
+// A MARKER THAT NAMES NO TARGET IS CLEARED AND NOTHING ELSE.
 //
-// The mark writes the `duplicates` edge and the marker in ONE append, so a
-// marker with no edge is an append whose relation gesture resolved to nothing.
-// The merge did not happen — so cancelling the task here would close an item
-// nobody merged, and leaving the flag set would run this job against it on
-// every tick for ever.
+// A mark at [tracker.MergeRecordVersion] carries its target, and the writer
+// refuses one without it. A mark at the first version carries none, and names
+// its target only through the `duplicates` edge it added — so one whose task
+// holds no such edge names nothing the merge could be finished into.
+// Cancelling the task here would close an item into nothing, and leaving the
+// flag set would run this job against it on every tick for ever.
 func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -354,13 +355,8 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 		}
 		r.drain()
 	}
-	// THE MARKER WITHOUT THE REST, which is what a holder that died
-	// between the first append and the last leaves behind.
-	merging := true
-	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "t-1", "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Merging: &merging}, tracker.ChangeFields, nil); err != nil {
-		t.Fatalf("UpdateTask: %v", err)
-	}
+	// THE MARKER WITHOUT THE REST, at the first version and with no edge.
+	r.appendRecord(firstVersionMark("t-1"))
 	r.drain()
 
 	swept, err := trackerWorker(t, r).Tick(t.Context())
@@ -442,7 +438,7 @@ func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 						Kind: tracker.RelationDuplicates, Other: "keep",
 					}}},
-					Merging: &merging, MergeReparent: &tc.reparent,
+					Merging: &merging, MergeReparent: &tc.reparent, MergeInto: ptr("keep"),
 				}, tracker.ChangeRelations, nil); err != nil {
 				t.Fatalf("UpdateTask mark: %v", err)
 			}
@@ -647,6 +643,7 @@ func trackerWorkerWriting(t *testing.T, r *roundTrip, log *slog.Logger,
 	w, err := maintenance.New(maintenance.Options{
 		Jobs: tracker.Jobs(tracker.DutyDeps{
 			DB: r.db, Writer: writer, NodeID: "node-a", Logger: log,
+			Reader: linearReader(t, r),
 		}),
 		Now: func() time.Time { return wednesday },
 	})
@@ -654,6 +651,79 @@ func trackerWorkerWriting(t *testing.T, r *roundTrip, log *slog.Logger,
 		t.Fatalf("build the tracker's maintenance worker: %v", err)
 	}
 	return w
+}
+
+// linearReader is this harness's read path at the level the merge repair reads
+// at: a barrier appended to the real log, and a wait that runs this node's
+// applier until it has applied the barrier — which is what a node's own
+// applier does while a read waits. Nothing else in the harness is driven: a
+// write the case left on the log unapplied stays unapplied until something
+// reads at this level.
+func linearReader(t *testing.T, r *roundTrip) *tracker.Reader {
+	t.Helper()
+	index, err := statelog.NewReadIndex(tracker.Domain{}, r.log,
+		tracker.EncodeBarrier, func() uint32 { return 0 }, nil)
+	if err != nil {
+		t.Fatalf("build the read index: %v", err)
+	}
+	var lag, first, floor uint64 = 0, 1, 0
+	log, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: tracker.Domain{}, DB: r.db.Replicated(), Index: index,
+		Waiter: drainingWaiter{committed: r.waiter.Committed, drain: r.drain},
+		Health: func() statelog.Health {
+			at := r.waiter.Committed()
+			return statelog.Health{
+				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
+				Lag:   &lag, FirstSeq: &first, TrimFloor: &floor,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("build the framework reader: %v", err)
+	}
+	reader, err := tracker.NewReader(r.db, log)
+	if err != nil {
+		t.Fatalf("build the tracker reader: %v", err)
+	}
+	return reader
+}
+
+// drainingWaiter is this node's applier as a linearizable read waits on it:
+// it applies what the log holds until the position is reached. Its two halves
+// are the harness's own — the position [roundTrip.apply] reaches, and
+// [roundTrip.drain] — so the applier here is the one every case drives.
+type drainingWaiter struct {
+	committed func() statelog.Position
+	drain     func()
+}
+
+func (w drainingWaiter) Committed() statelog.Position { return w.committed() }
+
+func (w drainingWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+	for w.Committed().Packed() < p.Packed() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		w.drain()
+	}
+	return nil
+}
+
+func (w drainingWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
+	p statelog.Position) error {
+	return w.WaitCommitted(ctx, p)
+}
+
+// firstVersionMark is a merge marker as a record at the first version raises
+// it: the marker alone, with no target — [tracker.MergeRecordVersion] is what
+// added one — and here with no `duplicates` edge either.
+func firstVersionMark(id string) tracker.MutationRecord {
+	merging := true
+	rec := taskRecord(id, tracker.OpPatch, tracker.TaskPatch{Merging: &merging}, nil)
+	rec.OpID = "op-mark-" + id
+	rec.Kind = tracker.ChangeFields
+	return rec
 }
 
 // capturedLog keeps what the duty logged, because for these repairs the log
@@ -1156,7 +1226,7 @@ func TestAnAbandonedMergeIntoAPurgedTaskIsClearedNotCompleted(t *testing.T) {
 					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 						Kind: tracker.RelationDuplicates, Other: "keep",
 					}}},
-					Merging: &merging, MergeReparent: &reparent,
+					Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 				}, tracker.ChangeRelations, nil); err != nil {
 				t.Fatalf("UpdateTask mark: %v", err)
 			}
@@ -1224,7 +1294,7 @@ func TestAPurgeDuringTheDutysMergeIsSeenByItsNextStep(t *testing.T) {
 			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 				Kind: tracker.RelationDuplicates, Other: "keep",
 			}}},
-			Merging: &merging, MergeReparent: &reparent,
+			Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 		}, tracker.ChangeRelations, nil); err != nil {
 		t.Fatalf("UpdateTask mark: %v", err)
 	}
@@ -1342,7 +1412,7 @@ func TestTheSweepGivesAMergesClaimBack(t *testing.T) {
 				Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 					Kind: tracker.RelationDuplicates, Other: "keep",
 				}}},
-				Merging: &merging, MergeReparent: &reparent,
+				Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 			}, tracker.ChangeRelations, nil); err != nil {
 			t.Fatalf("round %d: UpdateTask mark: %v", round, err)
 		}
@@ -1402,7 +1472,7 @@ func TestTheSweepPassesOverAMergeAnotherNodeIsWalking(t *testing.T) {
 			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 				Kind: tracker.RelationDuplicates, Other: "keep",
 			}}},
-			Merging: &merging, MergeReparent: &reparent,
+			Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 		}, tracker.ChangeRelations, nil); err != nil {
 		t.Fatalf("UpdateTask mark: %v", err)
 	}
@@ -1436,7 +1506,7 @@ func TestTheSweepDoesNotCloseAMergeThatAlreadyClosed(t *testing.T) {
 			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 				Kind: tracker.RelationDuplicates, Other: "keep",
 			}}},
-			Merging: &merging, MergeReparent: &reparent,
+			Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 		}, tracker.ChangeRelations, nil); err != nil {
 		t.Fatalf("UpdateTask mark: %v", err)
 	}
@@ -1487,7 +1557,7 @@ func TestTheSweepDoesNotGiveUpAMergeAlreadyGivenUp(t *testing.T) {
 			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 				Kind: tracker.RelationDuplicates, Other: "keep",
 			}}},
-			Merging: &merging, MergeReparent: &reparent,
+			Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 		}, tracker.ChangeRelations, nil); err != nil {
 		t.Fatalf("UpdateTask mark: %v", err)
 	}
@@ -1528,12 +1598,8 @@ func TestTheSweepDoesNotClearAMarkerAlreadyCleared(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	filedTask(t, r, "dup")
-	merging, done := true, false
-	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Merging: &merging},
-		tracker.ChangeFields, nil); err != nil {
-		t.Fatalf("UpdateTask mark: %v", err)
-	}
+	done := false
+	r.appendRecord(firstVersionMark("dup"))
 	r.drain()
 	if _, err := r.writer.UpdateTask(t.Context(), "op-clear", "dup", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Merging: &done},
@@ -1601,7 +1667,7 @@ func TestAnAbandonedMergeIntoAnItemInTheTrashIsGivenUp(t *testing.T) {
 					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 						Kind: tracker.RelationDuplicates, Other: "keep",
 					}}},
-					Merging: &merging, MergeReparent: &reparent,
+					Merging: &merging, MergeReparent: &reparent, MergeInto: ptr("keep"),
 				}, tracker.ChangeRelations, nil); err != nil {
 				t.Fatalf("UpdateTask mark: %v", err)
 			}
@@ -1689,5 +1755,220 @@ func TestOneMergeTheDutyCannotFinishDoesNotHoldUpTheRest(t *testing.T) {
 	if summary.attrs["merges"] != int64(2) || summary.attrs["failed"] != int64(1) {
 		t.Errorf("the sweep's line says %+v, want 2 finished and 1 failed",
 			summary.attrs)
+	}
+}
+
+// A LAGGING NODE'S SWEEP DOES NOT ACT ON A MERGE THAT CLOSED BEFORE IT.
+//
+// A walk that closes on another node gives its claim back once the close is
+// acknowledged, so the sweep here can take the claim while its own rows still
+// show the merge running. Decided from those rows, the sweep moves a subtask
+// filed under the duplicate after the walk read its batch — a subject nothing
+// else wrote, so the broker accepts it — and the subtask lands on the target
+// after the merge closed without it. The sweep reads the task linearizably
+// after taking the claim instead, so its rows hold the close and it does
+// nothing.
+//
+// Mutation: read the mid-merge task at `stale` in abandonedMerge and the late
+// subtask is moved onto the target.
+func TestALaggingSweepDoesNotActOnAMergeThatClosedBeforeIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent, keep := "dup", "keep"
+	for _, id := range []string{"kid-1", "kid-late"} {
+		kid := newTask(id)
+		kid.Parent, kid.Depth = &parent, 1
+		if id == "kid-late" {
+			// THE WALK: the mark, and its move of the one subtask its
+			// batch read. The late one is filed after that batch.
+			merging, reparent := true, true
+			if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{
+					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+						Kind: tracker.RelationDuplicates, Other: "keep",
+					}}},
+					Merging: &merging, MergeReparent: &reparent, MergeInto: &keep,
+				}, tracker.ChangeRelations, nil); err != nil {
+				t.Fatalf("UpdateTask mark: %v", err)
+			}
+			r.drain()
+			if _, err := r.writer.UpdateTask(t.Context(), "op-move", "kid-1", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Parent: &keep},
+				tracker.ChangeReparented, nil); err != nil {
+				t.Fatalf("move kid-1: %v", err)
+			}
+			r.drain()
+		}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	// THE CLOSE ON THE LOG AND NOT IN THIS NODE'S ROWS.
+	cancelled, done := tracker.StatusCancelled, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &cancelled, Merging: &done},
+		tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTask close: %v", err)
+	}
+	if !r.task(t, "dup").Task.Merging {
+		t.Fatal("the close was applied before the sweep ran, so this case is " +
+			"not the shape it names")
+	}
+
+	r.applyWhileWriting()
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Errorf("the sweep finished %d merge(s), and the one it read had "+
+			"closed before it", n)
+	}
+	r.drain()
+	if got := parentOf(r.task(t, "kid-late")); got != "dup" {
+		t.Errorf("the subtask filed after the walk read its batch is under %q; "+
+			"the merge had closed without it, so it stays under dup", got)
+	}
+}
+
+// THE SWEEP FINISHES A MERGE INTO THE TASK ITS MARK NAMED.
+//
+// The mark states its target on the task, and that is what the sweep reads —
+// not the `duplicates` relation, which can say something else by the time a
+// merge is found abandoned: an edit to the relations while the merge runs
+// replaces the edge the mark added. Read off the relations, the sweep folded
+// the duplicate into whatever the last edit named.
+//
+// Mutation: read the target off the relations in abandonedMerge and the
+// subtask ends under `other`.
+func TestTheSweepFinishesAMergeIntoTheTaskItsMarkNamed(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"keep", "other", "dup"} {
+		filedTask(t, r, id)
+	}
+	parent, keep := "dup", "keep"
+	kid := newTask("kid")
+	kid.Parent, kid.Depth = &parent, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	merging, reparent := true, true
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+			Merging: &merging, MergeReparent: &reparent, MergeInto: &keep,
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	// WHILE IT IS MID-MERGE, somebody says it duplicates another item.
+	if _, err := r.writer.UpdateTask(t.Context(), "op-relink", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "other",
+			}}},
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask relink: %v", err)
+	}
+	r.drain()
+
+	r.applyWhileWriting()
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if swept["tracker_abandoned_merges"] != 1 {
+		t.Fatalf("the sweep finished %d merges, want the one", swept["tracker_abandoned_merges"])
+	}
+	r.drain()
+	if got := parentOf(r.task(t, "kid")); got != "keep" {
+		t.Errorf("the subtask is under %q; the mark folded dup into keep", got)
+	}
+	if dup := r.task(t, "dup"); dup.Task.Status != tracker.StatusCancelled ||
+		dup.Task.Merging || dup.Task.MergeInto != "" {
+		t.Errorf("the duplicate reads status %q, merging=%v, target %q — want "+
+			"it closed with the marker and its target cleared", dup.Task.Status,
+			dup.Task.Merging, dup.Task.MergeInto)
+	}
+}
+
+// A MARK AT THE FIRST VERSION NAMES ITS TARGET ONLY THROUGH ITS EDGE.
+//
+// Such a mark carries no target of its own, so the sweep finishes it into the
+// task's `duplicates` edge when there is exactly one — the edge that mark
+// added. With two, nothing says which the merge was folding into, and the
+// sweep gives it up rather than guess: the marker cleared, the task left open
+// with its subtasks, and the edges named on its warning.
+//
+// Mutation: take the last edge when there are several and the second case
+// folds the duplicate into `other`.
+func TestAMarkAtTheFirstVersionIsFinishedOnlyIntoItsOneEdge(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		edges []string
+		// want is where the subtask ends, and closed whether the
+		// duplicate is cancelled.
+		want   string
+		closed bool
+	}{
+		{"one edge is its target", []string{"keep"}, "keep", true},
+		{"two edges name none", []string{"keep", "other"}, "dup", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			for _, id := range []string{"keep", "other", "dup"} {
+				filedTask(t, r, id)
+			}
+			parent := "dup"
+			kid := newTask("kid")
+			kid.Parent, kid.Depth = &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("CreateTask kid: %v", err)
+			}
+			r.drain()
+			relations := make([]tracker.Relation, 0, len(tc.edges))
+			for _, other := range tc.edges {
+				relations = append(relations, tracker.Relation{
+					Kind: tracker.RelationDuplicates, Other: other,
+				})
+			}
+			merging, reparent := true, true
+			mark := taskRecord("dup", tracker.OpPatch, tracker.TaskPatch{
+				Relations: &relations, Merging: &merging, MergeReparent: &reparent,
+			}, nil)
+			mark.OpID, mark.Kind = "op-mark", tracker.ChangeRelations
+			r.appendRecord(mark)
+			r.drain()
+
+			log := &capturedLog{}
+			r.applyWhileWriting()
+			if _, err := trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context()); err != nil {
+				t.Fatalf("Tick: %v", err)
+			}
+			r.drain()
+			if got := parentOf(r.task(t, "kid")); got != tc.want {
+				t.Errorf("the subtask is under %q, want %q", got, tc.want)
+			}
+			dup := r.task(t, "dup")
+			if dup.Task.Merging || (dup.Task.Status == tracker.StatusCancelled) != tc.closed {
+				t.Errorf("the duplicate reads merging=%v and status %q", dup.Task.Merging,
+					dup.Task.Status)
+			}
+			if !tc.closed {
+				line := log.only(t, "tracker_merge_marker_without_target")
+				if got := fmt.Sprint(line.attrs["duplicates"]); got != "[keep other]" {
+					t.Errorf("the warning names %s, want both edges", got)
+				}
+			}
+		})
 	}
 }

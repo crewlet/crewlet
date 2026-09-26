@@ -10,9 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the version this build writes every record at but two —
-// [RankOrderRecordVersion] and [PurgeRecordVersion] — and the version of every
-// record encoded without one.
+// RecordVersion is the version this build writes every record at but three
+// kinds — a rank order at [RankOrderRecordVersion], a purge at
+// [PurgeRecordVersion], and a task patch that raises or lowers the merge marker
+// at [MergeRecordVersion] — and the version of every record encoded without
+// one.
 //
 // A record at a version higher than [ReadableRecordVersion] leaves the envelope
 // decoded and everything else opaque, and is RETAINED at its position rather
@@ -26,9 +28,8 @@ const RecordVersion = 1
 //
 // A record at it places each task by writing the key into the task's DOCUMENT
 // as well as its `rank` column, and only while the task is still in the order's
-// project ([placeTask]). A rank order at [RecordVersion] placed by the column
-// alone and placed a task whatever its project, and it still applies that way
-// ([placeByColumn]).
+// project ([placeTask]). A rank order at [RecordVersion] places by the column
+// alone and places a task whatever its project ([placeByColumn]).
 //
 // # Why the change is a version and not an edit
 //
@@ -47,8 +48,8 @@ const RankOrderRecordVersion = 2
 //
 // A purge at it does everything one at [RecordVersion] does — the task's rows
 // deleted with every row naming it, the deletion marker written, its children
-// moved onto its own parent — and five things more, each of which a purge at
-// [RecordVersion] does not do and still does not do ([Applier.purgeTask]):
+// moved onto its own parent — and five things more, none of which a purge at
+// [RecordVersion] does ([Applier.purgeTask]):
 //
 //   - it empties the CONTENT of the task's history and inbox rows
 //     ([scrubPurgedContent]);
@@ -77,32 +78,67 @@ const RankOrderRecordVersion = 2
 // retain the record for later: its applier STOPS at it, which is the
 // framework's rule for every gate it cannot read ([internal/statelog]'s package
 // doc says what a stop costs) — and the reason this is a version at all, since
-// the alternative is that build applying the purge by the rule this one
-// replaced.
+// the alternative is that build applying the purge by the rule of
+// [RecordVersion].
 //
-// Purges written at [RecordVersion] keep their rows, content included, on
-// every node that replays them, and nothing re-scrubs them: a migration would
-// empty only the rows a node held when it ran, and a node that replays the log
-// after it would hold them whole. No released build wrote one — the one tag,
-// v0.1.0, carries no Go source at all.
+// A purge at [RecordVersion] keeps the task's history and inbox content, on
+// every node that applies or replays it, and nothing re-scrubs it: a migration
+// would empty only the rows a node held when it ran, and a node that replays
+// the log after it would hold them whole. This build writes none.
 const PurgeRecordVersion = 3
+
+// MergeRecordVersion is the version a task patch that raises or lowers the
+// merge marker ([TaskPatch.Merging]) is written at.
+//
+// A patch at it carries the merge's TARGET beside the marker
+// ([TaskPatch.MergeInto]), and its apply writes that target onto the task
+// ([Task.MergeInto]): the mark writes the task being merged into, and every
+// patch that lowers the marker writes it empty. A patch at a lower version
+// carries no target and its apply writes none, so a marker a record at
+// [RecordVersion] raised names what it merges into only through the
+// `duplicates` relation that mark added — [duty.abandonedMerge] says what the
+// tracker duty reads off such a marker.
+//
+// # Why the target is on the task
+//
+// The sweep that finishes an abandoned merge has to know what the merge was
+// folding into, and the relation set cannot say: it can be edited while the
+// merge is running, and a `duplicates` edge written then replaces the one the
+// mark added ([RelationKind.Single]). The mark is the one record that knows,
+// so it writes the answer where the sweep reads it.
+//
+// # Why the change is a version and not an edit
+//
+// For [RankOrderRecordVersion]'s reason: a build that reads below this version
+// applies the marker and has no field for the target, so an edit in place
+// would leave two copies of one log holding different documents for the same
+// record. An older build RETAINS a record at it, with every later record its
+// scope covers, and applies them after its upgrade.
+const MergeRecordVersion = 4
 
 // ReadableRecordVersion is the highest record version this build decodes —
 // what [Domain.RecordVersion] declares to the framework.
-const ReadableRecordVersion = PurgeRecordVersion
+const ReadableRecordVersion = MergeRecordVersion
 
-// recordVersionOf is the version a record on this subject, doing this, is
-// written at.
+// recordVersionOf is the version a record on this subject, doing this, with
+// this payload, is written at.
 //
 // THE LOWEST VERSION WHOSE APPLY IS THE ONE THIS BUILD MEANS, and nothing
 // higher: a record stamped above what an older build reads is retained by
 // every such node — or, for a gate, stops it — for no change in what it does.
-func recordVersionOf(subject Subject, op OpKind) int {
+// So a task patch is at [MergeRecordVersion] only when it carries the merge
+// target, and at [RecordVersion] otherwise.
+func recordVersionOf(subject Subject, op OpKind, payload any) int {
 	switch {
 	case subject.Kind == KindRankOrder:
 		return RankOrderRecordVersion
+	case subject.Kind == KindEviction:
+		return GateRecordVersion
 	case op == OpPurge:
 		return PurgeRecordVersion
+	}
+	if patch, ok := payload.(TaskPatch); ok && patch.MergeInto != nil {
+		return MergeRecordVersion
 	}
 	return RecordVersion
 }

@@ -282,9 +282,19 @@ func TestAMergeWhoseTargetIsPurgedPartWayIsGivenUp(t *testing.T) {
 
 			_, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup",
 				"keep", true, nil)
-			if !errors.Is(err, tracker.ErrPurged) || !errors.Is(err, tracker.ErrNoTask) {
+			var stopped *tracker.PartialError
+			if !errors.Is(err, tracker.ErrPurged) || !errors.Is(err, tracker.ErrNoTask) ||
+				!errors.As(err, &stopped) || stopped.Rerun {
 				t.Fatalf("a merge whose target was purged part-way answered %v, "+
-					"want the purge named", err)
+					"want the purge named, partial and not re-run — its mark "+
+					"landed", err)
+			}
+			// AND IT SAYS A MOVED SUBTASK WENT WHERE THE PURGE PUT THE
+			// TARGET'S CHILDREN, which is where it now is.
+			if !strings.Contains(err.Error(), "went where that purge moved its "+
+				"children") || strings.Contains(err.Error(), "stays under it") {
+				t.Errorf("a merge given up over a purge answered %q, want it to "+
+					"say a moved subtask went where the purge moved them", err)
 			}
 			r.drain()
 			if !hooked.didFire() {
@@ -720,9 +730,11 @@ func TestAMergeEndedByAnotherWriterIsNotClosedOverIt(t *testing.T) {
 		t.Fatal("nothing ended the merge while it walked, so this case is not " +
 			"the shape it names")
 	}
-	if err == nil || !strings.Contains(err.Error(), "ended by another writer") {
-		t.Fatalf("a merge ended by another writer answered %v, want it to say so",
-			err)
+	var stopped *tracker.PartialError
+	if err == nil || !strings.Contains(err.Error(), "ended by another writer") ||
+		!errors.As(err, &stopped) || stopped.Rerun {
+		t.Fatalf("a merge ended by another writer answered %v, want it to say "+
+			"so, partial and not re-run — its mark landed", err)
 	}
 	r.drain()
 	if got := r.task(t, "dup").Task.Status; got == tracker.StatusCancelled {
@@ -837,12 +849,26 @@ func TestAMergeWhoseTargetIsRemovedPartWayIsGivenUp(t *testing.T) {
 				t.Fatal("the removal never landed, so this case is not the shape " +
 					"it names")
 			}
+			// PARTIAL AND NOT RE-RUN: the mark landed, so "not made" would
+			// be false, and nothing — neither a second call nor the duty —
+			// finishes a merge whose target is in the trash.
 			var stopped *tracker.PartialError
-			if err == nil || errors.As(err, &stopped) ||
+			if err == nil || !errors.As(err, &stopped) || stopped.Rerun ||
 				!strings.Contains(err.Error(), "given up") ||
-				!strings.Contains(err.Error(), "restore") {
+				!strings.Contains(err.Error(), "restore") ||
+				strings.Contains(err.Error(), "tracker duty finishes it") {
 				t.Fatalf("a merge whose target went in the trash part-way "+
-					"answered %v, want it given up naming the restore", err)
+					"answered %v, want it given up, partial and not re-run, "+
+					"naming the restore", err)
+			}
+			// AND IT SAYS WHERE A MOVED SUBTASK IS BY WHAT TOOK THE
+			// TARGET: a removal moves nothing, so it stays under the
+			// target — the purge's sentence would send the reader looking
+			// for it under the target's parent.
+			if !strings.Contains(err.Error(), "stays under it") ||
+				strings.Contains(err.Error(), "purge moved its children") {
+				t.Errorf("a merge given up over a removal answered %q, want "+
+					"it to say a moved subtask stays under the target", err)
 			}
 			r.drain()
 			dup := r.task(t, "dup")
@@ -855,5 +881,192 @@ func TestAMergeWhoseTargetIsRemovedPartWayIsGivenUp(t *testing.T) {
 				t.Errorf("the subtask's parent is %q, want %q", got, tc.kidParent)
 			}
 		})
+	}
+}
+
+// A SUBTASK PURGED WHILE A MERGE WALKS IS PASSED OVER, AND THE MERGE FINISHES.
+//
+// The walk reads a batch of subtasks and moves them one append at a time. A
+// subtask purged in between has no row for its move to read, and refused as a
+// task this node does not hold, it stopped the walk as a failure — after the
+// mark and the earlier moves had landed, with the caller told the merge did
+// not land. A purged task is no subtask of anything, so the move is passed
+// over like one moved elsewhere.
+//
+// Mutation: drop the purged check from UpdateTask's absent-row branch and the
+// merge answers a failure with the duplicate still marked.
+func TestASubtaskPurgedDuringAMergeDoesNotStopIt(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent := "dup"
+	for _, id := range []string{"kid-1", "kid-2"} {
+		kid := newTask(id)
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	hooked.arm(func(_, opID string) bool { return opID == "op-merge.c/kid-1" },
+		func() { purgeNow(t, r, "kid-2") })
+
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		true, nil); err != nil {
+		t.Fatalf("a merge whose subtask was purged while it walked answered %v", err)
+	}
+	if !hooked.didFire() {
+		t.Fatal("nothing purged a subtask during the walk, so this case is not " +
+			"the shape it names")
+	}
+	r.drain()
+	if got := parentOf(r.task(t, "kid-1")); got != "keep" {
+		t.Errorf("the subtask the merge moved is under %q, want keep", got)
+	}
+	if dup := r.task(t, "dup"); dup.Task.Status != tracker.StatusCancelled ||
+		dup.Task.Merging {
+		t.Errorf("the duplicate reads status %q and merging=%v after its merge",
+			dup.Task.Status, dup.Task.Merging)
+	}
+}
+
+// A TASK DUPLICATES ONE OTHER, SO A NEW `duplicates` EDGE REPLACES THE OLD.
+//
+// A second edge beside the first would leave "which item survives this one?"
+// with two answers — on the board, and to a merge folding the task into one
+// of them. The replacement is resolved inside the decide, against the set the
+// task holds there, so an edge written after the caller's own read is
+// replaced too; and every other kind of edge is left as it is. The merge's own
+// mark replaces an earlier edge the same way, so a merged duplicate names the
+// task it was folded into.
+//
+// Mutation: drop the Single branch from RelationIntent.resolve and the task
+// holds both edges.
+func TestADuplicatesEdgeReplacesTheOneBefore(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	for _, id := range []string{"dup", "first", "second", "keep", "linked"} {
+		filedTask(t, r, id)
+	}
+	relate := func(op string, add ...tracker.Relation) {
+		t.Helper()
+		if _, err := r.writer.UpdateTask(t.Context(), op, "dup", "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{
+				Relate: &tracker.RelationIntent{Add: add},
+			}, tracker.ChangeRelations, nil); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+		r.drain()
+	}
+	duplicates := func(other string) tracker.Relation {
+		return tracker.Relation{Kind: tracker.RelationDuplicates, Other: other}
+	}
+	relate("op-link", tracker.Relation{Kind: tracker.RelationLinked, Other: "linked"},
+		duplicates("first"))
+	relate("op-second", duplicates("second"))
+	edges := func() []string {
+		var out []string
+		for _, relation := range r.task(t, "dup").Task.Relations {
+			out = append(out, string(relation.Kind)+":"+relation.Other)
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got := edges(); !slices.Equal(got, []string{"duplicates:second", "linked:linked"}) {
+		t.Errorf("after a second duplicate_of the task holds %v, want the new "+
+			"edge alone beside its link", got)
+	}
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		false, nil); err != nil {
+		t.Fatalf("MergeDuplicates: %v", err)
+	}
+	r.drain()
+	if got := edges(); !slices.Equal(got, []string{"duplicates:keep", "linked:linked"}) {
+		t.Errorf("after the merge the task holds %v, want the edge to the task "+
+			"it was folded into", got)
+	}
+}
+
+// THE MERGE MARKER AND ITS TARGET TRAVEL TOGETHER, or the write is refused.
+//
+// The sweep that finishes an abandoned merge reads the target off the task
+// and nowhere else, so a marker raised without one is a merge nobody can
+// finish; and a target stated on a patch that lowers the marker, or on one
+// that does not touch it, describes a merge that is not running.
+func TestAMergeMarkerWithoutItsTargetIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dup")
+	before := r.consumed
+	up, down, keep := true, false, "keep"
+	for name, patch := range map[string]tracker.TaskPatch{
+		"a raised marker naming no target":    {Merging: &up},
+		"a raised marker naming an empty one": {Merging: &up, MergeInto: ptr("")},
+		"a lowered marker naming a target":    {Merging: &down, MergeInto: &keep},
+		"a target with no marker":             {MergeInto: &keep},
+	} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+name, "dup", "ENG",
+			tracker.NoIfMatch, patch, tracker.ChangeFields, nil); err == nil {
+			t.Errorf("%s was written", name)
+		}
+	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("the refused patches appended %d record(s)", r.consumed-before)
+	}
+}
+
+// A MERGE WHOSE DUPLICATE IS PURGED WHILE IT WALKS IS ENDED, NOT FAILED.
+//
+// A purge of the task being merged ends its merge with it: the purge moves the
+// subtasks the walk had not reached onto the duplicate's own parent, and there
+// is no row left to close. The close, finding the task purged, writes nothing
+// and the call reports the merge ended by another writer — with what it moved
+// standing. Refused as a task this node does not hold instead, the call told
+// its caller the tracker duty would finish a merge no node holds any more.
+//
+// Mutation: drop the marked case from mergeStep.purged and the call answers
+// that the duty finishes it.
+func TestAMergeWhoseDuplicateIsPurgedWhileItWalksIsEnded(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent := "dup"
+	for _, id := range []string{"kid-1", "kid-2"} {
+		kid := newTask(id)
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	hooked.arm(func(_, opID string) bool { return opID == "op-merge.c/kid-1" },
+		func() { purgeNow(t, r, "dup") })
+
+	_, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		true, nil)
+	if !hooked.didFire() {
+		t.Fatal("nothing purged the duplicate during the walk, so this case is " +
+			"not the shape it names")
+	}
+	var stopped *tracker.PartialError
+	if err == nil || !errors.As(err, &stopped) || stopped.Rerun ||
+		!strings.Contains(err.Error(), "ended by another writer") ||
+		strings.Contains(err.Error(), "tracker duty finishes it") {
+		t.Fatalf("a merge whose duplicate was purged while it walked answered "+
+			"%v, want it ended, partial and not re-run", err)
+	}
+	r.drain()
+	if got := parentOf(r.task(t, "kid-1")); got != "keep" {
+		t.Errorf("the subtask the merge moved is under %q, want keep", got)
+	}
+	if got := parentOf(r.task(t, "kid-2")); got != "" {
+		t.Errorf("the subtask the purge moved is under %q, want the purged "+
+			"duplicate's own parent — none", got)
 	}
 }

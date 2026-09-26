@@ -271,6 +271,7 @@ type Progress struct {
 	outputTokens int
 	roundsUsed   int
 	model        string
+	models       []ModelTokens
 
 	// truncated and emptyAnswers are the two facts about the loop's
 	// rounds that a finished [Result] reports and a snapshot used to drop.
@@ -302,6 +303,7 @@ func (p *Progress) Snapshot() Result {
 		Abandoned:    append([]Narration(nil), p.abandoned...),
 		RoundsUsed:   p.roundsUsed,
 		Model:        p.model,
+		Models:       append([]ModelTokens(nil), p.models...),
 		Messages:     append([]llm.Message(nil), p.messages...),
 		Truncated:    p.truncated,
 		EmptyAnswers: p.emptyAnswers,
@@ -341,11 +343,12 @@ func (p *Progress) start(msgs []llm.Message) {
 	p.messages = append([]llm.Message(nil), msgs...)
 	p.executions, p.narration, p.abandoned = nil, nil, nil
 	p.inputTokens, p.outputTokens, p.roundsUsed, p.model = 0, 0, 0, ""
+	p.models = nil
 	p.truncated, p.emptyAnswers = false, 0
 }
 
 func (p *Progress) record(msgs []llm.Message, execs []Execution, narr, abandoned []Narration,
-	in, out, rounds int, model string,
+	in, out, rounds int, model string, models []ModelTokens,
 ) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -355,6 +358,7 @@ func (p *Progress) record(msgs []llm.Message, execs []Execution, narr, abandoned
 	p.abandoned = append([]Narration(nil), abandoned...)
 	p.inputTokens, p.outputTokens = in, out
 	p.roundsUsed, p.model = rounds, model
+	p.models = append([]ModelTokens(nil), models...)
 }
 
 // Result is one loop invocation's outcome.
@@ -364,7 +368,23 @@ type Result struct {
 	OutputTokens int
 	Executions   []Execution
 	RoundsUsed   int
-	Model        string
+
+	// Model is the model the FIRST completion reported serving it, and
+	// until one has, the configured model of the provider the loop calls —
+	// the one name a live row and a summary line show.
+	Model string
+
+	// Models is InputTokens and OutputTokens by the model each completion
+	// reported serving it, in the order the models first answered. See
+	// [ModelTokens] for what a completion that names no model is counted
+	// under.
+	//
+	// Beside Model rather than instead of it, because the two answer
+	// different questions: Model names the phase, and a fallback chain can
+	// move a phase between models round by round, so billing every round
+	// to the model that served the first is a per-model breakdown that
+	// names a model that did not do the work.
+	Models []ModelTokens
 
 	// Narration is per-round what Text is in aggregate. Both are published:
 	// Text is what every existing consumer and every already-stored event
@@ -445,6 +465,58 @@ type Result struct {
 	PendingToolCallID string
 	PendingToolName   string
 	SuspendPayload    map[string]any
+}
+
+// ModelTokens is what the completions one model served in a loop billed.
+//
+// Keyed on the model each completion REPORTED serving it ([llm.Completion.Model]),
+// because that is the only place the answer is correct: a fallback chain is
+// shared by concurrent callers, and every member of one is a different model.
+// A completion that names none is counted under the configured model of the
+// provider the loop called. Behind a fallback chain that is rarely reached: the
+// chain writes the answering member's configured model onto a completion that
+// names none, so only a member configured with no model of its own leaves one
+// nameless.
+type ModelTokens struct {
+	Model        string
+	InputTokens  int
+	OutputTokens int
+}
+
+// AddModelTokens adds one completion's tokens to a per-model list, under its
+// model's entry when the list has one and as a new entry at the end when it
+// does not — so the list stays in the order the models first answered.
+func AddModelTokens(list []ModelTokens, model string, in, out int) []ModelTokens {
+	for i := range list {
+		if list[i].Model == model {
+			list[i].InputTokens += in
+			list[i].OutputTokens += out
+			return list
+		}
+	}
+	return append(list, ModelTokens{Model: model, InputTokens: in, OutputTokens: out})
+}
+
+// FoldModelTokens is the per-model list of two invocations of one phase, the
+// earlier's first: what a caller that runs the loop again — an extended phase,
+// or a phase resumed after a suspension — reports for the phase as a whole,
+// beside the token counts it sums the same way.
+//
+// A fresh list, so neither argument's backing array is written through.
+func FoldModelTokens(done, live []ModelTokens) []ModelTokens {
+	out := append([]ModelTokens(nil), done...)
+	for _, m := range live {
+		out = AddModelTokens(out, m.Model, m.InputTokens, m.OutputTokens)
+	}
+	return out
+}
+
+// servedBy is the model a completion is counted under. See [ModelTokens].
+func servedBy(completion *llm.Completion, provider llm.Provider) string {
+	if completion.Model != "" {
+		return completion.Model
+	}
+	return provider.Model()
 }
 
 // partialInterval bounds how often a round in flight republishes.
@@ -601,6 +673,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var narration, abandoned []Narration
 	var inTokens, outTokens int
 	var model string
+	var models []ModelTokens
 	// served distinguishes the model a COMPLETION named from the configured
 	// placeholder a streamed round shows before one exists.
 	var served bool
@@ -616,7 +689,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var partial *Partial
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, rounds, model, models)
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(Result{
@@ -629,6 +702,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				Partial:      partial.clone(),
 				RoundsUsed:   rounds,
 				Model:        model,
+				Models:       append([]ModelTokens(nil), models...),
 				Messages:     append([]llm.Message(nil), msgs...),
 			})
 		}
@@ -675,7 +749,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 					kept = append(kept, Narration{Round: roundsUsed,
 						Reasoning: uncommitted.ReasoningContent, Content: uncommitted.Content})
 				}
-				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model)
+				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model, models)
 			case partial != nil:
 				// A streamed answer still arriving: where a failed provider
 				// call leaves its attempt.
@@ -684,7 +758,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				}
 				cfg.Progress.abandon(kept)
 			default:
-				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model)
+				cfg.Progress.record(msgs, execs, narration, kept, inTokens, outTokens, answeredRounds, model, models)
 			}
 		}
 		panic(recovered)
@@ -818,9 +892,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 		}
 		// BILLED THE MOMENT IT ARRIVES, so an account taken from here on counts
-		// it, whatever then becomes of the round.
+		// it, whatever then becomes of the round — and under the model that
+		// served it, whichever that was.
 		inTokens += completion.InputTokens
 		outTokens += completion.OutputTokens
+		models = AddModelTokens(models, servedBy(completion, cfg.Provider),
+			completion.InputTokens, completion.OutputTokens)
 		answeredRounds, uncommitted = roundsUsed, completion
 		roundSpan.SetAttributes(
 			attribute.String("crewlet.model", completion.Model),
@@ -878,7 +955,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				})
 			}
 			if cfg.Progress != nil {
-				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model)
+				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model, models)
 			}
 			return nil, err
 		}
@@ -1000,7 +1077,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// outside the engine. No publish follows this return, so the
 			// failure view is brought up to date here.
 			if cfg.Progress != nil {
-				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model)
+				cfg.Progress.record(msgs, execs, narration, abandoned, inTokens, outTokens, roundsUsed, model, models)
 			}
 			return nil, err
 		}
@@ -1020,6 +1097,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				Abandoned:         abandoned,
 				RoundsUsed:        roundsUsed,
 				Model:             model,
+				Models:            models,
 				Messages:          msgs,
 				EmptyAnswers:      emptyAnswers,
 				Suspended:         true,
@@ -1044,6 +1122,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		Abandoned:       abandoned,
 		RoundsUsed:      roundsUsed,
 		Model:           model,
+		Models:          models,
 		Messages:        msgs,
 		ExhaustedRounds: exhausted,
 		EmptyAnswers:    emptyAnswers,
