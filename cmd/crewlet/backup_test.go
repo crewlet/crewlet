@@ -33,9 +33,12 @@ func newBackupNode(t *testing.T) *backupNode {
 				"taken_at":    "2026-08-30T12:00:00Z",
 				"finished_at": "2026-08-30T12:00:02Z",
 				"node_id":     "node-0",
-				"store": map[string]any{
-					"file": "store.db", "source": "/data/company.db",
-					"bytes": 262144, "migrations": []string{"0001_events.sql"},
+				"stores": []map[string]any{
+					{"estate": "node", "file": "store.db", "source": "/data/company.db",
+						"bytes": 262144, "migrations": []string{"0001_events.sql"}},
+					{"estate": "replicated", "file": "store-replicated.db",
+						"source": "/data/crewlet-replicated.db", "bytes": 131072,
+						"migrations": []string{"0001_tracker.sql", "0002_pages.sql"}},
 				},
 				"streams": []map[string]any{
 					{"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
@@ -73,7 +76,8 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 	}
 	// Both estates named, so an operator can see what they actually got
 	// rather than inferring it from an exit code.
-	for _, want := range []string{"/var/backups/tonight", "store", "CREWLET_AGENT", "12 messages"} {
+	for _, want := range []string{"/var/backups/tonight", "store (node)", "store (replicated)",
+		"2 migrations", "CREWLET_AGENT", "12 messages"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
 		}
