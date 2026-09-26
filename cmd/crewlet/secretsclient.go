@@ -81,7 +81,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 			Source    string `json:"source"`
 		} `json:"secrets"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body, oneAnswer); err != nil {
 		return nil, err
 	}
 	out := make([]secrets.Record, 0, len(body.Secrets))
@@ -109,7 +109,7 @@ func (c *secretsClient) Set(ctx context.Context, name, value, _, source string, 
 	if source != "" {
 		path += "?source=" + url.QueryEscape(source)
 	}
-	return c.call(ctx, http.MethodPut, path, []byte(value), nil)
+	return c.call(ctx, http.MethodPut, path, []byte(value), nil, oneAnswer)
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.
@@ -118,7 +118,7 @@ func (c *secretsClient) Get(ctx context.Context, name string) (string, error) {
 		Value string `json:"value"`
 	}
 	err := c.call(ctx, http.MethodGet,
-		"/secrets/"+url.PathEscape(name)+"?reveal=true", nil, &body)
+		"/secrets/"+url.PathEscape(name)+"?reveal=true", nil, &body, oneAnswer)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +130,7 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 	var body struct {
 		Removed bool `json:"removed"`
 	}
-	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, &body)
+	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, &body, oneAnswer)
 	if err != nil {
 		return false, err
 	}
@@ -148,15 +148,59 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID, _ string, _ time
 		Moved []string `json:"moved"`
 	}
 	err := c.call(ctx, http.MethodPost,
-		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
+		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body, oneAnswer)
 	if err != nil {
 		return nil, err
 	}
 	return body.Moved, nil
 }
 
+// Values reads every value the fleet holds, for a command resolving the
+// company document: see [companyResolver] for why it takes them all.
+//
+// The node logs the read, naming every value's name and the operator its
+// guard authenticated.
+func (c *secretsClient) Values(ctx context.Context) (map[string]string, error) {
+	var body struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/secrets?reveal=true", nil, &body, wholeStore); err != nil {
+		return nil, err
+	}
+	if body.Values == nil {
+		// A NODE THAT ANSWERED WITHOUT THE FIELD is not a fleet with no
+		// secrets: it is a node that did not serve this read, and resolving
+		// on as if the store were empty would read every stored credential
+		// as unset.
+		return nil, fmt.Errorf("%s answered GET /secrets?reveal=true without "+
+			"the values it holds; a node on this build answers it", c.base)
+	}
+	return body.Values, nil
+}
+
+// answerBound is how much of one answer this client reads, and why.
+type answerBound struct {
+	bytes int
+	why   string
+}
+
+var (
+	// oneAnswer bounds every route but the bulk read: a small JSON object,
+	// or one credential.
+	oneAnswer = answerBound{maxSecretResponseBytes, "a credential this long " +
+		"is not one this build stores, and a clipped one would be worse than none"}
+
+	// wholeStore bounds the bulk read at the tree's ceiling for a body that
+	// is decoded ([httpx.MaxResponseBody]): it holds every value the fleet
+	// does, each under the write limit, so it has no bound of its own short
+	// of the store's size.
+	wholeStore = answerBound{httpx.MaxResponseBody, "a store this large is " +
+		"not read whole, and a clipped one would resolve every value past " +
+		"the cut as unset"}
+)
+
 // call performs one request and decodes the answer, or explains the refusal.
-func (c *secretsClient) call(ctx context.Context, method, path string, body []byte, out any) error {
+func (c *secretsClient) call(ctx context.Context, method, path string, body []byte, out any, bound answerBound) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -181,23 +225,18 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	// BOUNDED, AND REFUSED PAST THE BOUND. Every answer here is a small JSON
-	// object or one credential; the reveal route's value is capped by the
-	// same limit the write is, and nothing else this client reads is larger.
-	//
-	// The refusal is what the bound needs to be worth having: io.LimitReader
-	// stops at its cap and reports a clean EOF, so an over-long answer used
-	// to arrive CLIPPED — and a clipped credential is one this command prints
-	// for an operator to paste somewhere, silently missing its tail.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSecretResponseBytes+1))
+	// BOUNDED PER ROUTE, AND REFUSED PAST THE BOUND ([answerBound]). The
+	// refusal is what a bound needs to be worth having: io.LimitReader stops
+	// at its cap and reports a clean EOF, so a bound that only capped would
+	// hand on a CLIPPED answer — a credential this command prints for an
+	// operator to paste somewhere, silently missing its tail.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(bound.bytes)+1))
 	if err != nil {
 		return fmt.Errorf("reading the answer from %s: %w", c.base, err)
 	}
-	if len(raw) > maxSecretResponseBytes {
-		return fmt.Errorf(
-			"the node's answer to %s exceeded %d bytes, so it was not read: a "+
-				"credential this long is not one this build stores, and a clipped "+
-				"one would be worse than none", path, maxSecretResponseBytes)
+	if len(raw) > bound.bytes {
+		return fmt.Errorf("the node's answer to %s exceeded %d bytes, so it "+
+			"was not read: %s", path, bound.bytes, bound.why)
 	}
 	if resp.StatusCode/100 != 2 {
 		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
@@ -225,8 +264,8 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 	decodeRefusal(raw, &body)
 	if !body.fromNode() {
 		// SHOWN, NEVER INTERPRETED — see [refusalBody.fromNode]. An
-		// answer here can be as large as maxSecretResponseBytes, which is
-		// what [unrecognisedRefusal] bounds.
+		// answer here can be as large as the route's [answerBound], and
+		// [unrecognisedRefusal] bounds what of it is shown.
 		return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
 			unrecognisedRefusal(contentType, raw))
 	}

@@ -2400,7 +2400,8 @@ func writeFailure(name string, err error) string {
 		}
 		return fmt.Sprintf("%s landed only in part (%v). Part of this change "+
 			"WAS made, and calling %s again does not finish it — the message "+
-			"says what does. Report what landed rather than that nothing did.",
+			"says what becomes of the rest. Report what landed rather than "+
+			"that nothing did.",
 			name, err, name)
 	}
 	switch {

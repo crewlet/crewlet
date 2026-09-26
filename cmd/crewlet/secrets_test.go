@@ -412,12 +412,16 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	}
 }
 
-// AND WHEN THE NODE CANNOT BE REACHED, both facts are in the refusal.
+// AND WHEN THE NODE CANNOT BE REACHED, both facts are in the refusal — and
+// the one way forward, which is the API.
 //
 // The lock alone reads as "you are blocked, with no way forward"; the API's
 // own complaint alone reads as though the local store were never an option.
 // An operator needs to know that the engine is holding the file AND why the
-// route around it did not work.
+// route to it did not work. Neither this node's own table nor the environment
+// is a way round: the next start keeps the fleet's copy of a name it already
+// holds and deletes the local one, and the store is read before the
+// environment, so either would look like a rotation and change nothing.
 func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	t.Parallel()
 	// api.port 0 is a node that serves no HTTP at all, which is the one
@@ -436,13 +440,19 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	for _, want := range []string{
 		"pid 41",       // the original, still there to act on
 		"crewlet.yaml", // which node
-		"api.port",     // why the route around it failed
+		"api.port",     // why the route to it failed, and what to fix
 		"crewlet run",  // what is holding the file
-		"environment",  // the way out that needs no downtime
+		"-api",         // the other way to name the node
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal omits %q, so an operator is told they are "+
 				"blocked and not what to do: %v", want, err)
+		}
+	}
+	for _, wrong := range []string{"stop `crewlet run`", "process environment"} {
+		if strings.Contains(err.Error(), wrong) {
+			t.Errorf("the refusal offers %q as a way round the API, and it is "+
+				"not one: %v", wrong, err)
 		}
 	}
 }
@@ -573,7 +583,10 @@ func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 	// Each opener, and the function that must appear in it. `secrets.go`
 	// routes to the API; the other two explain.
 	openers := map[string]map[string]string{
-		"secrets.go":    {"openSecretStore": "throughTheRunningNode"},
+		"secrets.go": {
+			"openSecretStore": "throughTheRunningNode",
+			"runningNode":     "runningNodeClient",
+		},
 		"config_cmd.go": {"openConfigStore": "engineHoldsTheStore"},
 		"ops.go":        {"runMigrate": "engineHoldsTheStore"},
 	}
@@ -612,5 +625,37 @@ func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 					"would be reported with no way forward", fnName, file, needs)
 			}
 		}
+	}
+}
+
+// ON A STOPPED NODE, A READ OR A REMOVAL SAYS WHICH STORE ANSWERED.
+//
+// This node's own table is empty for every name the fleet holds, so its "not
+// found" says nothing about the fleet's value, and "was not set" would tell an
+// operator removing a live credential that there was nothing to remove.
+//
+// Mutation: answer the local table's miss as the plain "not found" or "was not
+// set", and the store and the way to the fleet go missing.
+func TestAStoppedNodesMissSaysWhichStoreMissed(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	_, _, err := secretsCmd(t, cfg, "get", "FLEET_ONLY", "-reveal")
+	if err == nil {
+		t.Fatal("a name no store holds was revealed")
+	}
+	out, _, unsetErr := secretsCmd(t, cfg, "unset", "FLEET_ONLY")
+	if unsetErr != nil {
+		t.Fatalf("unset: %v", unsetErr)
+	}
+	for what, said := range map[string]string{"get": err.Error(), "unset": out} {
+		for _, want := range []string{"index.db", "-api"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s on a stopped node said %q, which omits %q", what, said, want)
+			}
+		}
+	}
+	if strings.Contains(out, "was not set") {
+		t.Errorf("unset on a stopped node told the operator the name was not set: %q", out)
 	}
 }

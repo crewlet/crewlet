@@ -147,18 +147,18 @@ type SeatCallable interface {
 //
 // The native tracker's writes are keyed on the turn and on how many writes of
 // the same kind to the same object came earlier in it (see
-// internal/agent/builtin), which it reads off [turnctx.Turn.Calls]: the turn's
-// closed rounds, and the calls this surface recorded before the one it is
-// running. Two such calls in flight at once would each be handed the same
-// earlier calls and name two writes as one — and the operation ledger answers
-// the second `applied` without writing it.
+// internal/agent/builtin), which it reads off [turnctx.Turn.Calls]: the calls
+// the Turn this surface is bound to carries, followed by the ones this surface
+// recorded before the call it is running. Two such calls in flight at once
+// would each be handed the same earlier calls and name two writes as one — and
+// the operation ledger answers the second `applied` without writing it.
 //
 // A surface CAN run two calls at once: the MCP bridge executes each call a
 // coding agent sends it as it arrives, and the SDK serving the bridge handles
 // calls asynchronously. So the surface runs these ONE AT A TIME, each from the
 // moment it is handed the calls before it until it is recorded among them.
-// Every other tool runs as it always has — a read serialised behind a write
-// would only be slower.
+// Every other tool runs without waiting on them — a read serialised behind a
+// write would only be slower.
 //
 // Optional, like [SeatCallable], and for the same reason.
 type Sequenced interface {

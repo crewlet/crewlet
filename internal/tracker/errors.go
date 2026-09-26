@@ -23,23 +23,33 @@ import "fmt"
 // the first one wrote and writes the rest. A promotion's second call finds the
 // subtask the first one filed — its id is derived from the checklist item —
 // and goes on to mark the item. A cross-project move's second call is refused,
-// because its root has already moved; a merge's marker hands what is left to
-// the tracker duty. The message of each says what finishes it.
+// because its root has already moved, and its message says that nothing
+// completes the walk on its own; a merge's message says the tracker duty
+// completes what its marker began.
 type PartialError struct {
 	// Rerun reports whether calling the same gesture again finishes it.
 	Rerun bool
 
-	err error
+	// Err is the gesture's own account of where it stopped — what landed,
+	// what did not — wrapping the cause it stopped on.
+	Err error
 }
 
-// partial is a [PartialError] whose message is format with args, wrapping what
-// fmt.Errorf would.
+// partial is a [PartialError] whose account is format with args, wrapping
+// what fmt.Errorf would.
 func partial(rerun bool, format string, args ...any) error {
-	return &PartialError{Rerun: rerun, err: fmt.Errorf(format, args...)}
+	return &PartialError{Rerun: rerun, Err: fmt.Errorf(format, args...)}
 }
 
-func (e *PartialError) Error() string { return e.err.Error() }
+// Error is the gesture's account. A PartialError carrying none still says what
+// kind of failure it is, rather than panicking in whatever prints it.
+func (e *PartialError) Error() string {
+	if e.Err == nil {
+		return "tracker: a gesture stopped after its first commit landed"
+	}
+	return e.Err.Error()
+}
 
 // Unwrap keeps the cause the gesture stopped on reachable, so a caller asking
 // what went wrong underneath — a conflict, a node that is behind — still can.
-func (e *PartialError) Unwrap() error { return e.err }
+func (e *PartialError) Unwrap() error { return e.Err }

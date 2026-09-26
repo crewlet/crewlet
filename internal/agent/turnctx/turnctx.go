@@ -153,9 +153,16 @@ type Turn struct {
 	Rounds []ledger.Iteration
 
 	// Earlier is every call this turn made before the one now running that
-	// no closed round in [Turn.Rounds] holds — above all the running
-	// phase's own calls so far, which the surface running a call derives
-	// into the Turn it hands that call. [Turn.Calls] is the two together.
+	// no closed round in [Turn.Rounds] holds: the running phase's calls so
+	// far, including — for a phase re-entered after a suspend — the ones it
+	// made before suspending. [Turn.Calls] is the two together.
+	//
+	// TWO FRAMES FILL IT. The surface running a call appends the calls IT
+	// has recorded to whatever the Turn it was bound to already carries,
+	// and hands the call that (see the tools package's Surface). A call no
+	// surface in this process recorded — a re-entered phase's calls from
+	// before its suspend — reaches it only if the frame binding the surface
+	// put it in the bound Turn.
 	//
 	// It travels because a write is NAMED after the calls before it: the
 	// native tracker's tools key each operation on the turn and on how many
@@ -176,10 +183,15 @@ type Turn struct {
 	// The seed is the work key where there is one, and every run of that
 	// unit of work started after its triggers were published, so it is the
 	// earliest trigger's own envelope timestamp; with no work key the seed
-	// is the run, and it is the run's start. See [TriggerInstant]. What
-	// reads it is the write path's mint instant, which a node that adopted
-	// a snapshot compares against the adoption: a retry stamped with its
-	// OWN call time reads as newer than an adoption its first attempt
+	// is the run, and it is the run's start. See [TriggerInstant]. A turn
+	// re-entered after a coding run carries the earliest instant that run's
+	// row records — its first launch — because the row holds neither of
+	// those; that bounds what the re-entry mints, and not an id it derives
+	// again that the dispatched turn minted earlier.
+	//
+	// What reads it is the write path's mint instant, which a node that
+	// adopted a snapshot compares against the adoption: a retry stamped with
+	// its OWN call time reads as newer than an adoption its first attempt
 	// predates, and is decided a second time.
 	//
 	// Zero means nothing is known, and each write is then stamped with its
@@ -190,10 +202,13 @@ type Turn struct {
 // TriggerInstant is [Turn.TriggeredAt] for a turn a dispatch started.
 //
 // WITH A WORK KEY, the earliest envelope timestamp among the events the turn
-// was dispatched for: the work key is derived from those events, a redelivery
-// derives it again, and no attempt at the work can have minted anything before
-// the events it was woken by existed. NOT the dispatch's own instant, which on
-// a redelivery is later than the first attempt's writes.
+// was dispatched for: the work key is derived from events among them, every
+// attempt at the work was woken by those events, and none can have minted
+// anything before they existed. NOT the dispatch's own instant, which on a
+// redelivery is later than the first attempt's writes. An event the key is not
+// derived from can only make the answer earlier, and an instant too early costs
+// at most an `unknown` its caller retries, where one too late has a write
+// decided a second time.
 //
 // WITHOUT ONE, the run's own start, because the run is then the seed and
 // nothing but this run derives its ids.

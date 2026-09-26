@@ -448,12 +448,13 @@ roles:
 //   - the reflection workers — the episodist, and the persist decider whose
 //     diary is built in the same call — are handed over only in the apply's
 //     commit, after every step that can refuse. A worker set handed over
-//     before a refusal would be the refused revision's, embedding every
-//     completed turn with its model.
+//     before a refusal would be the refused revision's, reflecting every
+//     completed turn as a company the node does not serve.
 //
-// Mutation: in [Engine.Apply], hand the reflection workers over between
-// equipping the revision and building its sandbox, and the episodist files
-// the turn under the refused model.
+// Mutation: in [Engine.Apply], hand the reflection workers over before the
+// revision's sandbox is built, and the completed turn is reflected by the
+// refused revision's episodist — built from an epoch never equipped, so it
+// files the turn with no vector and no model.
 func TestARefusedRevisionMovesNoVector(t *testing.T) {
 	t.Parallel()
 	provider := newConceptServer(t)

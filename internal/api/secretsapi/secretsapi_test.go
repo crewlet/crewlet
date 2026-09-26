@@ -383,3 +383,66 @@ func TestRemovingANameTheWritePathWouldRefuseStillWorks(t *testing.T) {
 		t.Fatalf("DELETE = %d %s, want 200 with removed:true", code, body)
 	}
 }
+
+// EVERY VALUE COMES BACK IN ONE ANSWER, AND ONLY WITH THE FLAG.
+//
+// A command resolving the company document off the node reads the fleet's
+// whole store at once; the listing an operator or the dashboard reads must
+// still carry no value at all. The revealing answer is a map from name to
+// value, the exact store, and a proxy may not keep it.
+//
+// Mutation: answer the listing's shape under the flag, or drop a value from
+// the map, and the revealing half fails; serve values without the flag and
+// the plain half does.
+func TestEveryValueComesBackInOneAnswerOnlyWithTheFlag(t *testing.T) {
+	t.Parallel()
+	h, _ := surface(t, cipherFor(t, "k1"), "k1")
+	want := map[string]string{"GL_TOKEN": "glpat-one", "SIGNING": "whsec_two\nline"}
+	for name, value := range want {
+		if code, body := call(t, h, http.MethodPut, "/secrets/"+name, value); code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s", name, code, body)
+		}
+	}
+
+	code, plain := call(t, h, http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || strings.Contains(plain, "glpat") ||
+		strings.Contains(plain, `"values"`) {
+		t.Fatalf("the plain listing answered %d %s, want names and no values", code, plain)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/secrets?reveal=true", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /secrets?reveal=true = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	var body struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if len(body.Values) != len(want) {
+		t.Errorf("revealed %d values, want %d: %v", len(body.Values), len(want), body.Values)
+	}
+	for name, value := range want {
+		if body.Values[name] != value {
+			t.Errorf("%s revealed as %q, want %q", name, body.Values[name], value)
+		}
+	}
+}
+
+// A NODE WITH NO KEYRING REVEALS NOTHING, and says what to install: it holds
+// no key to open a row with, and an empty map would read as a fleet that
+// holds no secret.
+func TestWithoutAKeyringNothingIsRevealedInBulk(t *testing.T) {
+	t.Parallel()
+	h, _ := surface(t, nil, "")
+	code, body := call(t, h, http.MethodGet, "/secrets?reveal=true", "")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "no_keyring") {
+		t.Fatalf("GET /secrets?reveal=true with no keyring = %d %s, want 503 no_keyring",
+			code, body)
+	}
+}

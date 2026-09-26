@@ -392,11 +392,13 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 }
 
-// A NODE-LOCAL WRITE SAYS SO, and says what will carry it to the fleet.
+// A NODE-LOCAL WRITE SAYS SO, and says when it will and will not reach the
+// fleet.
 //
 // An operator who wrote a value while the engine was stopped and saw nothing
-// propagate would reasonably conclude the write failed. "This node will put
-// it on the fleet at its next start" is not guessable.
+// propagate would reasonably conclude the write failed. And the next start
+// copies it onto the fleet only when the fleet holds no value under that name,
+// so a rotation written here is discarded — which nothing else would say.
 func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
@@ -411,7 +413,8 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 		// The note, whose phrasing is distinct from the store's own
 		// description on purpose: dropping it while keeping the path
 		// would still leave an operator without the way forward.
-		"To reach a RUNNING fleet now",
+		"already holds GL_TOKEN", // the write the next start discards
+		"-api",                   // and the way a rotation does arrive
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output omits %q: %q", want, out.String())
@@ -442,5 +445,55 @@ func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 	}
 	if patient.http.Timeout != time.Hour {
 		t.Errorf("patiently(1h) timeout = %v, want 1h", patient.http.Timeout)
+	}
+}
+
+// EVERY VALUE IS READ IN ONE REVEALING REQUEST, and an answer without them is
+// not an empty store.
+//
+// A node that answered without the field did not serve this read; resolving
+// on as if the store were empty would read every stored credential as unset,
+// which for a signing secret is the signal to mint one.
+//
+// Mutation: accept an answer with no values as an empty map, and the second
+// half resolves on.
+func TestTheValuesAreReadInOneRequestAndNeverGuessed(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"values":{"A_TOKEN":"one","B_TOKEN":"two"}}`
+	got, err := node.client(t).Values(t.Context())
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	if len(got) != 2 || got["A_TOKEN"] != "one" || got["B_TOKEN"] != "two" {
+		t.Errorf("Values = %v, want both values the node holds", got)
+	}
+	if node.last.method != http.MethodGet || node.last.path != "/secrets" ||
+		node.last.query != "reveal=true" || node.last.auth != "Bearer ops-token" {
+		t.Errorf("the node saw %+v, want one authenticated GET /secrets?reveal=true",
+			node.last)
+	}
+
+	node.body = `{"secrets":[]}`
+	if values, err := node.client(t).Values(t.Context()); err == nil {
+		t.Errorf("an answer with no values field read as the store %v", values)
+	}
+}
+
+// AN ANSWER PAST ITS BOUND IS REFUSED, not clipped. A clipped bulk answer
+// would resolve every value past the cut as unset; a clipped single one is a
+// credential missing its tail.
+func TestAnAnswerPastItsBoundIsRefusedNotClipped(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"value":"` + strings.Repeat("x", maxSecretResponseBytes) + `"}`
+	if _, err := node.client(t).Get(t.Context(), "BIG"); err == nil ||
+		!strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("a single answer past its bound = %v, want it refused", err)
+	}
+	// THE BULK READ'S BOUND IS ITS OWN: the same body is well inside it.
+	node.body = `{"values":{"BIG":"` + strings.Repeat("x", maxSecretResponseBytes) + `"}}`
+	if _, err := node.client(t).Values(t.Context()); err != nil {
+		t.Errorf("the whole store was refused at one credential's bound: %v", err)
 	}
 }

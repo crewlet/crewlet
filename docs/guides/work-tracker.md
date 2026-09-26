@@ -631,9 +631,22 @@ names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
 its own reasons.
 
-Neither is `purge`, which destroys every row on every node and has no inverse.
-That one is `crewlet work purge`, with a typed confirmation and a required
-reason, and it is deliberately not a tool at all.
+Nothing can be filed or moved under an item in the trash. A create or a
+re-parent naming a removed parent is refused, and the refusal says who removed
+it and when — restore it first. A removed item is frozen besides: a comment or
+an edit on it is refused until it is restored.
+
+A subtree leaves and comes back one item at a time, parent first, so a removal
+or a restore can stop part-way, with its root done and some of what goes with
+it not. The answer says so rather than that nothing happened, and calling the
+same tool again finishes it: each item already where the gesture puts it is
+passed over. `restore_work_item` on an item that is already out of the trash
+is how a stopped restore is finished — it brings back whatever that item's
+removal took that is still in there, and writes nothing else.
+
+Neither of the two is `purge`, which destroys every row on every node and has
+no inverse. That one is `crewlet work purge`, with a typed confirmation and a
+required reason, and it is deliberately not a tool at all.
 
 Three of those count as a **delivery**: create, update and comment. A turn
 woken by an assignment answers by moving the task, commenting on it, or filing
@@ -654,9 +667,6 @@ write back at a cheaper level. See [Read consistency](consistency.md).
 read. Without it, the last write wins — which is right for a field an agent is
 setting from its own work. With it, a concurrent edit is refused and the
 refusal carries the current version, so the caller can re-read and decide.
-
-The body is different: a save must state the version it edited, always. There
-is no per-field merge that makes overwriting prose safe.
 
 Watching is not a field a caller sets either. The watcher list is a set, and a
 tool that could write it whole would have to know every name already on it —
