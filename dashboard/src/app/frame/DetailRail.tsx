@@ -38,10 +38,10 @@ import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts"
 import { href } from "../router.tsx";
 import { ButtonLink, IconButton } from "@crewlethq/ui";
 import {
-  ArrowOutwardGlyph,
-  CloseGlyph,
-  KeyboardArrowDownGlyph,
-  KeyboardArrowUpGlyph,
+  ArrowUpRightGlyph,
+  XGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useKeyChords } from "~/lib/keys.ts";
 
@@ -240,7 +240,7 @@ export function DetailRail({
               <IconButton
                 size="sm"
                 variant="ghost"
-                icon={<KeyboardArrowUpGlyph size="sm" />}
+                icon={<ChevronUpGlyph size="sm" />}
                 label="Previous"
                 title="Previous ([)"
                 onClick={() => onStep(-1)}
@@ -248,7 +248,7 @@ export function DetailRail({
               <IconButton
                 size="sm"
                 variant="ghost"
-                icon={<KeyboardArrowDownGlyph size="sm" />}
+                icon={<ChevronDownGlyph size="sm" />}
                 label="Next"
                 title="Next (])"
                 onClick={() => onStep(1)}
@@ -264,14 +264,14 @@ export function DetailRail({
             size="small"
             variant="secondary"
             href={peekHref(object)}
-            trailingIcon={<ArrowOutwardGlyph size="sm" />}
+            trailingIcon={<ArrowUpRightGlyph size="sm" />}
           >
             Open
           </ButtonLink>
           <IconButton
             size="sm"
             variant="ghost"
-            icon={<CloseGlyph size="sm" />}
+            icon={<XGlyph size="sm" />}
             label="Close"
             title="Close (esc)"
             onClick={close}

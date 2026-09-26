@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
@@ -428,5 +429,42 @@ func TestTheSpendChartDrawsExactlyTheEnginesPhaseBands(t *testing.T) {
 	if !slices.Equal(drawn, folded) {
 		t.Errorf("the dashboard draws the bands %v and the engine folds into %v — "+
 			"one set, in one stacking order", drawn, folded)
+	}
+}
+
+// AND A PHASE IS DRAWN IN THE BAND THE ENGINE FOLDS IT INTO.
+//
+// The design system has no phase hues: inside a figure a phase is a series,
+// and the dashboard draws it in its BAND's (`PHASE_BANDS`, read by
+// `phaseColor`), so a phase is one colour on every chart. That table is
+// tokens.PhaseBand written out by phase, and it can drift two ways, both
+// silent: an entry the engine folds elsewhere is a coding run drawn as Review
+// in one chart and counted as Execute in the next, and a phase the table does
+// not name falls to Auxiliary's hue whatever the engine does with it.
+func TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal(clientsource.Tree(t), "PHASE_BANDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("no phases were found at all, so this gate certifies nothing")
+	}
+	for _, key := range keys {
+		drawn := clientsource.Field(block, key)
+		if want := string(tokens.PhaseBand(key)); len(drawn) != 1 || drawn[0] != want {
+			t.Errorf("the dashboard draws phase %q in band %v and the engine folds it into %q",
+				key, drawn, want)
+		}
+	}
+	for _, p := range phase.All {
+		if !slices.Contains(keys, string(p)) {
+			t.Errorf("phase %q is not in PHASE_BANDS, so it is drawn in Auxiliary's hue "+
+				"whatever band the engine counts it in", p)
+		}
 	}
 }

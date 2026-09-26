@@ -1,17 +1,18 @@
-The faces in this directory are redistributed under the SIL Open Font License,
-Version 1.1. They are the `latin` and `latin-ext` subsets that Google Fonts
-serves for these families: subsets and partial instances of the upstream
-variable fonts, and therefore Modified Versions under the definitions below.
-Neither family declares a Reserved Font Name. fonts/README.md records where
-each file was downloaded from, and SHA256SUMS its checksum.
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)
 
-  Inter
-    Copyright (c) 2016 The Inter Project Authors
-    https://github.com/rsms/inter
+These are the copyright notices of the faces in this directory, reproduced
+exactly as their files state them: the Geist faces carry the first and the
+Geist Mono faces the second. The faces are the `latin` and `latin-ext` subsets
+that Google Fonts serves for the two families. Each keeps part of the upstream
+variable font's glyphs, layout features and tables, and is therefore a
+Modified Version under the definitions below. Neither family declares a
+Reserved Font Name. fonts/README.md records where each file was downloaded
+from, and SHA256SUMS its checksum.
 
-  JetBrains Mono
-    Copyright (c) 2020 The JetBrains Mono Project Authors
-    https://github.com/JetBrains/JetBrainsMono
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

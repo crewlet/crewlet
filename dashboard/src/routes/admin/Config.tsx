@@ -32,12 +32,12 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  DescriptionGlyph,
-  DnsGlyph,
-  ForkRightGlyph,
+  FileTextGlyph,
+  ServerGlyph,
+  SplitGlyph,
   LayersGlyph,
-  ScheduleGlyph,
-  TuneGlyph,
+  ClockGlyph,
+  SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 // OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
@@ -226,7 +226,7 @@ function AppliedAcross({
   }
   return (
     <Card>
-      <Card.Header icon={<DnsGlyph size="sm" />}>Across the fleet</Card.Header>
+      <Card.Header icon={<ServerGlyph size="sm" />}>Across the fleet</Card.Header>
       {body}
     </Card>
   );
@@ -308,7 +308,7 @@ function RevisionBody({
         </section>
       ) : (
         <Card>
-          <Card.Header icon={<DescriptionGlyph size="sm" />}>Where it came from</Card.Header>
+          <Card.Header icon={<FileTextGlyph size="sm" />}>Where it came from</Card.Header>
           {provenance}
         </Card>
       )}
@@ -362,7 +362,7 @@ export function RevisionPeek({ id }: { id: string }) {
         {audit.data && !revision && (
           <EmptyState
             size="compact"
-            icon={<ScheduleGlyph size="xl" />}
+            icon={<ClockGlyph size="xl" />}
             title="No such revision in the recent history"
             description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
           />
@@ -372,7 +372,7 @@ export function RevisionPeek({ id }: { id: string }) {
             <ObjectHeader
               size="peek"
               kind="Revision"
-              icon="description"
+              icon="file-text"
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
@@ -522,10 +522,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             value={lens}
             onChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: "description" },
+              { value: "active", label: "Active", icon: "file-text" },
               { value: "entities", label: "Entities", icon: "layers" },
-              { value: "audit", label: "History", icon: "schedule" },
-              { value: "diff", label: "Diff", icon: "fork_right" },
+              { value: "audit", label: "History", icon: "clock" },
+              { value: "diff", label: "Diff", icon: "split" },
             ]}
           />
         }
@@ -545,7 +545,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
           <QueryState error={audit.error} loading={audit.loading}>
             {audit.data && !addressed && (
               <EmptyState
-                icon={<ScheduleGlyph size="xl" />}
+                icon={<ClockGlyph size="xl" />}
                 title="No such revision in the recent history"
                 description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
               />
@@ -554,7 +554,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               <>
                 <ObjectHeader
                   kind="Revision"
-                  icon="description"
+                  icon="file-text"
                   identifier={addressed.revision_id.slice(0, 10)}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
@@ -562,7 +562,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   actions={
                     <Button
                       size="small"
-                      leadingIcon={<ForkRightGlyph size="sm" />}
+                      leadingIcon={<SplitGlyph size="sm" />}
                       onClick={() => {
                         setRevision(addressed.revision_id);
                         setAgainst("");
@@ -592,7 +592,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             {active.data ? (
               <Card>
                 <Card.Header
-                  icon={<DescriptionGlyph size="sm" />}
+                  icon={<FileTextGlyph size="sm" />}
                   subtitle="as the engine resolved it"
                   actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
                 >
@@ -618,7 +618,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               </Card>
             ) : (
               <EmptyState
-                icon={<TuneGlyph size="xl" />}
+                icon={<SlidersVerticalGlyph size="xl" />}
                 title={NO_REVISION.title}
                 description={NO_REVISION.hint}
               />
@@ -665,7 +665,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   {(ids.data?.ids ?? []).map((id) => (
                     <Button
                       key={id}
-                      variant={id === entity ? "primary" : "tertiary"}
+                      variant={id === entity ? "primary" : "ghost"}
                       size="small"
                       onClick={() => setEntity(id === entity ? "" : id)}
                     >
@@ -676,7 +676,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               </Card>
               <Card>
                 <Card.Header
-                  icon={<DescriptionGlyph size="sm" />}
+                  icon={<FileTextGlyph size="sm" />}
                   subtitle="as the active revision declares it"
                   actions={
                     one.data?.entity ? (
@@ -716,7 +716,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       // of the document.
                       <EmptyState
                         size="compact"
-                        icon={<TuneGlyph size="xl" />}
+                        icon={<SlidersVerticalGlyph size="xl" />}
                         title={NO_REVISION.title}
                         description="There is no active revision for this entity to be declared in."
                       />
@@ -745,7 +745,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             }
           >
             <Card padding="none">
-              <Card.Header icon={<ScheduleGlyph size="sm" />} count={rows.length}>
+              <Card.Header icon={<ClockGlyph size="sm" />} count={rows.length}>
                 Revisions
               </Card.Header>
               <DataGrid<RevisionMeta>
@@ -811,7 +811,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
           {lens === "diff" && (
             <Card>
               <Card.Header
-                icon={<ForkRightGlyph size="sm" />}
+                icon={<SplitGlyph size="sm" />}
                 subtitle={
                   against
                     ? `against revision ${against.slice(0, 10)}`
@@ -823,7 +823,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               {!revision ? (
                 <EmptyState
                   size="compact"
-                  icon={<ForkRightGlyph size="xl" />}
+                  icon={<SplitGlyph size="xl" />}
                   title="Pick a revision above"
                   description="Its differences against the currently active document are shown here."
                 />

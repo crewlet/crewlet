@@ -665,6 +665,48 @@ test("the rail names a person, exactly as the page does", async () => {
   expect(setBy.some((line) => /\bada\b/.test(line))).toBe(false);
 });
 
+// AN OPERATOR IS A PERSON, AND IS DRAWN AS ONE. A task filed through an
+// operator token has the TOKEN's name as its reporter — author kind
+// `operator` — and no chart lists it, so the chart alone drew that person
+// with the agent's squircle. The change log says who wrote it and as what;
+// the badge takes the kind its writes carry, on the page and the peek alike.
+test("an operator reporter is drawn with a person's circle", async () => {
+  serving({
+    work_item: {
+      task: task({ assignee: "ada", reporter: "founder" }),
+      history: [
+        {
+          id: "h-1",
+          kind: "create",
+          actor: "founder",
+          actor_kind: "operator",
+          at: "2031-04-16T09:00:00Z",
+          log_seq: 1,
+        },
+      ],
+      complete: true,
+    },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <ItemPeek itemKey="ENG-42" />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.getAllByText("founder").length).toBeGreaterThan(0));
+  const chip = [...container.querySelectorAll("a.seat-chip")].find(
+    (a) => a.textContent === "FOfounder" || a.querySelector(".truncate")?.textContent === "founder",
+  );
+  expect(chip, "the reporter is drawn as a seat chip").toBeTruthy();
+  expect(chip!.querySelector(".crewlet-avatar--human")).not.toBeNull();
+  expect(chip!.querySelector(".crewlet-avatar--agent")).toBeNull();
+  // AND THE CHART STILL WINS where it holds the seat: Ada is an agent.
+  const ada = [...container.querySelectorAll("a.seat-chip")].find(
+    (a) => a.querySelector(".truncate")?.textContent === "Ada Okonkwo",
+  );
+  expect(ada!.querySelector(".crewlet-avatar--agent")).not.toBeNull();
+});
+
 // THE RAIL'S BODY IS KEYED ON ITS SUBJECT. `[` and `]` move the peek from
 // task A to task B by changing one query key, so React reconciles one body
 // rather than mounting another — and everything that body remembers, an open
@@ -896,10 +938,11 @@ test("the history draws a mark per kind and never reprints the thread", async ()
   );
   fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
 
-  // FOUR KINDS, FOUR DRAWINGS. Today every row renders the same `timeline`
-  // path, so this set has one member.
+  // FOUR KINDS, FOUR DRAWINGS. A drawing is the glyph's whole markup — a
+  // Lucide glyph is several strokes — so one mark on every row is a set of
+  // one member.
   const drawings = new Set(
-    [...container.querySelectorAll(".work-hist-row > svg path")].map((p) => p.getAttribute("d")),
+    [...container.querySelectorAll(".work-hist-row > svg")].map((svg) => svg.innerHTML),
   );
   expect(drawings.size).toBe(4);
 

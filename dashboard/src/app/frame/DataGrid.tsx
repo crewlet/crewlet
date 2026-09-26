@@ -36,10 +36,11 @@ import {
 } from "react";
 import { useParam } from "../router.tsx";
 import { Button, EmptyState, cx } from "@crewlethq/ui";
-import { KeyboardArrowDownGlyph, KeyboardArrowUpGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
-import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 
 export interface GridColumn<T> {
@@ -334,7 +335,7 @@ export function DataGrid<T>({
   isFailed?: (row: T) => boolean;
   defaultSort?: string;
   serverSorted?: boolean;
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: MarkName };
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName };
   footer?: ReactNode;
   onLoadMore?: () => void;
   /** "40 of 312 loaded" — what an export would actually contain. */
@@ -714,11 +715,7 @@ export function DataGrid<T>({
             <>
               <span className="truncate">{column.header}</span>
               {sorted &&
-                (sort?.desc ? (
-                  <KeyboardArrowDownGlyph size="xs" />
-                ) : (
-                  <KeyboardArrowUpGlyph size="xs" />
-                ))}
+                (sort?.desc ? <ChevronDownGlyph size="xs" /> : <ChevronUpGlyph size="xs" />)}
             </>
           );
           if (!column.sortValue) {

@@ -31,8 +31,9 @@
 #
 # The whole emitted tree, not just assets/: index.html is generated too and
 # took the third marker injection, and protocol.js is the second build target.
-# Not `static/**` — static/crewlet-icon.svg is a hand-maintained embed the
-# build does not write.
+# Not `static/**` — static/static.go (the embed directive) and
+# static/merge_test.go sit beside the generated tree, are hand-written, and
+# must merge as ordinary source; the merge test's "other side" case holds that.
 #
 # static/merge_test.go asserts the EFFECT of this line, via `git check-attr`,
 # because a rule held by prose alone decays (adr/README) — and because this

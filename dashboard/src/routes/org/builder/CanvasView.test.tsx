@@ -42,7 +42,6 @@ import {
   chartCards,
   chartLinks,
   harnessProbe,
-  isOutlinedCard,
   nodeName,
   nodeTrailing,
   type BuilderSpies,
@@ -133,19 +132,30 @@ const label = menuEntryLabel;
  * spelt here, this suite would match nothing and report it as a defect in the
  * screen rather than in itself.
  */
-const markStep = (which: "large" | "ring"): string => {
-  const zone = (props: { iconSize?: "md" | "lg"; iconRing?: "none" | "dashed" }) => {
+const largeStep = (): string => {
+  const zone = (props: { iconSize?: "md" | "lg" }) => {
     const { container, unmount } = render(<OrgNodeLabel name="x" icon={<i />} {...props} />);
     const classes = [...container.firstElementChild!.classList];
     unmount();
     return classes;
   };
   const plain = zone({});
-  const marked = which === "large" ? zone({ iconSize: "lg" }) : zone({ iconRing: "dashed" });
-  const extra = marked.filter((name) => !plain.includes(name))[0];
-  if (!extra) throw new Error(`the node label draws no ${which} step this suite can find`);
+  const extra = zone({ iconSize: "lg" }).filter((name) => !plain.includes(name))[0];
+  if (!extra) throw new Error("the node label draws no large step this suite can find");
   return extra;
 };
+
+/** An element's text with a seat badge's initials left out: the name is printed beside them. */
+const said = (el: Element): string =>
+  [...el.childNodes]
+    .map((node) =>
+      node.nodeType === Node.TEXT_NODE
+        ? (node.textContent ?? "")
+        : node instanceof Element && !node.classList.contains("crewlet-avatar")
+          ? said(node)
+          : "",
+    )
+    .join("");
 
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => nodeName(el);
@@ -237,17 +247,19 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
   });
 
-  test("a human seat is drawn with the dashed edge, by kind rather than by colour", () => {
+  test("a human seat is drawn with a person's badge, by kind rather than by colour", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    // The mark is the CARD's boundary, which the design system draws, so the
-    // claim is "drawn as the chart draws somebody outside the system" rather
-    // than the name of a class that belongs to the package.
-    expect(isOutlinedCard(chartCard(item("CEO")))).toBe(true);
-    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit is a
-    // card that is not outlined rather than a row that is not marked.
-    expect(isOutlinedCard(chartCard(item("Dev")))).toBe(false);
+    // THE BADGE'S OUTLINE IS THE ONE CUE: a person's circle, an agent's
+    // squircle, on the same solid card. The kit names the two outlines by the
+    // kind they draw, which is the claim — a card-level mark is gone, because
+    // two cues for one fact are two things to keep agreeing.
+    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar--agent")).toBeNull();
+    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears an
+    // agent's badge rather than a row that is merely not marked.
+    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
     expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
     // And the hue is an agent seat's alone: a human seat wears the boundary.
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
@@ -302,50 +314,34 @@ describe("the tree", () => {
   test("a seat's kind is drawn once and said once", () => {
     mount();
     const card = item("Dev");
-    expect(card.textContent).toBe("DevAgent seat@dev");
+    // The badge's initials are the eye's, and hidden from everyone else: the
+    // name is printed beside them.
+    expect(said(card)).toBe("DevAgent seat@dev");
     expect(card.getAttribute("title")).toBe("Agent seat, @dev");
   });
 
   /*
-   * AN AGENT SEAT WEARS THE LARGE MARK, because the chart this is drawn from
-   * sizes a mark by what it stands for: a container at half its icon zone and
-   * the thing the chart is ABOUT at three quarters of it. Drawn at one step
-   * for all three, an agent seat was told from a unit by its hue and its
-   * caption alone.
+   * A SEAT LEADS WITH ITS BADGE AND A CONTAINER WITH ITS GLYPH, because the
+   * chart this is drawn from sizes a mark by what it stands for: the seats
+   * are what the chart is ABOUT, so each is its own person or agent, and a
+   * unit or the company is a glyph at half its zone. The badge's outline is
+   * who holds the seat — an agent's squircle, a person's circle — which is the
+   * one cue: the dashed ring round a person's figure is gone with the kit's
+   * second cue for the same fact.
    */
-  test("an agent seat's mark is the large step and a container's is not", () => {
-    mount();
-    // What the package calls the large step is asked OF the package, by
-    // drawing one node each way and taking the difference: a class the design
-    // system draws is not the engine's to spell.
-    const large = markStep("large");
-    const mark = (name: string) => item(name).querySelector("[aria-hidden='true']")!.className;
-    expect(mark("Dev")).toContain(large);
-    expect(mark("Engineering")).not.toContain(large);
-    expect(mark("Acme")).not.toContain(large);
-  });
-
-  /*
-   * A human seat keeps the small figure inside its dashed ring, which is the
-   * boundary that says what it is.
-   *
-   * THE FIGURE'S OWN SIZE, not only the ring's class. This case read the class
-   * alone and stayed green while the figure grew to the zone's own step and
-   * measured 20px inside the 24px ring, touching it on every side: the ring
-   * stops reading as a ring, which is the one thing it is there to do. Every
-   * other mark IS the zone and answers `1em`, which is how an agent seat wears
-   * the large one.
-   */
-  test("a human seat's mark stays the small step inside its ring", () => {
+  test("a seat leads with its badge and a container with its glyph", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    const zone = item("CEO").querySelector("[aria-hidden='true']")!;
-    expect(zone.className).toContain(markStep("ring"));
-    expect(zone.className).not.toContain(markStep("large"));
-    expect(zone.querySelector("svg")?.getAttribute("width")).toBe("14px");
-    // The agent seat beside it takes whatever its zone is set to.
-    expect(item("Dev").querySelector("svg")?.getAttribute("width")).toBe("1em");
+    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
+    const large = largeStep();
+    for (const container of ["Engineering", "Acme"]) {
+      expect(item(container).querySelector(".crewlet-avatar"), container).toBeNull();
+      const zone = item(container).querySelector("[aria-hidden='true']")!;
+      expect(zone.querySelector("svg"), container).not.toBeNull();
+      expect(zone.className, container).not.toContain(large);
+    }
   });
 
   /*

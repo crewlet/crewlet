@@ -21,7 +21,12 @@
 
 import type { ReactNode } from "react";
 import { Button, Callout } from "@crewlethq/ui";
-import { KeyGlyph, RefreshGlyph, TuneGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import {
+  KeyGlyph,
+  RotateCwGlyph,
+  SlidersVerticalGlyph,
+  TriangleAlertGlyph,
+} from "@crewlethq/icons/glyphs";
 import { CoverageTags, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
@@ -73,14 +78,14 @@ export function degradationOf({
   if (!connected) {
     return {
       variant: "warning",
-      icon: <RefreshGlyph size="md" />,
+      icon: <RotateCwGlyph size="md" />,
       message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
     };
   }
   if (configured === false) {
     return {
       variant: "warning",
-      icon: <TuneGlyph size="md" />,
+      icon: <SlidersVerticalGlyph size="md" />,
       message:
         "No company configuration is active: no seats are running, and inbound webhooks are refused with a 503 their sender will retry.",
       action: { label: "Configuration", onClick: onConfig },
@@ -140,7 +145,7 @@ export function StateBar({
           may be missing, rows that should have gone may still be here, and
           every total on this screen was computed over the incomplete set. */}
       {incomplete && (
-        <Callout variant="warning" icon={<WarningGlyph size="md" />} layout="banner">
+        <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />} layout="banner">
           <span>
             {/* THE BOLD STAYS IN THE SENTENCE rather than becoming Callout's
                 `title`. Its title is a lead-in label with its own trailing

@@ -459,8 +459,8 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
-bumps carry, plus two grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Seven things are
+bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
+request, and — as below — CI is what decides whether it lands. Eight things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -488,6 +488,15 @@ worth knowing:
   buys all of it. It costs something in the meantime, and the cost is real: a
   `vitest`-only bump now arrives titled for the group, with the packages it
   actually moved in the body rather than the subject.
+- **The design system's three packages are grouped, because they pin each
+  other.** `@crewlethq/ui` depends on `@crewlethq/tokens` and `@crewlethq/icons`
+  at an *exact* version, and the three are released together. So a lone bump
+  of one installs cleanly and wrongly: a newer `ui` beside the direct `tokens`
+  nests a second copy of the tokens under `ui`, and the components paint from
+  one palette while the dashboard's own stylesheets read the other — a split
+  no install error reports and no test reading the installed package can see.
+  The group's pattern is `@crewlethq/*`, because the pinning is the scope's
+  convention rather than a fact about three names.
 - **Nothing else is grouped, and that is the rule rather than today's state.**
   The only other *required* edges a bump there could split are
   `@testing-library/react`'s — on react and react-dom at `^18.0.0 || ^19.0.0`,

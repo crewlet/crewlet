@@ -177,17 +177,20 @@ test("a seat's badge is its initials, the same ones the board draws", () => {
   expect(container.querySelector(".crewlet-avatar")?.textContent).toBe("FE");
 });
 
-// AND A HUMAN SEAT IS STILL DRAWN, NOT RUN. The dashed edge is the design
-// system's own word for it; the local mark carried the same fact as a dashed
-// ring, and losing it would have made a person indistinguishable from an agent
-// on every grid in the product.
-test("a human seat keeps the drawn edge an agent does not have", () => {
+// AND A HUMAN SEAT IS STILL DRAWN AS A PERSON. The badge's outline is the
+// design system's own word for it — a circle for a person, a squircle for an
+// agent — and losing it would make a person indistinguishable from an agent on
+// every grid in the product.
+test("a human seat is drawn as a person and an agent as an agent", () => {
   const { container } = render(<SeatCell handle="ada" name="Ada Lovelace" kind="human" />);
   const badge = container.querySelector(".crewlet-avatar")!;
-  expect(badge.className).toContain("dashed");
+  expect(badge.classList.contains("crewlet-avatar--human")).toBe(true);
+  expect(badge.classList.contains("crewlet-avatar--agent")).toBe(false);
   cleanup();
   const agent = render(<SeatCell handle="cto" name="Agent CTO" kind="agent" />);
-  expect(agent.container.querySelector(".crewlet-avatar")!.className).not.toContain("dashed");
+  const mark = agent.container.querySelector(".crewlet-avatar")!;
+  expect(mark.classList.contains("crewlet-avatar--agent")).toBe(true);
+  expect(mark.classList.contains("crewlet-avatar--human")).toBe(false);
 });
 
 /**
@@ -225,7 +228,7 @@ test("no module draws an identity badge of its own", async () => {
   expect(
     offenders.map(({ path }) => path),
     "a seat's identity badge is @crewlethq/ui's Avatar — its initials are what " +
-      'make one seat tellable from another, and `variant="dashed"` is what ' +
+      "make one seat tellable from another, and its `kind` outline is what " +
       "makes a human seat tellable from an agent one",
   ).toEqual([]);
 });

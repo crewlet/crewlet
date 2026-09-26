@@ -18,16 +18,15 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section, SeatChip } from "~/components/common.tsx";
 import { Button, Callout, Card, EmptyState, EmptyValue, Input, Skeleton, Tag } from "@crewlethq/ui";
 import {
-  ArrowForwardGlyph,
-  Book2Glyph,
-  CloseGlyph,
-  DatabaseGlyph,
-  DescriptionGlyph,
+  ArrowRightGlyph,
+  BookOpenGlyph,
+  XGlyph,
+  FileTextGlyph,
   FolderGlyph,
-  GroupGlyph,
-  NeurologyGlyph,
-  OpenInNewGlyph,
-  ScheduleGlyph,
+  UsersGlyph,
+  BrainGlyph,
+  ExternalLinkGlyph,
+  ClockGlyph,
   SearchGlyph,
   TargetGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -42,6 +41,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
@@ -119,7 +119,7 @@ export function Knowledge() {
         {q && (
           <Button
             variant="secondary"
-            leadingIcon={<CloseGlyph size="sm" />}
+            leadingIcon={<XGlyph size="sm" />}
             onClick={() => {
               setDraft("");
               setQ("");
@@ -132,7 +132,7 @@ export function Knowledge() {
 
       {!q && (
         <EmptyState
-          icon={<Book2Glyph size="xl" />}
+          icon={<BookOpenGlyph size="xl" />}
           title="Search the company's shared knowledge"
           description="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
@@ -150,7 +150,7 @@ export function Knowledge() {
       {q && data?.available === false && (
         <Callout
           variant={data.reason === "building" ? "warning" : "neutral"}
-          icon={data.reason === "building" ? <ScheduleGlyph size="md" /> : <Book2Glyph size="md" />}
+          icon={data.reason === "building" ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
         >
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
@@ -234,7 +234,7 @@ export function Knowledge() {
                       vendor's link for a vendor one. */}
                   {hit.url ? (
                     <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                      {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
+                      {hit.title} <ExternalLinkGlyph size="xs" style={{ display: "inline" }} />
                     </a>
                   ) : hit.container ? (
                     // THE CONTAINER AND THE TITLE, which is how a page is
@@ -294,7 +294,7 @@ export function Knowledge() {
         {index.seats.filter((s) => s.kind === "agent").length === 0 ? (
           <EmptyState
             size="compact"
-            icon={<NeurologyGlyph size="xl" />}
+            icon={<BrainGlyph size="xl" />}
             title="No agent seats to have learned anything"
             description="Memory is per agent seat: a diary, past episodes, and the skills it drafted for itself. This company's seats are all human, so there is nothing private to show."
           />
@@ -310,14 +310,16 @@ export function Knowledge() {
                   href={href(["company", "people", seat.handle], { tab: "memory" })}
                 >
                   <div className="row">
-                    <span className="attention-icon" data-severity="info">
-                      <DatabaseGlyph size="sm" />
-                    </span>
+                    {/* THE SEAT'S OWN BADGE, as every other surface draws a
+                        seat. A tinted database glyph here made every card the
+                        same drawing, and said "storage" where the card's
+                        subject is WHO learned it. */}
+                    <SeatAvatar name={seat.name} kind="agent" size="md" decorative />
                     <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                       <strong className="truncate t-cell">{seat.name}</strong>
                       <span className="truncate t-caption mono">@{seat.handle}</span>
                     </span>
-                    <ArrowForwardGlyph size="sm" />
+                    <ArrowRightGlyph size="sm" />
                   </div>
                   <span className="t-caption truncate">
                     {seat.goal || "memory, episodes and skills"}
@@ -595,7 +597,7 @@ function ContainerPages({
 }) {
   return (
     <Card>
-      <Card.Header icon={<DescriptionGlyph size="sm" />} count={recent.length}>
+      <Card.Header icon={<FileTextGlyph size="sm" />} count={recent.length}>
         <Card.Title>Recent pages</Card.Title>
       </Card.Header>
       <QueryState
@@ -654,7 +656,7 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
   return (
     <Card>
       <Card.Header
-        icon={<GroupGlyph size="sm" />}
+        icon={<UsersGlyph size="sm" />}
         count={writers.length}
         subtitle="the seats that started these pages"
       >

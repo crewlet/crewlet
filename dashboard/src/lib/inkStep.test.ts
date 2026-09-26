@@ -2,8 +2,8 @@
 /**
  * Every fact a screen draws is drawn in an ink a reader can read.
  *
- * `--text-faint` is DECORATION ONLY — `src/styles/uilet.css` says so at the
- * token, and it is the rung below the one the palette is measured for as TEXT.
+ * `--color-text-muted` is DECORATION ONLY — the design system's palette says
+ * so at the token, and it is the rung below the one measured for as TEXT.
  * Ninety-eight spellings of `.faint` put WORDS in it: "not set", "none",
  * "nobody", "no summary recorded", a seat's goal, a node's remedy, a
  * schedule's next fire, an integration's notes, and the ten spellings of

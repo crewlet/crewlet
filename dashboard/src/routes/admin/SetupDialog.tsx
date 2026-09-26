@@ -41,13 +41,7 @@
 
 import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { Button, Callout, InlineCode, Modal, Tag, useToast } from "@crewlethq/ui";
-import {
-  CableGlyph,
-  ContentCopyGlyph,
-  DescriptionGlyph,
-  InfoGlyph,
-  LinkGlyph,
-} from "@crewlethq/icons/glyphs";
+import { PlugGlyph, CopyGlyph, FileTextGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -886,7 +880,7 @@ export function SetupDialog({
     <Modal
       open
       title={connecting ? `Connect ${title}` : `${title} settings`}
-      icon={<CableGlyph size="md" />}
+      icon={<PlugGlyph size="md" />}
       onClose={onClose}
       // A CONNECT IS SEVERAL WRITES IN ORDER — the credential sealed, the
       // `${VAR}` pointer merged, the epoch advanced — so a dismissal
@@ -902,7 +896,7 @@ export function SetupDialog({
         // spacer used to be shoved past — so the hand-spelled push is one of
         // the things the port takes away rather than carries over.
         <>
-          <Button variant="tertiary" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={busy}>
@@ -1022,7 +1016,7 @@ export function SetupDialog({
                 {seat?.manifest && (
                   <details className="int-manifest">
                     <summary className="int-summary int-manifest-summary">
-                      <DescriptionGlyph size="sm" />
+                      <FileTextGlyph size="sm" />
                       {/* NOT "for SRE Lead". The block this sits in is that
                           agent's and carries their name two lines above, so
                           repeating it here says nothing and pushes the words
@@ -1043,7 +1037,7 @@ export function SetupDialog({
                       <Button
                         size="small"
                         variant="secondary"
-                        leadingIcon={<ContentCopyGlyph size="sm" />}
+                        leadingIcon={<CopyGlyph size="sm" />}
                         onClick={(e) => {
                           e.preventDefault();
                           void navigator.clipboard?.writeText(seat.manifest ?? "");

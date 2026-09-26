@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 // bundle contains, each with its license text, sorted by package, so the output
 // is as reproducible as the bundle the CI diff checks. It only sees what a
 // MODULE GRAPH reaches, so `sourceNotices` appends what travels as files: the
-// faces, and the Material Symbols drawings behind every glyph, both
+// faces, and the Lucide drawings behind every glyph, both
 // redistributed by a package under a license of their own that the package's
 // own MIT text does not cover.
 //
@@ -66,25 +66,61 @@ function fontLicence(): Plugin {
 //
 // Both files are @crewlethq/icons', so the tab icon, the rail lockup, the
 // GitHub App landing page and the raster favicon a browser asks for unprompted
-// are one drawing with one source. They are emitted rather than imported
-// because nothing in the module graph references them: the shell names the SVG
-// in its head and the engine serves the .ico from a route of its own.
+// are one drawing with one source, served from /static/dashboard/ like every
+// other file the build writes. There is no second copy anywhere in the tree.
+// They are emitted rather than imported because nothing in the module graph
+// references them: the shell names the SVG in its head and the engine serves
+// the .ico from a route of its own.
+//
+// AND THE DEV SERVER SERVES THEM TOO, from the same package files, under the
+// same base: an emitted asset exists only in a build, so without this a
+// reader of `npm run dev` gets a blank tab icon and an empty lockup — and the
+// proxy entry that used to paper over that forwarded the path to whatever the
+// running engine had embedded instead.
+//
+// THE TAB ICON'S <link> IS WRITTEN HERE rather than in index.html, because its
+// URL is `base` plus the file and the two modes disagree about a literal: the
+// dev server prefixes `base` to every root-relative URL in the shell, so
+// `/static/dashboard/crewlet-icon.svg` became `/static/dashboard/static/
+// dashboard/…` there, while a build leaves a URL that is not a public file
+// exactly as written, so `/crewlet-icon.svg` stayed unprefixed in the
+// artifact. A tag injected after Vite's own pass is written once, from the
+// resolved base, and is the same in both.
 const BRAND_ASSETS: readonly { from: string; to: string }[] = [
   { from: `${ICONS}/svg/crewlet-icon.svg`, to: "crewlet-icon.svg" },
   { from: `${ICONS}/favicon/crewlet.ico`, to: "favicon.ico" },
 ];
 
 function brandAssets(): Plugin {
+  const read = (from: string) => readFileSync(fileURLToPath(new URL(from, import.meta.url)));
+  let base = "/";
   return {
     name: "crewlet:brand-assets",
-    apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler: () => [
+        {
+          tag: "link",
+          attrs: { rel: "icon", type: "image/svg+xml", href: `${base}crewlet-icon.svg` },
+          injectTo: "head",
+        },
+      ],
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? "").split("?")[0];
+        const asset = BRAND_ASSETS.find(({ to }) => path === `${base}${to}`);
+        if (!asset) return next();
+        res.setHeader("Content-Type", asset.to.endsWith(".svg") ? "image/svg+xml" : "image/x-icon");
+        res.end(read(asset.from));
+      });
+    },
     generateBundle() {
       for (const { from, to } of BRAND_ASSETS) {
-        this.emitFile({
-          type: "asset",
-          fileName: to,
-          source: readFileSync(fileURLToPath(new URL(from, import.meta.url))),
-        });
+        this.emitFile({ type: "asset", fileName: to, source: read(from) });
       }
     },
   };
@@ -95,19 +131,14 @@ function brandAssets(): Plugin {
 // covers, so the notice moves with the material it belongs to.
 const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[] = [
   {
-    heading: "Fonts: Inter and JetBrains Mono (OFL-1.1)",
+    heading: "Fonts: Geist and Geist Mono (OFL-1.1)",
     lead: "The dashboard serves these font files from /static/dashboard/fonts/.",
     file: FONT_LICENCE,
   },
   {
-    heading: "Icons: Material Symbols (Apache-2.0)",
-    lead: "The dashboard's glyphs are Material Symbols drawings, redistributed by @crewlethq/icons.",
-    file: fileURLToPath(new URL(`${ICONS}/symbols/LICENSE`, import.meta.url)),
-  },
-  {
-    heading: "Icons: Material Symbols, notice",
-    lead: "The notice the Apache License requires to travel with the drawings.",
-    file: fileURLToPath(new URL(`${ICONS}/symbols/NOTICE`, import.meta.url)),
+    heading: "Icons: Lucide (ISC; portions Feather, MIT)",
+    lead: "The dashboard's glyphs are Lucide drawings, redistributed by @crewlethq/icons.",
+    file: fileURLToPath(new URL(`${ICONS}/glyphs/LICENSE`, import.meta.url)),
   },
 ];
 
@@ -224,11 +255,6 @@ export default defineConfig({
       // Fleet screen's replication panels write. The retention document they
       // sit beside is read over the socket.
       "/work": { target: "http://localhost:8000" },
-      // The brand mark the shell's tab icon and the rail name, which the
-      // engine serves beside the dashboard's tree rather than inside it. The
-      // one file, never `/static`: that prefix covers `base` above, and the
-      // dev server would hand the dashboard's own modules to the engine.
-      "/static/crewlet-icon.svg": { target: "http://localhost:8000" },
     },
   },
 });

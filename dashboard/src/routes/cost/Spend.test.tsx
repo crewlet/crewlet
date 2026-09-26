@@ -77,7 +77,11 @@ let asks: { what: string; params: unknown }[] = [];
 
 /** Mount the screen with a pushed rollup, one stubbed `tokens` answer and,
  *  optionally, one `turns` answer. */
-function mount(asked: () => Promise<unknown>, turns?: () => Promise<unknown>) {
+function mount(
+  asked: () => Promise<unknown>,
+  turns?: () => Promise<unknown>,
+  series?: () => Promise<unknown>,
+) {
   asks = [];
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -88,6 +92,7 @@ function mount(asked: () => Promise<unknown>, turns?: () => Promise<unknown>) {
     asks.push({ what, params });
     if (what === "tokens") return asked();
     if (what === "turns" && turns) return turns();
+    if (what === "token_series" && series) return series();
     return new Promise(() => {});
   };
   store.applyTokens(rollup(5_000));
@@ -216,4 +221,72 @@ test("the breakdown, the chart and the turn table all ask for the window's compa
     expect(ask.params).not.toHaveProperty("since");
     expect(ask.params).not.toHaveProperty("until");
   }
+});
+
+// THE LEGEND NAMES WHAT THE CHART DRAWS. A band the window spent nothing on has
+// no segment in any column, and its entry beside the others read as a series
+// the chart had failed to draw.
+test("a band worth nothing in the window has no legend entry", async () => {
+  const none = { input_tokens: 0, output_tokens: 0, total_tokens: 0, calls: 0 };
+  const band = (group: string, total: number) => ({
+    ...bucket(total),
+    group,
+    other: false,
+    folded: 0,
+  });
+  const answer = {
+    group: "phase",
+    bucket: "day",
+    since: "2026-09-12T00:00:00Z",
+    until: "2026-09-13T00:00:00Z",
+    from: "2026-09-12",
+    to: "2026-09-12",
+    days: 1,
+    horizon: { days: 181, floor: "2026-03-15" },
+    series: [
+      {
+        ...bucket(40),
+        at: "2026-09-12T00:00:00Z",
+        window: "2026-09-12",
+        days: 1,
+        groups: { execute: bucket(40), auxiliary: none },
+        other: none,
+      },
+    ],
+    by_group: [band("execute", 40), band("auxiliary", 0)],
+    totals: bucket(40),
+    grouped: bucket(40),
+  };
+  const { container } = mount(
+    () => Promise.resolve(rollup(40)),
+    undefined,
+    () => Promise.resolve(answer),
+  );
+  await settle();
+  const legend = container.querySelector(".crewlet-legend");
+  expect(legend, "the chart's legend is on screen").not.toBeNull();
+  expect(legend!.textContent).toContain("Execute");
+  expect(legend!.textContent).not.toContain("Auxiliary");
+});
+
+// THE OUTPUT IS THE PAIR'S UNIT, NOT HALF OF ITS DISPLAY NUMBER. One
+// display-size "5.1M / 164k" was wider than a phone's tile, and the kit's value
+// ends in an ellipsis rather than wrapping — so the output lost its digits with
+// nothing to say so. In the unit slot it is set at a text step on the same line.
+test("the input/output tile carries the output as its unit", async () => {
+  mount(() =>
+    Promise.resolve({
+      ...rollup(5_264_000),
+      totals: {
+        input_tokens: 5_100_000,
+        output_tokens: 164_000,
+        total_tokens: 5_264_000,
+        calls: 3,
+      },
+    }),
+  );
+  await settle();
+  const unit = screen.getByText("/ 164k");
+  expect(unit.classList.contains("crewlet-statcard__unit")).toBe(true);
+  expect(unit.parentElement!.firstChild!.textContent).toBe("5.1M");
 });

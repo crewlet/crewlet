@@ -39,7 +39,7 @@ import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
-import { MoveItemGlyph } from "@crewlethq/icons/glyphs";
+import { FolderInputGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Checkbox, Modal } from "@crewlethq/ui";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -144,13 +144,13 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       open
       stackBody
       title={`Move ${name}`}
-      icon={<MoveItemGlyph />}
+      icon={<FolderInputGlyph />}
       size="md"
       onClose={onClose}
       onSubmit={move}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={!chosen || sameSpot || api.readOnly}>

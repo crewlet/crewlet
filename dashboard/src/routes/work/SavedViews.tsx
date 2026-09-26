@@ -35,7 +35,7 @@ import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { Button, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
-import { ArrowForwardGlyph, DashboardGlyph } from "@crewlethq/icons/glyphs";
+import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
@@ -139,7 +139,7 @@ export function SavedViews({ id }: { id?: string }) {
         // three columns of falling height — a BOARD, as distinct from a list
         // — and the glyph set has no board. See the report.
         <EmptyState
-          icon={<DashboardGlyph size="xl" />}
+          icon={<LayoutDashboardGlyph size="xl" />}
           title="No saved view with that id"
           description="A view that was deleted, or one saved against a different container. The inventory lists what this company has."
         />
@@ -173,7 +173,7 @@ export function SavedViews({ id }: { id?: string }) {
             button about something it never named. */}
         <ObjectHeader
           kind="Saved view"
-          icon="view_column"
+          icon="columns-3"
           identifier={one.key}
           title={one.name}
           facts={viewFacts(one, owner)}
@@ -181,7 +181,7 @@ export function SavedViews({ id }: { id?: string }) {
         <ViewFacts view={one} />
         <Button
           variant="primary"
-          leadingIcon={<ArrowForwardGlyph size="sm" />}
+          leadingIcon={<ArrowRightGlyph size="sm" />}
           onClick={() => nav.to(["work"], { view: one.key })}
         >
           Run this view on the board
@@ -220,7 +220,7 @@ export function SavedViews({ id }: { id?: string }) {
               key: "name",
               header: "View",
               sortValue: (v) => v.name,
-              cell: (v) => <TextCell icon="view_column">{v.name}</TextCell>,
+              cell: (v) => <TextCell icon="columns-3">{v.name}</TextCell>,
             },
             {
               key: "key",

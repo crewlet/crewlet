@@ -67,7 +67,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Callout, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
-import { ArrowForwardGlyph, InboxGlyph } from "@crewlethq/icons/glyphs";
+import { ArrowRightGlyph, InboxGlyph } from "@crewlethq/icons/glyphs";
 // A CONDITION'S MARK IS DATA — `lib/attention.ts` names it, and that name is
 // still one of ours. Resolving it to a glyph is the other half of this port and
 // belongs in that file; see the report.
@@ -627,7 +627,9 @@ function NoticeRow({
               asks
             </Tag>
           )}
-          {notice.subject_key && <span className="mono t-caption">{notice.subject_key}</span>}
+          {notice.subject_key && (
+            <span className="mono t-caption item-key">{notice.subject_key}</span>
+          )}
         </span>
         {/* THE PROSE THE BODY RENDERS TO, not its source. An excerpt is a
             cut of a comment or a description — markdown by contract — and this
@@ -667,7 +669,7 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
         {item.at && <p className="t-caption">Since {fmtDateTime(item.at)}</p>}
         {item.path && (
           <a className="t-link row gap-1" href={href(item.path, item.query)}>
-            Go to it <ArrowForwardGlyph size="sm" />
+            Go to it <ArrowRightGlyph size="sm" />
           </a>
         )}
         <p className="t-caption">
@@ -817,7 +819,7 @@ function usePulse(input: {
         key: "tokens",
         icon: PULSE_GLYPHS.tokens,
         value: tokens ? tokens.totals.total_tokens : null,
-        label: "tokens",
+        label: tokens?.totals.total_tokens === 1 ? "token" : "tokens",
         // NOT "today". The window is the engine's and this screen was not
         // given one, so the strip names the figure and puts the window it
         // actually covers where a reader can read it.
@@ -830,7 +832,9 @@ function usePulse(input: {
         key: "alarms",
         icon: PULSE_GLYPHS.alarms,
         value: critical,
-        label: "alarms",
+        // COUNTED, so it agrees with its figure: "1 alarms" is a strip that
+        // was written for one number and shown another.
+        label: critical === 1 ? "alarm" : "alarms",
         title: "Conditions the engine raised at critical severity. They are the first band below.",
         path: ["inbox"],
         tone: critical > 0 ? "critical" : undefined,

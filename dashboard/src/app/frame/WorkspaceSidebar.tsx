@@ -53,12 +53,13 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute, samePath } from "../router.tsx";
 import { Input, StatusDot, cx } from "@crewlethq/ui";
-import { ChevronRightGlyph, KeyboardArrowDownGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { ChevronRightGlyph, ChevronDownGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 // A ROW'S MARK IS DATA — it comes from `app/nav.ts`'s destinations table by
 // way of `workspaces/sidebars.tsx`, and from each workspace's own builder — so
 // it travels as a NAME and is resolved here. See the registry's own doc for
 // why that entry point is separate from the glyphs themselves.
-import { markByName, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { glyphFor } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 
@@ -69,7 +70,7 @@ export interface SidebarRow {
   path: string[];
   /** Query carried with the path — allowed only where the ROW IS the list. */
   query?: Record<string, string>;
-  icon?: MarkName;
+  icon?: GlyphName;
   /** A state mark, never an identity colour. */
   tone?: Tone;
   /**
@@ -109,8 +110,8 @@ export interface SidebarSection {
 }
 
 /** A row's own mark, resolved from the name the destinations table carries. */
-function RowGlyph({ name }: { name: MarkName }) {
-  const Glyph = markByName(name);
+function RowGlyph({ name }: { name: GlyphName }) {
+  const Glyph = glyphFor(name);
   return <Glyph size="sm" />;
 }
 
@@ -254,7 +255,7 @@ function Row({
             aria-label={open ? `Collapse ${row.label}` : `Expand ${row.label}`}
             aria-expanded={open}
           >
-            {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
+            {open ? <ChevronDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
           </button>
         ) : (
           <span className="side-twist" aria-hidden="true" />
@@ -265,7 +266,7 @@ function Row({
           aria-current={here ? "page" : undefined}
         >
           {/* THE SLOT IS ALWAYS DRAWN, whether or not there is a mark to put
-              in it — which is the same rule `--nav-gutter` plus `--nav-row-pad`
+              in it — which is the same rule `--size-nav-gutter` plus `--size-nav-row-pad`
               states for the rail, and for the same reason: every row at one
               depth has to start its text on ONE vertical line.
 
@@ -284,7 +285,7 @@ function Row({
               in it.
 
               The dot is THEIRS, and it is the same 6px mark in the same tones —
-              with the neutral one measured: ours drew it on `--text-faint`,
+              with the neutral one measured: ours drew it on `--color-text-muted`,
               which is 2.33:1 against a light page, where `StatusDot` takes the
               tertiary step at 4.87:1. It hides itself from assistive
               technology, so the `aria-hidden` that used to be spelled here is
@@ -401,11 +402,7 @@ export function WorkspaceSidebar({
                       aria-expanded={open}
                       onClick={() => setFolded((was) => ({ ...was, [section.key]: open }))}
                     >
-                      {open ? (
-                        <KeyboardArrowDownGlyph size="xs" />
-                      ) : (
-                        <ChevronRightGlyph size="xs" />
-                      )}
+                      {open ? <ChevronDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
                       {section.label}
                     </button>
                   ) : (

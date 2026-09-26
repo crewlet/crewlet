@@ -17,7 +17,7 @@
 
      The label is still the point of the rail — a row a reader has to learn by
      its icon is a row they hover — and the longest workspace name
-     ("Knowledge") measures 58.27px at `--fs-3xs`, which a rail cannot hand it
+     ("Knowledge") measures 58.27px at `--font-size-2xs`, which a rail cannot hand it
      until the rail is 72px: the border, `.rail-rows`' inset and the row's own
      padding take 13px before any text is reached, so the floor is 71.27 and a
      71px rail still ellipsed. That is why this was raised from 68, where it
@@ -44,7 +44,7 @@
      reader can SEE is the reason either of them is in the chrome at all; what
      was actually wrong was a rail too narrow to hold what it was drawing. */
   --rail-foot-w: 80px;
-  --rail-w: calc(var(--rail-foot-w) + 2 * var(--space-2) + 1px);
+  --rail-w: calc(var(--rail-foot-w) + 2 * var(--spacing-2) + 1px);
   --rail-w-collapsed: 48px;
   /* The bottom bar's height on a phone. A glyph, its label under it, and the
      touch target both have to live in: 56px is the floor every platform's own
@@ -56,7 +56,7 @@
   /* The page bar keeps the old topbar's height: the two are the same band,
      and a reader moving between an old bookmark and a new one should not see
      the content jump. */
-  --page-bar-h: var(--topbar-h);
+  --page-bar-h: var(--size-shell-topbar);
   /* Below this the detail rail becomes a drawer. The measured quantity is the
      LIST FLOOR: 444px is under the width a work row needs for a key, a title
      and an assignee. The threshold is that floor plus the chrome in front of
@@ -64,7 +64,7 @@
      window has to carry those plus the rail plus the floor.
 
      DERIVED AT THE WIDEST DENSITY, which is the half a single measurement
-     misses. `--rail-w` composes `2 * --space-2`, and every spacing token is
+     misses. `--rail-w` composes `2 * --spacing-2`, and every spacing token is
      `calc(Npx * var(--density))` — so the rail is 94.11px compact, 97px
      normal and 99.23px comfortable, and the sum it feeds is 1194.11, 1197
      and 1199.23. A media query cannot read `--density` any more than it can
@@ -77,7 +77,7 @@
      column over a list too narrow to read is the bug.
 
      IT WAS 1180, DERIVED WHEN `--rail-w` WAS A FLAT 80px. The rail became
-     `--rail-foot-w + 2 * --space-2 + 1px` above and this sum was not redone,
+     `--rail-foot-w + 2 * --spacing-2 + 1px` above and this sum was not redone,
      so between 1181 and 1200 the peek stayed a column over a list of
      427–443px: below the floor this number exists to hold, at twenty widths
      of window, with nothing to report it. The floor is what was measured; the
@@ -101,6 +101,187 @@
   --peek-drawer-max: 1200px;
 }
 
+/* ---- The page column's own furniture -------------------------------------
+   The ONE scroll container, the toolbar a screen puts its own controls in,
+   the command palette, and the narrow-layout drawer's veil and toggle. These
+   were a sheet of their own (`shell.css`) loaded ahead of this one, which is
+   why they come first here: a tie between one of them and a frame rule was
+   always decided in the frame's favour, and still is. */
+
+.screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+}
+
+/* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
+   starts below it. Asked with `:has` on the whole screen rather than on a
+   direct child, because a toolbar rendered inside a tab panel or a panel is
+   still sticky against this same scroller and still covers the same band.
+   The offset is ONE band of controls: a toolbar narrow enough to wrap is
+   taller than that and a column head then parks under its second row — the
+   only alternative is measuring the band in JS and writing the property from
+   a ResizeObserver, which puts a layout read in the scroll path to buy a
+   pixel at the one width where the grid is already dropping columns. */
+.screen:has(.toolbar) {
+  --sticky-top: var(--toolbar-h);
+}
+
+/* THE SCREEN ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL. `data-fill` is set
+   by the shell from a screen's own request (`app/fill.tsx`), never by a
+   selector reaching into a screen for a class neither of them owns — which is
+   what the rule this replaces did, and why it stopped matching the day the
+   markup under it moved.
+
+   A CANVAS FILLS THE BOX ITS SCREEN GIVES IT rather than growing the page: a
+   wheel turned over a page that scrolls lands in a canvas half off screen. So
+   while the request holds, this scroller stops being one and the column takes
+   what is left of the window. The bottom padding goes with it — it is landing
+   room under a page that ends, and there is no end to scroll to here. */
+.screen[data-fill] {
+  /* AND IT BECOMES A COLUMN, which is the half that was missing and the half
+     the `flex` below is worthless without: `.screen` is a BLOCK container, so
+     a flex shorthand on its child means nothing at all and `.screen-inner`
+     kept taking its height from its content. Measured against a running
+     engine — the builder's canvas lens rendered its toolbar and then a chart
+     2px tall, on a company the chart lens draws as six seats in three units:
+     every card was there, laid out in a world of zero height inside a
+     viewport of zero height inside a column that had nothing to fill.
+
+     The rule this replaced was `.screen-inner:has(.org-builder-body.fill)`,
+     which named a class in another package's file — and `.screen-inner` was
+     itself the flex container then, so nothing had to be said about the
+     scroller. Moving the request onto the scroller moved the container with
+     it, and the declaration did not follow. */
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.screen[data-fill] > .screen-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: var(--spacing-5);
+}
+
+.screen-inner {
+  /* NO MAX WIDTH. The page column is already bounded by the rail and the
+     workspace sidebar, and a cap inside it throws away exactly the width the
+     two-level navigation just bought — a grid of forty rows reading at 1560px
+     on a 2560px screen with 500px of grey either side. Prose and forms get
+     their measure from `--size-measure` where they need one; tables, boards and
+     charts genuinely want the viewport. */
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-index-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  padding: var(--spacing-2) 0;
+  background: var(--color-surface-background);
+  min-width: 0;
+  /* A FLOOR, NOT A HEIGHT. The band is what `--sticky-top` offsets the grid's
+     column heads by, so it has to be a real number even on a screen whose
+     toolbar holds one short chip — and a fixed height would clip the wrapped
+     row instead, which is the case the floor deliberately lets grow. */
+  min-height: var(--toolbar-h);
+}
+
+.palette {
+  width: min(620px, 100%);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: min(60dvh, 520px);
+  animation: rise var(--motion-duration-slow) var(--motion-easing-emphasized);
+}
+
+.palette-input {
+  width: 100%;
+  height: var(--size-row-lg);
+  padding: 0 var(--spacing-4);
+  border: none;
+  border-bottom: 1px solid var(--color-border-default);
+  background: transparent;
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.palette-results {
+  overflow-y: auto;
+  padding: var(--spacing-1);
+}
+
+.palette-group {
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  width: 100%;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+  min-width: 0;
+}
+
+.palette-item[aria-selected="true"] {
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
+}
+
+.palette-item .palette-hint {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-elevated);
+}
+
+.drawer-veil {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-surface-subtle) 60%, transparent);
+  z-index: calc(var(--z-index-overlay) - 1);
+}
+
+.drawer-toggle {
+  display: none;
+}
+
 /* ---- The application grid ------------------------------------------------
    Three columns and one scroll container. ONE, because the router restores a
    scroll position per history entry and a page with three independent
@@ -109,14 +290,19 @@
 
 .app {
   display: grid;
-  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr);
+  grid-template-columns: var(--rail-w) var(--size-shell-rail) minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
-  background: var(--bg);
+  /* THE WINDOW IS THE FRAME, and the page column is the sheet on it: the
+     design system's four rungs are frame (the window and its navigation),
+     background (the sheet everything is read on), subtle (a card) and
+     elevated (a block inside a card). `styles/surfaces.test.ts` holds which
+     element paints which, and that all four are distinct. */
+  background: var(--color-surface-frame);
 }
 
 .app[data-rail-collapsed="true"] {
-  grid-template-columns: var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr);
+  grid-template-columns: var(--rail-w-collapsed) var(--size-shell-rail) minmax(0, 1fr);
 }
 
 /* A workspace with no tree of its own — the Inbox and My work are two-pane
@@ -155,13 +341,13 @@
 @media (min-width: 1201px) {
   .app[data-peek="true"] {
     grid-template-columns:
-      var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
+      var(--rail-w) var(--size-shell-rail) minmax(0, 1fr)
       var(--peek-w, 420px);
   }
 
   .app[data-peek="true"][data-rail-collapsed="true"] {
     grid-template-columns:
-      var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
+      var(--rail-w-collapsed) var(--size-shell-rail) minmax(0, 1fr)
       var(--peek-w, 420px);
   }
 
@@ -182,20 +368,21 @@
    `outline-style: none` on the element.
 
    THE RING THEN LOSES A TIE RATHER THAN A FIGHT, which is why nothing about
-   this looks wrong in the file. `base.css`'s `:focus-visible` is one
+   this looks wrong in the file. The kit baseline's `:focus-visible` is one
    pseudo-class, specificity (0,1,0); `.rail-collapse` is one class, the same
-   (0,1,0). Frame.css is imported after base.css, so the later rule wins and
-   the ring is gone. It is the SAME failure the comment above that
-   `:focus-visible` describes for the design system's components — a tie
-   decided by import order, visible to somebody using the keyboard and to
-   nobody else.
+   (0,1,0). The baseline is imported first, so the later rule wins and the
+   ring is gone — which is exactly the order a kit component's own focus
+   treatment relies on (see the note where `base.css` declines to write a
+   focus rule), so it is answered here, by name, rather than by moving the
+   baseline. A tie decided by import order, visible to somebody using the
+   keyboard and to nobody else.
 
    Measured with a tab walk against a running engine: the rail's collapse
    control took focus with no ring on every screen in the product, and the
    sidebar's twist on every screen that has a tree.
 
    ONE RULE RATHER THAN FIVE, and it states nothing the baseline does not —
-   it re-states exactly what `base.css` says, at a specificity the reset cannot
+   it re-states exactly the baseline's ring, at a specificity the reset cannot
    out-rank. `styles/frame.test.ts` holds the two lists together: a sixth
    `all: unset` that is not named here fails the build. */
 .rail-collapse:focus-visible,
@@ -204,7 +391,7 @@
 .grid-th:focus-visible,
 .grid-cols-reset:focus-visible,
 .histogram-bar:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -214,8 +401,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-panel);
-  border-right: 1px solid var(--border);
+  background: var(--color-surface-frame);
+  border-right: 1px solid var(--color-border-hover);
 }
 
 .rail-brand {
@@ -223,7 +410,7 @@
   align-items: center;
   justify-content: center;
   height: var(--page-bar-h);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border-hover);
   flex: 0 0 auto;
 }
 
@@ -239,7 +426,7 @@
    than restated as a `calc(… * 3 / 2)` here, where it would be a second
    declaration of the mark's shape that nothing holds against the first.
 
-   `max-height` is `--control-h`, the step every control in this band
+   `max-height` is `--size-control-md`, the step every control in this band
    measures: `.rail-brand`, `.side-head`, `.peek-bar` and `.page-bar` are one
    `--page-bar-h` band, so the mark stands as tall as the chrome beside it and
    scales with `--density` for the same reason that does. `max-width` is the
@@ -248,7 +435,7 @@
 
    A MAXIMUM ON BOTH AXES RATHER THAN A SIZE ON ONE AND A CLAMP ON THE OTHER,
    because the clamp does NOT carry through a definite size: `height:
-   var(--control-h)` with `max-width` gave a 39×32 box in the narrow column,
+   var(--size-control-md)` with `max-width` gave a 39×32 box in the narrow column,
    ratio 1.219, and the mark letterboxed inside it exactly as it had in the
    square. CSS 2.1 § 10.4's table rescales the other axis only where that axis
    was itself derived — a height the author stated is a used value the clamp
@@ -265,15 +452,15 @@
 .rail-brand img {
   width: auto;
   height: auto;
-  max-height: var(--control-h);
-  max-width: calc(100% - 2 * var(--space-1));
+  max-height: var(--size-control-md);
+  max-width: calc(100% - 2 * var(--spacing-1));
 }
 
 .rail-rows {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--space-2) var(--space-1);
+  padding: var(--spacing-2) var(--spacing-1);
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -284,33 +471,33 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: var(--space-2) 2px;
-  border-radius: var(--r-md);
-  color: var(--text-muted);
+  padding: var(--spacing-2) 2px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
   position: relative;
 }
 
 .rail-row:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
-/* THE INK, NOT THE FILL. `--accent` is a fill — it is what a primary button
-   and a meter bar are painted WITH — and `--accent-ink` is the same hue moved
+/* THE INK, NOT THE FILL. `--color-brand-accent` is a fill — it is what a primary button
+   and a meter bar are painted WITH — and `--color-brand-accent-ink` is the same hue moved
    to where it can be read as text, which is why every anchor in `base.css`
    already takes it. Spent as text on the soft ground this row also carries, the
    fill measures 3.09:1 in dark and 3.81 in light, under the 4.5 small text
    needs; the ink is 5.96 and 7.34. The rail's current row is the one piece of
    chrome that says where the reader IS. */
 .rail-row.active {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+  color: var(--color-brand-accent-ink);
+  background: var(--color-brand-accent-soft);
 }
 
 /* The current row also carries a bar, so "where you are" survives a viewer
    who cannot separate the accent from the muted text. It hangs back into the
-   rail's own `--space-1` padding, and the offset is a `calc()` because CSS
-   has no unary minus in front of a function: `-var(--space-1)` parses as a
+   rail's own `--spacing-1` padding, and the offset is a `calc()` because CSS
+   has no unary minus in front of a function: `-var(--spacing-1)` parses as a
    value nothing can compute, the whole declaration is dropped, and `left`
    falls back to `auto` — which on an abspos child of a centred column flex
    row is the STATIC position, so the bar painted straight down the middle of
@@ -318,11 +505,11 @@
 .rail-row.active::before {
   content: "";
   position: absolute;
-  left: calc(-1 * var(--space-1));
+  left: calc(-1 * var(--spacing-1));
   inset-block: 6px;
   width: 2px;
   border-radius: 1px;
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }
 
 .rail-glyph {
@@ -331,7 +518,7 @@
 }
 
 .rail-label {
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   line-height: 1.1;
   text-align: center;
   max-width: 100%;
@@ -340,49 +527,70 @@
   white-space: nowrap;
 }
 
+/* BESIDE THE GLYPH, NOT ON IT. The badge starts 2px PAST the glyph's right
+   edge: at `right: -9px` a "46" was 23px wide over a 20px glyph and hid the
+   inbox it was counting, and at `100% - 4px` it still covered the tray's
+   corner. The labelled rail is 97px wide and the glyph sits centred in it,
+   so a three-digit count has the room. */
 .rail-badge {
   position: absolute;
-  top: -5px;
-  right: -9px;
+  top: -6px;
+  left: calc(100% + 2px);
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
   border-radius: 999px;
   font-size: 9px;
-  font-weight: var(--fw-semibold);
+  font-weight: var(--font-weight-semibold);
   line-height: 15px;
   text-align: center;
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border-hover);
   font-variant-numeric: tabular-nums;
 }
 
-/* AN INK GOES ON THE SOFT, NEVER ON THE FILL. The three rungs are a set:
-   `--caution` is what a thing is painted WITH, `--caution-soft` is the ground
-   it tints, and `--caution-ink` is the one of the three that is a TEXT colour.
-   This badge took the fill as its ground and the ink on top of it, which is the
-   one pairing of the three the design system does not offer: 1.72:1, measured
-   in the browser, on a 9px semibold digit. The count was a dot.
+/* A COUNT OF THINGS WAITING FOR YOU IS NOT A WARNING. The inbox's badge
+   counts the notices a reader is on the hook for, and it was drawn in the
+   caution hue — which spent the one colour that says "something is wrong" on
+   the ordinary state of having mail, and put it on every screen. The approved
+   design draws that count in the ACCENT, the product's "act here" colour, as
+   the ink on its own soft ground (the pairing the kit publishes for text),
+   with the accent fill as the ring so it still reads from the corner of an
+   eye. */
+/* THE 48px RAIL HAS NO ROOM BESIDE ITS GLYPH — 9.5px each side of a 16px
+   mark — so there the badge is pinned to the ROW's right edge instead and
+   covers the glyph's corner by what it must. Anchored beside the glyph as
+   above, a "46" ran past the rail's border into the page. The offset is the
+   slack between the glyph and the row's edge, derived from what makes it: the
+   collapsed width, the rail's 1px border, `.rail-rows`' inline padding and
+   `.rail-row`'s 2px, and the `md` glyph. Two routes reach that width — the
+   reader collapsing the rail, and the 960 breakpoint — and below 860 the rail
+   is a bottom bar with room again. */
+@media (min-width: 861px) {
+  .app[data-rail-collapsed="true"] .rail-badge {
+    left: auto;
+    right: calc((var(--rail-w-collapsed) - 1px - 2 * var(--spacing-1) - 2 * 2px - 16px) / -2 - 2px);
+  }
+}
+@media (min-width: 861px) and (max-width: 960px) {
+  .rail-badge {
+    left: auto;
+    right: calc((var(--rail-w-collapsed) - 1px - 2 * var(--spacing-1) - 2 * 2px - 16px) / -2 - 2px);
+  }
+}
 
-   It is the only place in this tree that puts text on a solid feedback fill —
-   everything else spending `--caution` is a status dot or a meter bar, which
-   carry none. So there is no ink published for that ground, and nothing else
-   to keep consistent with; the badge's own resting state is already a tinted
-   ground with a border and a muted digit, and this is that shape in amber.
-   11.79:1 in dark and 14.72 in light, with the fill kept as the RING so the
-   badge still reads as attention from the corner of an eye. */
 .rail-badge.attention {
-  background: var(--caution-soft);
-  border-color: var(--caution);
-  color: var(--caution-ink);
+  background: var(--color-brand-accent-soft);
+  border-color: var(--color-brand-accent);
+  color: var(--color-brand-accent-ink);
 }
 
 .rail-lock {
   position: absolute;
   bottom: -4px;
   right: -6px;
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 
 /* THE FOOT IS THREE THINGS, NOT ONE BLOCK. A state, two settings and the
@@ -395,19 +603,19 @@
    nav item rather than as the bar under them, and the two segmented controls —
    which draw their own boundary — touched both walls.
 
-   So the foot takes its OWN inset: `--space-2` at the sides, which doubles the
+   So the foot takes its OWN inset: `--spacing-2` at the sides, which doubles the
    air around the two controls that have a border of their own, and
-   `--space-3` top and bottom, which separates the first control from the
+   `--spacing-3` top and bottom, which separates the first control from the
    hairline above it by more than the controls are separated from each other.
-   The gap is `--space-2`, one step up from the rows', because what is being
+   The gap is `--spacing-2`, one step up from the rows', because what is being
    separated here is kinds rather than siblings. */
 .rail-foot {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  border-top: 1px solid var(--border);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-2);
+  border-top: 1px solid var(--color-border-hover);
   flex: 0 0 auto;
 }
 
@@ -418,14 +626,14 @@
   justify-content: center;
   width: 100%;
   height: 22px;
-  border-radius: var(--r-sm);
-  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
 .rail-collapse:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* ---- The workspace sidebar ---------------------------------------------- */
@@ -434,26 +642,26 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-panel);
-  border-right: 1px solid var(--border);
+  background: var(--color-surface-frame);
+  border-right: 1px solid var(--color-border-hover);
 }
 
 .side-head {
   display: flex;
   align-items: center;
   height: var(--page-bar-h);
-  padding: 0 var(--space-3);
-  border-bottom: 1px solid var(--border);
+  padding: 0 var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-hover);
   flex: 0 0 auto;
 }
 
 .side-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
 .side-filter {
-  padding: var(--space-2) var(--space-2) 0;
+  padding: var(--spacing-2) var(--spacing-2) 0;
   flex: 0 0 auto;
 }
 
@@ -461,19 +669,19 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-1) var(--space-4);
+  padding: var(--spacing-2) var(--spacing-1) var(--spacing-4);
 }
 
 .side-section + .side-section {
-  margin-top: var(--space-3);
+  margin-top: var(--spacing-3);
 }
 
 .side-section-label {
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
-  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-tertiary);
+  padding: var(--spacing-1) var(--spacing-2);
 }
 
 /* THE SAME HEADING, PRESSABLE. It is a `<button>` where the section folds, so
@@ -493,22 +701,22 @@
   gap: 2px;
   width: 100%;
   cursor: pointer;
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
-  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-tertiary);
+  padding: var(--spacing-1) var(--spacing-2);
 }
 
 .side-section-label.foldable:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .side-row {
   display: flex;
   align-items: center;
-  min-height: var(--row-h-sm);
-  padding-left: calc(var(--depth, 0) * var(--space-3));
+  min-height: var(--size-row-sm);
+  padding-left: calc(var(--depth, 0) * var(--spacing-3));
 }
 
 .side-twist {
@@ -518,36 +726,36 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-faint);
+  color: var(--color-text-muted);
   cursor: pointer;
   flex: 0 0 auto;
 }
 
 .side-twist:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .side-link {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex: 1 1 auto;
   min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
 }
 
 .side-link:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 .side-row.current > .side-link {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font-weight: var(--fw-medium);
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
+  font-weight: var(--font-weight-medium);
 }
 
 /* The mark's column, drawn on every row. See WorkspaceSidebar.tsx for what a
@@ -563,21 +771,21 @@
 }
 
 .side-sub {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
 }
 
 .side-count {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
 
 .side-empty {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* ---- The page column ---------------------------------------------------- */
@@ -592,7 +800,7 @@
 
    READ THE TOKENS, NEVER A REMEMBERED LITERAL. This paragraph said 96 and 234
    because both were true when it was written: the rail was a flat `--rail-w`
-   before it became `--rail-foot-w + 2 * --space-2 + 1px` above, and the extra
+   before it became `--rail-foot-w + 2 * --spacing-2 + 1px` above, and the extra
    pixel is the border the composition exists to account for. A width quoted
    here is a copy of a value that lives somewhere else, and this one was two
    changes stale with nothing to say so — the same failure `.num-block`'s
@@ -606,6 +814,7 @@
   min-width: 0;
   min-height: 0;
   container: page / inline-size;
+  background: var(--color-surface-background);
 }
 
 /* THE BAR SHRINKS, AND ONLY THE CONTAINER QUERY BELOW BREAKS IT.
@@ -650,12 +859,14 @@
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-panel);
+  padding: var(--spacing-1) var(--spacing-4);
+  border-bottom: 1px solid var(--color-border-hover);
+  /* A BAR INSIDE THE PAGE stands on the page's own ground, the sheet: the
+     hairline under it is what separates it from what scrolls. */
+  background: var(--color-surface-background);
   flex: 0 0 auto;
 }
 
@@ -681,13 +892,15 @@
 
    20ch IS WHAT THE NARROWEST LINE CAN GIVE, which is a different number from
    what the deepest address needs. Measured in Chromium against the shipped
-   stylesheets, at `--fs-sm` (14px Inter, so 1ch is 8.83px and 20ch is
-   176.6px): the least the trail's own line ever hands it is 178.8px — 20.25ch
-   — at a 310px and at a 350px viewport, where it sits beside the drawer
-   toggle, the viewer chip and the search trigger. 21ch is over that at some
-   widths and 22ch is over it at every one, and a floor the line cannot honour
-   does not widen the trail — it pushes the search trigger, the command
-   palette's only pointer affordance, onto a row of its own.
+   stylesheets, at `--font-size-sm` (14px Geist, so 1ch is 9.28px and 20ch is
+   185.6px): the least the trail's own line ever hands it is 188px — 20.25ch
+   — at a 310px viewport, where it sits beside the drawer toggle, the viewer
+   chip and the search trigger (228px at 350). 21ch (194.9px) is already over
+   that, and a floor the line cannot honour does not widen the trail — it
+   pushes the search trigger, the command palette's only pointer affordance,
+   onto a row of its own. That line is measured with the trigger as the kit's
+   `toolbar` field (`PageBar.tsx`); as the kit's default `rail` field it takes
+   the whole width and a row of its own regardless.
 
    IT IS NOT ENOUGH FOR EVERY ADDRESS, AND NO FLOOR IS. This note used to say
    "Admin / Infrastructure /" was the deepest fixed ancestry the route table
@@ -743,7 +956,7 @@
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
 }
 
 .crumbs::-webkit-scrollbar {
@@ -771,24 +984,24 @@
 }
 
 .crumb-sep {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
   padding: 0 2px;
 }
 
 .crumb-link {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .crumb-link:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .crumb-here {
-  color: var(--text);
-  font-weight: var(--fw-medium);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -806,6 +1019,14 @@
      measured at zero visible pixels on `#/admin/config/revisions/<id>` at a
      390px viewport. What reaches it there is the scroller `.crumbs` above
      takes, not this. */
+}
+
+/* THE FLOOR IS THE LAST PART'S ALONE. `.crumb-here` also draws an ANCESTOR
+   that has no page of its own ("Item" in "Work / Item / …", "seats" in
+   "agents / seats / …"), and those never shrink (`flex: 0 0 auto` above) —
+   so a floor there does nothing but pad a word narrower than 5ch, which drew
+   a gap before the next separator that no other segment had. */
+.crumb-part:last-child > .crumb-here {
   min-width: 5ch;
 }
 
@@ -843,7 +1064,7 @@
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-1) var(--space-2);
+  gap: var(--spacing-1) var(--spacing-2);
   flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
@@ -857,6 +1078,75 @@
 .page-actions {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* THE SEARCH FIELD GIVES WAY AFTER THE TRAIL, DOWN TO ITS GLYPH.
+
+   The kit's `toolbar` field rests at 200px and floors there
+   (`--crewlet-search-trigger-width` as a `min-width`), collapsing to its glyph
+   only under the 1024px VIEWPORT. On this bar that floor is a pixel count the
+   line owes before anything else fits, and the line's other occupants are a
+   screen's own controls, which differ per route: measured on
+   `#/activity/turns` at 1440 — lens switch, range picker, star, Copy link —
+   the bar was 1107px wide and its content 1152, so the keycap hint sat past
+   the right edge, clipped. Above the 1100px container query nothing wraps, and
+   no viewport or container threshold can know how wide a given route's
+   controls are.
+
+   So the field's width is FLEX, not a floor: it rests at the kit's 200px and
+   shrinks (factor 1, against the trail's 100 — the trail still goes first, to
+   its 20ch floor), down to a control square. And it collapses BY ITS OWN
+   WIDTH, which a container query on this wrapper can read: the keycap goes
+   first, then the word, leaving the glyph — the same end state the kit
+   reaches under 1024px, reached here whenever the bar needs the room. The
+   button keeps its accessible name ("Search") throughout; it is on the
+   element, not the hidden label. */
+.page-search {
+  container: page-search / inline-size;
+  display: flex;
+  flex: 0 1 200px;
+  min-width: var(--size-control-md);
+}
+
+.page-search > .crewlet-search-trigger--toolbar {
+  --crewlet-search-trigger-width: 0px;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The keycap needs about 176px beside the word; below it the hint goes. */
+@container page-search (max-width: 176px) {
+  .page-search .crewlet-search-trigger__shortcut {
+    display: none;
+  }
+}
+
+/* Below the word's own width, the glyph alone, centred in the square. */
+@container page-search (max-width: 96px) {
+  .page-search .crewlet-search-trigger__label {
+    display: none;
+  }
+
+  .page-search > .crewlet-search-trigger--toolbar {
+    justify-content: center;
+    padding-inline: 0;
+  }
+}
+
+/* UNDER THE KIT'S OWN BREAKPOINT the field is its glyph at every width (the
+   kit hides the word and the keycap there), so the wrapper is the control
+   square rather than a 200px basis: a flexible box would hand an empty field
+   whatever the trail left over. Strictly `< 1024px`, as the kit switches. */
+@media (width < 1024px) {
+  .page-search {
+    flex: 0 0 var(--size-control-md);
+  }
+
+  .page-search > .crewlet-search-trigger--toolbar {
+    justify-content: center;
+    padding-inline: 0;
+  }
 }
 
 /* ---- The page bar, once its own width runs out --------------------------
@@ -944,12 +1234,12 @@
 .state-facts {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-4);
+  border-bottom: 1px solid var(--color-border-hover);
+  background: var(--color-surface-background);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   min-height: 24px;
 }
 
@@ -958,22 +1248,22 @@
 .object-head {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-4) 0 var(--space-3);
+  gap: var(--spacing-1);
+  padding: var(--spacing-4) 0 var(--spacing-3);
 }
 
 .object-head.peek {
-  padding: var(--space-3) 0 var(--space-2);
+  padding: var(--spacing-3) 0 var(--spacing-2);
 }
 
 .object-eyebrow {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-3xs);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .object-id {
@@ -986,14 +1276,14 @@
    a five-declaration rule that does nothing if any one of them is missing,
    which is what `styles/text.test.ts` exists to refuse. */
 .object-title {
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
   margin: 0;
   min-width: 0;
 }
 
 .object-head.peek .object-title {
-  font-size: var(--fs-lg);
+  font-size: var(--font-size-lg);
 }
 
 /* THE OBJECT'S STATE, BESIDE ITS NAME — and it keeps its width. These are
@@ -1008,9 +1298,9 @@
 .fact-line {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-  column-gap: var(--space-4);
-  row-gap: var(--space-3);
-  padding-top: var(--space-1);
+  column-gap: var(--spacing-4);
+  row-gap: var(--spacing-3);
+  padding-top: var(--spacing-1);
 }
 
 .fact {
@@ -1022,15 +1312,15 @@
 }
 
 .fact-label {
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .fact-value {
-  font-size: var(--fs-xs);
-  color: var(--text);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
 }
 
 /* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
@@ -1043,7 +1333,7 @@
    than as one row of facts.
 
    The cap that used to answer it was `max-width: 16ch`, and it could only ever
-   narrow the problem: sixteen characters at `--fs-3xs` is still wider than
+   narrow the problem: sixteen characters at `--font-size-2xs` is still wider than
    most values, so a footnote went on setting its column and the pitch went on
    being irregular. The column is a grid track now and the note wraps inside
    whatever it is, so there is nothing left to cap.
@@ -1054,8 +1344,8 @@
    which costs nothing now that the track does the bounding. */
 .fact-note,
 .fact-setby {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   text-wrap: balance;
 }
 
@@ -1073,8 +1363,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-panel);
-  border-left: 1px solid var(--border);
+  background: var(--color-surface-subtle);
+  border-left: 1px solid var(--color-border-hover);
 }
 
 .peek-grip {
@@ -1088,16 +1378,16 @@
 }
 
 .peek-grip:hover {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 .peek-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   height: var(--page-bar-h);
-  padding: 0 var(--space-2);
-  border-bottom: 1px solid var(--border);
+  padding: 0 var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-hover);
   flex: 0 0 auto;
 }
 
@@ -1105,7 +1395,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 var(--space-4) var(--space-6);
+  padding: 0 var(--spacing-4) var(--spacing-6);
 }
 
 /* THE DRAWER SIDE OF THE SAME THRESHOLD, and it must tile exactly with the
@@ -1119,8 +1409,8 @@
     display: block;
     position: fixed;
     inset: 0;
-    background: color-mix(in srgb, var(--surface-panel) 60%, transparent);
-    z-index: calc(var(--z-drawer) - 1);
+    background: color-mix(in srgb, var(--color-surface-subtle) 60%, transparent);
+    z-index: calc(var(--z-index-overlay) - 1);
   }
 
   .peek-rail {
@@ -1128,9 +1418,9 @@
     top: 0;
     right: 0;
     bottom: 0;
-    z-index: var(--z-drawer);
+    z-index: var(--z-index-overlay);
     width: min(var(--peek-w, 420px), 92vw);
-    box-shadow: var(--shadow-2);
+    box-shadow: var(--shadow-md);
   }
 
   .peek-grip {
@@ -1165,10 +1455,10 @@
 .grid-wrap {
   display: grid;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-md);
   overflow: clip;
-  background: var(--surface-panel);
+  background: var(--color-surface-subtle);
 }
 
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
@@ -1200,19 +1490,19 @@
 .grid-head {
   align-items: center;
   /* A REAL HEIGHT, so the band head below can be offset by it rather than by
-     a number somebody measured off a screenshot. --row-h is the product's own
+     a number somebody measured off a screenshot. --size-row-md is the product's own
      row rhythm and clears an 11px label with its padding at every density. A
      floor rather than a height because `--density: compact` shrinks the
      padding but not the label, which at a fixed height would put the glyphs
      0.7px outside a box that clips; the band head then sticks that same sliver
      high, which is the cheaper of the two errors. */
-  min-height: var(--row-h);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
+  min-height: var(--size-row-md);
+  border-bottom: 1px solid var(--color-border-hover);
+  background: var(--color-surface-elevated);
   position: sticky;
   /* NOT 0: `.toolbar` is sticky at the top of the same scroller, opaque and
-     at --z-sticky, so a header that stopped at 0 would stop underneath it.
-     See `--sticky-top` in shell.css, which is 0 on a screen with no toolbar
+     at --z-index-sticky, so a header that stopped at 0 would stop underneath it.
+     See `--sticky-top` on `.screen:has(.toolbar)`, which is 0 on a screen with no toolbar
      rather than a band of empty page above every header. */
   top: var(--sticky-top);
   z-index: 2;
@@ -1223,11 +1513,11 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-3xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   cursor: pointer;
   min-width: 0;
 }
@@ -1237,11 +1527,11 @@
 }
 
 .grid-th:not(.plain):hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-th.sorted {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-th.right {
@@ -1249,7 +1539,7 @@
 }
 
 .grid-th:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -1262,8 +1552,8 @@
 
 .grid-row {
   align-items: center;
-  min-height: var(--row-h);
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--size-row-md);
+  border-bottom: 1px solid var(--color-border-default);
   color: inherit;
   cursor: pointer;
   /* The containing block for `.row-link` below. */
@@ -1296,31 +1586,31 @@
 }
 
 .grid-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 
 .grid-row.selected {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 .grid-row.cursor {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 
 /* A FAILED ROW IS MARKED ON ITS EDGE, not tinted: a tinted row competes with
    the status column that already says so, and two signals for one fact is how
    a reader learns to trust neither. */
 .grid-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 
 .grid-cell {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-compact);
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* A column that shrinks to its content and never wraps — a key, a timestamp,
@@ -1347,22 +1637,22 @@
 }
 
 .grid-band + .grid-band {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--color-border-hover);
 }
 
 .grid-band-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-raised);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   position: sticky;
-  /* Under the column heads, which are `--row-h` tall and already parked at
+  /* Under the column heads, which are `--size-row-md` tall and already parked at
      `--sticky-top`. A band head is confined to its own `.grid-band`, so it
      leaves with the band rather than stacking up. */
-  top: calc(var(--sticky-top) + var(--row-h));
+  top: calc(var(--sticky-top) + var(--size-row-md));
   /* Above the rows — which are `position: relative` for the row link and so
      would otherwise paint over it in document order — and below the column
      heads at 2. */
@@ -1377,15 +1667,14 @@
    uppercase register, because the deeper heading is the more specific one and
    a shout at both levels ranks neither. */
 .grid-band .grid-band > .grid-band-head {
-  padding-left: calc(var(--space-3) + var(--space-4));
-  background: var(--surface-panel);
+  padding-left: calc(var(--spacing-3) + var(--spacing-4));
+  background: var(--color-surface-subtle);
   text-transform: none;
   letter-spacing: normal;
-  font-weight: var(--fw-medium);
-  /* `--text-muted` IS THE READABLE RUNG — this sheet's aliases are one step
-     off the package's, so it resolves to `--color-text-tertiary` at 6.63:1.
-     See the note at `.props-empty`; there is no `--text-tertiary` here. */
-  color: var(--text-muted);
+  font-weight: var(--font-weight-medium);
+  /* `--color-text-tertiary` IS THE READABLE RUNG for a sentence; see the note
+     at `.props-empty`. */
+  color: var(--color-text-tertiary);
 }
 
 /* AND A SUB-BAND DRAWS NO RULE ABOVE ITSELF. `.grid-band + .grid-band` is the
@@ -1397,16 +1686,16 @@
 
 .grid-band-count {
   margin-left: auto;
-  color: var(--text-muted);
-  font-weight: var(--fw-normal);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-regular);
   font-variant-numeric: tabular-nums;
 }
 
 .grid-band-foot {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  background: var(--surface-raised);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-elevated);
 }
 
 /* THE WAY INTO WHAT A BAND DID NOT FIT. A band carries a page of a count the
@@ -1414,20 +1703,20 @@
    reachable from — and the link is a standalone call to action on its own
    line, drawn by its container exactly as the board's column foot is. */
 .grid-band-foot a {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .grid-band-foot a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .grid-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
-  font-size: var(--fs-2xs);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-top: 1px solid var(--color-border-hover);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
 }
 
 .grid-cols-reset {
@@ -1437,9 +1726,9 @@
      full-width band above would be undone here and the button would be sized
      by the first column. */
   grid-column: 1 / -1;
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-3xs);
-  color: var(--accent-ink);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-brand-accent-ink);
   cursor: pointer;
   text-align: left;
 }
@@ -1453,11 +1742,11 @@
    over one rule is how the two would start disagreeing about what an empty
    `cols=` means. */
 .grid-cols-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 /* TWO COLUMNS, because a chooser is a list of short words and a single file of
    them makes a menu as tall as the grid has columns — twelve on the work
@@ -1465,50 +1754,54 @@
 .grid-cols-choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-1) var(--space-3);
+  gap: var(--spacing-1) var(--spacing-3);
 }
 .grid-cols-choice {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   /* THE POINTER TARGET IS THE ROW, not the box: a 13px checkbox is under the
      minimum on a phone, and the label is what a reader aims at. */
   min-height: var(--size-target-min);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
 /* ---- Cells -------------------------------------------------------------- */
 
 .cell-date {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
 .cell-seat {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
   color: inherit;
 }
 
 /* A NO-OP UNTIL NOW, and nothing could see it: `.cell-seat` takes `color:
-   inherit` and a grid row's colour IS `--text`, so "hover moves it to
-   `--text`" moved it nowhere, and what actually answered the pointer was the
+   inherit` and a grid row's colour IS `--color-text-primary`, so "hover moves it to
+   `--color-text-primary`" moved it nowhere, and what actually answered the pointer was the
    baseline's hover underline that this application never wanted. With that
    reset, hovering a seat name changed nothing at all.
 
    The step is the other direction here, and it has to be: the rungs move a
-   link TOWARD `--text` when it starts at the accent ink, and this register
-   deliberately starts at `--text` so a grid of seat names does not read as a
+   link TOWARD `--color-text-primary` when it starts at the accent ink, and this register
+   deliberately starts at `--color-text-primary` so a grid of seat names does not read as a
    page of links. Onto the accent's one text rung is the same move in reverse,
    and it says what the row's own wash cannot — that this NAME is the link
    rather than the row. `.wl-who` in screens.css is the same object and takes
-   the same answer. */
-.cell-seat:hover {
-  color: var(--accent-ink);
+   the same answer.
+
+   ONLY WHERE THE NAME IS THE LINK: `SeatLabel` wears the same class inside a
+   row that is itself the link, and an accent there would say the name goes
+   somewhere the row does not. */
+a.cell-seat:hover {
+  color: var(--color-brand-accent-ink);
 }
 
 .cell-status {
@@ -1519,24 +1812,24 @@
 }
 
 .cell-glyph {
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
   line-height: 1;
 }
 
 .cell-status.positive .cell-glyph {
-  color: var(--positive);
+  color: var(--color-feedback-success);
 }
 .cell-status.caution .cell-glyph {
-  color: var(--caution);
+  color: var(--color-feedback-warning);
 }
 .cell-status.critical .cell-glyph {
-  color: var(--critical);
+  color: var(--color-feedback-danger);
 }
 .cell-status.info .cell-glyph {
-  color: var(--info);
+  color: var(--color-feedback-info);
 }
 .cell-status.neutral .cell-glyph {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 
 .cell-meter {
@@ -1544,27 +1837,27 @@
   width: 64px;
   height: 6px;
   border-radius: 3px;
-  background: var(--surface-raised);
+  background: var(--color-surface-elevated);
   overflow: hidden;
 }
 
 .cell-meter-fill {
   display: block;
   height: 100%;
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }
 
 .cell-meter-fill.positive {
-  background: var(--positive);
+  background: var(--color-feedback-success);
 }
 .cell-meter-fill.caution {
-  background: var(--caution);
+  background: var(--color-feedback-warning);
 }
 .cell-meter-fill.critical {
-  background: var(--critical);
+  background: var(--color-feedback-danger);
 }
 .cell-meter-fill.neutral {
-  background: var(--text-faint);
+  background: var(--color-text-muted);
 }
 
 /* ---- Narrow ------------------------------------------------------------- */
@@ -1591,9 +1884,10 @@
      pill and past the 48px column itself — 4.11px off the window's left edge
      and 3.11px past the column's right one. "unreachable" is 64.44px and
      spills 8.72px and 7.72px. The dot is the state and the word is the label
-     for it, and the labels are already gone here. It comes back with them in
-     the bottom bar below, where the foot is a row of the bar and the pill has
-     63.22px to draw in. */
+     for it, and the labels are already gone here. It stays gone in the bottom
+     bar below, where the labels come back: there the foot shares one row with
+     eight destinations, and the word cost the active one its place. The
+     link's accessible name carries the word at every width (`Shell.tsx`). */
   .rail-engine > .truncate {
     display: none;
   }
@@ -1603,10 +1897,10 @@
     top: 0;
     bottom: 0;
     left: var(--rail-w-collapsed);
-    width: var(--sidebar-w);
-    z-index: var(--z-drawer);
+    width: var(--size-shell-rail);
+    z-index: var(--z-index-overlay);
     transform: translateX(-110%);
-    box-shadow: var(--shadow-2);
+    box-shadow: var(--shadow-md);
 
     /* AND OUT OF REACH, NOT MERELY OUT OF SIGHT. A transform moves pixels and
        nothing else: the closed drawer kept EIGHT TAB STOPS — the filter box,
@@ -1626,15 +1920,15 @@
        the markup is the same at every width. */
     visibility: hidden;
     transition:
-      transform var(--dur) var(--ease),
-      visibility 0s linear var(--dur);
+      transform var(--motion-duration-base) var(--motion-easing-default),
+      visibility 0s linear var(--motion-duration-base);
   }
 
   .workspace-side[data-open="true"] {
     transform: none;
     visibility: visible;
     transition:
-      transform var(--dur) var(--ease),
+      transform var(--motion-duration-base) var(--motion-easing-default),
       visibility 0s;
   }
 }
@@ -1642,10 +1936,10 @@
 /* ---- The page's own one-line explanation --------------------------------- */
 
 .page-note {
-  margin: 0 0 var(--space-3);
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  max-width: var(--measure);
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+  max-width: var(--size-measure);
 }
 
 /* ---- The viewer chip ----------------------------------------------------- */
@@ -1653,18 +1947,18 @@
 .viewer-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 2px var(--space-2) 2px 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  color: var(--text-secondary);
-  font-size: var(--fs-2xs);
+  gap: var(--spacing-2);
+  padding: 2px var(--spacing-2) 2px 2px;
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
   max-width: 180px;
 }
 
 .viewer-chip:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* ---- The rail's engine pill ---------------------------------------------- */
@@ -1676,28 +1970,28 @@
    column is `--rail-w` — 97px at density 1, and 94.11 or 99.23 at the other
    two, since the insets it composes scale — but its own `border-right` and
    the foot's inset are spent before this box begins, so the pill is
-   `--rail-foot-w` wide, a flat 80px at every density, and its `--space-1`
+   `--rail-foot-w` wide, a flat 80px at every density, and its `--spacing-1`
    padding leaves 72px of content (70.9px at comfortable, 73.46px at
    compact).
 
-   Measured in Chromium against the shipped stylesheets, at `--fs-3xs` — 11px
-   Inter, and a font size is the one token density does not scale, so these
+   Measured in Chromium against the shipped stylesheets, at `--font-size-2xs` — 11px
+   Geist, and a font size is the one token density does not scale, so these
    are the widths at all three. The four words `Shell.tsx` puts here are
-   "unreachable" at 64.44px, "connected" at 55.22px, "no config" at 49.06px
-   and "refused" at 39.91px. So the longest alone wants 64.44 of the 72, and a
+   "unreachable" at 62.13px, "connected" at 53px, "no config" at 46.44px and
+   "refused" at 38.36px. So the longest alone wants 62.13 of the 72, and a
    row owes 6px more to the dot and 2px to the gap between it and the word:
-   72.44 into 72, with nothing else on the line at all, which draws as
-   "unreacha…".
+   70.13 into 72 — a fit with under two pixels to spare, and only with
+   nothing else on the line at all.
 
-   AND THE COUNT IS WHAT MAKES THAT THE GOOD CASE. It renders whenever the
-   engine has work in flight, and the marks then measure 19.14px at one digit
-   and 26.27px at two, leaving the word 50.86px and 43.73px — so a row cut the
-   one piece of chrome that says whether the engine is reachable down to
-   "3 connec…", exactly while the engine was busiest. A status indicator
-   nobody can read is a status indicator that is not there.
+   AND THE COUNT IS WHAT BREAKS IT. It renders whenever the engine has work in
+   flight, and the marks then measure 19.61px at one digit and 26.2px at two,
+   leaving the word 50.39px and 43.8px — so a row cut the one piece of chrome
+   that says whether the engine is reachable down to "3 connec…", exactly
+   while the engine was busiest. A status indicator nobody can read is a
+   status indicator that is not there.
 
    Stacked, the word has the pill's whole 72px and every one of the four fits,
-   the longest with 7.56px to spare. The dot and the count share the first
+   the longest with 9.87px to spare. The dot and the count share the first
    line because they are both marks; the word takes the second. */
 .rail-engine {
   display: flex;
@@ -1705,10 +1999,10 @@
   align-items: center;
   gap: 2px;
   width: 100%;
-  padding: var(--space-1) var(--space-1);
-  border-radius: var(--r-sm);
-  color: var(--text-muted);
-  font-size: var(--fs-3xs);
+  padding: var(--spacing-1) var(--spacing-1);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
   min-width: 0;
 }
 
@@ -1720,8 +2014,8 @@
 }
 
 .rail-engine:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* ---- An object's own facts ------------------------------------------------
@@ -1742,16 +2036,16 @@
 .props {
   display: grid;
   grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
-  gap: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
+  gap: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-compact);
   align-items: baseline;
   min-width: 0;
   margin: 0;
 }
 
 .props > dt {
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
   min-width: 0;
 }
 
@@ -1763,14 +2057,14 @@
 
 .props-section {
   grid-column: 1 / -1;
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* THE RAIL'S FIRST HEADING HAS NOTHING TO BE SEPARATED FROM, so it loses the
@@ -1789,22 +2083,17 @@
    the CALLER wrote for it. See PropertiesRail's own doc for why the rail does
    not decide this for itself.
 
-   `--text-muted` IS THE READABLE RUNG HERE, and the name is the trap. This
-   sheet's aliases are one step off the token package's: `uilet.css` maps
-   `--text-muted` to `--color-text-tertiary` (6.63:1 light, 7.01:1 dark) and
-   `--text-faint` to `--color-text-muted` (~3:1, the non-text floor). So the
-   palette doc's rule — words a reader has to read take
-   `--color-text-tertiary`, never `--color-text-muted` — is kept by the line
-   BELOW and broken by `--text-faint`, which is what `styles/rungs.test.ts`
-   fails on in both directions. There is no `--text-tertiary` in this tree:
-   reaching for that spelling names a property nothing declares, which
-   `styles/tokens.test.ts` fails on and which the browser drops whole, taking
-   the colour with it rather than falling back. This is a sentence, so it sits
-   at the same rung as every other empty state in the product. */
+   `--color-text-tertiary` IS THE READABLE RUNG HERE, and the name is the
+   trap: `--color-text-muted` sounds like the quiet word and is the ~3:1
+   non-text step, a floor for a MARK. The palette doc's rule — words a reader
+   has to read take `--color-text-tertiary`, never `--color-text-muted` — is
+   kept by the line below, and `styles/rungs.test.ts` fails on a word set in
+   the muted step in both directions. This is a sentence, so it sits at the
+   same rung as every other empty state in the product. */
 .props-empty {
   grid-column: 1 / -1;
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* WHO SET IT, under the value rather than beside it: the value is what the
@@ -1813,8 +2102,8 @@
 .props-setby {
   display: block;
   margin-top: 2px;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
 }
 
 /* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
@@ -1852,41 +2141,68 @@
   align-items: flex-end;
   gap: 1px;
   width: 100%;
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border);
+  padding: var(--spacing-1) 0;
+  border-bottom: 1px solid var(--color-border-hover);
 }
 
+/* THE SLOT IS THE CONTROL; THE FILL INSIDE IT IS THE BAR. Painted as the slot
+   itself, a seven-day window holding one busy day drew a solid block a seventh
+   of the card wide — a panel, not a quantity — the defect the spend chart's
+   `.stackseries-stack` was already fixed for. The fill takes the kit's own
+   column proportion (`.crewlet-stacked-columns__column`: 63% of its slot,
+   capped at `--spacing-7`), centred, so one bucket and ninety draw with the
+   geometry every other chart in the product uses; the click target stays the
+   whole slot, because a thinner bar is no reason for a smaller control. */
 .histogram-bar {
   all: unset;
-  flex: 1;
+  flex: 1 1 0;
   min-width: 2px;
-  background: var(--accent);
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
   /* A bar is only a control where the caller gave it something to do, and
      ui/Histogram.tsx renders a div rather than a button where it did not —
      so the pointer follows the element rather than a class. */
   cursor: inherit;
 }
 
+/* A COUNT IS DATA, SO IT IS DRAWN IN THE DATA RAMP. The accent is the kit's
+   HERE/ACT colour — the primary action, the selection, the reader's own count
+   — and a histogram filled with it both disagreed with every other chart in
+   the workspace and spent the one colour that says "act here" on a picture.
+   The accent is kept for the one bar the reader is pointing at, which is the
+   selection this control is about to make. */
+.histogram-fill {
+  display: block;
+  width: 63%;
+  min-width: 2px;
+  max-width: var(--spacing-7);
+  background: var(--color-data-1);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
 button.histogram-bar {
   cursor: pointer;
 }
 
-button.histogram-bar:hover {
-  background: var(--accent-hover);
+button.histogram-bar:hover > .histogram-fill,
+button.histogram-bar:focus-visible > .histogram-fill {
+  background: var(--color-brand-accent);
 }
 
-.histogram-bar[data-empty] {
-  background: var(--surface-inset);
+/* AN EMPTY BUCKET IS A VISIBLE FLOOR. It was `--color-surface-inset`, which on
+   the card rung the chart sits on is within a shade of the card itself — so an
+   empty stretch drew nothing, and a week with one busy day read as one block
+   over a bare line. The strong border is the tone the kit rules an axis in:
+   present, and plainly not a quantity. */
+.histogram-bar[data-empty] > .histogram-fill {
+  background: var(--color-border-strong);
 }
 
-button.histogram-bar[data-empty]:hover {
-  background: var(--border-strong);
-}
-
-.histogram-bar:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
+button.histogram-bar[data-empty]:hover > .histogram-fill,
+button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
+  background: var(--color-border-strong-hover);
 }
 
 /* THE DATES UNDER THE BARS, which is the half that makes the plot an axis. A
@@ -1917,15 +2233,15 @@ button.histogram-bar[data-empty]:hover {
   /* THE ROW IS AS TALL AS ONE LABEL, stated rather than left to the absolutely
      positioned children — which contribute no height at all, so without this
      the chart and whatever follows it would overlap. */
-  height: calc(var(--fs-3xs) * var(--lh-normal));
+  height: calc(var(--font-size-2xs) * var(--font-line-height-normal));
   margin-top: 2px;
 }
 
 .histogram-tick {
   position: absolute;
   top: 0;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   /* A COLUMN OF TIMES LINES UP or it reads as a jitter in the axis itself. */
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1943,19 +2259,19 @@ button.histogram-bar[data-empty]:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1);
-  margin-bottom: var(--space-2);
+  gap: var(--spacing-1);
+  margin-bottom: var(--spacing-2);
 }
 
 /* ---- Key mark -----------------------------------------------------------
    A mono key mark, wherever a project or item key stands beside prose. */
 .key-mark {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
   padding: 1px 4px;
-  border-radius: var(--r-xs);
-  background: var(--surface-inset);
-  color: var(--text-muted);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-inset);
+  color: var(--color-text-tertiary);
   flex: 0 0 auto;
 }
 
@@ -1985,11 +2301,11 @@ button.histogram-bar[data-empty]:hover {
   .rail {
     position: fixed;
     inset: auto 0 0 0;
-    z-index: var(--z-drawer);
+    z-index: var(--z-index-overlay);
     flex-direction: row;
     height: var(--rail-bar-h);
     border-right: none;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--color-border-hover);
     /* The home indicator on a modern phone sits over the bottom edge, so the
        last row of anything flush to it is unpressable. */
     padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -2023,8 +2339,8 @@ button.histogram-bar[data-empty]:hover {
   /* THE BAR MOVES TO THE TOP EDGE OF THE ROW, because on a bottom bar a
      vertical rule beside the icon is a rule against the screen's edge. */
   .rail-row.active::before {
-    left: var(--space-2);
-    right: var(--space-2);
+    left: var(--spacing-2);
+    right: var(--spacing-2);
     top: 0;
     bottom: auto;
     inset-block: auto;
@@ -2040,18 +2356,19 @@ button.histogram-bar[data-empty]:hover {
     display: block;
   }
 
-  /* AND SO DOES THE ENGINE'S WORD, for the same reason and in the same place:
-     the foot is a row of the bar here rather than a 48px column. */
-  .rail-engine > .truncate {
-    display: inline;
-  }
+  /* BUT THE ENGINE'S WORD STAYS OUT. The foot is a row of the bar here, and
+     every pixel it takes is a pixel the destinations scroll under: with
+     "connected" beside the dot it was 61px of a 390px bar, and the eighth
+     destination — the one a reader on Activity, Cost or Admin is ON — sat cut
+     at the scroller's edge as "Ac". The dot is the state; the link's own
+     accessible name says the word (`Shell.tsx`), exactly as at 960 above. */
 
   .rail-foot {
     flex-direction: row;
     align-items: center;
     border-top: none;
-    border-left: 1px solid var(--border);
-    padding: 0 var(--space-2);
+    border-left: 1px solid var(--color-border-hover);
+    padding: 0 var(--spacing-2);
   }
 
   /* The workspace drawer opens over the page from the left edge now, since
@@ -2060,11 +2377,20 @@ button.histogram-bar[data-empty]:hover {
     left: 0;
   }
 
-  /* THE PAGE'S CLEARANCE OVER THE BAR is `shell.css`'s, derived from
-     `--rail-bar-h` where `.screen-inner`'s padding is already declared. Set
-     here as well it would be two rules at one breakpoint racing on one
-     property, and the loser would be whichever file happened to load second.
-  */
+  .drawer-toggle {
+    display: inline-flex;
+  }
+
+  /* THE PAGE'S CLEARANCE OVER THE BAR. Derived from `--rail-bar-h` rather
+     than eyeballed, because a bar whose height and a page whose clearance are
+     two literals is a list whose last row goes under the navigation the day
+     either one moves. The safe-area inset is the home indicator on a modern
+     phone, which the bar also pads for — it is counted once here and once
+     there because they are two boxes stacked on the same edge. */
+  .screen-inner {
+    padding: var(--spacing-4) var(--spacing-3)
+      calc(var(--rail-bar-h) + env(safe-area-inset-bottom, 0px) + var(--spacing-6));
+  }
 
   /* ---- The page bar on a phone ------------------------------------------
      NOTHING IN THE CHROME MAY SIT OUTSIDE THE VIEWPORT, which is what this
@@ -2090,8 +2416,8 @@ button.histogram-bar[data-empty]:hover {
      query could not see is written down. What is left here is the phone's own
      tightening. */
   .page-bar {
-    padding: 0 var(--space-2);
-    gap: var(--space-1);
+    padding: 0 var(--spacing-2);
+    gap: var(--spacing-1);
   }
 
   /* THE VIEWER IS ITS MARK HERE. The chip is 117px of a 390px bar for a name
@@ -2168,7 +2494,7 @@ button.histogram-bar[data-empty]:hover {
      hover, selection and failure marks this file gives it. */
   .grid-row {
     display: block;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--spacing-2) var(--spacing-3);
     min-height: 0;
   }
 
@@ -2182,7 +2508,7 @@ button.histogram-bar[data-empty]:hover {
      the viewport. A flex line per cell takes any number of children, because
      the cell keeps the flex box it already has in the wide layout.
      A FIXED BASIS is what lines the labels up without a shared track, and
-     7rem is MEASURED rather than chosen. At `--fs-3xs` uppercase with the
+     7rem is MEASURED rather than chosen. At `--font-size-2xs` uppercase with the
      0.05em tracking the rule below sets, the widest head that still fits on
      one line is CONVERSATION at 93.09px, so 112px clears it with 19px to
      spare and leaves the value the rest of a 390px card. ASSIGNEE, PRIORITY
@@ -2193,7 +2519,7 @@ button.histogram-bar[data-empty]:hover {
   .grid-cell {
     display: flex;
     align-items: baseline;
-    gap: var(--space-3);
+    gap: var(--spacing-3);
     padding: 1px 0;
     min-width: 0;
   }
@@ -2260,10 +2586,10 @@ button.histogram-bar[data-empty]:hover {
     content: attr(data-label);
     flex: 0 0 7rem;
     overflow-wrap: anywhere;
-    font-size: var(--fs-3xs);
+    font-size: var(--font-size-2xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-muted);
+    color: var(--color-text-tertiary);
   }
 
   /* `shrink` and `right` are COLUMN shapes and there are no columns here: a

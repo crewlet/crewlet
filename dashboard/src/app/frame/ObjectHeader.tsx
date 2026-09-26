@@ -35,13 +35,14 @@
  */
 
 import type { ReactNode } from "react";
-import { ArrowOutwardGlyph } from "@crewlethq/icons/glyphs";
+import { ArrowUpRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
 import { cx } from "@crewlethq/ui";
 // AN OBJECT'S EYEBROW MARK IS NAME-KEYED — `icon: IconName` is the prop every
 // screen and every peek fills in — so the name→drawing lookup stays in
 // `~/ui/Icon.tsx` and moves all of them onto uilet's glyphs in one place.
-import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
 
 export interface SetBy {
   actor: string;
@@ -106,7 +107,7 @@ export function SetByLine({
               `white-space` cannot suppress that — `.t-link` already carries
               one — and only a formatting context of the anchor's own can. */}
           <a className="t-link setby-turn" href={href(["activity", "turns", setBy.turnId])}>
-            turn <ArrowOutwardGlyph size="xs" />
+            turn <ArrowUpRightGlyph size="xs" />
           </a>
         </>
       )}
@@ -157,7 +158,11 @@ export function FactLine({ facts }: { facts: Fact[] }) {
       {shown.map((fact) => (
         <span key={fact.label} className="fact">
           <span className="fact-label">{fact.label}</span>
-          <span className="fact-value truncate">
+          {/* TWO LINES, THEN AN ELLIPSIS — not one. A fact is a short phrase
+              in a track as narrow as `8rem`, and cut to one line an agent's
+              "not running on this node" read "not running on this no…" at
+              1440, which says nothing about where it IS running. */}
+          <span className="fact-value clamp">
             {fact.path ? (
               <a className="t-link" href={href(fact.path, fact.query)}>
                 {fact.value}
@@ -194,7 +199,7 @@ export function ObjectHeader({
 }: {
   /** The eyebrow: what kind of thing this is. */
   kind: string;
-  icon?: MarkName;
+  icon?: GlyphName;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   title: ReactNode;
@@ -237,7 +242,7 @@ export function ObjectHeader({
             `lead` bounds the ordinary case; this bounds the one it
             deliberately does not, a summary written as a single unpunctuated
             clause, which no sentence rule can shorten and which set three
-            lines of `--fs-xl` semibold above the facts, pushing them off a
+            lines of `--font-size-xl` semibold above the facts, pushing them off a
             laptop's first screen.
 
             `.clamp` rather than `.truncate`: one line cuts most real titles,

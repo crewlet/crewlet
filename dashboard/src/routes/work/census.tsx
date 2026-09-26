@@ -27,7 +27,7 @@
  *
  * # Colour is on state only
  *
- * `--positive` for done and the data ramp's neutral residual for closed, per
+ * `--color-feedback-success` for done and the data ramp's neutral residual for closed, per
  * `docs/reference/dashboard-design.md` §"The one rule". Nothing here is tinted
  * by WHICH project it is.
  */
@@ -60,7 +60,7 @@ export function ProjectProgress({ counts }: { counts: WorkTaskCounts }) {
   return (
     <StackedBar
       segments={[
-        { id: "done", label: "Done", value: counts.done, color: "var(--positive)" },
+        { id: "done", label: "Done", value: counts.done, color: "var(--color-feedback-success)" },
         { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
         // THE REMAINDER IS A SEGMENT, and it is transparent so the track shows
         // through it. It has to be here: the bar sizes every part against the
@@ -98,7 +98,7 @@ export function ProjectProgressLegend({ counts }: { counts?: WorkTaskCounts }) {
   return (
     <Legend
       items={[
-        { id: "done", label: "Done", color: "var(--positive)", value: counts?.done },
+        { id: "done", label: "Done", color: "var(--color-feedback-success)", value: counts?.done },
         { id: "closed", label: "Closed", color: DATA_COLOR_OTHER, value: counts?.closed },
       ]}
     />

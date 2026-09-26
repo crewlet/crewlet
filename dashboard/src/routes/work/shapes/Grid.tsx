@@ -87,7 +87,7 @@
 
 import { useMemo } from "react";
 import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
-import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
+import { CopyGlyph } from "@crewlethq/icons/glyphs";
 
 import {
   columnChoicesOf,
@@ -671,7 +671,7 @@ export function WorkGrid({
           ? {
               title: "The trash is empty",
               hint: "Nothing in this container has been removed. A removal is reversible at any age, so what lands here stays until somebody restores or purges it.",
-              icon: "delete",
+              icon: "trash",
             }
           : {
               title: "Nothing matches",
@@ -774,8 +774,7 @@ function trashColumns(
                 and `system` (`tracker.AuthorKind`) — there is no `seat` among
                 them, so the word this checked against matched nothing and the
                 tag was drawn on EVERY removal, including every ordinary one.
-                A mark on every row is a mark that separates nothing, which is
-                the same rule the priority scale keeps for `normal`. The
+                A mark on every row is a mark that separates nothing. The
                 history row one screen over already spelled it `agent`; this
                 is the copy that drifted. */}
             {record.actor_kind && record.actor_kind !== "agent" && (
@@ -815,8 +814,8 @@ function RestoreCall({ id }: { id: string }) {
   return (
     <Button
       size="small"
-      variant="tertiary"
-      leadingIcon={<ContentCopyGlyph />}
+      variant="ghost"
+      leadingIcon={<CopyGlyph />}
       title={text}
       onClick={(e) => {
         // THE ROW IS AN ANCHOR. Without this the copy also opens the task,

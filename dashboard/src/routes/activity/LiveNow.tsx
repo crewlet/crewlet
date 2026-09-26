@@ -45,24 +45,21 @@ import {
   StatGroup,
   Tag,
 } from "@crewlethq/ui";
-// STILL OURS: the phase→token map. uilet publishes the three phase hues as
-// `--color-phase-*` (the alias sheet already points `--phase-*` at them) but
-// no function that picks one from a phase name, and its data ramp is
-// deliberately NOT that — a chart hue means "this series", never "execute".
-import { phaseColor } from "~/ui/charts.tsx";
+// A phase is drawn in the series of the band the engine folds it into.
+import { phaseColor } from "~/lib/spend.ts";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { mergeRuns, RunStatus } from "./Runs.tsx";
 import {
-  ArrowForwardGlyph,
-  Book2Glyph,
-  BoltGlyph,
-  GroupGlyph,
+  ArrowRightGlyph,
+  BookOpenGlyph,
+  ZapGlyph,
+  UsersGlyph,
   LinkGlyph,
-  NeurologyGlyph,
-  ScheduleGlyph,
-  TerminalGlyph,
-  TimelineGlyph,
-  TokenGlyph,
+  BrainGlyph,
+  ClockGlyph,
+  SquareTerminalGlyph,
+  ChartNoAxesGanttGlyph,
+  CoinsGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   useAgents,
@@ -109,7 +106,7 @@ const STRIP_CELLS = 60;
  * How many coding runs the "In a box" panel draws before it says how many more.
  *
  * EIGHT, which is the feed's seven beside it plus a row: both lists are on a
- * landing screen read at a glance, and a row is `--row-h` tall, so eight is a
+ * landing screen read at a glance, and a row is `--size-row-md` tall, so eight is a
  * screenful rather than a scroll. The set is NOT bounded by the seat count the
  * way the live tiles are — a run parked on a question that nobody ever answers
  * stays in the record until the retention sweep takes it, so a company can
@@ -242,7 +239,7 @@ export function LiveNow() {
             <TimeRangePicker range={range} ariaLabel="Activity window" />
             <Button
               variant="secondary"
-              leadingIcon={<NeurologyGlyph size="sm" />}
+              leadingIcon={<BrainGlyph size="sm" />}
               onClick={() => nav.to(["activity", "turns"])}
             >
               Turns
@@ -261,7 +258,7 @@ export function LiveNow() {
           hairline, same clip — so there is no Panel around it any more. */}
       <StatGroup columns={4}>
         <StatCard
-          icon={<BoltGlyph size="xs" />}
+          icon={<ZapGlyph size="xs" />}
           label="Working now"
           value={live.length}
           // THE OTHER HALF OF THE SAME COUNT, not a list of who. `sub` is one
@@ -274,7 +271,7 @@ export function LiveNow() {
           sub={`${plural(idle, "seat")} idle and waiting for work`}
         />
         <StatCard
-          icon={<TerminalGlyph size="xs" />}
+          icon={<SquareTerminalGlyph size="xs" />}
           label="Coding runs"
           value={inFlight.length}
           sub={
@@ -284,7 +281,7 @@ export function LiveNow() {
           }
         />
         <StatCard
-          icon={<TimelineGlyph size="xs" />}
+          icon={<ChartNoAxesGanttGlyph size="xs" />}
           label={`Events · last ${windowLabel(range.window)}`}
           value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
           sub={
@@ -294,7 +291,7 @@ export function LiveNow() {
           }
         />
         <StatCard
-          icon={<TokenGlyph size="xs" />}
+          icon={<CoinsGlyph size="xs" />}
           label="Tokens"
           value={
             tokens ? fmtCount(tokens.totals.total_tokens) : <EmptyValue label="Not counted yet" />
@@ -310,10 +307,10 @@ export function LiveNow() {
       <div className="grid grid-auto-lg">
         <Card>
           <Card.Header
-            icon={<GroupGlyph size="sm" />}
+            icon={<UsersGlyph size="sm" />}
             count={live.length}
             actions={
-              <Button size="small" variant="tertiary" onClick={() => nav.to(["company", "people"])}>
+              <Button size="small" variant="ghost" onClick={() => nav.to(["company", "people"])}>
                 All seats
               </Button>
             }
@@ -343,7 +340,7 @@ export function LiveNow() {
           ) : (
             <EmptyState
               size="compact"
-              icon={<ScheduleGlyph size={32} />}
+              icon={<ClockGlyph size={32} />}
               title="No seat is mid-turn"
               description={
                 seatCount
@@ -356,9 +353,9 @@ export function LiveNow() {
 
         <Card>
           <Card.Header
-            icon={<TimelineGlyph size="sm" />}
+            icon={<ChartNoAxesGanttGlyph size="sm" />}
             actions={
-              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
+              <Button size="small" variant="ghost" onClick={() => nav.to(["activity"])}>
                 Event log
               </Button>
             }
@@ -392,7 +389,7 @@ export function LiveNow() {
               {!events.length && (
                 <EmptyState
                   size="compact"
-                  icon={<TimelineGlyph size={32} />}
+                  icon={<ChartNoAxesGanttGlyph size={32} />}
                   title="Nothing has happened yet"
                   description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
@@ -410,11 +407,11 @@ export function LiveNow() {
           sections come and go with the data cannot be read at a glance. */}
       <Card padding="none">
         <Card.Header
-          icon={<TerminalGlyph size="sm" />}
+          icon={<SquareTerminalGlyph size="sm" />}
           count={inFlight.length}
           subtitle="detached coding runs that have not finished"
           actions={
-            <Button size="small" variant="tertiary" onClick={() => nav.to(["activity", "runs"])}>
+            <Button size="small" variant="ghost" onClick={() => nav.to(["activity", "runs"])}>
               All runs
             </Button>
           }
@@ -459,7 +456,7 @@ export function LiveNow() {
         ) : (
           <EmptyState
             size="compact"
-            icon={<TerminalGlyph size={32} />}
+            icon={<SquareTerminalGlyph size={32} />}
             title="Nothing is running in a box"
             description="A coding run starts when a seat calls the sandbox tool. Every finished one is still in the record under Runs."
           />
@@ -469,10 +466,10 @@ export function LiveNow() {
       <div className="grid grid-auto-lg">
         <Card>
           <Card.Header
-            icon={<TokenGlyph size="sm" />}
+            icon={<CoinsGlyph size="sm" />}
             subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
             actions={
-              <Button size="small" variant="tertiary" onClick={() => nav.to(["cost"])}>
+              <Button size="small" variant="ghost" onClick={() => nav.to(["cost"])}>
                 Spend
               </Button>
             }
@@ -497,7 +494,7 @@ export function LiveNow() {
 
         <Card>
           <Card.Header
-            icon={<GroupGlyph size="sm" />}
+            icon={<UsersGlyph size="sm" />}
             subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
           >
             <Card.Title>Top seats by spend</Card.Title>
@@ -513,7 +510,7 @@ export function LiveNow() {
         <div className="grid grid-auto">
           {[
             {
-              icon: <NeurologyGlyph size="sm" />,
+              icon: <BrainGlyph size="sm" />,
               title: "Turns",
               body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
               path: ["activity", "turns"],
@@ -525,7 +522,7 @@ export function LiveNow() {
               path: ["activity", "a2a"],
             },
             {
-              icon: <Book2Glyph size="sm" />,
+              icon: <BookOpenGlyph size="sm" />,
               title: "Knowledge",
               body: "Search the company knowledge base the way an agent does, and read what each seat has learned for itself.",
               path: ["knowledge"],
@@ -538,7 +535,7 @@ export function LiveNow() {
                 </span>
                 <strong className="t-body">{card.title}</strong>
                 <span className="spacer" />
-                <ArrowForwardGlyph size="sm" />
+                <ArrowRightGlyph size="sm" />
               </div>
               <span className="t-caption">{card.body}</span>
             </a>

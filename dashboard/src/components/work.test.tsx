@@ -2,14 +2,14 @@
  * How the tracker's shared pieces draw a PERSON.
  *
  * The rule is `docs/reference/dashboard-design.md`'s "A person in a grid cell
- * is a resolved name", and its avatar clause: an identity badge is initials on
- * a neutral disc, and the ONE variant it has is structural — the dashed ring a
- * HUMAN seat wears, which says the engine does not run it.
+ * is a resolved name", and its avatar clause: an identity badge is initials,
+ * and the ONE variant it has is structural — its OUTLINE, a circle for a
+ * person and a squircle for an agent.
  *
  * These are the pieces every tracker surface draws rather than one screen's
  * columns, which is why they are asserted here: the board card, the compact
  * row and the item page all mount [Assignee], and before [RowChrome] carried
- * the kind not one of them could draw the ring at all. `routes/work/shapes/
+ * the kind not one of them could draw a person at all. `routes/work/shapes/
  * Grid.test.tsx` holds the same rule over the grid's two column sets.
  */
 
@@ -51,58 +51,67 @@ function badge(container: HTMLElement): HTMLElement {
   return marks[0] as HTMLElement;
 }
 
-// THE RING IS THE BADGE'S ONLY VARIANT, and it is a fact about the SEAT rather
-// than about the surface: a person on a board card is the same person as on
-// the row under it.
-test("a human assignee wears the dashed ring", () => {
+/** Which outline the kit drew the badge in: a person's circle or an agent's squircle. */
+function outline(container: HTMLElement): "human" | "agent" {
+  const mark = badge(container);
+  const human = mark.classList.contains("crewlet-avatar--human");
+  const agent = mark.classList.contains("crewlet-avatar--agent");
+  if (human === agent)
+    throw new Error(`the badge is drawn as both kinds or neither: ${mark.className}`);
+  return human ? "human" : "agent";
+}
+
+// THE OUTLINE IS THE BADGE'S ONLY VARIANT, and it is a fact about the SEAT
+// rather than about the surface: a person on a board card is the same person
+// as on the row under it.
+test("a human assignee is drawn as a person", () => {
   const { container } = render(
     <Assignee handle="iris" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
   );
-  expect(badge(container).className).toContain("dashed");
+  expect(outline(container)).toBe("human");
 });
 
-// AND AN AGENT DOES NOT. `agent` is what nearly every seat in an agent company
-// is, so a ring on every one of them would separate nothing.
-test("an agent assignee wears no ring", () => {
+// AND AN AGENT IS DRAWN AS AN AGENT.
+test("an agent assignee is drawn as an agent", () => {
   const { container } = render(
     <Assignee handle="ada" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
   );
-  expect(badge(container).className).not.toContain("dashed");
+  expect(outline(container)).toBe("agent");
 });
 
-// A HANDLE THE CHART DOES NOT HOLD IS NOT AN AGENT — it is a seat that was
-// renamed or removed, and the tracker still holds its work. The neutral disc
-// is the honest badge; a ring would claim the chart answered when it did not.
-test("a handle the chart does not hold falls back to the neutral disc", () => {
+// A HANDLE THE CHART DOES NOT HOLD is a seat that was renamed or removed, and
+// the tracker still holds its work. It takes the kit's default outline, an
+// agent's, because a person is always DECLARED: a circle there would claim
+// the chart answered when it did not.
+test("a handle the chart does not hold is never drawn as a person", () => {
   const { container } = render(
     <Assignee handle="departed" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
   );
-  const mark = badge(container);
-  expect(mark.className).not.toContain("dashed");
+  expect(outline(container)).toBe("agent");
   // AND THE HANDLE IS STILL THE LABEL, never a blank: "somebody the chart has
   // lost" and "nobody holds this" are different facts.
-  expect(mark.textContent).toBe("D");
+  expect(badge(container).textContent).toBe("DE");
 });
 
-// A CELL HANDED NO RESOLVER AT ALL draws the neutral disc rather than throwing
-// or guessing: every prop on this component is optional, and a surface that
-// has no chart yet is an ordinary state.
-test("no kind resolver draws the neutral disc", () => {
+// A CELL HANDED NO RESOLVER AT ALL draws the default rather than throwing or
+// guessing: every prop on this component is optional, and a surface that has
+// no chart yet is an ordinary state.
+test("no kind resolver never draws a person", () => {
   const { container } = render(<Assignee handle="iris" seatName={chrome.seatName} />);
-  expect(badge(container).className).not.toContain("dashed");
+  expect(outline(container)).toBe("agent");
 });
 
 // THE BOARD CARD READS THE SAME CHROME. It was the surface with the least
 // excuse for disagreeing — a column of cards is scanned for who holds what —
 // and it drew the badge through the same [Assignee] with the kind dropped.
-test("the board card draws a human seat's ring and an agent's plain disc", () => {
+test("the board card draws a human seat as a person and an agent as an agent", () => {
   const human = render(
     <BoardCard row={row({ assignee: "iris" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
   );
-  expect(badge(human.container).className).toContain("dashed");
+  expect(outline(human.container)).toBe("human");
   cleanup();
   const agent = render(
     <BoardCard row={row({ assignee: "ada" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
   );
-  expect(badge(agent.container).className).not.toContain("dashed");
+  expect(outline(agent.container)).toBe("agent");
 });

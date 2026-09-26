@@ -41,12 +41,12 @@
 
 import { Button, Popover, Select } from "@crewlethq/ui";
 import {
-  CalendarTodayGlyph,
-  DashboardGlyph,
+  CalendarGlyph,
+  LayoutDashboardGlyph,
   ListGlyph,
-  TimelineGlyph,
-  ViewColumnGlyph,
-  VisibilityGlyph,
+  ChartNoAxesGanttGlyph,
+  Columns3Glyph,
+  EyeGlyph,
 } from "@crewlethq/icons/glyphs";
 import { SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
 import { GROUP_AXES } from "~/contract/work.ts";
@@ -56,10 +56,10 @@ import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 /** The five shapes, each with the mark it is drawn as in the strip. */
 const SHAPES: { value: Shape; label: string; Glyph: typeof ListGlyph }[] = [
   { value: "list", label: "List", Glyph: ListGlyph },
-  { value: "board", label: "Board", Glyph: DashboardGlyph },
-  { value: "table", label: "Table", Glyph: ViewColumnGlyph },
-  { value: "calendar", label: "Calendar", Glyph: CalendarTodayGlyph },
-  { value: "timeline", label: "Timeline", Glyph: TimelineGlyph },
+  { value: "board", label: "Board", Glyph: LayoutDashboardGlyph },
+  { value: "table", label: "Table", Glyph: Columns3Glyph },
+  { value: "calendar", label: "Calendar", Glyph: CalendarGlyph },
+  { value: "timeline", label: "Timeline", Glyph: ChartNoAxesGanttGlyph },
 ];
 
 export interface DisplayMenuProps {
@@ -122,8 +122,8 @@ export function DisplayMenu(props: DisplayMenuProps) {
       trigger={(open, toggle) => (
         <Button
           size="small"
-          variant="tertiary"
-          leadingIcon={<VisibilityGlyph size="sm" />}
+          variant="ghost"
+          leadingIcon={<EyeGlyph size="sm" />}
           aria-expanded={open}
           aria-haspopup="dialog"
           onClick={toggle}
@@ -240,7 +240,7 @@ function DisplayPanel({
           with. */}
       {shape !== viewShape && (
         <div className="work-display-foot">
-          <Button size="small" variant="tertiary" onClick={() => onShape(viewShape)}>
+          <Button size="small" variant="ghost" onClick={() => onShape(viewShape)}>
             Back to this view&rsquo;s own shape
           </Button>
         </div>

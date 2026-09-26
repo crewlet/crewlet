@@ -14,7 +14,7 @@
  * trade for a preference.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { RAIL, type Workspace } from "../nav.ts";
 import { href } from "../router.tsx";
 import { cx } from "@crewlethq/ui";
@@ -23,7 +23,7 @@ import { ChevronLeftGlyph, ChevronRightGlyph, KeyGlyph } from "@crewlethq/icons/
 // is the one case `@crewlethq/icons/glyphs/registry` exists for, and why it is
 // a separate entry point: importing it pulls in every drawing, and the three
 // literal glyphs above cost only themselves.
-import { markByName } from "~/ui/glyph.tsx";
+import { glyphFor } from "~/ui/glyph.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 
 const COLLAPSE_KEY = "crewlet.rail.collapsed";
@@ -81,16 +81,29 @@ export function AppRail({
   /** Whether the guarded rows draw their lock. */
   locked?: boolean;
 }) {
+  const rows = useRef<HTMLDivElement>(null);
+  // THE CURRENT DESTINATION IS ON SCREEN. On a phone the rail is a bottom bar
+  // whose eight rows scroll sideways (frame.css), and a reader on Activity,
+  // Cost or Admin found the row they were ON past the scroller's edge — the
+  // one row a navigation bar must never hide. Brought to the nearest edge on
+  // every change of workspace, and only when the rows actually scroll that
+  // way: the desktop column does not, and moving it would move nothing.
+  useLayoutEffect(() => {
+    const strip = rows.current;
+    const row = strip?.querySelector<HTMLElement>(".rail-row.active");
+    if (!strip || !row) return;
+    revealInline(strip, row);
+  }, [active]);
   return (
     <nav className="rail" data-collapsed={collapsed || undefined} aria-label="Workspaces">
       <a className="rail-brand" href={href(["inbox"])} title="Crewlet">
-        <img src="/static/crewlet-icon.svg" alt="Crewlet" />
+        <img src="/static/dashboard/crewlet-icon.svg" alt="Crewlet" />
       </a>
 
-      <div className="rail-rows">
+      <div className="rail-rows" ref={rows}>
         {RAIL.map((row) => {
           const badge = badges?.[row.key] ?? null;
-          const Glyph = markByName(row.icon);
+          const Glyph = glyphFor(row.icon);
           return (
             <a
               key={row.key}
@@ -141,6 +154,24 @@ export function AppRail({
       </div>
     </nav>
   );
+}
+
+/**
+ * Scroll `strip` sideways just far enough that `row` is wholly inside it.
+ *
+ * THE SCROLLER ALONE, never its ancestors: `scrollIntoView` walks every
+ * scrollable box up to the document, so on a phone it would also scroll the
+ * page behind the fixed bar. A strip that does not overflow horizontally (the
+ * desktop column) is left exactly where it is.
+ */
+export function revealInline(strip: HTMLElement, row: HTMLElement): void {
+  if (strip.scrollWidth <= strip.clientWidth) return;
+  const box = strip.getBoundingClientRect();
+  const at = row.getBoundingClientRect();
+  const start = at.left - box.left + strip.scrollLeft;
+  const end = start + at.width;
+  if (start < strip.scrollLeft) strip.scrollLeft = start;
+  else if (end > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = end - strip.clientWidth;
 }
 
 /**

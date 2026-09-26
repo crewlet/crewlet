@@ -31,7 +31,7 @@ import type {
 } from "~/protocol/index.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
-import type { MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { roundLabel, runState, staleness, stoppedLine } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -85,7 +85,7 @@ export interface Attention {
   severity: Severity;
   /** What this is about. [SUBJECTS] is what the quiet band draws from it. */
   subject: Subject;
-  icon: MarkName;
+  icon: GlyphName;
   /** What happened, in the fewest words that are still true. */
   title: string;
   /** What it costs to leave it, or what to do about it. */
@@ -148,7 +148,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "offline",
       severity: "critical",
       subject: "engine",
-      icon: "power_settings_new",
+      icon: "power",
       title: "No connection to the engine",
       detail:
         "The page is showing the last state it received and polling a REST snapshot until the socket returns.",
@@ -163,7 +163,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "unconfigured",
       severity: "critical",
       subject: "engine",
-      icon: "tune",
+      icon: "sliders-vertical",
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
@@ -175,7 +175,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: `posture-${engine.posture}`,
       severity: "critical",
       subject: "engine",
-      icon: "dns",
+      icon: "server",
       title: `This node's control-plane posture is "${engine.posture}"`,
       detail:
         engine.posture === "shed"
@@ -189,7 +189,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "draining",
       severity: "caution",
       subject: "engine",
-      icon: "power_settings_new",
+      icon: "power",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
       path: ["admin", "fleet"],
@@ -213,7 +213,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "org-budget",
       severity: "critical",
       subject: "budget",
-      icon: "token",
+      icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
       detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
       path: ["cost"],
@@ -224,7 +224,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "org-budget-near",
       severity: "caution",
       subject: "budget",
-      icon: "token",
+      icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
       detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
       path: ["cost"],
@@ -243,7 +243,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: `sandbox-${run.turn_id}`,
       severity: "caution",
       subject: "run",
-      icon: "help",
+      icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
       // THE RUN'S OWN PATH. It was `#/activity/runs?run=`, which the runs
@@ -265,7 +265,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         id: `error-${agent.role}`,
         severity: "critical",
         subject: "seat",
-        icon: "warning",
+        icon: "triangle-alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
         path: ["company", "people", String(agent.handle ?? agent.id)],
@@ -299,7 +299,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
           subject: "seat",
-          icon: "schedule",
+          icon: "clock",
           title:
             how === "stalled"
               ? `${agent.role} has been on one round for over 10 minutes`
@@ -327,7 +327,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         id: `seat-budget-${agent.role}`,
         severity: "caution",
         subject: "budget",
-        icon: "token",
+        icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
         detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
         path: ["company", "people", String(agent.handle ?? agent.id)],

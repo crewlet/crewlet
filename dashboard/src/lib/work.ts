@@ -28,7 +28,7 @@ import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC, plural } from "./
 // be a second copy of markdown's rules, which is the drift `textcut` and `whsec`
 // each record.
 import { plainText } from "./markdown.ts";
-import type { MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,
   WorkChange,
@@ -105,18 +105,18 @@ export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
  * slugs ship with the engine; a company's own type falls through to the
  * neutral box rather than to a generated anything.
  */
-export const TYPE_ICON: Record<string, MarkName> = {
-  task: "check_circle",
-  bug: "bug_report",
-  epic: "bolt",
-  story: "book_2",
-  spike: "explore",
-  chore: "build",
+export const TYPE_ICON: Record<string, GlyphName> = {
+  task: "circle-check",
+  bug: "bug",
+  epic: "zap",
+  story: "book-open",
+  spike: "compass",
+  chore: "wrench",
   milestone: "flag",
 };
 
-export function typeIcon(slug: string | undefined): MarkName {
-  return TYPE_ICON[slug ?? ""] ?? "package_2";
+export function typeIcon(slug: string | undefined): GlyphName {
+  return TYPE_ICON[slug ?? ""] ?? "package";
 }
 
 /** What a type is called, preferring the company's own declaration. */
@@ -145,8 +145,8 @@ const BY_KIND = new Map<string, (typeof CHANGES)[number]>(
  * rolling upgrade puts kinds this build has never heard of on the wire, and a
  * row that drew nothing for one would read as a rendering fault.
  */
-export function changeMark(kind: string): MarkName {
-  return BY_KIND.get(kind)?.mark ?? "difference";
+export function changeMark(kind: string): GlyphName {
+  return BY_KIND.get(kind)?.mark ?? "diff";
 }
 
 /** What a change of this kind is called, after the actor's name. */

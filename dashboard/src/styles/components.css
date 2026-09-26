@@ -12,13 +12,13 @@
    is — one recipe, two grounds, no second component. */
 
 .panel-foot {
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* One remark in a thread — a work item's and a page's alike, which is why it
@@ -29,10 +29,10 @@
 .comment {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--surface-raised);
-  border-radius: var(--r-sm);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  background: var(--color-surface-elevated);
+  border-radius: var(--radius-sm);
 }
 
 /* A FIGURE COLUMN, fixed width and right-aligned, so a header label and the
@@ -47,7 +47,7 @@
 
    7rem BECAUSE OF THE HEADING, not the figure. A fixed column wraps its own
    heading rather than growing for it, and the widest one these blocks carry
-   — APPROX. TOKENS — measures 103px at `--fs-3xs` with `--track-wide`, so at
+   — APPROX. TOKENS — measures 103px at `--font-size-2xs` with `--font-letter-spacing-wide`, so at
    the 5.5rem this started on it broke across two lines while every value
    under it sat on one. A label is what says which number this is, so it is
    the label that sets the width; 112px clears the measurement with room for
@@ -129,8 +129,8 @@
    heading, because the table it was derived from is 746px on a turn that ran
    twice. The width such a number has to clear is the column COUNT
    (`Turn.tsx`), `.num-col` above, the gap (a token), WHICH ROW this turn
-   produced, and the rendered width of a heading at `--fs-3xs` with
-   `--track-wide` — font metrics, which live in no file at all. Any literal
+   produced, and the rendered width of a heading at `--font-size-2xs` with
+   `--font-letter-spacing-wide` — font metrics, which live in no file at all. Any literal
    here is a sixth quantity nothing can hold in step with five it cannot see,
    and it fails SILENTLY: a `max-width` narrower than its content is not an
    error, not a warning, and in a diff it is a file nobody touched.
@@ -145,7 +145,7 @@
    own content: measured with the ceiling removed outright, on a 390px phone
    the weights block draws 746px out of a card whose content box is 332px,
    from x=29 to x=775. Nothing scrolls it — `.app` and `.screen` are both
-   `overflow-x: hidden` (frame.css, shell.css), so the page does not take the
+   `overflow-x: hidden` (frame.css), so the page does not take the
    overflow either — and three of the five figure columns, APPROX. TOKENS
    among them, sit past x=390 with no way to reach them at all. The same box
    with wrappable content does clamp, which is exactly why deleting this line
@@ -186,7 +186,7 @@
    drawn at its full intrinsic width, so the class was decoration here and the
    block grew in its place. A bound is what makes it mean its own name.
 
-   20rem BECAUSE OF THE NOTES, measured at `--fs-2xs`. Three of the four the
+   20rem BECAUSE OF THE NOTES, measured at `--font-size-xs`. Three of the four the
    thread block can say are whole diagnostic sentences that have to arrive
    intact, because telling them apart is the entire reason the engine puts
    `thread_context_read` on the wire: `the thread could not be read from that
@@ -226,20 +226,20 @@
    line between two. A divider is a fact about the card, so it spans the
    card. */
 .ledger-follows:not(:first-child) {
-  border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
 }
 
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  background: var(--surface-inset);
-  border-radius: var(--r-full);
-  padding: 1px var(--space-2);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--spacing-2);
   min-width: 20px;
   text-align: center;
 }
@@ -252,28 +252,28 @@
 .dot {
   width: 6px;
   height: 6px;
-  border-radius: var(--r-full);
-  background: var(--text-faint);
+  border-radius: var(--radius-pill);
+  background: var(--color-text-muted);
   flex: none;
 }
 .dot.positive {
-  background: var(--positive);
+  background: var(--color-feedback-success);
 }
 .dot.caution {
-  background: var(--caution);
+  background: var(--color-feedback-warning);
 }
 .dot.critical {
-  background: var(--critical);
+  background: var(--color-feedback-danger);
 }
 .dot.info {
-  background: var(--info);
+  background: var(--color-feedback-info);
 }
 .dot.accent {
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }
 .dot.working {
-  background: var(--info);
-  animation: pulse-dot 1.8s var(--ease) infinite;
+  background: var(--color-feedback-info);
+  animation: pulse-dot 1.8s var(--motion-easing-default) infinite;
 }
 @keyframes pulse-dot {
   0%,
@@ -283,6 +283,14 @@
   50% {
     opacity: 0.35;
   }
+}
+
+/* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
+   the image a reader hears, so it takes the badge's box and nothing more —
+   no line box of its own around it, and never squeezed by a row it sits in. */
+.seat-avatar {
+  display: inline-flex;
+  flex: none;
 }
 
 /* A link that IS a row takes the page's text colour, not the link colour.
@@ -297,7 +305,7 @@ a.seat-chip {
   color: inherit;
 }
 a.seat-chip:hover {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 
 /* ---- Table --------------------------------------------------------------
@@ -314,10 +322,10 @@ a.seat-chip:hover {
 
 .table {
   width: 100%;
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 .table td {
-  padding: var(--space-1) var(--space-2);
+  padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 0;
   vertical-align: middle;
 }
@@ -352,10 +360,10 @@ a.seat-chip:hover {
     display: block;
   }
   .table tr {
-    padding: var(--space-2) 0;
+    padding: var(--spacing-2) 0;
   }
   .table tr + tr {
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--color-border-default);
   }
   .table td {
     padding: 1px 0;
@@ -363,7 +371,7 @@ a.seat-chip:hover {
   /* THE NAME IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap —
      a term name is an identifier and breaking it mid-word helps nobody. */
   .table td:first-child {
-    padding-bottom: var(--space-1);
+    padding-bottom: var(--spacing-1);
   }
 }
 
@@ -391,22 +399,22 @@ a.seat-chip:hover {
   position: sticky;
   top: var(--sticky-top);
   z-index: 1;
-  padding: var(--space-2) var(--row-inline) var(--space-1);
-  background: var(--surface-panel);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
+  padding: var(--spacing-2) var(--row-inline) var(--spacing-1);
+  background: var(--color-surface-subtle);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .list-row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: var(--row-h);
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
+  min-height: var(--size-row-md);
   min-width: 0;
   text-align: left;
   width: 100%;
@@ -418,14 +426,14 @@ a.seat-chip:hover {
   cursor: pointer;
 }
 .list-row.clickable:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .list-row.selected {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 .list-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 
 /* ---- Controls ----------------------------------------------------------- */
@@ -454,7 +462,7 @@ a.seat-chip:hover {
   left: 0;
   right: 0;
   margin: 0;
-  padding: var(--space-1);
+  padding: var(--spacing-1);
   list-style: none;
   /* BOUNDED AND SCROLLED. A company with forty sealed entries would
      otherwise draw a list past the bottom of the dialog. */
@@ -465,73 +473,82 @@ a.seat-chip:hover {
      show through the names. */
   /* THE RUNG ABOVE ITS GROUND, not the same one: this opens over a modal, and a
      modal paints the panel rung. */
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-2);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
 }
 .input-suggest {
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-xs);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-xs);
   cursor: pointer;
   /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
      screen: these are the names that go in one, and a list drawn in the
      page's prose font reads as prose rather than as values. */
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
   font-variant-ligatures: none;
-  font-size: var(--fs-2xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .input-suggest.is-active {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* Segmented control — lenses, tabs, ranges. One implementation; the system
-   this replaces had lens tabs, room tabs and filter pills as three. */
+   this replaces had lens tabs, room tabs and filter pills as three.
+
+   IT WRAPS RATHER THAN OVERFLOWING. Its options never shrink (a label cut
+   mid-word is not a choice anybody can read), so on one unbroken row a group
+   wider than its container ran off the edge: on a phone the spend chart's
+   "Split by" ended at "Worke", clipped by the card with no way to reach the
+   rest. Wrapped, every option stays visible, clickable and inside the
+   focus ring's room — which a horizontal scroll strip would clip. */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   padding: 2px;
-  background: var(--surface-inset);
-  border-radius: var(--r-sm);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-sm);
   min-width: 0;
+  max-width: 100%;
 }
 .segmented > button {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  height: calc(var(--control-h) - 6px);
-  padding: 0 var(--space-3);
-  border-radius: calc(var(--r-sm) - 1px);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-muted);
+  gap: var(--spacing-1);
+  height: calc(var(--size-control-md) - 6px);
+  padding: 0 var(--spacing-3);
+  border-radius: calc(var(--radius-sm) - 1px);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    background var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .segmented > button:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
    `tab` to `radio` because not one call site controls a tabpanel — see
    `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
    is how a correct role ships with the selected segment drawn as unselected. */
 .segmented > button[aria-checked="true"] {
-  background: var(--surface-panel);
-  color: var(--text);
-  box-shadow: var(--shadow-1);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-sm);
 }
 .segmented.sm > button {
-  height: calc(var(--control-h-sm) - 4px);
-  padding: 0 var(--space-2);
-  font-size: var(--fs-3xs);
+  height: calc(var(--size-control-sm) - 4px);
+  padding: 0 var(--spacing-2);
+  font-size: var(--font-size-2xs);
 }
 
 /* Tabs — the in-page navigation a section owns. The STRIP is uilet's
@@ -545,29 +562,27 @@ a.seat-chip:hover {
    the Seat screen renders with its cards butted together. Nothing in the test
    suite can see that: the markup is correct either way.
 
-   The focus ring is suppressed because the panel takes a tab stop for reach
-   rather than for interaction — a reader lands here on their way INTO the
-   content, and a box drawn around 600px of page is noise rather than a cue.
-   It stays keyboard-reachable; only the outline goes. */
+   THE PANEL KEEPS THE KIT'S FOCUS RING. It takes a tab stop (`tabIndex={0}`,
+   the ARIA tabs pattern) so a keyboard reader lands on the content, and a
+   stop that draws nothing is a stop the reader cannot find — WCAG 2.4.7. A
+   `.tabpanel:focus { outline: none }` used to sit here; at (0,2,0) it beat
+   the baseline's `:focus-visible` ring, so the ring never drew for anyone.
+   The baseline already draws nothing on a pointer focus. */
 .tabpanel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--spacing-5);
   min-width: 0;
-}
-
-.tabpanel:focus {
-  outline: none;
 }
 
 /* ---- Inline code -------------------------------------------------------- */
 
 code.inline {
   font-size: 0.92em;
-  background: var(--surface-inset);
-  border-radius: var(--r-xs);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-xs);
   padding: 1px 4px;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
      public base URLs. Without this the chip is pushed whole onto its own
      line and the sentence around it is torn into fragments. */
@@ -582,10 +597,10 @@ code.inline {
  */
 .problems {
   margin: 0;
-  padding-left: var(--space-4);
+  padding-left: var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 /* INHERITED, not restated — and that is uilet's `InlineCode` now, which the
    problems are drawn with: `tone="inherit"` is the chip inside a message that
@@ -597,14 +612,14 @@ code.inline {
    its own quiet grey, which is the half nobody noticed. */
 
 kbd {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  background: var(--color-surface-inset);
+  border: 1px solid var(--color-border-default);
   border-bottom-width: 2px;
-  border-radius: var(--r-xs);
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* ---- Overlay ------------------------------------------------------------ */
@@ -621,21 +636,21 @@ kbd {
 .veil {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
+  background: color-mix(in srgb, var(--color-surface-subtle) 72%, transparent);
   backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: var(--space-16) var(--space-4) var(--space-4);
-  z-index: var(--z-modal);
-  animation: fade var(--dur) var(--ease);
+  padding: var(--spacing-10) var(--spacing-4) var(--spacing-4);
+  z-index: var(--z-index-modal);
+  animation: fade var(--motion-duration-base) var(--motion-easing-default);
 }
 @keyframes fade {
   from {
     opacity: 0;
   }
 }
-/* The palette is its one caller now — `.palette`, in shell.css. */
+/* The palette is its one caller now — `.palette`, in frame.css. */
 @keyframes rise {
   from {
     opacity: 0;
@@ -650,11 +665,11 @@ kbd {
   overflow: visible;
 }
 .chart .axis-line {
-  stroke: var(--border-subtle);
+  stroke: var(--color-border-default);
   stroke-width: 1;
 }
 .chart .grid-line {
-  stroke: var(--border-subtle);
+  stroke: var(--color-border-default);
   stroke-width: 1;
   stroke-dasharray: 2 4;
 }
@@ -665,6 +680,13 @@ kbd {
  * the window's length, so 24 hours and 30 days draw the same chart at two
  * densities rather than one chart and one overflowing row. A minimum width of
  * one pixel is what keeps an empty bucket's gap visible at the widest window.
+ *
+ * A COLUMN IS A SLOT, AND THE BAR IS NOT THE WHOLE SLOT. Filled edge to edge, a
+ * one-day window was one column the width of the card — a solid block, not a
+ * bar, which reads as a panel rather than as a quantity. The bar takes the
+ * kit's own proportion (`.crewlet-stacked-columns__column`: 63% of its slot,
+ * capped at `--spacing-7`), centred, so one bucket draws as one bar and ninety
+ * draw as ninety thin ones with the same geometry the kit's charts use.
  */
 .stackseries {
   display: flex;
@@ -680,21 +702,30 @@ kbd {
   height: 100%;
   display: flex;
   align-items: flex-end;
+  justify-content: center;
 }
 .stackseries-stack {
   position: relative;
   z-index: 1;
-  width: 100%;
+  width: 63%;
+  min-width: 1px;
+  max-width: var(--spacing-7);
   min-height: 1px;
   display: flex;
   flex-direction: column-reverse;
   border-radius: 2px 2px 0 0;
   overflow: hidden;
-  background: var(--surface-inset);
+  background: var(--color-surface-inset);
 }
 .stackseries-stack > span {
   display: block;
   width: 100%;
+  /* A SEGMENT THAT EXISTS IS SEEN. `columnsOf` drops a part worth nothing, so
+     every span here carries tokens; at a 160px column a band under 0.6% of
+     the peak rounded to no pixels and its legend entry pointed at nothing. A
+     one-pixel floor is a line, not a quantity, and costs the band above it at
+     most that pixel. */
+  min-height: 1px;
 }
 /* The prior period as a MARK AT ITS OWN HEIGHT, not a second set of bands: a
  * comparison needs a height, and a ghost drawn in its own hues is a chart with
@@ -707,16 +738,20 @@ kbd {
  * both directions. */
 .stackseries-ghost {
   position: absolute;
+  /* Over the BAR, not the slot: the same width and centring as the stack. */
   inset-inline: 0;
+  margin-inline: auto;
+  width: 63%;
+  max-width: var(--spacing-7);
   bottom: 0;
   z-index: 2;
   pointer-events: none;
-  border-top: 1px dashed var(--text-secondary);
+  border-top: 1px dashed var(--color-text-secondary);
 }
 
 /* The palette's scope hints, with the one in use marked: a sigil nobody is
    told about is a feature that does not exist. */
 .palette-foot .is-on {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
   font-weight: 600;
 }

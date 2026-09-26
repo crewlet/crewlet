@@ -830,6 +830,21 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
 }
 
 /**
+ * A seat by HANDLE or, failing that, by NAME — the pair a badge needs.
+ *
+ * Half the rows that name a seat carry its handle (a lease, a channel end) and
+ * half carry its role NAME (a turn, a budget, a spend row), so a screen drawing
+ * the badge in both kinds of column needs both lookups. Handle first, because
+ * a handle is unique and a name only the first seat's.
+ */
+export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; kind?: SeatKind } {
+  return (key) => {
+    const seat = index.byHandle.get(key) ?? index.byName.get(key);
+    return seat ? { name: seat.name, kind: seat.kind } : { name: key };
+  };
+}
+
+/**
  * The same two answers, as the pair a ROW RENDERER takes.
  *
  * A grid cell is handed resolvers rather than the chart — see the row chrome
@@ -847,8 +862,10 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
  * answer rather than a missing one: "this is an agent" and "this company has
  * no such seat" must not collapse, because the second is how a renamed or
  * removed seat still appears on the work it was filed against. The name falls
- * back to the handle for the same reason; the badge falls back to the neutral
- * disc, which is what a seat whose kind nobody knows honestly looks like.
+ * back to the handle for the same reason. The kit's badge has two outlines and
+ * no third, so a renderer draws an unknown kind with the kit's default (the
+ * agent's squircle) — which is why a screen holding its writers' recorded
+ * kinds layers them on with [kindWithAuthors] before it draws anybody.
  */
 export function seatResolvers(index: OrgIndex): {
   seatName: (handle: string) => string;
@@ -859,6 +876,58 @@ export function seatResolvers(index: OrgIndex): {
     seatName: (handle) => lookup(handle).name,
     seatKind: (handle) => lookup(handle).kind,
   };
+}
+
+/**
+ * The kind of a writer the CHART does not hold, from what the record says
+ * wrote it.
+ *
+ * AN OPERATOR IS A PERSON WHO IS NOT A SEAT. A write through `/operator/mcp`
+ * carries the TOKEN's name as its author, with author kind `operator` — so a
+ * task an operator filed has a reporter no chart lists, and the chart's
+ * answer for it is "no such seat". Drawn from that alone the badge fell to the
+ * kit's default outline, the agent's squircle, and the one fact the outline
+ * encodes was wrong for every operator-authored write on the item page.
+ *
+ * The record already says it: every change row and every comment carries its
+ * writer's `actor_kind` / `author_kind`. So a handle the chart misses takes
+ * the kind its own writes were recorded under — `agent` for an agent,
+ * `human` and `operator` for a person. `system` names no one and is left
+ * unresolved, and so is a handle the answer never saw write anything.
+ * The CHART still wins where it has the seat: it is the declaration, and a
+ * row is one writer's claim about one commit.
+ */
+export function authorKinds(
+  rows: readonly { actor?: string; actor_kind?: string; author?: string; author_kind?: string }[],
+): Map<string, SeatKind> {
+  const out = new Map<string, SeatKind>();
+  for (const row of rows) {
+    const who = row.actor ?? row.author;
+    const kind = kindOfAuthor(row.actor_kind ?? row.author_kind);
+    if (who && kind && !out.has(who)) out.set(who, kind);
+  }
+  return out;
+}
+
+/** An author kind off the wire, as the badge's outline; undefined names no one. */
+export function kindOfAuthor(kind: string | undefined): SeatKind | undefined {
+  switch (kind) {
+    case "agent":
+      return "agent";
+    case "human":
+    case "operator":
+      return "human";
+    default:
+      return undefined;
+  }
+}
+
+/** The chart's kind for a handle, or else the kind its recorded writes carry. */
+export function kindWithAuthors(
+  seatKind: (handle: string) => SeatKind | undefined,
+  authors: ReadonlyMap<string, SeatKind>,
+): (handle: string) => SeatKind | undefined {
+  return (handle) => seatKind(handle) ?? authors.get(handle);
 }
 
 /**

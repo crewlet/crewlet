@@ -45,8 +45,9 @@ import {
   useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
-import { Avatar, SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
-import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
+import { SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { MonitorGlyph, MoonGlyph, SunGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { nodeCountLabel } from "~/lib/format.ts";
@@ -507,19 +508,20 @@ function ViewerChip() {
           hand-rolled `.seat-mark` in the tree, kept on the reasoning that
           "uilet's Avatar is a picture of a person rather than a kind-of-seat
           mark" — which was never true of the badge and is not true of the
-          product either: `Avatar` draws INITIALS, and its `dashed` variant is
-          documented as "a HUMAN seat: the engine does not run it", the exact
-          fact the dashed ring carried. Meanwhile the claim beside it, that the
-          mark is "drawn identically in the people list, the peek and the org
-          chart", had stopped holding — all three draw `Avatar` — so the one
-          place a reader sees THEMSELVES was the one place they did not look
-          like themselves. `brand`, because this badge IS the reader: it is the
-          single use the tone exists for. */}
-      <Avatar
+          product either: `Avatar` draws INITIALS, and its `human` kind is the
+          circle every person's seat is drawn with. Meanwhile the claim beside
+          it, that the mark is "drawn identically in the people list, the peek
+          and the org chart", had stopped holding — all three draw `Avatar` —
+          so the one place a reader sees THEMSELVES was the one place they did
+          not look like themselves. The accent RING, because this badge IS the
+          reader: the kit spells "this one is you, selected" as `ring="brand"`
+          round the neutral badge, and a badge FILLED with the accent was
+          identity drawn in the colour that means "act here". */}
+      <SeatAvatar
         name={viewer.name || viewer.handle}
         size="xs"
-        tone="brand"
-        variant="dashed"
+        kind="human"
+        ring="brand"
         decorative
       />
       <span className="truncate">{viewer.name || viewer.handle}</span>
@@ -574,6 +576,12 @@ function EngineFooter({
         // no read of its own — and says "node count unavailable" rather than
         // a number when the engine could not count.
         title={connected ? `Engine ${word} · ${nodeCountLabel(nodes)}` : `Engine ${word}`}
+        // THE NAME CARRIES THE WORD, because the word is not always drawn:
+        // the stylesheet hides it at 960px and on the phone's bottom bar,
+        // where the dot alone is the state. Without this the link's name was
+        // its visible text — nothing, or the in-flight count ("3") — and a
+        // screen reader announced the engine's state as a number.
+        aria-label={`Engine ${word}${inFlight > 0 ? `, ${inFlight} in flight` : ""}`}
       >
         {/* The dot is the shape half and the word beside it is the state —
             which is exactly StatusDot's contract, so it is `aria-hidden` and
@@ -606,13 +614,13 @@ function EngineFooter({
             value={theme}
             onValueChange={setTheme}
             options={[
-              { value: "light", icon: <LightModeGlyph size="xs" />, title: "Light" },
+              { value: "light", icon: <SunGlyph size="xs" />, title: "Light" },
               {
                 value: "system",
-                icon: <ComputerGlyph size="xs" />,
+                icon: <MonitorGlyph size="xs" />,
                 title: "Follow the system",
               },
-              { value: "dark", icon: <DarkModeGlyph size="xs" />, title: "Dark" },
+              { value: "dark", icon: <MoonGlyph size="xs" />, title: "Dark" },
             ]}
           />
           <SegmentedControl<Density>

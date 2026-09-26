@@ -10,12 +10,9 @@
  * saving it, which reads as success to everyone including the reader. A test
  * that only rendered the buttons would have passed through all of them.
  *
- * `PhaseTag` joins them for exactly that reason. It is four lines over
- * `@crewlethq/ui`'s `Tag`, and its whole content is a spelling: a variant the
- * package does not know renders the NEUTRAL pill rather than failing, so
- * `execute` where `phase-execute` was meant is a phase that silently stops
- * being a colour a reader can follow across four screens, and nothing in the
- * build says so.
+ * `PhaseTag` joins them for the opposite reason: its whole content is that it
+ * draws NO colour. A phase is a category, and a pill that took a hue for one
+ * again would put a second coloured thing beside the state on every row.
  */
 
 import { StrictMode } from "react";
@@ -547,34 +544,33 @@ describe("DownloadButton", () => {
 });
 
 describe("PhaseTag", () => {
-  // THE PREFIX IS THE WHOLE COMPONENT. uilet's `TagVariant` carries the phase
-  // vocabulary under its own names, separated from the status hues so the two
-  // families can never be confused inside one union — and a bare `execute`
-  // there is not a phase at all.
-  test("draws the three phases uilet has hues for", () => {
-    for (const [phase, variant] of [
-      ["onboarding", "phase-onboarding"],
-      ["execute", "phase-execute"],
-      ["review", "phase-review"],
-    ] as const) {
-      const { container } = render(<PhaseTag phase={phase} />);
-      expect(container.querySelector(`.crewlet-tag--${variant}`)).not.toBeNull();
-      // COLOUR IS NEVER THE ONLY CARRIER: the word is beside it, always.
+  // A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system
+  // removed its phase family: beside a state badge the state is the one
+  // coloured thing on the row, and the phase is the word that says where the
+  // work is. So every phase — the engine's seven and one a later build sends —
+  // is the same neutral pill, and the word is the whole of what it says.
+  test("every phase is the neutral pill with its word", () => {
+    const drawn = [
+      "onboarding",
+      "execute",
+      "review",
+      "sandbox",
+      "subagent",
+      "auxiliary",
+      "judge",
+      "a_phase_from_a_later_build",
+    ].map((phase) => {
+      const { container, unmount } = render(<PhaseTag phase={phase} />);
+      const pill = container.querySelector(".crewlet-tag")!;
+      expect(pill.classList.contains("crewlet-tag--neutral"), phase).toBe(true);
       expect(container.textContent).toBe(phase);
-    }
-  });
-
-  // THE ENGINE EMITS MORE PHASES THAN THE DESIGN SYSTEM DRAWS — `subagent`,
-  // `auxiliary` and `judge` — and a phase this build has never heard of is the
-  // same case, because a rolling upgrade puts one on the wire. Neutral is the
-  // honest pill: the word still reads, and nothing claims a hue that would
-  // collide with one of the three.
-  test("a phase with no hue takes the neutral pill rather than none", () => {
-    for (const phase of ["subagent", "auxiliary", "judge", "a_phase_from_a_later_build"]) {
-      const { container } = render(<PhaseTag phase={phase} />);
-      expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
-      expect(container.textContent).toBe(phase);
-    }
+      const classes = [...pill.classList].sort().join(" ");
+      unmount();
+      return classes;
+    });
+    // ONE DRAWING FOR ALL OF THEM, which stays red however a per-phase fill
+    // is respelled.
+    expect(new Set(drawn).size).toBe(1);
   });
 
   // A RECORD WITH NO PHASE IS NOT A PHASE CALLED "". An empty pill is a
@@ -590,11 +586,10 @@ describe("PhaseTag", () => {
   });
 
   // The value is a column in the event store, and nothing normalises its case
-  // on the way out — so the lookup does, or a capitalised phase falls through
-  // to neutral and loses its hue on one screen and not the next.
-  test("a phase reaches the table whatever its case", () => {
+  // on the way out — so the pill does, or one phase reads as two words on two
+  // screens.
+  test("a phase is said in one case whatever the record's", () => {
     const { container } = render(<PhaseTag phase="Execute" />);
-    expect(container.querySelector(".crewlet-tag--phase-execute")).not.toBeNull();
     expect(container.textContent).toBe("execute");
   });
 });

@@ -14,15 +14,9 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Callout, Card, Tag, cx } from "@crewlethq/ui";
-import {
-  ArrowUpwardGlyph,
-  CalendarTodayGlyph,
-  KeyboardArrowDownGlyph,
-  KeyboardArrowUpGlyph,
-  PersonGlyph,
-  RemoveGlyph,
-} from "@crewlethq/icons/glyphs";
+import { Callout, Card, Tag, cx } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: a task TYPE's mark is named by the company's own type table as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays in
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
@@ -43,14 +37,15 @@ export interface RowChrome {
    * Which KIND of seat a handle is — the chart's again, and the other half of
    * drawing a person.
    *
-   * An identity badge has exactly one variant and it is structural: the dashed
-   * ring a HUMAN seat wears, which says the engine does not run it. Without
-   * this the compact cells could not draw it at all, so one person was a
-   * dashed disc in a column that happened to be handed a kind and a solid one
-   * in the column beside it — on the same grid, over the same row.
+   * An identity badge has exactly one variant and it is structural: its
+   * OUTLINE, a circle for a person and a squircle for an agent. Without this
+   * the compact cells could not draw it at all, so one person was a circle in
+   * a column that happened to be handed a kind and a squircle in the column
+   * beside it — on the same grid, over the same row.
    *
-   * `undefined` is a seat the chart does not hold, and it draws the neutral
-   * disc rather than claiming the seat is an agent. Both resolvers come from
+   * `undefined` is a seat the chart does not hold, and it takes the kit's
+   * default, the agent's squircle: the engine runs agents, and a person is
+   * always declared. Both resolvers come from
    * [seatResolvers], so a builder cannot thread the name and drop this.
    */
   seatKind?: (handle: string) => SeatKind | undefined;
@@ -85,40 +80,50 @@ export function TypeIcon({
   );
 }
 
+/** How many of the three bars a priority fills. `urgent` is not a fourth bar. */
+const PRIORITY_LEVEL: Record<string, number> = { low: 1, normal: 2, high: 3 };
+
 /**
  * The priority, as a shape first.
  *
- * COLOUR IS NEVER THE ONLY CARRIER — the glyph differs per step, so the scale
- * reads under any vision and in a screenshot — and the two ends are the only
- * ones that take a status tone at all: `normal` and `low` are the ordinary
- * case, and tinting them would spend the caution and critical hues on the
- * fact that somebody filed a task.
+ * THE SIGNAL BARS, which is how the approved Board draws it: three rising
+ * bars filled to the step — one for `low`, two for `normal`, three for `high`
+ * — and `urgent` as the alert mark rather than a fourth bar, because urgent is
+ * not "more high", it is "stop and look". A level is read by COUNTING, so the
+ * scale reads under any vision and in a screenshot with no colour spent on it
+ * at all. It was a chevron pair once, and a chevron in a list is the
+ * expand/collapse control: a column of them read as rows that fold.
+ *
+ * The bars are drawn by the stylesheet (`.work-prio-bars`) rather than as a
+ * glyph: the kit vendors no signal mark, and a level meter is a data mark —
+ * three boxes and a count — rather than a drawing with a name.
+ *
+ * ONLY `urgent` TAKES A STATUS TONE. `high` is a step on the scale; tinting it
+ * would spend the caution hue on the fact that somebody filed a task.
  */
 export function PriorityMark({ priority, word }: { priority?: string; word?: boolean }) {
-  // NOTHING IS DRAWN FOR THE DEFAULT. `normal` is what a task gets when
-  // nobody said, so it is most of the board, and a mark on every card is a
-  // mark that says nothing — it buries the four cards that ARE urgent under
-  // forty that are not. `word` is the one caller that still wants it: a
-  // properties panel is answering "what is this set to", where "normal" is
-  // the answer and a blank is a gap.
+  // EVERY STEP ON THE SCALE IS DRAWN, `normal` included — two of three bars,
+  // as the approved Board draws it on every card. Blank for `normal` meant a
+  // list whose priority column was mostly empty, where "two bars" never
+  // appeared and a blank could not be told from a value this build did not
+  // receive. The urgent cards still stand out: they are the only alert mark
+  // in a column of bars. `none` (the engine's "nobody said") and an absent
+  // value are not steps, and draw nothing.
   if (!priority || priority === "none") return null;
-  if (priority === "normal" && !word) return null;
-  // FOUR STEPS, FOUR SHAPES — the scale has to read without its colour, which
-  // is what this mark is for. uilet vendors no double chevron, so the top step
-  // takes the SOLID ARROW against high's chevron rather than two chevrons
-  // against one: a different drawing, and still a different drawing per step,
-  // which is the property that was load-bearing.
-  const Glyph =
-    priority === "urgent"
-      ? ArrowUpwardGlyph
-      : priority === "high"
-        ? KeyboardArrowUpGlyph
-        : priority === "low"
-          ? KeyboardArrowDownGlyph
-          : RemoveGlyph;
+  const level = PRIORITY_LEVEL[priority];
   return (
     <span className="work-prio" data-priority={priority} title={`${priority} priority`}>
-      <Glyph size="xs" />
+      {/* A value this build has no step for draws no mark rather than a
+          guessed one — its word still says what it is. */}
+      {priority === "urgent" ? (
+        <CircleAlertGlyph size="sm" />
+      ) : level !== undefined ? (
+        <span className="work-prio-bars" data-level={level} aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+      ) : null}
       {word ? <span>{priority}</span> : <span className="sr-only">{priority} priority</span>}
     </span>
   );
@@ -157,7 +162,7 @@ export function Assignee({
   if (!handle) {
     return (
       <span className="work-nobody" title="Unassigned">
-        <PersonGlyph size="xs" />
+        <UserGlyph size="xs" />
         <span className="sr-only">Unassigned</span>
         {showName && <span className="muted">Unassigned</span>}
       </span>
@@ -171,15 +176,15 @@ export function Assignee({
           a screen reader is free to ignore — so the four columns that draw the
           badge alone announced the assignee as nothing at all.
 
-          AND THE DASHED RING IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew
-          it from the kind it was handed and this cell could not be handed one,
+          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew it
+          from the kind it was handed and this cell could not be handed one,
           so the same human seat was drawn two ways on the two column sets of
-          ONE grid. A kind the chart does not hold draws the neutral disc,
-          which is the honest badge for a seat nobody can classify. */}
-      <Avatar
+          ONE grid. A kind the chart does not hold takes the kit's default,
+          the agent's squircle. */}
+      <SeatAvatar
         name={label}
         size={size}
-        variant={seatKind?.(handle) === "human" ? "dashed" : "solid"}
+        kind={seatKind?.(handle) === "human" ? "human" : "agent"}
         decorative={showName}
       />
       {showName && <span className="truncate">{label}</span>}
@@ -202,7 +207,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     // compact form, because a column of dates repeating one year on every
     // row is how the one date not in this year goes unnoticed.
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
-      <CalendarTodayGlyph size="xs" />
+      <CalendarGlyph size="xs" />
       {fmtDateCompact(due, now)}
       {overdue && <span className="sr-only">— overdue</span>}
     </span>

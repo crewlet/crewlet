@@ -48,17 +48,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { CheckGlyph, ContentCopyGlyph, ErrorGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import {
-  Button,
-  cx,
-  EmptyValue,
-  Tag,
-  type TagVariant,
-  type Tone as UiletTone,
-  writeClipboard,
-} from "@crewlethq/ui";
-import { Mark, type MarkName } from "./glyph.tsx";
+import { CheckGlyph, CopyGlyph, CircleAlertGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { Button, cx, EmptyValue, Tag, type Tone as UiletTone, writeClipboard } from "@crewlethq/ui";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "./glyph.tsx";
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -115,42 +108,19 @@ export function uiletTone(tone: Tone): UiletTone {
 // ---------------------------------------------------------------------------
 
 /**
- * Which uilet variant draws a phase.
+ * A phase mark: the neutral pill with the phase's word.
  *
- * Phase is the one categorical identity this product spends colour on outside
- * a chart, because it is what a reader follows across the Model, Seat,
- * Activity and Trace screens — and `TagVariant` carries that vocabulary
- * already, on the design system's own hues (`--color-phase-*`), measured to
- * stay separable under protan and deutan vision.
- *
- * THE PREFIX IS THE POINT: uilet spells them `phase-onboarding`,
- * `phase-execute` and `phase-review` so a phase and a state can never be
- * confused for one another inside one union, and a bare `execute` is a type
- * error rather than a pill that quietly renders neutral.
- */
-const PHASE_VARIANT: Record<string, TagVariant> = {
-  onboarding: "phase-onboarding",
-  execute: "phase-execute",
-  review: "phase-review",
-};
-
-/**
- * A phase mark.
- *
- * The engine emits four phases beyond the three uilet draws — `sandbox`,
- * `subagent`, `auxiliary` and `judge` — and there is no hue for them, which is the right
- * answer rather than a gap: they take the neutral pill, exactly as this drew
- * them before the port, and the word beside the colour is what a reader
- * actually reads. An unknown phase off the wire lands there too, which is the
- * behaviour a rolling upgrade needs.
+ * A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system
+ * removed its phase family in 0.5.0 for the reason this product gives for every
+ * other identity: beside a state badge the state is the one coloured thing on
+ * the row, and the phase is the word that says where the work is. Inside a
+ * FIGURE a phase is a series (`lib/spend.ts`' `phaseColor`); on a row it is a
+ * word, and every phase — the engine's seven, and one a newer peer sends — is
+ * drawn the same way, which is the behaviour a rolling upgrade needs.
  */
 export function PhaseTag({ phase }: { phase: string }) {
   const key = (phase || "").toLowerCase();
-  return (
-    <Tag variant={PHASE_VARIANT[key] ?? "neutral"}>
-      {key || <EmptyValue label="No phase on this record" />}
-    </Tag>
-  );
+  return <Tag variant="neutral">{key || <EmptyValue label="No phase on this record" />}</Tag>;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +326,7 @@ export function Segmented<T extends string>({
     value: T;
     label: ReactNode;
     count?: number;
-    icon?: MarkName;
+    icon?: GlyphName;
     title?: string;
   }[];
   onChange: (value: T) => void;
@@ -565,16 +535,16 @@ function FeedbackButton({
       <Button
         // OUR TWO WORDS, SAID IN UILET'S. `ghost` is the transparent one and
         // `default` the bordered one this product has always drawn; the
-        // package spells them `tertiary` and `secondary`, and its own default
+        // package spells them `ghost` and `secondary`, and its own default
         // is `primary`, which is neither. Translated in one place rather than
         // at the three call sites, for the reason [uiletTone] gives above.
         size={size === "sm" ? "small" : "medium"}
-        variant={variant === "ghost" ? "tertiary" : "secondary"}
+        variant={variant === "ghost" ? "ghost" : "secondary"}
         leadingIcon={
           state === "done" ? (
             <CheckGlyph size={glyph} />
           ) : state === "failed" ? (
-            <ErrorGlyph size={glyph} />
+            <CircleAlertGlyph size={glyph} />
           ) : (
             icon
           )
@@ -663,7 +633,7 @@ export function CopyButton({
   return (
     <FeedbackButton
       run={run}
-      icon={<ContentCopyGlyph size={size === "sm" ? "xs" : "sm"} />}
+      icon={<CopyGlyph size={size === "sm" ? "xs" : "sm"} />}
       label={label}
       doneLabel="Copied"
       failedLabel="Copy failed"

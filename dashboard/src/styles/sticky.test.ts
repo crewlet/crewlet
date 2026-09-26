@@ -10,7 +10,7 @@ import { expect, test } from "vitest";
  * Several things stick to the top of one scroller at once — a screen's
  * toolbar, a grid's column heads, a grouped list's group heads, an item's side
  * rail, the inbox's detail pane — and only ONE of them owns the top. The
- * toolbar does: it is opaque, it is at `--z-sticky`, and `.screen:has(.toolbar)`
+ * toolbar does: it is opaque, it is at `--z-index-sticky`, and `.screen:has(.toolbar)`
  * publishes its height as `--sticky-top` so everything else can start below it.
  * A band that stops at 0 instead stops UNDERNEATH it and is simply gone, with
  * no error and nothing in the markup to read: the head is in the DOM, it is
@@ -66,13 +66,13 @@ function stickyTops(): Map<string, string> {
 }
 
 test("the toolbar owns the top of the scroller and publishes where it ends", () => {
-  const shell = readFileSync(join(STYLES, "shell.css"), "utf8");
+  const frame = readFileSync(join(STYLES, "frame.css"), "utf8");
   // THE PUBLISHER. Without this rule `--sticky-top` never leaves its `0px`
   // default and every offset below is a no-op that still reads as deliberate.
-  expect(shell).toMatch(/\.screen:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-h\)/);
+  expect(frame).toMatch(/\.screen:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-h\)/);
   // And the toolbar is the one band entitled to stop at 0, because it is what
   // the others are being offset BY.
-  expect(stickyTops().get("shell.css .toolbar")).toBe("0");
+  expect(stickyTops().get("frame.css .toolbar")).toBe("0");
 });
 
 test("every other sticky band starts below it, never at zero", () => {
@@ -80,11 +80,11 @@ test("every other sticky band starts below it, never at zero", () => {
   // A gate over an empty roster certifies nothing, and this one is a scan.
   expect(tops.size).toBeGreaterThan(3);
   for (const [where, top] of tops) {
-    if (where === "shell.css .toolbar") continue;
+    if (where === "frame.css .toolbar") continue;
     expect(
       top,
       `${where} sticks at ${top}: on a screen that draws a toolbar this band ` +
-        `stops underneath an opaque box at --z-sticky and vanishes. Offset it ` +
+        `stops underneath an opaque box at --z-index-sticky and vanishes. Offset it ` +
         `by var(--sticky-top), which is 0px on a screen with no toolbar.`,
     ).toContain("var(--sticky-top)");
   }

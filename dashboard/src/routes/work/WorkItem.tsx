@@ -49,24 +49,25 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  DeleteGlyph,
-  ArrowForwardGlyph,
+  TrashGlyph,
+  ArrowRightGlyph,
   CheckGlyph,
-  ChatGlyph,
-  HelpGlyph,
-  GroupGlyph,
+  MessageSquareGlyph,
+  CircleQuestionMarkGlyph,
+  UsersGlyph,
   LinkGlyph,
-  NotificationsGlyph,
-  Package2Glyph,
-  RemoveGlyph,
-  ScheduleGlyph,
-  TimelineGlyph,
-  TuneGlyph,
-  WarningGlyph,
+  BellGlyph,
+  PackageGlyph,
+  MinusGlyph,
+  ClockGlyph,
+  ChartNoAxesGanttGlyph,
+  SlidersVerticalGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatResolvers } from "~/lib/seats.ts";
+import { authorKinds, indexOrg, kindWithAuthors, seatResolvers } from "~/lib/seats.ts";
+import type { OrgIndex } from "~/lib/seats.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { plainText } from "~/lib/markdown.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
@@ -180,7 +181,7 @@ export function itemFlags(detail: WorkItemDetail): ReactNode {
  */
 export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
   return (
-    <Callout variant="warning" icon={<DeleteGlyph size="md" />}>
+    <Callout variant="warning" icon={<TrashGlyph size="md" />}>
       <span>
         <strong>This is in the trash.</strong> {tomb.by || "somebody"}
         {tomb.kind ? ` (${tomb.kind})` : ""} removed it {relTime(tomb.at, now)}
@@ -245,20 +246,19 @@ function itemFacts({
 }): Fact[] {
   const item = detail.task;
   const seatName = chrome.seatName ?? ((handle: string) => handle);
-  // AND THE KIND BESIDE IT, because a chip draws the dashed ring off it. An
-  // absent resolver answers `undefined`, which is the neutral disc — the same
-  // fallback an unresolved handle takes.
+  // AND THE KIND BESIDE IT, because a chip draws its outline off it — a
+  // person's circle, an agent's squircle. An absent resolver answers
+  // `undefined`, which takes the kit's default, as an unresolved handle does.
   const seatKind = chrome.seatKind ?? (() => undefined);
   return [
     { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
     {
       label: "Priority",
-      // NOTHING IS DRAWN FOR THE DEFAULT, which is what a header line is for:
-      // `none` and `normal` are both what a task gets when nobody has decided,
-      // and a fact line carrying them on every task buries the one that is
-      // urgent. The rail's row is the other question — what is this set to —
-      // and answers `none` with the word. `word` is still asked for here
-      // because `normal` IS a choice somebody made when it is drawn at all.
+      // `none` IS NOT DRAWN on the header line: it is what a task gets when
+      // nobody has decided, and a fact reading "none" on every such task says
+      // nothing. The rail's row is the other question — what is this set to —
+      // and answers `none` with the word. Every step of the scale, `normal`
+      // included, is drawn with its bars and its word.
       value:
         item.priority && item.priority !== "none" ? (
           <PriorityMark priority={item.priority} word />
@@ -299,6 +299,35 @@ function itemFacts({
   ];
 }
 
+/**
+ * The item page's row chrome: the chart's names and kinds, the project's
+ * vocabulary — and the kinds this item's OWN writers were recorded under.
+ *
+ * ONE BUILDER for the page and the peek, because the third half is the one
+ * that was missing: a task filed through an operator token has a reporter the
+ * chart does not list (the token's name, author kind `operator`), and the
+ * chart alone drew that person with the agent's squircle. The change log and
+ * the thread carry each writer's kind, so a handle the chart misses takes the
+ * kind its writes carry — see [kindWithAuthors].
+ */
+function useItemChrome(
+  index: OrgIndex,
+  detail: WorkItemDetail | null | undefined,
+  project: WorkProjectDetail | null | undefined,
+): RowChrome {
+  const authors = useMemo(
+    () => authorKinds([...(detail?.history ?? []), ...(detail?.comments ?? [])]),
+    [detail?.history, detail?.comments],
+  );
+  const chart = seatResolvers(index);
+  return {
+    ...chart,
+    seatKind: kindWithAuthors(chart.seatKind, authors),
+    types: project?.types,
+    statuses: project?.statuses,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------
@@ -324,11 +353,7 @@ export function WorkItem({ id }: { id: string }) {
     pollMs: 300_000,
   });
 
-  const chrome: RowChrome = {
-    ...seatResolvers(index),
-    types: project.data?.types,
-    statuses: project.data?.statuses,
-  };
+  const chrome = useItemChrome(index, state.data, project.data);
 
   // THE TRAIL IS THE PAGE BAR'S. This screen drew its own — workspace, project,
   // key — above the title, so a reader had two breadcrumbs on one page,
@@ -399,7 +424,7 @@ export function WorkItem({ id }: { id: string }) {
               </div>
               <div className="work-item-side">
                 <Card>
-                  <Card.Header icon={<TuneGlyph size="sm" />}>
+                  <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>
                     <Card.Title>Properties</Card.Title>
                   </Card.Header>
                   <ItemProps detail={state.data} chrome={chrome} project={project.data} />
@@ -466,11 +491,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
 
   // THE PAGE'S OWN CHROME, built from the same two reads: the chart for the
   // names and the project for its vocabulary.
-  const inner: RowChrome = {
-    ...seatResolvers(index),
-    types: project.data?.types,
-    statuses: project.data?.statuses,
-  };
+  const inner = useItemChrome(index, state.data, project.data);
 
   return (
     <>
@@ -514,7 +535,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
             // [QueryState]'s own sentence above.
             <EmptyState
               size="compact"
-              icon={<Package2Glyph size="xl" />}
+              icon={<PackageGlyph size="xl" />}
               title={`Nothing answers to “${itemKey}”`}
               description="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
             />
@@ -743,7 +764,7 @@ export function ItemBody({
           </Card.Header>
           {(list.items ?? []).map((entry) => (
             <div key={entry.id} className={`work-check${entry.done ? " done" : ""}`}>
-              {entry.done ? <CheckGlyph size="sm" /> : <RemoveGlyph size="sm" />}
+              {entry.done ? <CheckGlyph size="sm" /> : <MinusGlyph size="sm" />}
               <span className="work-check-name">{entry.name}</span>
               {entry.promoted_to && (
                 <a className="t-link" href={href(["work", entry.promoted_to])}>
@@ -777,13 +798,13 @@ export function ItemBody({
             {
               value: "comments",
               label: "Thread",
-              icon: <ChatGlyph size="sm" />,
+              icon: <MessageSquareGlyph size="sm" />,
               count: comments.length,
             },
             {
               value: "history",
               label: "History",
-              icon: <TimelineGlyph size="sm" />,
+              icon: <ChartNoAxesGanttGlyph size="sm" />,
               count: history.length,
             },
             // THE FACT NO OTHER TRACKER RECORDS. Every tracker can say a
@@ -793,7 +814,7 @@ export function ItemBody({
             {
               value: "woke",
               label: "Woke",
-              icon: <NotificationsGlyph size="sm" />,
+              icon: <BellGlyph size="sm" />,
               count: history.filter((entry) => !entry.quiet).length,
             },
           ]}
@@ -832,7 +853,7 @@ function Thread({
     return <span className="muted">Nobody has commented.</span>;
   }
   return (
-    <div className="col gap-3" style={{ paddingTop: "var(--space-3)" }}>
+    <div className="col gap-3" style={{ paddingTop: "var(--spacing-3)" }}>
       {more && (
         <span className="t-caption">
           Older comments are on the engine's own thread — this is the newest page of it.
@@ -842,7 +863,7 @@ function Thread({
         <div
           key={comment.id}
           className={`comment${comment.ask ? " work-ask" : ""}`}
-          style={comment.reply_to ? { marginLeft: "var(--space-4)" } : undefined}
+          style={comment.reply_to ? { marginLeft: "var(--spacing-4)" } : undefined}
         >
           <div className="row gap-2 wrap">
             <SeatChip
@@ -857,12 +878,12 @@ function Thread({
             {/* AN ASK IS THE ONE STATE IN A THREAD THAT IS ABOUT THE READER:
                 somebody owes it an answer, and it does not block a close. */}
             {comment.ask && (
-              <Tag variant="warning" leadingIcon={<HelpGlyph size="xs" />}>
+              <Tag variant="warning" leadingIcon={<CircleQuestionMarkGlyph size="xs" />}>
                 asked {chrome.seatName?.(comment.ask) ?? comment.ask}
               </Tag>
             )}
             {comment.answers && (
-              <Tag variant="info" leadingIcon={<ArrowForwardGlyph size="xs" />}>
+              <Tag variant="info" leadingIcon={<ArrowRightGlyph size="xs" />}>
                 answers a question
               </Tag>
             )}
@@ -898,7 +919,7 @@ function History({
     return <span className="muted">Nothing has moved this item yet.</span>;
   }
   return (
-    <div className="work-hist" style={{ paddingTop: "var(--space-2)" }}>
+    <div className="work-hist" style={{ paddingTop: "var(--spacing-2)" }}>
       {history.map((entry) => (
         <div key={entry.id} className="work-hist-row">
           {/* THE KIND, AS A MARK. Every row drew the same timeline glyph, so a
@@ -989,7 +1010,7 @@ function Woke({
     return (
       <EmptyState
         size="compact"
-        icon={<NotificationsGlyph size="xl" />}
+        icon={<BellGlyph size="xl" />}
         title="Nothing here announced anything"
         description="Every change to this item was quiet — a field edit, or part of a bulk call. A quiet commit still writes a history row, which is how you can tell it from nothing having happened."
       />
@@ -997,7 +1018,7 @@ function Woke({
   }
 
   return (
-    <div className="split" style={{ paddingTop: "var(--space-2)" }}>
+    <div className="split" style={{ paddingTop: "var(--spacing-2)" }}>
       <div className="list">
         {announced.map((entry) => (
           <button
@@ -1114,7 +1135,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
     return (
       <EmptyState
         size="compact"
-        icon={<HelpGlyph size="xl" />}
+        icon={<CircleQuestionMarkGlyph size="xl" />}
         title="No such change here"
         description="A record id this node holds no history row for — a link from before a purge, or a reanchor that has not replayed this far."
       />
@@ -1124,7 +1145,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
     return (
       <EmptyState
         size="compact"
-        icon={<ScheduleGlyph size="xl" />}
+        icon={<ClockGlyph size="xl" />}
         title="Beyond the retention window"
         description={`This change announced something, and it is older than ${
           answer.retained_from ? fmtDateTime(answer.retained_from) : "the inbox horizon"
@@ -1136,7 +1157,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
     return (
       <EmptyState
         size="compact"
-        icon={<HelpGlyph size="xl" />}
+        icon={<CircleQuestionMarkGlyph size="xl" />}
         title="Cannot say"
         description="This change announced something and no recipients remain, and this node was not told how long an inbox is kept — so an absent set cannot be dated."
       />
@@ -1145,7 +1166,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
   return (
     <EmptyState
       size="compact"
-      icon={<GroupGlyph size="xl" />}
+      icon={<UsersGlyph size="xl" />}
       title="It announced, and reached nobody"
       description="Every candidate was the person making the change, or has left the company. The notification was formed and had nowhere to go — which is a different fact from a quiet commit, and the only place it is visible."
     />
@@ -1462,7 +1483,7 @@ export function ItemProps({
                 {handoffs(item.reassignments ?? 0, detail.reassignment_budget)}
                 {detail.reassignment_budget !== undefined &&
                   (item.reassignments ?? 0) >= detail.reassignment_budget && (
-                    <WarningGlyph size="xs" />
+                    <TriangleAlertGlyph size="xs" />
                   )}
               </span>
             ),

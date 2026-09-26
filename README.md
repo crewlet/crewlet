@@ -342,6 +342,7 @@ Security issues: please report them privately — see [SECURITY.md](SECURITY.md)
 
 [MIT](LICENSE)
 
-The dashboard's icon sprite is adapted from
-[Feather Icons](https://feathericons.com) — MIT License,
-Copyright (c) 2013-2023 Cole Bemis.
+The dashboard's glyphs are [Lucide](https://lucide.dev) (ISC, Feather-derived)
+via `@crewlethq/icons`, and its typefaces are Geist and Geist Mono (OFL) via
+`@crewlethq/tokens`; the full texts ship in every build as
+`THIRD_PARTY_NOTICES.txt`.

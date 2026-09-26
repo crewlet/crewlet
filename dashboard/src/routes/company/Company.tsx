@@ -33,15 +33,16 @@
 import { useMemo, type CSSProperties } from "react";
 import { href } from "~/app/router.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
-import { Avatar, Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
-  AccountTreeGlyph,
-  ArrowForwardGlyph,
+  NetworkGlyph,
+  ArrowRightGlyph,
   CrownGlyph,
-  ExploreGlyph,
+  CompassGlyph,
   FlagGlyph,
   FolderGlyph,
-  GroupGlyph,
+  UsersGlyph,
   ShieldGlyph,
   TargetGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -97,19 +98,16 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
   return (
     <div className="org-seats" style={style}>
       {seats.map((seat) => (
-        <a
-          key={seat.key}
-          className={`org-node${seat.kind === "human" ? " human" : ""}`}
-          href={href(seatPath(seat))}
-        >
-          {/* THEIR `variant="dashed"` IS OUR `human`, and it means the same
-              thing: a human seat is DRAWN rather than tinted, because the
-              engine does not run it and that is structure, not status. Their
-              `md` is 32px where ours was 26, so the step moves down one. */}
-          <Avatar
+        <a key={seat.key} className="org-node" href={href(seatPath(seat))}>
+          {/* THE KIND IS THE OUTLINE: a person is the kit's circle and an
+              agent its squircle, the one cue that tells them apart. It is
+              structure, not status, so it is drawn rather than tinted. The
+              kit's `md` is 32px where ours was 26, so the step moves down
+              one. */}
+          <SeatAvatar
             name={seat.name}
             size="sm"
-            variant={seat.kind === "human" ? "dashed" : "solid"}
+            kind={seat.kind === "human" ? "human" : "agent"}
             decorative
             title={seat.name}
           />
@@ -122,7 +120,10 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
             {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
           </span>
           {seat.kind === "human" ? (
-            <Tag appearance="outline">human</Tag>
+            // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
+            // circle was the outline said twice; the word stays for a
+            // screen reader, which does not see the outline.
+            <span className="sr-only">human</span>
           ) : (
             <StateBadge agent={agents.find((a) => a.role === seat.name)} />
           )}
@@ -152,7 +153,7 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
             {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
           </span>
           <Tag appearance="outline">{child.type || "unit"}</Tag>
-          <ArrowForwardGlyph size="sm" />
+          <ArrowRightGlyph size="sm" />
         </a>
       ))}
     </div>
@@ -240,8 +241,15 @@ export function UnitBlock({ unit }: { unit: Unit }) {
   return (
     <div className="org-unit">
       <div className="org-unit-head">
-        <FolderGlyph size="sm" style={{ color: "var(--text-faint)" }} />
-        <strong className="t-body truncate">{unit.name}</strong>
+        {/* THE NAME IS THE ONE THING THIS HEAD MUST SAY, so it is the one part
+            that never gives way: the head WRAPS instead, and the kind, the lead
+            and the count move to a line of their own under it. Shrunk in one
+            row with them, a phone drew "Developer Relations" as "D…" beside a
+            full "department" tag and a full lead chip. */}
+        <span className="org-unit-name">
+          <FolderGlyph size="sm" style={{ color: "var(--color-text-muted)" }} />
+          <strong className="t-body truncate">{unit.name}</strong>
+        </span>
         <Tag appearance="outline">{unit.type || "unit"}</Tag>
         {lead && (
           <Tag
@@ -260,11 +268,11 @@ export function UnitBlock({ unit }: { unit: Unit }) {
             the SUBTREE bare under the same name, so Leadership was "2 seats"
             here and "5" three inches to the left. A unit with no sub-units has
             one honest number and still reads as one fact. */}
-        <span className="t-caption">{unitSeatsLabel(unitTally(unit))}</span>
+        <span className="t-caption org-unit-count">{unitSeatsLabel(unitTally(unit))}</span>
       </div>
       {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
       {unit.seats.length > 0 && (
-        <SeatLinks seats={unit.seats} style={{ marginTop: "var(--space-2)" }} />
+        <SeatLinks seats={unit.seats} style={{ marginTop: "var(--spacing-2)" }} />
       )}
       {unit.children.length > 0 && (
         <div className="org-children">
@@ -293,9 +301,9 @@ export function CompanyScreen() {
             value={lens}
             onChange={setLens}
             options={[
-              { value: "chart", label: "Chart", icon: "account_tree" },
+              { value: "chart", label: "Chart", icon: "network" },
               { value: "charter", label: "Charter", icon: "flag" },
-              { value: "builder", label: "Builder", icon: "edit" },
+              { value: "builder", label: "Builder", icon: "pencil" },
             ]}
           />
         }
@@ -336,7 +344,7 @@ export function CompanyScreen() {
             ))}
             {!index.units.length && !rootSeats.length && (
               <EmptyState
-                icon={<AccountTreeGlyph size={32} />}
+                icon={<NetworkGlyph size={32} />}
                 title="No organisation is loaded"
                 description="The org tree comes from the active company configuration."
               />
@@ -357,7 +365,7 @@ export function CompanyScreen() {
           </Card>
           {org?.vision && (
             <Card>
-              <Card.Header icon={<ExploreGlyph size="sm" />}>
+              <Card.Header icon={<CompassGlyph size="sm" />}>
                 <Card.Title>Vision</Card.Title>
               </Card.Header>
               <p className="t-body measure">{org.vision}</p>
@@ -368,7 +376,7 @@ export function CompanyScreen() {
               <Card.Title>Policies</Card.Title>
             </Card.Header>
             {org?.policies?.length ? (
-              <ol className="col gap-2" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
+              <ol className="col gap-2" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
                 {org.policies.map((p, i) => (
                   <li key={i} className="t-body measure">
                     {p}
@@ -395,7 +403,7 @@ export function CompanyScreen() {
                   {u.goals.length ? (
                     <ul
                       className="col gap-1"
-                      style={{ paddingLeft: "var(--space-4)", margin: "var(--space-2) 0 0" }}
+                      style={{ paddingLeft: "var(--spacing-4)", margin: "var(--spacing-2) 0 0" }}
                     >
                       {u.goals.map((g, i) => (
                         <li key={i} className="t-cell">
@@ -445,7 +453,7 @@ export function UnitScreen({ id }: { id: string }) {
   if (!unit) {
     return (
       <EmptyState
-        icon={<AccountTreeGlyph size={32} />}
+        icon={<NetworkGlyph size={32} />}
         title={`No unit called “${id}”`}
         description={NO_UNIT_HINT}
       />
@@ -464,7 +472,7 @@ export function UnitScreen({ id }: { id: string }) {
         }
       </PageActions>
 
-      <ObjectHeader kind="Unit" icon="account_tree" title={unit.name} facts={facts} />
+      <ObjectHeader kind="Unit" icon="network" title={unit.name} facts={facts} />
 
       {unit.purpose && (
         <Card>
@@ -480,7 +488,7 @@ export function UnitScreen({ id }: { id: string }) {
           <Card.Header icon={<FlagGlyph size="sm" />} count={unit.goals.length}>
             <Card.Title>Goals</Card.Title>
           </Card.Header>
-          <ul className="col gap-1" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
+          <ul className="col gap-1" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
             {unit.goals.map((g, i) => (
               <li key={i} className="t-cell">
                 {g}
@@ -492,18 +500,18 @@ export function UnitScreen({ id }: { id: string }) {
 
       <Card padding="none">
         <Card.Header
-          icon={<GroupGlyph size="sm" />}
+          icon={<UsersGlyph size="sm" />}
           count={seats.length}
           subtitle="everyone in this unit and everything under it"
         >
           <Card.Title>Seats</Card.Title>
         </Card.Header>
         {seats.length > 0 ? (
-          <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
+          <SeatLinks seats={seats} style={{ padding: "var(--spacing-3)" }} />
         ) : (
           <EmptyState
             size="compact"
-            icon={<GroupGlyph size={32} />}
+            icon={<UsersGlyph size={32} />}
             title="No seats in this unit"
             description={NO_SEATS_HINT}
           />
@@ -512,7 +520,7 @@ export function UnitScreen({ id }: { id: string }) {
 
       {unit.children.length > 0 && (
         <Card padding="none">
-          <Card.Header icon={<AccountTreeGlyph size="sm" />} count={unit.children.length}>
+          <Card.Header icon={<NetworkGlyph size="sm" />} count={unit.children.length}>
             <Card.Title>Sub-units</Card.Title>
           </Card.Header>
           <SubUnitLinks units={unit.children} />
@@ -556,7 +564,7 @@ export function UnitPeek({ id }: { id: string }) {
     return (
       <EmptyState
         size="compact"
-        icon={<AccountTreeGlyph size={32} />}
+        icon={<NetworkGlyph size={32} />}
         title={`No unit called “${id}”`}
         description={NO_UNIT_HINT}
       />
@@ -568,7 +576,7 @@ export function UnitPeek({ id }: { id: string }) {
 
   return (
     <>
-      <ObjectHeader size="peek" kind="Unit" icon="account_tree" title={unit.name} facts={facts} />
+      <ObjectHeader size="peek" kind="Unit" icon="network" title={unit.name} facts={facts} />
       <div className="col gap-3">
         {/* WHAT IT IS FOR, always drawn — including when nobody wrote one.
             "Is this the one I meant" is the question the rail answers, and a
@@ -590,15 +598,15 @@ export function UnitPeek({ id }: { id: string }) {
             recognise it by its name, and the badge on each row is the other
             half of "what is it doing". */}
         <Card padding="none">
-          <Card.Header icon={<GroupGlyph size="sm" />} count={seats.length}>
+          <Card.Header icon={<UsersGlyph size="sm" />} count={seats.length}>
             <Card.Title>Seats</Card.Title>
           </Card.Header>
           {seats.length > 0 ? (
-            <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
+            <SeatLinks seats={seats} style={{ padding: "var(--spacing-3)" }} />
           ) : (
             <EmptyState
               size="compact"
-              icon={<GroupGlyph size={32} />}
+              icon={<UsersGlyph size={32} />}
               title="No seats in this unit"
               description={NO_SEATS_HINT}
             />
@@ -607,7 +615,7 @@ export function UnitPeek({ id }: { id: string }) {
 
         {children.length > 0 && (
           <Card padding="none">
-            <Card.Header icon={<AccountTreeGlyph size="sm" />} count={children.length}>
+            <Card.Header icon={<NetworkGlyph size="sm" />} count={children.length}>
               <Card.Title>Sub-units</Card.Title>
             </Card.Header>
             <SubUnitLinks units={children} />

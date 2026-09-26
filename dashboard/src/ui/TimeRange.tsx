@@ -24,7 +24,7 @@ import { RANGES, RANGE_LABEL, isRange, windowLabel } from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
 import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
-import { ScheduleGlyph } from "@crewlethq/icons/glyphs";
+import { ClockGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics` — the arrows commit the option they land on — and this strip
 // drives a `useParam` that re-runs the screen's series query. Arrowing across
@@ -126,7 +126,7 @@ function CustomWindow({
     <Modal
       open
       title="Custom window"
-      icon={<ScheduleGlyph size="md" />}
+      icon={<ClockGlyph size="md" />}
       // 420 IS NOT A STEP AND DOES NOT WANT TO BE. `sm` is 480 and `md` is
       // 560; two date boxes read in one glance are neither, and there is
       // nothing else in the product at this width to make a step out of.
@@ -147,7 +147,7 @@ function CustomWindow({
               — ours defaulted to the quiet recipe — so a footer that named no
               variant would put two primary buttons side by side and say
               nothing about which one commits. */}
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button

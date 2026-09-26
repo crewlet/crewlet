@@ -58,7 +58,7 @@ test("the live state and problem count slots neither shrink nor wrap", () => {
  * THE HANDLES ON THE TABLE'S CELLS DECLARE NOTHING, and that is the whole of
  * what they are for: `.btable-name` is how this suite finds a row by its NAME
  * cell rather than by whichever cell happens to mention a name. It declared
- * display, align-items, gap and min-width, and `.crewlet-org-table__node`
+ * display, align-items, gap and min-width, and `.crewlet-org-label--row`
  * arrives on that same element through `className` and declares the same four,
  * byte for byte; `.btable-name > :first-child { flex: none }` restated the
  * package's own rule for the icon, and `.btable-label { min-width: 0 }` was
@@ -127,20 +127,14 @@ test("no builder rule redraws what the design system's chart and table draw", ()
  *
  * Spelled as a pattern over the FAMILY rather than over each token, and paired
  * with the case below, because this guard was already dead twice: it matched
- * `--data-*` while the tokens were named `--viz-*`, and then it matched ONLY
- * the design system's canonical `--color-feedback-*` / `--color-data-*` names,
- * which no stylesheet in this tree writes — every sheet here is written
- * against the short aliases `styles/uilet.css` declares (`--critical`,
- * `--info`, `--phase-execute`), so the canonical spelling could not match a
- * single declaration and the guard passed on everything.
- *
- * BOTH SPELLINGS, therefore. The alias is what a rule here would be written
- * with today and the canonical name is what it resolves to, so a rule reaching
- * for a hue is caught whichever way its author spelled it — and the day the
- * aliases go, this guard does not quietly stop working.
+ * `--data-*` while the tokens were named `--viz-*`, and then it matched only
+ * the design system's names while every sheet here was written against short
+ * aliases of them, so it could not match a single declaration and passed on
+ * everything. There is no alias layer now: every sheet reads the design
+ * system's `--color-feedback-*` and `--color-data-*` under their own names,
+ * which is the one spelling this has to know.
  */
-const CARRIED_HUE =
-  /var\(--(?:critical|caution|positive|info|phase)[-\w]*\)|var\(--color-(?:feedback|data|phase)-[-\w]*\)/;
+const CARRIED_HUE = /var\(--color-(?:feedback|data)-[-\w]*\)/;
 
 /*
  * A NODE HUE IS NOT ONE OF THESE, and it does not come from here. An agent
@@ -162,13 +156,12 @@ test("a builder node or row takes no status or data hue, only the accent for the
 });
 
 test("the hue guard recognises a hue, and lets the accent through", () => {
-  expect(CARRIED_HUE.test("color: var(--critical-ink);")).toBe(true);
-  expect(CARRIED_HUE.test("box-shadow: inset 2px 0 0 var(--caution);")).toBe(true);
-  expect(CARRIED_HUE.test("background: var(--color-data-3);")).toBe(true);
-  expect(CARRIED_HUE.test("border-color: var(--phase-execute-ink);")).toBe(true);
   expect(CARRIED_HUE.test("color: var(--color-feedback-danger-ink);")).toBe(true);
+  expect(CARRIED_HUE.test("box-shadow: inset 2px 0 0 var(--color-feedback-warning);")).toBe(true);
+  expect(CARRIED_HUE.test("background: var(--color-data-3);")).toBe(true);
+  expect(CARRIED_HUE.test("border-color: var(--color-data-other);")).toBe(true);
   // Where the reader is, which is the one colour a builder card may carry.
-  expect(CARRIED_HUE.test("background: var(--accent-soft);")).toBe(false);
-  expect(CARRIED_HUE.test("color: var(--text-muted);")).toBe(false);
-  expect(CARRIED_HUE.test("border: 1px solid var(--border-subtle);")).toBe(false);
+  expect(CARRIED_HUE.test("background: var(--color-brand-accent-soft);")).toBe(false);
+  expect(CARRIED_HUE.test("color: var(--color-text-tertiary);")).toBe(false);
+  expect(CARRIED_HUE.test("border: 1px solid var(--color-border-default);")).toBe(false);
 });

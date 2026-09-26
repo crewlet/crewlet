@@ -2115,7 +2115,7 @@ where the build put the file:
 | Files | `Cache-Control` | Why |
 |---|---|---|
 | Everything under `/static/dashboard/assets/` — the entry module, every chunk, the stylesheet | `public, max-age=31536000, immutable` | Each name carries a content hash, so different bytes are a different URL. A browser that has the file never asks again, reload included |
-| Everything else — the shell (`/dashboard`), `/favicon.ico`, `/static/crewlet-icon.svg`, the fonts, the notices and `protocol.js` | `no-cache` | The name does not change with the bytes. The browser keeps its copy and revalidates it on every load, so a redeploy is picked up on the next one; the shell is what names the new hashed files |
+| Everything else — the shell (`/dashboard`), `/favicon.ico`, `/static/dashboard/crewlet-icon.svg`, the fonts, the notices and `protocol.js` | `no-cache` | The name does not change with the bytes. The browser keeps its copy and revalidates it on every load, so a redeploy is picked up on the next one; the shell is what names the new hashed files |
 
 Every file answers with a strong `ETag`, and `If-None-Match` is read as a
 list under weak comparison, so `"a", "b"`, `W/"a"` and `*` each earn a
@@ -2141,10 +2141,14 @@ it is.
 `/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
 license text of every npm package the bundle contains, the design system's
 three among them, written by Vite's `build.license`, followed by the SIL Open
-Font License of the embedded Inter and JetBrains Mono faces and the Apache
-License and notice of the Material Symbols drawings every glyph is one of. The
-release archives and the container image carry the same file, beside the
-notices for the Go modules the binary links.
+Font License of the embedded Geist and Geist Mono faces and the ISC License of
+the Lucide drawings every glyph is one of (with Feather's MIT text for the
+glyphs Lucide derives from it). The release archives and the container image
+carry the same file, beside the notices for the Go modules the binary links.
+
+The product's mark is `/static/dashboard/crewlet-icon.svg`, emitted by the
+build from `@crewlethq/icons` beside the raster `favicon.ico`; the tab icon, the
+dashboard's lockup and the GitHub App landing page all draw that one file.
 
 A second build target, `/static/dashboard/protocol.js`, is the wire
 protocol alone as plain ESM: `internal/e2e` replays a real company's

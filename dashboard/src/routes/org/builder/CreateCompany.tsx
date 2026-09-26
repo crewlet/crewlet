@@ -28,7 +28,7 @@ import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { screenPath } from "./dialogParts.tsx";
-import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
+import { NetworkGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   ButtonLink,
@@ -102,7 +102,7 @@ export function CreateCompany({
   return (
     <Card as="section">
       <Card.Header
-        icon={<AccountTreeGlyph size="sm" />}
+        icon={<NetworkGlyph size="sm" />}
         subtitle="the charter, a shape to start from, and your own seat"
       >
         <Card.Title>Create the company</Card.Title>
@@ -221,7 +221,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         icon={<CheckGlyph size="sm" />}
         subtitle="two steps the dashboard cannot take for you"
         actions={
-          <Button size="small" variant="tertiary" onClick={onDismiss}>
+          <Button size="small" variant="ghost" onClick={onDismiss}>
             Dismiss
           </Button>
         }

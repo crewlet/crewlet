@@ -10,8 +10,8 @@
  *
  * The palette is `@crewlethq/tokens` now, and that package publishes the same
  * gate over its own built sheets: `runPalette({tokens, themes})` measures every
- * rule in all four states of the cascade — base, light, dark by media query,
- * dark by attribute — and hands back the failures. Keeping a second
+ * rule in all four states of the cascade — base, dark on the bare root, light
+ * by media query, light by attribute — and hands back the failures. Keeping a second
  * implementation beside it would be two ideas of what "4.5:1 on every surface
  * it can land on" means, which is the failure `textcut` and `whsec` are named
  * after in this repository.
@@ -24,11 +24,11 @@
  *
  * # What this does not cover
  *
- * The values our own sheet still owns, which are no longer colours at all.
- * `tokens.css` keeps the layout constants — the rail's geometry, a row's
- * height, the peek's column — plus `--focus-ring`, which is a composition of
- * two of the package's colours rather than one of them, and the dark theme's
- * inset hairline. Its chart ramp is GONE: `--viz-1` … `--viz-5` and
+ * Nothing of ours, because nothing of ours is a colour: `tokens.css` keeps
+ * three layout values and DECLARES no colour and no shadow, which
+ * `tokens.test.ts` enforces. The focus ring is the package's `--shadow-focus`
+ * and a row's height, a control's and the rail's geometry are its `--size-*`.
+ * The chart ramp is GONE too: `--viz-1` … `--viz-5` and
  * `--viz-other` were retired when the last reader moved to `dataColor()` and
  * `DATA_COLOR_OTHER`, so the hues a chart spends are inside what `runPalette`
  * measures now rather than beside it.

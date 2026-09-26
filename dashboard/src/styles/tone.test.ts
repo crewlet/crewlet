@@ -27,9 +27,11 @@ import { modules } from "../test/source.ts";
  * the site should be re-justified. Two-sided, so an entry that stopped firing
  * fails as loudly as a site that is not excused.
  *
- * SCOPE, stated rather than assumed: this reads the literal `"brand"` only.
- * `Tag` is the one uilet component taking `variant: TagVariant`, and
- * `StatusDot`'s `tone` would be caught by the same literal. Out of scope on
+ * SCOPE, stated rather than assumed: this reads the literal `"brand"` only,
+ * and the two places the kit still spends it are the ones excused here — a
+ * `Tag` of `variant="brand"`, and `Avatar`'s `ring="brand"`, the accent drawn
+ * round a badge to say "this one is you". `StatusDot`'s `tone` would be
+ * caught by the same literal. Out of scope on
  * purpose: `Meter`'s and `MeterCell`'s `tone="accent"`, which is a BAR'S FILL
  * rather than a pill's ground and a different family — the accent list includes
  * the primary button for the same reason — and `uiletTone(toneOf(...))`, which
@@ -70,8 +72,8 @@ const ACCENT: Site[] = [
   },
   {
     file: "app/Shell.tsx",
-    line: `tone="brand"`,
-    why: 'THE badge that IS the reader — the rail\'s own account row. `AvatarTone` in @crewlethq/ui reserves `brand` for exactly this: "the one badge that is the reader themselves". It is the strongest reading of the rule this file enforces, not an exception to it.',
+    line: `ring="brand"`,
+    why: "THE badge that IS the reader — the rail's own account row. The kit's `ring=\"brand\"` is the accent drawn as a RING round the neutral badge and means selected, which is what the reader's own badge is; a badge FILLED with the accent is gone from the kit because that was identity drawn in the colour that means act here.",
   },
   {
     file: "routes/work/SavedViews.tsx",

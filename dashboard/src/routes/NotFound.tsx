@@ -1,5 +1,5 @@
 import { Button, EmptyState } from "@crewlethq/ui";
-import { ExploreGlyph } from "@crewlethq/icons/glyphs";
+import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 
 export function NotFound({ what }: { what: string }) {
@@ -7,7 +7,7 @@ export function NotFound({ what }: { what: string }) {
   const nav = useNavigator();
   return (
     <EmptyState
-      icon={<ExploreGlyph size={32} />}
+      icon={<CompassGlyph size={32} />}
       title={`This URL names ${what}, and there is no such screen.`}
       description={
         <>

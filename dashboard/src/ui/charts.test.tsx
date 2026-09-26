@@ -18,7 +18,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
-import { StackedTimeSeries, TimeSeries, phaseColor } from "./charts.tsx";
+import { StackedTimeSeries, TimeSeries } from "./charts.tsx";
 
 afterEach(cleanup);
 
@@ -67,14 +67,41 @@ test("a series with no colour of its own takes its place on the data ramp", () =
   for (const s of drawn) expect(s).toMatch(/^var\(--color-data-/);
 });
 
+// FOUR HUES, THEN THE RESIDUAL. The kit's ramp is four data colours and a
+// neutral for everything past them — which is what this product's figures
+// are designed around: a phase chart draws exactly four bands, and a fifth
+// series is "other" rather than a fifth hue nobody chose. Written as the
+// literal variables, not through `dataColor`, so a kit bump that grows or
+// shrinks the ramp, or wraps it back to the first hue, turns this red rather
+// than agreeing with itself.
+test("the data ramp is four distinct hues, and a fifth series is the residual", () => {
+  const line = (name: string) => ({
+    name,
+    points: [
+      { t: 0, v: 1 },
+      { t: 1000, v: 2 },
+    ],
+  });
+  const { container } = render(
+    <TimeSeries {...WINDOW} series={["a", "b", "c", "d", "e"].map(line)} />,
+  );
+  expect(strokes(container)).toEqual([
+    "var(--color-data-1)",
+    "var(--color-data-2)",
+    "var(--color-data-3)",
+    "var(--color-data-4)",
+    "var(--color-data-other)",
+  ]);
+});
+
 test("a series that names its own colour keeps it", () => {
   const { container } = render(
     <TimeSeries
       {...WINDOW}
-      series={[{ name: "ideal", color: "var(--text-secondary)", points: [{ t: 0, v: 1 }] }]}
+      series={[{ name: "ideal", color: "var(--color-text-secondary)", points: [{ t: 0, v: 1 }] }]}
     />,
   );
-  expect(strokes(container)).toEqual(["var(--text-secondary)"]);
+  expect(strokes(container)).toEqual(["var(--color-text-secondary)"]);
 });
 
 // A BAND THE LEGEND DOES NOT NAME IS THE RESIDUAL. A transparent segment still
@@ -140,20 +167,27 @@ test("the ghost is drawn against the same peak, and a zero prior draws none", ()
   expect(stacks(container)).toEqual(["50%", "50%"]);
 });
 
-// PHASE IS NOT A SLOT ON THE RAMP. A data hue means "this series" and would
-// name a different phase on every chart that ordered its bands differently, so
-// the three phases have tokens of their own — and anything else is the
-// residual, which is a colour this product still publishes.
-test("each phase takes its own token, and an unknown one takes the residual", () => {
-  expect(phaseColor("onboarding")).toBe("var(--phase-onboarding)");
-  expect(phaseColor("Execute")).toBe("var(--phase-execute)");
-  expect(phaseColor("review")).toBe("var(--phase-review)");
-  for (const unknown of ["", "triage", "self_iterate"]) {
-    expect(phaseColor(unknown)).toBe(DATA_COLOR_OTHER);
-    expect(phaseColor(unknown)).toMatch(/^var\(--/);
-  }
-  // And never a data hue: a chart colour says "this series", never "execute".
-  expect([phaseColor("onboarding"), phaseColor("execute"), phaseColor("review")]).not.toContain(
-    dataColor(0),
+// A PART WORTH NOTHING DRAWS NO SEGMENT. Segments carry a one-pixel floor so a
+// small band stays visible (components.css); a zero part handed in would get
+// that floor too, and draw a band that is not there.
+test("a part worth nothing draws no segment", () => {
+  const { container } = render(
+    <StackedTimeSeries
+      bands={[
+        { key: "a", label: "A", color: "red" },
+        { key: "b", label: "B", color: "blue" },
+      ]}
+      buckets={[
+        {
+          at: "x",
+          total: 10,
+          parts: [
+            { key: "a", value: 10 },
+            { key: "b", value: 0 },
+          ],
+        },
+      ]}
+    />,
   );
+  expect(segments(container)).toHaveLength(1);
 });

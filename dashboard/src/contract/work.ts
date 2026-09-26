@@ -116,36 +116,36 @@ export const PROJECT_SORT_KEYS = [
  *
  * `as const`, because a contract module imports nothing and so cannot name
  * the glyph type: every mark stays its own literal, and `lib/work.ts` returns
- * them as `MarkName`, which is where a mark the glyph set does not draw fails
+ * them as `GlyphName`, which is where a mark the glyph set does not draw fails
  * to compile.
  */
 export const CHANGES = [
-  { kind: "created", mark: "add", phrase: "created it" },
-  { kind: "fields", mark: "tune", phrase: "changed a field" },
-  { kind: "status", mark: "cached", phrase: "moved it" },
-  { kind: "assignee", mark: "person", phrase: "reassigned it" },
-  { kind: "collaborators", mark: "group", phrase: "changed the collaborators" },
-  { kind: "watchers", mark: "visibility", phrase: "changed the watchers" },
-  { kind: "tags", mark: "tag", phrase: "changed the tags" },
+  { kind: "created", mark: "plus", phrase: "created it" },
+  { kind: "fields", mark: "sliders-vertical", phrase: "changed a field" },
+  { kind: "status", mark: "refresh-ccw", phrase: "moved it" },
+  { kind: "assignee", mark: "user", phrase: "reassigned it" },
+  { kind: "collaborators", mark: "users", phrase: "changed the collaborators" },
+  { kind: "watchers", mark: "eye", phrase: "changed the watchers" },
+  { kind: "tags", mark: "hash", phrase: "changed the tags" },
   { kind: "relations", mark: "link", phrase: "changed a relation" },
-  { kind: "routed", mark: "fork_right", phrase: "routed it" },
-  { kind: "moved", mark: "move_item", phrase: "moved it to another project" },
-  { kind: "reparented", mark: "account_tree", phrase: "changed its parent" },
+  { kind: "routed", mark: "split", phrase: "routed it" },
+  { kind: "moved", mark: "folder-input", phrase: "moved it to another project" },
+  { kind: "reparented", mark: "network", phrase: "changed its parent" },
   { kind: "checklist", mark: "list", phrase: "changed a checklist" },
-  { kind: "archived", mark: "package_2", phrase: "archived it" },
-  { kind: "comment", mark: "chat", phrase: "commented" },
-  { kind: "comment_edited", mark: "edit", phrase: "edited a comment" },
+  { kind: "archived", mark: "package", phrase: "archived it" },
+  { kind: "comment", mark: "message-square", phrase: "commented" },
+  { kind: "comment_edited", mark: "pencil", phrase: "edited a comment" },
   { kind: "comment_resolved", mark: "check", phrase: "resolved a comment" },
-  { kind: "comment_removed", mark: "close", phrase: "removed a comment" },
-  { kind: "removed", mark: "remove", phrase: "removed it" },
-  { kind: "restored", mark: "settings_backup_restore", phrase: "restored it" },
-  { kind: "purged", mark: "delete", phrase: "purged it" },
-  { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
+  { kind: "comment_removed", mark: "x", phrase: "removed a comment" },
+  { kind: "removed", mark: "minus", phrase: "removed it" },
+  { kind: "restored", mark: "rotate-ccw", phrase: "restored it" },
+  { kind: "purged", mark: "trash", phrase: "purged it" },
+  { kind: "project_created", mark: "folder-plus", phrase: "created the project" },
   { kind: "project_updated", mark: "folder", phrase: "changed the project" },
   { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
-  { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
+  { kind: "prioritised", mark: "arrow-up", phrase: "reordered somebody's priorities" },
   { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 

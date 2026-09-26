@@ -17,8 +17,9 @@
  */
 
 import { useState } from "react";
-import { Avatar, Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
-import { CableGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
@@ -223,7 +224,7 @@ export function DisconnectDialog({
       <Modal
         open
         title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
-        icon={<CableGlyph size="md" />}
+        icon={<PlugGlyph size="md" />}
         onClose={onClose}
         // `md` IS 560, AND THIS WAS 520. Nothing chose 520: the setup dialog
         // this card's other button opens has always been 560, and the two
@@ -278,7 +279,7 @@ export function DisconnectDialog({
     <Modal
       open
       title={`Disconnect ${name}`}
-      icon={<CableGlyph size="md" />}
+      icon={<PlugGlyph size="md" />}
       onClose={onClose}
       // A DISCONNECT IS SEVERAL SURFACES IN ORDER, and one of them may be
       // sitting out a busy vendor for up to forty-five seconds. Dismissing
@@ -289,7 +290,7 @@ export function DisconnectDialog({
       stackBody
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="danger" onClick={() => void submit(false)} disabled={busy}>
@@ -347,7 +348,7 @@ export function DisconnectDialog({
                 {/* DECORATIVE: the row states the agent's name in the line
                       beside it, and an avatar that announced it too would say
                       one thing twice. */}
-                <Avatar name={app.name || app.handle} size="sm" decorative />
+                <SeatAvatar name={app.name || app.handle} kind="agent" size="sm" decorative />
                 <div className="int-row-identity">
                   <span className="int-row-name">{app.name || app.handle}</span>
                 </div>
@@ -357,7 +358,7 @@ export function DisconnectDialog({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  <OpenInNewGlyph size="xs" />
+                  <ExternalLinkGlyph size="xs" />
                   Link to delete
                 </a>
               </li>
@@ -376,7 +377,7 @@ export function DisconnectDialog({
         // rather than either feedback mark: nothing has failed, the surface
         // is simply held by something else and the next attempt is already
         // scheduled.
-        <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+        <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
           <span>
             {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
             trying.
@@ -404,7 +405,7 @@ export function DisconnectDialog({
             <span>
               <Button
                 size="small"
-                variant="tertiary"
+                variant="ghost"
                 onClick={() => void submit(true)}
                 disabled={busy}
               >

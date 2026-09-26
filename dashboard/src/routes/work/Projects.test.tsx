@@ -426,11 +426,19 @@ test("a project with nothing filed draws no meter", async () => {
   expect(container.querySelector(".crewlet-stacked-bar")).toBeNull();
 });
 
-/** Every part the bar actually drew, with the colour it drew it in. */
+/**
+ * Every part the bar actually drew, with the colour it drew it in and its
+ * share of the track. The kit grows a part by its VALUE (`flex-grow`) rather
+ * than giving it a percentage width, so the share is the part's value over
+ * the sum of them — the track itself, gaps aside.
+ */
 function drawn(container: HTMLElement): { color: string; width: string }[] {
-  return [...container.querySelectorAll<HTMLElement>(".crewlet-stacked-bar__segment")].map((s) => ({
+  const parts = [...container.querySelectorAll<HTMLElement>(".crewlet-stacked-bar__segment")];
+  const grow = parts.map((s) => Number(s.style.flexGrow || 0));
+  const total = grow.reduce((a, b) => a + b, 0);
+  return parts.map((s, i) => ({
     color: s.style.getPropertyValue("--crewlet-stacked-bar-segment-color"),
-    width: s.style.width,
+    width: total > 0 ? `${Math.round((grow[i]! / total) * 100)}%` : "0%",
   }));
 }
 
@@ -466,7 +474,7 @@ test("done fills against everything filed, closed beside it", async () => {
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy());
   expect(drawn(container)).toEqual([
-    { color: "var(--positive)", width: "30%" },
+    { color: "var(--color-feedback-success)", width: "30%" },
     { color: "var(--color-data-other)", width: "10%" },
     { color: "transparent", width: "60%" },
   ]);

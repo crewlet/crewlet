@@ -19,7 +19,7 @@ import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { BoardCard, WorkRow } from "~/components/work.tsx";
+import { BoardCard, PriorityMark, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
@@ -441,12 +441,12 @@ test("a due date in this year is drawn without it, and another year keeps it", (
   expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
 });
 
-// THE DEFAULT IS DRAWN AS NOTHING. `normal` is what a task gets when nobody
-// said, so it is most of a board — a mark on every card is a mark that says
-// nothing, and it buries the four that ARE urgent under forty that are not.
-// `none` and `normal` differ in the data and agree on screen, which is the
-// one place they should.
-test("an ordinary priority draws no mark at all", () => {
+// EVERY STEP IS DRAWN, `normal` INCLUDED. The approved Board draws the bars
+// on every card; a list that left `normal` blank had a priority column that
+// was mostly empty, where the two-bar state never appeared and a blank could
+// not be told from a value that never arrived. `none` — the engine's "nobody
+// said" — and an absent value are not steps on the scale, and draw nothing.
+test("every step of the scale draws its mark, and no step draws none", () => {
   const marks = (priority?: string) =>
     render(
       <WorkRow
@@ -456,10 +456,37 @@ test("an ordinary priority draws no mark at all", () => {
         chrome={{}}
       />,
     ).container.querySelectorAll(".work-prio").length;
-  expect(marks("normal")).toBe(0);
+  expect(marks("normal")).toBe(1);
+  expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);
   expect(marks("low")).toBe(1);
   expect(marks("high")).toBe(1);
+});
+
+// THE SCALE IS SIGNAL BARS, COUNTED, and urgent is the alert mark. A chevron
+// pair drew it once, and a column of chevrons in a list reads as rows that
+// fold. The level is the NUMBER of filled bars, so it reads with no colour;
+// `urgent` is not a fourth bar; and a value this build has no step for draws
+// no mark rather than borrowing one.
+test("a priority is drawn as bars filled to its step, and urgent as the alert", () => {
+  const drawn = (priority: string) => {
+    const { container } = render(<PriorityMark priority={priority} word />);
+    const mark = container.querySelector(".work-prio")!;
+    const bars = mark.querySelector(".work-prio-bars");
+    const out = {
+      level: bars?.getAttribute("data-level") ?? null,
+      bars: bars?.children.length ?? 0,
+      glyph: mark.querySelectorAll(":scope > svg").length,
+      word: mark.textContent,
+    };
+    cleanup();
+    return out;
+  };
+  expect(drawn("low")).toEqual({ level: "1", bars: 3, glyph: 0, word: "low" });
+  expect(drawn("normal")).toEqual({ level: "2", bars: 3, glyph: 0, word: "normal" });
+  expect(drawn("high")).toEqual({ level: "3", bars: 3, glyph: 0, word: "high" });
+  expect(drawn("urgent")).toEqual({ level: null, bars: 0, glyph: 1, word: "urgent" });
+  expect(drawn("critical")).toEqual({ level: null, bars: 0, glyph: 0, word: "critical" });
 });
 
 // ---------------------------------------------------------------------------

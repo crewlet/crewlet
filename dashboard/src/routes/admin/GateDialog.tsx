@@ -71,7 +71,7 @@
 
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Input, Modal, Tag } from "@crewlethq/ui";
-import { DnsGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
+import { ClockGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import { keepsOperation, newGateOpID, rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateDomain, RetentionGateResult } from "~/protocol/index.ts";
@@ -307,7 +307,7 @@ export function GateDialog({
     <Modal
       open
       title={`${verb} ${node}`}
-      icon={<DnsGlyph size="md" />}
+      icon={<ServerGlyph size="md" />}
       onClose={onClose}
       // A REQUEST IN FLIGHT HAS AN OUTCOME NOBODY HAS HEARD YET, and a dialog
       // dismissed now leaves the operator unable to tell `applied` from
@@ -319,7 +319,7 @@ export function GateDialog({
       stackBody
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             {answered ? "Close" : "Cancel"}
           </Button>
           {forcing ? (
@@ -425,7 +425,7 @@ export function GateDialog({
       )}
 
       {gesture?.unanswered && (
-        <Callout variant="warning" role="alert" icon={<ScheduleGlyph size="md" />}>
+        <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
           <span className="col" style={{ gap: 6 }}>
             <span>
               <strong>No answer.</strong> {gesture.unanswered}, so what the{" "}
@@ -540,7 +540,7 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
     // record already on the log that this node has not reached yet, so the
     // glyph that says "wait" is the honest one.
     summary = (
-      <Callout variant="warning" role="status" icon={<ScheduleGlyph size="md" />}>
+      <Callout variant="warning" role="status" icon={<ClockGlyph size="md" />}>
         <span className="col" style={{ gap: 6 }}>
           <span>
             <strong>Durable on every log, not yet applied here</strong> on{" "}

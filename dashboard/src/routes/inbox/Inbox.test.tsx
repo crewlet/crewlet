@@ -18,7 +18,7 @@
  *     the others without hunting for a clear button somewhere else.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 
@@ -161,6 +161,20 @@ test("a company with nothing waiting still renders its own state", async () => {
   expect(screen.getByText("Needs a decision")).toBeTruthy();
   expect(screen.getByText("Notices")).toBeTruthy();
   expect(screen.getByText("Nothing needs a decision")).toBeTruthy();
+});
+
+// THE STRIP'S WORD AGREES WITH ITS FIGURE. "1 alarms" is a label written for
+// one number and shown another; a single critical condition is one alarm.
+test("one alarm is counted as one alarm", async () => {
+  const { store } = mount();
+  await act(async () => {
+    // An engine with no active revision is exactly one critical condition.
+    store.applyHealth({ status: "healthy", configured: false });
+  });
+  await settle();
+  const strip = screen.getByRole("group", { name: "The company right now" });
+  expect(within(strip).getByText("alarm")).toBeTruthy();
+  expect(within(strip).queryByText("alarms")).toBeNull();
 });
 
 // BOTH BANDS AT ONCE, WITHOUT PRESSING ANYTHING.

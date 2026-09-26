@@ -41,5 +41,5 @@ export function PageActions({ children }: { children: ReactNode }) {
   // Not yet looked: render nothing rather than the fallback, or every screen
   // in the application would paint its controls twice.
   if (!looked) return null;
-  return <div className="row gap-1 wrap page-actions">{children}</div>;
+  return <div className="row gap-2 wrap page-actions">{children}</div>;
 }

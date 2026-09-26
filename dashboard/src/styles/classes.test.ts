@@ -565,6 +565,41 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-search-trigger--toolbar",
+    why: "uilet's SearchTrigger writes it for `variant=\"toolbar\"`, whose 200px resting width is a FLOOR above 1024px. styles/frame.css cancels the floor inside `.page-search` so the page bar's field shrinks after the trail rather than pushing the keycap past the bar's edge — measured on #/activity/turns at 1440, content 1152px in a 1107px bar. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-search-trigger__shortcut",
+    why: "uilet's SearchTrigger writes it around the keycap. styles/frame.css hides it when `.page-search` is narrower than the word and the keycap together, the same end state the kit reaches under 1024px, reached by the field's own width. See crewlet-search-trigger--toolbar.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-search-trigger__label",
+    why: "uilet's SearchTrigger writes it around the word. styles/frame.css hides it once `.page-search` is down to its glyph. See crewlet-search-trigger--toolbar.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-main",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-actions",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-card__header-chrome",
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-statcard__sub",
+    why: "uilet's StatCard writes it for the line under the number. styles/screens.css lets it wrap rather than end in an ellipsis: inside a StatGroup the grid already stretches every tile in a row to one height, so the kit's one-line reserve buys nothing there, and `nowrap` cut every longer sentence — \"6 seats idle and waiting for …\" on a phone, the input/output caption at 1440. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-disclosure__trigger",
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
@@ -600,7 +635,7 @@ interface Handle {
 const HANDLES: Handle[] = [
   {
     name: "btable-name",
-    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-table__node` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
+    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
   },
   {
     name: "btable-label",
@@ -788,7 +823,7 @@ describe("every class the dashboard names", () => {
     expect(body).toMatch(/flex-direction:\s*column/);
     // THE GAP IS THE COLUMN'S OWN, not merely a rung of the scale. What this
     // test claims is that the panel KEEPS the rhythm its children lost, and
-    // `var(--space-\d+)` accepts every rung there is: set to `--space-1` the
+    // `var(--spacing-\d+)` accepts every rung there is: set to `--spacing-1` the
     // cards on every tabbed screen sit 4px apart instead of 24 and the shape
     // assertion stays green, which is the butted-together failure the rule
     // exists to prevent, just less obviously.
@@ -802,7 +837,7 @@ describe("every class the dashboard names", () => {
     // wrong box.
     const column = /(?:^|\n)\.screen-inner\s*\{([^}]*)\}/.exec(stylesheets());
     expect(column, ".screen-inner is not declared at all").not.toBeNull();
-    const rhythm = /gap:\s*(var\(--space-\d+\))/.exec(column![1]!);
+    const rhythm = /gap:\s*(var\(--spacing-\d+\))/.exec(column![1]!);
     expect(rhythm, ".screen-inner declares no gap to inherit the rhythm from").not.toBeNull();
     expect(body, "the panel's rhythm must be the column's").toMatch(
       new RegExp(`gap:\\s*${rhythm![1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),

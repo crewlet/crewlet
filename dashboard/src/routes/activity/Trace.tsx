@@ -14,11 +14,11 @@ import { QueryState } from "~/components/common.tsx";
 import { Button, Card, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
-  ErrorGlyph,
-  ForkRightGlyph,
+  CircleAlertGlyph,
+  SplitGlyph,
   LayersGlyph,
-  ScheduleGlyph,
-  TimelineGlyph,
+  ClockGlyph,
+  ChartNoAxesGanttGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
@@ -130,7 +130,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           <Button
             size="small"
             variant="secondary"
-            leadingIcon={<TimelineGlyph size="xs" />}
+            leadingIcon={<ChartNoAxesGanttGlyph size="xs" />}
             onClick={() => nav.to(["activity"], { q: traceId })}
           >
             In the log
@@ -145,7 +145,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           numbers wherever they meet this trace again. */}
       <ObjectHeader
         kind="Trace"
-        icon="fork_right"
+        icon="split"
         identifier={traceId}
         title={name || "Trace"}
         facts={facts}
@@ -179,7 +179,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             sub="events sharing this trace"
           />
           <StatCard
-            icon={<ScheduleGlyph size="xs" />}
+            icon={<ClockGlyph size="xs" />}
             label="Elapsed"
             value={to > from ? fmtDuration(to - from) : <EmptyValue label="Not measured" />}
             sub={
@@ -189,7 +189,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             }
           />
           <StatCard
-            icon={<ErrorGlyph size="xs" />}
+            icon={<CircleAlertGlyph size="xs" />}
             label="Failures"
             value={failed}
             sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
@@ -197,7 +197,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         </StatGroup>
 
         <Card padding="none">
-          <Card.Header icon={<ForkRightGlyph size="sm" />}>
+          <Card.Header icon={<SplitGlyph size="sm" />}>
             <Card.Title>Spans</Card.Title>
           </Card.Header>
           <div className="list">
@@ -230,7 +230,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                         marginLeft: `${left}%`,
                         width: "6px",
                         minWidth: 6,
-                        background: "var(--accent)",
+                        background: "var(--color-brand-accent)",
                         borderRadius: 2,
                         opacity: 0.7,
                       }}

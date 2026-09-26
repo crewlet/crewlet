@@ -299,3 +299,16 @@ describe("what the frame holds open", () => {
     ).toBeNull();
   });
 });
+
+// THE ENGINE'S STATE IS IN THE LINK'S NAME, not only in the word beside the
+// dot. The stylesheet hides the word at 960px and on the phone's bottom bar,
+// and a link named by its visible text then announced nothing — or the
+// in-flight count alone. The name carries the word at every width.
+test("the engine pill is named by its state, whatever is drawn", () => {
+  const { store } = frame(<Bare />);
+  act(() => store.applyHealth({ status: "healthy" }));
+  const pill = document.querySelector<HTMLAnchorElement>("a.rail-engine");
+  expect(pill?.getAttribute("aria-label")).toMatch(
+    /^Engine (connected|unreachable|no config|refused)/,
+  );
+});

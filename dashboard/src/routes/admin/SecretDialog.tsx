@@ -96,7 +96,7 @@ export function SecretDialog({
       onSubmit={() => void submit()}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>

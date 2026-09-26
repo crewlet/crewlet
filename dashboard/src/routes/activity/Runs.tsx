@@ -39,20 +39,20 @@ import {
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
-  CloseGlyph,
-  HelpGlyph,
-  Package2Glyph,
-  TerminalGlyph,
-  WarningGlyph,
+  XGlyph,
+  CircleQuestionMarkGlyph,
+  PackageGlyph,
+  SquareTerminalGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useSandboxes } from "~/lib/store-hooks.ts";
+import { useSandboxes, useSeatBadgeOf } from "~/lib/store-hooks.ts";
 import {
   elapsedMs,
   fmtDateTime,
@@ -243,7 +243,7 @@ function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
   const deadline = pauseDeadline(run);
   const expired = deadline !== null && tsKey(deadline) <= now;
   return (
-    <Callout variant="warning" icon={<HelpGlyph size="md" />}>
+    <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col" style={{ gap: 2 }}>
         <strong>{run.question || "The run asked a question."}</strong>
         <span className="t-caption">
@@ -351,7 +351,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
         {data && !run && (
           <EmptyState
             size="compact"
-            icon={<TerminalGlyph size={32} />}
+            icon={<SquareTerminalGlyph size={32} />}
             title="No coding run for this turn"
             description="A run is addressed by the turn that started it. This one is not in the durable record — it may have been swept, or the id may be wrong."
           />
@@ -361,7 +361,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
             <ObjectHeader
               size="peek"
               kind="Coding run"
-              icon="terminal"
+              icon="square-terminal"
               identifier={run.turn_id.slice(0, 8)}
               title={runTitle(run)}
               status={<RunStatus status={run.status} />}
@@ -418,6 +418,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
 }
 
 export function Runs({ runId }: { runId?: string }) {
+  const seatBadge = useSeatBadgeOf();
   const nav = useNavigator();
   const live = useSandboxes();
   const now = useNow();
@@ -503,13 +504,13 @@ export function Runs({ runId }: { runId?: string }) {
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={3}>
         <StatCard
-          icon={<TerminalGlyph size="xs" />}
+          icon={<SquareTerminalGlyph size="xs" />}
           label="Running"
           value={running}
           sub="a box is up and working"
         />
         <StatCard
-          icon={<HelpGlyph size="xs" />}
+          icon={<CircleQuestionMarkGlyph size="xs" />}
           label="Waiting on an answer"
           value={waiting}
           sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
@@ -522,7 +523,7 @@ export function Runs({ runId }: { runId?: string }) {
             the event stream, as the resumed turn's own events or a
             `sandbox_run_failed` naming the reason. */}
         <StatCard
-          icon={<Package2Glyph size="xs" />}
+          icon={<PackageGlyph size="xs" />}
           label="In the record"
           value={rows.length}
           sub="every run the fleet still holds"
@@ -572,7 +573,7 @@ export function Runs({ runId }: { runId?: string }) {
                 // run's own page, where it is a link again.
                 cell: (r) =>
                   r.role || r.agent_handle ? (
-                    <TextCell icon="memory">{r.role || r.agent_handle}</TextCell>
+                    <SeatLabel {...seatBadge(r.role || r.agent_handle)} />
                   ) : (
                     <EmptyValue label="No seat" />
                   ),
@@ -653,7 +654,7 @@ export function Runs({ runId }: { runId?: string }) {
         <>
           <ObjectHeader
             kind="Coding run"
-            icon="terminal"
+            icon="square-terminal"
             identifier={detail.turn_id.slice(0, 8)}
             title={runTitle(detail)}
             status={<RunStatus status={detail.status} />}
@@ -682,7 +683,7 @@ export function Runs({ runId }: { runId?: string }) {
                 <IconButton
                   size="sm"
                   variant="ghost"
-                  icon={<CloseGlyph size="sm" />}
+                  icon={<XGlyph size="sm" />}
                   label="Close"
                   title="Close"
                   onClick={() => setSelected("")}
@@ -692,7 +693,7 @@ export function Runs({ runId }: { runId?: string }) {
           />
           <Card>
             {AWAITING.includes(detail.status) && (
-              <div style={{ marginBottom: "var(--space-3)" }}>
+              <div style={{ marginBottom: "var(--spacing-3)" }}>
                 <AwaitingBanner run={detail} now={now} />
               </div>
             )}
@@ -753,7 +754,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
   return (
     <Card>
       <Card.Header
-        icon={<TerminalGlyph size="sm" />}
+        icon={<SquareTerminalGlyph size="sm" />}
         count={calls.length}
         subtitle="through the MCP bridge, in order"
         actions={
@@ -768,7 +769,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
           // MIDDLE rather than the start, because how a run began and how it
           // ended are what explain it — and a log that silently skips is a
           // log that lies about what the run did.
-          <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {plural(elided, "call")} from the middle of this log were dropped — the engine keeps the
             first and last hundred, so the run did more than is shown here.
           </Callout>

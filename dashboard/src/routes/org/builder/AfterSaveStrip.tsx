@@ -35,10 +35,10 @@ import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
 import { screenPath } from "./dialogParts.tsx";
 import {
   CheckGlyph,
-  CloseGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  RefreshGlyph,
+  XGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  RotateCwGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -190,9 +190,9 @@ export function AfterSaveStrip({
           state.tone === "positive" ? (
             <CheckGlyph />
           ) : state.tone === "critical" ? (
-            <ErrorGlyph />
+            <CircleAlertGlyph />
           ) : (
-            <RefreshGlyph />
+            <RotateCwGlyph />
           )
         }
         action={
@@ -200,7 +200,7 @@ export function AfterSaveStrip({
             {saved.parentRevisionId ? (
               <ButtonLink
                 size="small"
-                variant="tertiary"
+                variant="ghost"
                 href={href(screenPath("config"), {
                   lens: "diff",
                   revision: saved.revisionId,
@@ -212,19 +212,19 @@ export function AfterSaveStrip({
             ) : (
               // The company's first revision has no parent to differ from:
               // all of it is what the save wrote.
-              <ButtonLink size="small" variant="tertiary" href={href(screenPath("config"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("config"))}>
                 View the configuration
               </ButtonLink>
             )}
-            <Button size="small" variant="tertiary" onClick={() => setYaml(true)}>
+            <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
               Copy as YAML
             </Button>
             {state.showFleet && (
-              <ButtonLink size="small" variant="tertiary" href={href(screenPath("fleet"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("fleet"))}>
                 Open the fleet
               </ButtonLink>
             )}
-            <IconButton label="Dismiss" icon={<CloseGlyph />} size="sm" onClick={onDismiss} />
+            <IconButton label="Dismiss" icon={<XGlyph />} size="sm" onClick={onDismiss} />
           </span>
         }
       >
@@ -256,7 +256,7 @@ export function PreviousRevisionNote() {
   if (!saved || saved.epoch === null) return null;
   if ((health?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
-    <Callout variant="neutral" icon={<RefreshGlyph />}>
+    <Callout variant="neutral" icon={<RotateCwGlyph />}>
       This node is still applying revision{" "}
       <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
       revision before it.
@@ -311,7 +311,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       open
       stackBody
       title="The company as YAML"
-      icon={<DescriptionGlyph />}
+      icon={<FileTextGlyph />}
       size="lg"
       onClose={onClose}
       footer={

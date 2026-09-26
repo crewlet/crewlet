@@ -55,7 +55,7 @@ import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
 import { Button, Card, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
-import { TimelineGlyph } from "@crewlethq/icons/glyphs";
+import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
@@ -361,7 +361,7 @@ export function HistoryView({
 
       <Card>
         <Card.Header
-          icon={<TimelineGlyph size="sm" />}
+          icon={<ChartNoAxesGanttGlyph size="sm" />}
           // NOTHING TO DESCRIBE IS NOT A DESCRIPTION OF NOTHING. Drawn
           // unconditionally this promised bars over an empty card, which is the
           // rule `Activity`'s own card follows by leaving its subtitle

@@ -293,7 +293,7 @@ test("every fixed destination names itself rather than reading as a key", () => 
  *
  * `.crumbs` in frame.css gives the trail a floor and, past it, a scroller,
  * and the note on that rule quotes the width of the deepest fixed ancestry
- * this function can produce — measured in Chromium at `--fs-sm`: "Admin /
+ * this function can produce — measured in Chromium at `--font-size-sm`: "Admin /
  * Configuration / Revisions /" at 26.53ch, 31.53ch beside the 5ch stub the
  * last crumb floors at. That note was written when the deepest was believed
  * to be two crumbs ("Admin / Infrastructure /"), and it had been three on

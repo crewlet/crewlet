@@ -41,20 +41,20 @@
 
 import { useMemo } from "react";
 import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
-import { DescriptionGlyph, ContentCopyGlyph } from "@crewlethq/icons/glyphs";
+import { FileTextGlyph, CopyGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import { indexOrg, kindOfAuthor, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -121,6 +121,12 @@ export interface AuditEntry {
   actor: string;
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
+  /**
+   * The seat an operator token was BOUND to when it wrote this, where the
+   * record carries one (the tracker's `actor_seat`). `actor` stays the token,
+   * which is the audit trail; this is the person the row draws.
+   */
+  actorSeat?: string;
   /** What it was done to, as a person would name it. */
   subject: string;
   /** Where that object lives, where it still has an address. */
@@ -172,6 +178,11 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
   }
 }
 
+/** A case-blind substring match. */
+function includes(value: string, needle: string): boolean {
+  return value.toLowerCase().includes(needle.toLowerCase());
+}
+
 /** The leading segment of a uuid, which is what tells two of them apart. */
 function short(id: string): string {
   return id.length > 8 && id.includes("-") ? id.slice(0, 8) : id;
@@ -194,6 +205,84 @@ function short(id: string): string {
  */
 function list<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Who a row's writer IS, as the Who column draws them.
+ *
+ * AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT. An `operator` write
+ * carries the TOKEN's name as its actor, and the chart has no seat by that
+ * name — so the cell drew every operator as the chart's default, the agent's
+ * squircle, and linked "maya" to a seat page that does not exist. So:
+ *
+ *  - a token BOUND to a person (`actorSeat`) draws that person's seat, as a
+ *    person, linking to it — the token stays in the tooltip and in the CSV;
+ *  - an unbound token draws the human circle and its name as PLAIN TEXT,
+ *    since there is no page to link to;
+ *  - a seat's own write takes the chart's kind, or where the chart no longer
+ *    holds the seat, the kind the write was recorded under;
+ *  - `system` names a duty rather than anybody, and an empty actor is the
+ *    engine itself.
+ */
+export type Writer =
+  | { as: "seat"; handle: string; name: string; kind?: SeatKind; token?: string }
+  | { as: "token"; name: string }
+  | { as: "system"; name: string }
+  | { as: "engine" };
+
+export function writerOf(
+  row: Pick<AuditEntry, "actor" | "actorKind" | "actorSeat">,
+  who: (handle: string) => { name: string; kind?: SeatKind },
+): Writer {
+  if (!row.actor) return { as: "engine" };
+  if (row.actorKind === "operator") {
+    if (!row.actorSeat) return { as: "token", name: row.actor };
+    const seat = who(row.actorSeat);
+    // A PERSON EITHER WAY: a token is only ever bound to a person, so a seat
+    // the chart no longer holds is still drawn as one.
+    return {
+      as: "seat",
+      handle: row.actorSeat,
+      name: seat.name,
+      kind: seat.kind ?? "human",
+      token: row.actor,
+    };
+  }
+  if (row.actorKind === "system") return { as: "system", name: row.actor };
+  const seat = who(row.actor);
+  return {
+    as: "seat",
+    handle: row.actor,
+    name: seat.name,
+    kind: seat.kind ?? kindOfAuthor(row.actorKind),
+  };
+}
+
+/** The Who cell: one [Writer], drawn. */
+function WriterCell({ writer }: { writer: Writer }) {
+  switch (writer.as) {
+    case "seat":
+      return (
+        <SeatCell
+          handle={writer.handle}
+          name={writer.name}
+          kind={writer.kind}
+          {...(writer.token
+            ? { title: `${writer.name}, through the operator token ${writer.token}` }
+            : {})}
+        />
+      );
+    case "token":
+      return <SeatLabel name={writer.name} kind="human" />;
+    case "system":
+      return <TextCell>{writer.name}</TextCell>;
+    case "engine":
+      // THE ENGINE IS A WRITER. A chart apply and a repair duty carry no
+      // actor at all, and rendering them as a blank would make the five
+      // writers with no tool invisible on the one screen that exists to name
+      // every writer.
+      return <span className="muted">the engine</span>;
+  }
 }
 
 /**
@@ -254,6 +343,7 @@ export function Audit() {
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
+        ...(record.actor_seat ? { actorSeat: record.actor_seat } : {}),
         ...workSubject(record),
         // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
         // It also keeps a body's newlines out of a CSV field, where they are
@@ -324,7 +414,10 @@ export function Audit() {
         const at = Date.parse(row.at);
         if (Number.isNaN(at) || at < from || at > to) return false;
         if (kind && row.source !== kind) return false;
-        if (actor && !row.actor.toLowerCase().includes(actor.toLowerCase())) return false;
+        // THE TOKEN OR THE PERSON IT IS BOUND TO: a reader looking for
+        // somebody types the name the row draws, and the row draws the seat.
+        if (actor && ![row.actor, row.actorSeat ?? ""].some((name) => includes(name, actor)))
+          return false;
         return true;
       })
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -374,19 +467,7 @@ export function Audit() {
         sortValue: (row) => row.actor,
         cell: (row) => (
           <span className="row gap-1">
-            {row.actor ? (
-              // THE NAME AND THE KIND, from one lookup: the badge's dashed
-              // ring is a HUMAN seat, and a cell handed only the name draws
-              // every writer as an agent on a screen whose subject is the
-              // writers that are not.
-              <SeatCell handle={row.actor} {...who(row.actor)} />
-            ) : (
-              // THE ENGINE IS A WRITER. A chart apply and a
-              // repair duty carry no actor at all, and rendering them as a
-              // blank would make the five writers with no tool invisible on
-              // the one screen that exists to name every writer.
-              <span className="muted">the engine</span>
-            )}
+            <WriterCell writer={writerOf(row, who)} />
             {row.actorKind && <Tag appearance="outline">{row.actorKind}</Tag>}
           </span>
         ),
@@ -433,8 +514,8 @@ export function Audit() {
         <TimeRangePicker range={range} ariaLabel="Window" />
         <Button
           size="small"
-          variant="tertiary"
-          leadingIcon={<ContentCopyGlyph />}
+          variant="ghost"
+          leadingIcon={<CopyGlyph />}
           onClick={() => downloadCsv(shown)}
           disabled={shown.length === 0}
         >
@@ -468,7 +549,7 @@ export function Audit() {
       <QueryState error={work.error ?? knowledge.error ?? config.error} loading={loading}>
         <Card padding="none">
           <Card.Header
-            icon={<DescriptionGlyph size="sm" />}
+            icon={<FileTextGlyph size="sm" />}
             count={shown.length}
             subtitle={
               truncated.length > 0
@@ -486,7 +567,7 @@ export function Audit() {
             empty={{
               title: "Nothing in this window",
               hint: "No person and no operator token wrote anything here over this range. Widen the window, or clear the filters.",
-              icon: "description",
+              icon: "file-text",
             }}
             loadedNote={`${shown.length} loaded`}
           />
@@ -530,7 +611,7 @@ function useSecrets(): { rows: SecretRow[] | null } {
  */
 export function auditCsv(rows: AuditEntry[]): string {
   const cell = (value: string) => `"${value.replaceAll('"', '""')}"`;
-  const lines = [["at", "where", "who", "who_kind", "what", "to", "detail"].join(",")];
+  const lines = [["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail"].join(",")];
   for (const row of rows) {
     lines.push(
       [
@@ -538,6 +619,7 @@ export function auditCsv(rows: AuditEntry[]): string {
         SOURCE_LABEL[row.source],
         row.actor,
         row.actorKind,
+        row.actorSeat ?? "",
         row.kind,
         row.subject,
         row.detail,

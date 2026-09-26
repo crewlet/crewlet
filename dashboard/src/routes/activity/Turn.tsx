@@ -63,18 +63,18 @@ import {
   cx,
 } from "@crewlethq/ui";
 import {
-  Book2Glyph,
-  BoltGlyph,
+  BookOpenGlyph,
+  ZapGlyph,
   CheckGlyph,
   DatabaseGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  ForkRightGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  SplitGlyph,
   LayersGlyph,
-  NeurologyGlyph,
-  PersonGlyph,
-  TimelineGlyph,
-  WarningGlyph,
+  BrainGlyph,
+  UserGlyph,
+  ChartNoAxesGanttGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 // STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` and `DownloadButton` are
 // bare ACTIONS over text derived at press time — `Copyable` renders the value
@@ -540,7 +540,7 @@ function wokeBy(view: TurnView): string {
  * was delivered directly, I need to reply in the thread rather than staying
  * silent. Activating mattermost_post_message to reply to founder's test
  * message Replying to founder's test message to confirm Mattermost
- * integration works" — 280 characters set at `--fs-xl` semibold, three lines
+ * integration works" — 280 characters set at `--font-size-xl` semibold, three lines
  * deep, pushing the facts under it off a laptop's first screen. The turns
  * list, the peek rail and the feed card head with the same string.
  *
@@ -758,7 +758,7 @@ function turnStatus(view: TurnView): ReactNode {
           fired — which are precisely the turns with no failed phase record to
           find. */}
       {view.trouble > 0 && (
-        <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
+        <Tag variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
           {view.trouble === 1 ? "1 problem" : `${view.trouble} problems`}
         </Tag>
       )}
@@ -778,7 +778,7 @@ function turnStatus(view: TurnView): ReactNode {
       {view.cut && (
         <Tag
           variant="warning"
-          leadingIcon={<WarningGlyph size="xs" />}
+          leadingIcon={<TriangleAlertGlyph size="xs" />}
           title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
         >
           middle not shown
@@ -911,7 +911,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
   return (
     <Card padding="sm">
       <Card.Header
-        icon={<Book2Glyph size="sm" />}
+        icon={<BookOpenGlyph size="sm" />}
         subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
       >
         <Card.Title>What the turn was given</Card.Title>
@@ -1179,9 +1179,9 @@ function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
       </time>
       <span className="what truncate">
         {failed && (
-          <ErrorGlyph
+          <CircleAlertGlyph
             size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
         )}
         {withoutActor(event.summary, actor) || event.type}
@@ -1412,7 +1412,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               <Button
                 size="small"
                 variant="secondary"
-                leadingIcon={<PersonGlyph size="xs" />}
+                leadingIcon={<UserGlyph size="xs" />}
                 onClick={() => nav.to(["company", "people", role])}
               >
                 The seat
@@ -1452,7 +1452,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     key={id}
                     size="small"
                     variant="secondary"
-                    leadingIcon={<ForkRightGlyph size="xs" />}
+                    leadingIcon={<SplitGlyph size="xs" />}
                     onClick={() => nav.to(["activity", "traces", id])}
                     title={`trace ${id}`}
                   >
@@ -1465,7 +1465,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 <Button
                   size="small"
                   variant="secondary"
-                  leadingIcon={<ForkRightGlyph size="xs" />}
+                  leadingIcon={<SplitGlyph size="xs" />}
                   onClick={() => nav.to(["activity", "traces", traceId])}
                 >
                   Trace
@@ -1536,7 +1536,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             that are missing are the ending", which is the difference between
             a reader distrusting the page and a reader distrusting the turn. */}
         {cut && (
-          <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             This turn published more than the store returns for one turn. What is here is its{" "}
             <strong>opening and its ending</strong> — {events.length} events, so the records below
             are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle of
@@ -1554,7 +1554,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.wentWrong.length > 0 && (
           <Card padding="none">
             <Card.Header
-              icon={<ErrorGlyph size="sm" />}
+              icon={<CircleAlertGlyph size="sm" />}
               count={story.wentWrong.length}
               subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
             >
@@ -1569,7 +1569,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         )}
 
         <Card padding="sm">
-          <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
+          <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
             <Card.Title>Phases</Card.Title>
           </Card.Header>
           <div className="col gap-2">
@@ -1587,7 +1587,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.did.length > 0 && (
           <Card padding="none">
             <Card.Header
-              icon={<BoltGlyph size="sm" />}
+              icon={<ZapGlyph size="sm" />}
               count={story.did.length}
               // "COLLEAGUES" IS A PROMISE AGAIN, and only because the wire
               // can keep it now. This line used to advertise the three A2A
@@ -1628,7 +1628,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.rest.length > 0 && (
           <Card padding="none">
             <Card.Header
-              icon={<TimelineGlyph size="sm" />}
+              icon={<ChartNoAxesGanttGlyph size="sm" />}
               count={story.rest.length}
               subtitle="rows this build has no particular place for"
             >
@@ -1655,7 +1655,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {(rec.summary || rec.learning) && (
           <Card padding="sm">
             <Card.Header
-              icon={<DescriptionGlyph size="sm" />}
+              icon={<FileTextGlyph size="sm" />}
               subtitle="the two events the engine closes every turn with"
             >
               <Card.Title>The turn&rsquo;s own record</Card.Title>
@@ -1761,7 +1761,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
   return (
     <Card padding="sm">
-      <Card.Header icon={<NeurologyGlyph size="sm" />} count={phases.length}>
+      <Card.Header icon={<BrainGlyph size="sm" />} count={phases.length}>
         <Card.Title>Phases</Card.Title>
       </Card.Header>
       <div className="col gap-2">
@@ -1871,7 +1871,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
               opening and its ending and not its middle, and a rail that said
               nothing would report a long turn as a short one. */}
           {view.cut && (
-            <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+            <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
               The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its ending
               — the phases from its middle are not here, and neither is anything that went wrong in
               them.

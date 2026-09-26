@@ -43,7 +43,7 @@ import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
-import { AddGlyph } from "@crewlethq/icons/glyphs";
+import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
 
 const KINDS: { value: AddKind; label: string }[] = [
@@ -296,7 +296,7 @@ export function AddNodeGhostForm({ parent, kind, onClose }: AddProps) {
           the one the rest of the lens uses. */}
       <div className="row">
         <span className="spacer" />
-        <Button variant="tertiary" onClick={onClose}>
+        <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="primary" type="submit" disabled={form.blocked}>
@@ -323,7 +323,7 @@ export function AddNodeDialog({ parent, kind, onClose }: AddProps) {
       open
       stackBody
       title={`Add to ${where}`}
-      icon={<AddGlyph />}
+      icon={<PlusGlyph />}
       // ONE WAY OUT PER JOB. Cancel is in the foot; a close control beside the
       // title would be a second, unnamed spelling of it, which is what the
       // console's own dialogs do not have.
@@ -332,7 +332,7 @@ export function AddNodeDialog({ parent, kind, onClose }: AddProps) {
       onSubmit={form.add}
       footer={
         <>
-          <Button variant="tertiary" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={form.blocked}>

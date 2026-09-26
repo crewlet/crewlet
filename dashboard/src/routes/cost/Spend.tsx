@@ -43,14 +43,14 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  ArrowForwardGlyph,
+  ArrowRightGlyph,
   LayersGlyph,
-  MemoryGlyph,
-  RefreshGlyph,
-  ScheduleGlyph,
+  CpuGlyph,
+  RotateCwGlyph,
+  ClockGlyph,
   TargetGlyph,
-  TimelineGlyph,
-  GroupGlyph,
+  ChartNoAxesGanttGlyph,
+  UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics` — `radio` commits the option the arrows land on — and both
@@ -59,21 +59,26 @@ import {
 // and six history entries to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, NumberCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnRow } from "~/protocol/types.ts";
 // OURS, AND THERE IS NO PEER FOR EITHER. `Charts` exports a line `TimeSeries`
 // and a `StackedBar`, and this axis is neither: it is a column per bucket,
 // STACKED into bands, with the previous period drawn behind it as a ghost.
-// `phaseColor` has no peer either — uilet publishes `--color-phase-*` but no
-// function that picks one. See the report.
-import { StackedTimeSeries, phaseColor } from "~/ui/charts.tsx";
-import { bandsOf, columnsOf, ghostHeights, spendDays, unbandedTokens } from "~/lib/spend.ts";
+import { StackedTimeSeries } from "~/ui/charts.tsx";
+import {
+  bandsOf,
+  columnsOf,
+  ghostHeights,
+  phaseColor,
+  spendDays,
+  unbandedTokens,
+} from "~/lib/spend.ts";
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { useEngineHealth, useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useOrgBudget, useSeatBadgeOf, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   eventHistoryLabel,
@@ -141,7 +146,7 @@ function SpendOverTime({ days }: { days: number }) {
 
   return (
     <Card>
-      <Card.Header icon={<TimelineGlyph size="sm" />} subtitle="one column per company day">
+      <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />} subtitle="one column per company day">
         <Card.Title>Over time</Card.Title>
       </Card.Header>
       <QueryState
@@ -205,8 +210,13 @@ function SpendOverTime({ days }: { days: number }) {
               Spend history reaches back to {data.horizon.floor} ({data.horizon.days} days), on
               every node alike.
             </p>
+            {/* ONLY WHAT IS DRAWN. A band worth nothing in this window has
+                no segment in any column, and a legend entry with nothing to
+                point at reads as a series the chart failed to draw. */}
             <Legend
-              items={bands.map((b) => ({ id: b.key || "other", label: b.label, color: b.color }))}
+              items={bands
+                .filter((b) => b.total > 0)
+                .map((b) => ({ id: b.key || "other", label: b.label, color: b.color }))}
             />
             {unbanded > 0 && (
               // THE GAP IS SAID OUT LOUD. Grouping by worker leaves out every
@@ -226,6 +236,7 @@ function SpendOverTime({ days }: { days: number }) {
 }
 
 export function Spend() {
+  const seatBadge = useSeatBadgeOf();
   const pushed = useTokens();
   const { open: openPeek } = usePeekControls();
   const orgBudget = useOrgBudget();
@@ -371,7 +382,7 @@ export function Spend() {
           sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
         />
         <StatCard
-          icon={<MemoryGlyph size="xs" />}
+          icon={<CpuGlyph size="xs" />}
           label="Model calls"
           value={tokens ? fmtCount(tokens.totals.calls) : <EmptyValue label="Nothing recorded" />}
           sub={
@@ -381,29 +392,33 @@ export function Spend() {
           }
         />
         <StatCard
-          icon={<ArrowForwardGlyph size="xs" />}
+          icon={<ArrowRightGlyph size="xs" />}
           label="Input / output"
+          // THE OUTPUT IS THE UNIT, NOT A SECOND DISPLAY NUMBER. Written as one
+          // display-size string, "5.1M / 164k" was wider than a phone's tile and
+          // the kit's value ends in an ellipsis rather than wrapping, so the
+          // output was cut to "16…" — a digit lost with nothing to say so. The
+          // kit's unit slot is the "/ 7" after a 4, which is this pair's shape.
           value={
-            tokens ? (
-              `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
-            ) : (
-              <EmptyValue label="Not counted yet" />
-            )
+            tokens ? fmtCount(tokens.totals.input_tokens) : <EmptyValue label="Not counted yet" />
           }
-          sub="input includes any cached prefix, as the provider reports it"
+          unit={tokens ? `/ ${fmtCount(tokens.totals.output_tokens)}` : undefined}
+          // The sub WRAPS (styles/screens.css), so it says what the input
+          // count holds rather than being cut to fit one line.
+          sub="input includes the cached prefix"
         />
         {/* THE WINDOW'S OWN EDGE. The live window counts through its newest
             call; a named window is whole company days, which it names. */}
         {tokens?.from && tokens.to ? (
           <StatCard
-            icon={<ScheduleGlyph size="xs" />}
+            icon={<ClockGlyph size="xs" />}
             label="Company days"
             value={`${tokens.from} – ${tokens.to}`}
             sub={`${tokens.days ?? days} days on the company clock, every node's`}
           />
         ) : (
           <StatCard
-            icon={<ScheduleGlyph size="xs" />}
+            icon={<ClockGlyph size="xs" />}
             label="Counted through"
             value={
               tokens?.aggregated_through ? (
@@ -459,7 +474,7 @@ export function Spend() {
         </Card>
         <Card>
           <Card.Header
-            icon={<MemoryGlyph size="sm" />}
+            icon={<CpuGlyph size="sm" />}
             subtitle="from each completion's own reported model"
           >
             <Card.Title>By model</Card.Title>
@@ -476,7 +491,7 @@ export function Spend() {
 
       {(tokens?.by_worker ?? []).length > 0 && (
         <Card>
-          <Card.Header icon={<RefreshGlyph size="sm" />} subtitle="spend outside any seat's turn">
+          <Card.Header icon={<RotateCwGlyph size="sm" />} subtitle="spend outside any seat's turn">
             <Card.Title>Background workers</Card.Title>
           </Card.Header>
           <BarList
@@ -493,7 +508,7 @@ export function Spend() {
       )}
 
       <Card padding="none">
-        <Card.Header icon={<GroupGlyph size="sm" />} count={seats.length}>
+        <Card.Header icon={<UsersGlyph size="sm" />} count={seats.length}>
           <Card.Title>By seat</Card.Title>
         </Card.Header>
         <DataGrid
@@ -522,7 +537,7 @@ export function Spend() {
               // very seat — a second link over the name would swallow the plain
               // click the peek opens on and send the reader to the page the
               // rail was built to save them from.
-              cell: (a) => <TextCell icon="memory">{a.role}</TextCell>,
+              cell: (a) => <SeatLabel {...seatBadge(a.role)} />,
             },
             {
               key: "total",
@@ -643,7 +658,8 @@ export function Spend() {
               sortValue: (t) => t.role ?? "",
               // NOT `SeatCell` or the chip this drew: both are anchors and every
               // row here is one. The seat is a link again in the turn's own peek.
-              cell: (t) => <TextCell icon="memory">{t.role ?? ""}</TextCell>,
+              cell: (t) =>
+                t.role ? <SeatLabel {...seatBadge(t.role)} /> : <EmptyValue label="No seat" />,
             },
             {
               key: "total",

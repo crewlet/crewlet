@@ -48,11 +48,13 @@
 
 import type { ReactNode } from "react";
 import { href } from "../router.tsx";
-import { Avatar, cx, EmptyValue, Tag } from "@crewlethq/ui";
+import { cx, EmptyValue, Tag } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 // A `TextCell`'s mark is named by whichever screen draws the column, so the
 // name→drawing lookup stays in `~/ui/Icon.tsx` — one change there moves every
 // caller onto uilet's glyphs at once.
-import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import type { SeatKind } from "~/lib/seats.ts";
@@ -122,8 +124,8 @@ export function DateCell({ at, now }: { at?: string | null; now: number }) {
  * the same drawing.
  *
  * The distinction the local mark carried is not lost, because the design
- * system carries it: `dashed` is documented there as "a HUMAN seat: the engine
- * does not run it", which is precisely the structural fact the dashed ring
+ * system carries it: the badge's `kind` draws a person as a circle and an
+ * agent as a squircle, which is precisely the structural fact the old mark
  * meant here. What IS lost is a picture of a robot, and that was the half
  * saying nothing — it drew the KIND, which one glance at the roster gives, in
  * the slot that should have been saying WHO.
@@ -135,31 +137,63 @@ export function SeatCell({
   handle,
   name,
   kind,
+  title,
 }: {
   handle?: string | null;
   name?: string;
+  /**
+   * What the link's tooltip says, where the handle is not the whole story —
+   * an operator's write names the person AND the token they wrote through.
+   */
+  title?: string;
   /**
    * The seat's kind, which decides the badge's one variant.
    *
    * THE NAMED TYPE, because this said `"agent" | "human" | string` — a union
    * that collapses to `string`, so it accepted any word and a caller passing
    * an author kind the chart never mints type-checked and drew a solid disc
-   * for ever. `undefined` is a handle the chart does not hold, and it draws
-   * the neutral disc rather than claiming the seat is an agent.
+   * for ever. `undefined` is a handle the chart does not hold; the kit's
+   * badge has no third outline, so it takes the kit's default. A screen that
+   * holds its writers' recorded kinds resolves them first (`kindWithAuthors`
+   * in lib/seats.ts), which is what draws an operator as the person they are.
    */
   kind?: SeatKind;
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
-    <a className="cell-seat" href={href(["company", "people", handle])} title={`@${handle}`}>
-      <Avatar
+    <a
+      className="cell-seat"
+      href={href(["company", "people", handle])}
+      title={title ?? `@${handle}`}
+    >
+      <SeatAvatar
         name={name || handle}
         size="xs"
-        variant={kind === "human" ? "dashed" : "solid"}
+        kind={kind === "human" ? "human" : "agent"}
         decorative
       />
       <span className="truncate">{name || handle}</span>
     </a>
+  );
+}
+
+/**
+ * A seat named inside a row that is ALREADY a link: its badge and its name,
+ * and no anchor of its own.
+ *
+ * [SeatCell] is a link to the seat's page, and a grid whose rows are links
+ * (the turns list, a fleet's leases, the spend tables) cannot nest one — an
+ * anchor inside an anchor is markup no browser agrees about. Those columns
+ * drew `TextCell icon="cpu"` instead: a chip glyph where every other surface
+ * identifies a seat by its badge, so the same seat was a squircle on Work and
+ * a processor on Activity. This is the badge, without the link.
+ */
+export function SeatLabel({ name, kind }: { name: string; kind?: SeatKind }) {
+  return (
+    <span className="cell-seat" title={name}>
+      <SeatAvatar name={name} size="xs" kind={kind === "human" ? "human" : "agent"} decorative />
+      <span className="truncate">{name}</span>
+    </span>
   );
 }
 
@@ -298,7 +332,7 @@ export function TextCell({
   icon,
   mark,
 }: { children: ReactNode } & (
-  { icon?: MarkName; mark?: never } | { icon?: never; mark: ReactNode }
+  { icon?: GlyphName; mark?: never } | { icon?: never; mark: ReactNode }
 )) {
   return (
     <span className="row" style={{ gap: 6, minWidth: 0 }}>

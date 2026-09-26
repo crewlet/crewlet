@@ -40,12 +40,12 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
-  AccountTreeGlyph,
+  NetworkGlyph,
   CheckGlyph,
-  DescriptionGlyph,
-  ScheduleGlyph,
+  FileTextGlyph,
+  ClockGlyph,
   SearchGlyph,
-  TimelineGlyph,
+  ChartNoAxesGanttGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -324,7 +324,10 @@ export function Pages({ container: fromPath }: { container?: string }) {
       </div>
 
       {containers.data?.containers?.length ? (
-        <div className="row wrap" style={{ gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+        <div
+          className="row wrap"
+          style={{ gap: "var(--spacing-2)", marginBottom: "var(--spacing-3)" }}
+        >
           {containers.data.containers.map((c) => (
             // A BADGE THAT ACTS IS A `FilterChip` OVER THERE, which is the
             // whole of this change: our own `Badge` grew an `onClick` and a
@@ -397,7 +400,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 // NOT AN ANCHOR: the row is one now, and a title that was also
                 // a link would be the one part of the row where a plain click
                 // meant something different from everywhere else on it.
-                cell: (r) => <TextCell icon="description">{r.title}</TextCell>,
+                cell: (r) => <TextCell icon="file-text">{r.title}</TextCell>,
               },
               {
                 key: "container",
@@ -562,7 +565,7 @@ export function PageView({ container, title }: { container: string; title: strin
             is the same gap with nothing in it. */}
       {page && (data.ancestors ?? []).length > 0 ? (
         <PageNote>
-          <span className="row wrap" style={{ gap: "var(--space-1)" }}>
+          <span className="row wrap" style={{ gap: "var(--spacing-1)" }}>
             <a href={href(["knowledge", page.container])}>{page.container}</a>
             {(data.ancestors ?? []).map((a) => (
               <span key={a.id}>
@@ -595,7 +598,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 the status is the one fact that must survive the scroll. */}
             <ObjectHeader
               kind="Page"
-              icon="description"
+              icon="file-text"
               // NO IDENTIFIER BESIDE THE TITLE. A page is addressed by its
               // container and its title — both are already here, one as the
               // first fact and one as the title itself — and the only other
@@ -633,7 +636,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 <Card.Header>
                   <Card.Title>Watching</Card.Title>
                 </Card.Header>
-                <div className="row wrap" style={{ gap: "var(--space-2)" }}>
+                <div className="row wrap" style={{ gap: "var(--spacing-2)" }}>
                   {page.watchers.map((w) => (
                     <SeatChip key={w} handle={w} {...who(w)} />
                   ))}
@@ -649,7 +652,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 <div className="col gap-3">
                   {data.comments.map((c) => (
                     <div key={c.id} className="comment">
-                      <div className="row" style={{ gap: "var(--space-2)" }}>
+                      <div className="row" style={{ gap: "var(--spacing-2)" }}>
                         <SeatChip handle={c.author} {...who(c.author)} />
                         <span className="muted" title={fmtDateTime(c.created_at)}>
                           {relTime(c.created_at, now)}
@@ -762,7 +765,7 @@ export function PagePeek({ id }: { id: string }) {
     return (
       <EmptyState
         size="compact"
-        icon={<DescriptionGlyph size="xl" />}
+        icon={<FileTextGlyph size="xl" />}
         title={`No page at “${id}”`}
         description="A page is addressed by its container and its title. It may have been renamed, moved to another container, or trashed — or this node's copy of the knowledge base has not caught up with it yet."
       />
@@ -778,14 +781,14 @@ export function PagePeek({ id }: { id: string }) {
             <ObjectHeader
               size="peek"
               kind="Page"
-              icon="description"
+              icon="file-text"
               title={page.title}
               status={pageFlags(page)}
               facts={pageFacts({ page, history, now, seatName })}
             />
             <div className="col gap-3">
               <Card>
-                <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                <Card.Header icon={<FileTextGlyph size="sm" />}>
                   <Card.Title>The page</Card.Title>
                 </Card.Header>
                 {page.body ? (
@@ -805,7 +808,7 @@ export function PagePeek({ id }: { id: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<AccountTreeGlyph size="sm" />} count={children.length}>
+                <Card.Header icon={<NetworkGlyph size="sm" />} count={children.length}>
                   <Card.Title>Where it sits</Card.Title>
                 </Card.Header>
                 <div className="col gap-2">
@@ -837,7 +840,7 @@ export function PagePeek({ id }: { id: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<ScheduleGlyph size="sm" />} count={history.length}>
+                <Card.Header icon={<ClockGlyph size="sm" />} count={history.length}>
                   <Card.Title>Saves</Card.Title>
                 </Card.Header>
                 {history.length > 0 ? (
@@ -982,7 +985,7 @@ function PageHistory({
 
   return (
     <Card>
-      <Card.Header icon={<ScheduleGlyph size="sm" />}>
+      <Card.Header icon={<ClockGlyph size="sm" />}>
         <Card.Title>{`History (${history.length})`}</Card.Title>
       </Card.Header>
       {history.length ? (
@@ -995,7 +998,7 @@ function PageHistory({
               onClick={() => setOpen(rev.version === version ? "" : String(rev.version))}
             >
               <span className="row gap-2">
-                <DescriptionGlyph size="sm" />
+                <FileTextGlyph size="sm" />
                 <span className="mono">v{rev.version}</span>
                 <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
                 {rev.message && <span className="muted truncate">{rev.message}</span>}
@@ -1012,7 +1015,7 @@ function PageHistory({
       )}
 
       {version > 0 && (
-        <div style={{ marginTop: "var(--space-3)" }}>
+        <div style={{ marginTop: "var(--spacing-3)" }}>
           <QueryState error={body.error} loading={body.loading}>
             {body.data ? (
               <>
@@ -1080,7 +1083,7 @@ function PageHistory({
               !body.loading && (
                 <EmptyState
                   size="compact"
-                  icon={<ScheduleGlyph size="xl" />}
+                  icon={<ClockGlyph size="xl" />}
                   title="This node no longer holds that version"
                   description="A page keeps a bounded number of revisions. The entry above is the record that it existed."
                 />
@@ -1120,7 +1123,7 @@ function PageChanges({
   const changes = feed.data?.changes ?? [];
   return (
     <Card>
-      <Card.Header icon={<TimelineGlyph size="sm" />}>
+      <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />}>
         <Card.Title>{`Activity (${changes.length})`}</Card.Title>
       </Card.Header>
       <QueryState

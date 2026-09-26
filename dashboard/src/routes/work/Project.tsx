@@ -49,7 +49,11 @@ import { NumberCell } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { Callout, Card, EmptyState, EmptyValue, Skeleton, Tabs, Tag } from "@crewlethq/ui";
-import { DashboardGlyph, TimelineGlyph, TuneGlyph } from "@crewlethq/icons/glyphs";
+import {
+  LayoutDashboardGlyph,
+  ChartNoAxesGanttGlyph,
+  SlidersVerticalGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
@@ -180,7 +184,7 @@ function ProjectOverview({ detail, chrome }: { detail: WorkProjectDetail; chrome
   return (
     <div className="col gap-4">
       <Card>
-        <Card.Header icon={<DashboardGlyph size="sm" />}>
+        <Card.Header icon={<LayoutDashboardGlyph size="sm" />}>
           <Card.Title>Where the open work stands</Card.Title>
         </Card.Header>
         {/* A FAILED BREAKDOWN IS NOT AN EMPTY ONE. This is the only read that
@@ -206,7 +210,7 @@ function ProjectOverview({ detail, chrome }: { detail: WorkProjectDetail; chrome
       </Card>
 
       <Card>
-        <Card.Header icon={<TuneGlyph size="sm" />}>
+        <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>
           <Card.Title>What this project calls things</Card.Title>
         </Card.Header>
         <div className="col gap-3">
@@ -296,7 +300,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
   return (
     <Card>
       <Card.Header
-        icon={<TimelineGlyph size="sm" />}
+        icon={<ChartNoAxesGanttGlyph size="sm" />}
         count={feed.data ? pageCount(records.length, !!feed.data.next_cursor) : undefined}
         subtitle={pageNote(records.length, !!feed.data?.next_cursor, "change") || undefined}
       >
@@ -471,7 +475,7 @@ function ProjectHead({
       <ObjectHeader
         size={size}
         kind="Project"
-        icon="view_column"
+        icon="columns-3"
         identifier={detail.key}
         title={detail.name}
         status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
@@ -524,7 +528,7 @@ function projectLede(detail: WorkProjectDetail): string {
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (
     <EmptyState
-      icon={<DashboardGlyph size={32} />}
+      icon={<LayoutDashboardGlyph size={32} />}
       title={`No work has been filed in ${detail.name} yet`}
       description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself through your own assistant at /operator/mcp, attributed to your token rather than to a seat."
       // THE WAY OUT IS THE STATE'S OWN, not only the page bar's: a reader who
@@ -550,7 +554,7 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
   return (
     <EmptyState
       size="compact"
-      icon={<DashboardGlyph size="xl" />}
+      icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
       description="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the directory is what this company actually has."
     />

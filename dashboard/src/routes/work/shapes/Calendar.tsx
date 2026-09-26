@@ -71,7 +71,7 @@ export function CalendarView({
             title="The month after"
             onClick={() => onMonth(shiftMonth(month, 1))}
           />
-          <Button size="small" variant="tertiary" onClick={onToday}>
+          <Button size="small" variant="ghost" onClick={onToday}>
             Today
           </Button>
         </div>

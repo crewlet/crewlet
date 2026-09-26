@@ -38,7 +38,7 @@
  * last, because the company is the product and the engine is what runs it.
  */
 
-import type { MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
 
 /** The workspaces, which are the rail's rows. */
 export type Workspace =
@@ -56,7 +56,7 @@ export interface RailRow {
    * data (a navigation table)". The union keeps what the old `IconName`
    * bought — a misspelling is a compile error rather than a blank square.
    */
-  icon: MarkName;
+  icon: GlyphName;
   /** Where the row goes. */
   path: string[];
   /** Every first path segment this workspace owns. */
@@ -82,7 +82,7 @@ export const RAIL: RailRow[] = [
   {
     key: "me",
     label: "My work",
-    icon: "person",
+    icon: "user",
     path: ["me"],
     owns: ["me"],
     hint: "Your priorities, your asks, and what became workable",
@@ -100,7 +100,7 @@ export const RAIL: RailRow[] = [
   {
     key: "company",
     label: "Company",
-    icon: "group",
+    icon: "users",
     path: ["company"],
     owns: ["company"],
     hint: "The charter, the people and the units",
@@ -109,7 +109,7 @@ export const RAIL: RailRow[] = [
   {
     key: "knowledge",
     label: "Knowledge",
-    icon: "book_2",
+    icon: "book-open",
     path: ["knowledge"],
     owns: ["knowledge"],
     hint: "The company's own pages, searched the way an agent searches them",
@@ -118,7 +118,7 @@ export const RAIL: RailRow[] = [
   {
     key: "activity",
     label: "Activity",
-    icon: "timeline",
+    icon: "chart-no-axes-gantt",
     path: ["activity"],
     owns: ["activity"],
     hint: "Turns, coding runs, schedules, asks and the event log",
@@ -127,7 +127,7 @@ export const RAIL: RailRow[] = [
   {
     key: "cost",
     label: "Cost",
-    icon: "token",
+    icon: "coins",
     path: ["cost"],
     owns: ["cost"],
     hint: "Token spend by seat, model, phase and turn; budget headroom",
@@ -140,7 +140,7 @@ export const RAIL: RailRow[] = [
     // no configuration screen.
     key: "admin",
     label: "Admin",
-    icon: "dns",
+    icon: "server",
     path: ["admin"],
     owns: ["admin"],
     hint: "Nodes, integrations, tools, configuration and credentials",
@@ -217,7 +217,7 @@ export interface Destination {
   workspace: Workspace;
   label: string;
   /** A glyph name, for the reason [RailRow.icon] gives. */
-  icon: MarkName;
+  icon: GlyphName;
   path: string[];
   hint: string;
   guarded?: boolean;
@@ -236,7 +236,7 @@ export const DESTINATIONS: Destination[] = [
     key: "me",
     workspace: "me",
     label: "My work",
-    icon: "person",
+    icon: "user",
     path: ["me"],
     hint: "Your priorities, your asks, and what became workable",
   },
@@ -258,7 +258,7 @@ export const DESTINATIONS: Destination[] = [
     key: "work-projects",
     workspace: "work",
     label: "Projects",
-    icon: "view_column",
+    icon: "columns-3",
     path: ["work", "projects"],
     hint: "Every project, who leads it, and how far along it is",
   },
@@ -270,7 +270,7 @@ export const DESTINATIONS: Destination[] = [
     key: "work-history",
     workspace: "work",
     label: "History",
-    icon: "timeline",
+    icon: "chart-no-axes-gantt",
     path: ["work", "history"],
     hint: "Every change to the company's work, over a window you choose",
   },
@@ -278,7 +278,7 @@ export const DESTINATIONS: Destination[] = [
     key: "work-views",
     workspace: "work",
     label: "Saved views",
-    icon: "dashboard",
+    icon: "layout-dashboard",
     path: ["work", "views"],
     hint: "Every saved view, who owns it and which are pinned",
   },
@@ -302,7 +302,7 @@ export const DESTINATIONS: Destination[] = [
     key: "people",
     workspace: "company",
     label: "People",
-    icon: "group",
+    icon: "users",
     path: ["company", "people"],
     hint: "Every seat, what it is doing, and why it stopped",
   },
@@ -310,7 +310,7 @@ export const DESTINATIONS: Destination[] = [
     key: "knowledge",
     workspace: "knowledge",
     label: "Knowledge",
-    icon: "book_2",
+    icon: "book-open",
     path: ["knowledge"],
     hint: "Search the company knowledge base, and browse its containers",
   },
@@ -318,7 +318,7 @@ export const DESTINATIONS: Destination[] = [
     key: "activity",
     workspace: "activity",
     label: "Live now",
-    icon: "bolt",
+    icon: "zap",
     path: ["activity"],
     hint: "What the company is doing at this moment",
   },
@@ -326,7 +326,7 @@ export const DESTINATIONS: Destination[] = [
     key: "turns",
     workspace: "activity",
     label: "Turns",
-    icon: "neurology",
+    icon: "brain",
     path: ["activity", "turns"],
     hint: "Every turn the seats ran, round by round",
   },
@@ -334,7 +334,7 @@ export const DESTINATIONS: Destination[] = [
     key: "runs",
     workspace: "activity",
     label: "Coding runs",
-    icon: "terminal",
+    icon: "square-terminal",
     path: ["activity", "runs"],
     hint: "Detached sandbox runs, live and finished",
   },
@@ -342,7 +342,7 @@ export const DESTINATIONS: Destination[] = [
     key: "schedules",
     workspace: "activity",
     label: "Schedules",
-    icon: "calendar_clock",
+    icon: "calendar-clock",
     path: ["activity", "schedules"],
     hint: "Recurring work, when it next fires and how it last went",
   },
@@ -358,7 +358,7 @@ export const DESTINATIONS: Destination[] = [
     key: "events",
     workspace: "activity",
     label: "Event log",
-    icon: "timeline",
+    icon: "chart-no-axes-gantt",
     path: ["activity", "events"],
     hint: "Everything the engine published, filterable and paged",
   },
@@ -366,7 +366,7 @@ export const DESTINATIONS: Destination[] = [
     key: "cost",
     workspace: "cost",
     label: "Spend",
-    icon: "token",
+    icon: "coins",
     path: ["cost"],
     hint: "Token spend by seat, model, phase and turn",
   },
@@ -382,7 +382,7 @@ export const DESTINATIONS: Destination[] = [
     key: "fleet",
     workspace: "admin",
     label: "Infrastructure",
-    icon: "dns",
+    icon: "server",
     path: ["admin", "fleet"],
     hint: "Nodes, seat leases, domains and config rollout",
     guarded: true,
@@ -391,7 +391,7 @@ export const DESTINATIONS: Destination[] = [
     key: "integrations",
     workspace: "admin",
     label: "Integrations",
-    icon: "cable",
+    icon: "plug",
     path: ["admin", "integrations"],
     hint: "The surfaces agents work on, and whether traffic is arriving",
     guarded: true,
@@ -400,7 +400,7 @@ export const DESTINATIONS: Destination[] = [
     key: "tools",
     workspace: "admin",
     label: "Tools",
-    icon: "build",
+    icon: "wrench",
     path: ["admin", "tools"],
     hint: "Every tool a seat can call, by origin",
     guarded: true,
@@ -409,7 +409,7 @@ export const DESTINATIONS: Destination[] = [
     key: "config",
     workspace: "admin",
     label: "Configuration",
-    icon: "tune",
+    icon: "sliders-vertical",
     path: ["admin", "config"],
     hint: "The active company revision, its history and its diffs",
     guarded: true,
@@ -427,7 +427,7 @@ export const DESTINATIONS: Destination[] = [
     key: "audit",
     workspace: "admin",
     label: "Audit",
-    icon: "description",
+    icon: "file-text",
     path: ["admin", "audit"],
     hint: "Every write a person or a token made, across all four subsystems",
     guarded: true,

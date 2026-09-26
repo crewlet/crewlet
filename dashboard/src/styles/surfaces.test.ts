@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { contrast, paletteStates, parseHex, type Rgb } from "@crewlethq/tokens/test/palette";
@@ -10,31 +10,26 @@ import { contrast, paletteStates, parseHex, type Rgb } from "@crewlethq/tokens/t
  * WHAT A SCREEN'S TINT ACTUALLY RESOLVES TO, measured against the installed
  * palette rather than asserted from the token's name.
  *
- * The calendar's neighbouring-month cells carried `background: var(--surface-2)`
- * — a rule that had rendered nothing since the day it was written. That token is
- * `--color-surface-topbar-lift`, which is the SAME bytes as
- * `--color-surface-subtle` in every state of the cascade, and
- * `--color-surface-subtle` is what every `Card` paints. So the rule painted the
- * card in the card's own colour, the whole grid came back one flat field, and
- * the leading 31 of the previous month was indistinguishable from the 1st.
+ * The calendar's neighbouring-month cells once carried a background that had
+ * rendered nothing since the day it was written: the token it named was
+ * byte-identical to the one every `Card` paints, in every state of the
+ * cascade, so the rule painted the card in the card's own colour and the
+ * leading 31 of the previous month was indistinguishable from the 1st. The
+ * page bar, the rail, the workspace sidebar and every grid were the same
+ * mistake at the other end — each painted the page's own colour and was told
+ * apart from it by a 1px border.
  *
- * THE RAMP IS THE ROOT CAUSE, NOT THE CALL SITE, and it was wrong at both ends.
- * `--surface-1` was `--color-surface-topbar`, which is the same bytes as
- * `--color-surface-background` — so the page bar, the rail, the workspace
- * sidebar, every card and every grid painted THE PAGE'S OWN COLOUR and were
- * told apart from it by a 1px border. `--surface-2` was the card's colour, as
- * above. Twenty-two declarations at one end and thirteen at the other, none of
- * which drew anything.
- *
- * The package has exactly three opaque values and the ramp has two names over
- * the two that are not the page: `--surface-panel` and `--surface-raised`. That
- * is what this file measures — every pair, not the one cell a reader happened
- * to notice.
+ * THE RAMP IS THE ROOT CAUSE, NOT THE CALL SITE. The design system publishes
+ * FOUR opaque rungs, each a name for where a box stands: `frame` (the window
+ * and its navigation), `background` (the sheet everything is read on),
+ * `subtle` (a card) and `elevated` (a block inside a card). This file measures
+ * every pair, that each rung is painted by the element it names, and that no
+ * interaction state paints one — not the one cell a reader happened to notice.
  *
  * ASSERTED IN THE SHEET plus the palette, because jsdom computes no layout and
  * resolves no custom property: no rendered-DOM suite can see a background at
- * all, and a test that asserted "the rule says `--surface-3`" would pass again
- * the moment somebody swapped in another same-as-ground token.
+ * all, and a test that asserted "the rule says `--x`" would pass again the
+ * moment somebody swapped in another same-as-ground token.
  */
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
@@ -69,15 +64,6 @@ function token(css: string, selector: string, property: string): string {
   return m![1]!;
 }
 
-/** Our short name → the package name it aliases, from uilet's one `:root`. */
-function aliases(): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of sheet("uilet.css").matchAll(/^\s*(--[\w-]+):\s*var\((--[\w-]+)\)\s*;/gm)) {
-    out.set(m[1]!, m[2]!);
-  }
-  return out;
-}
-
 /** The product's three states. `base` is the marketing root; no screen paints it. */
 function themes(): [string, Map<string, string>][] {
   const at = (n: string) => readFileSync(require_.resolve(`@crewlethq/tokens/css${n}`), "utf8");
@@ -86,12 +72,8 @@ function themes(): [string, Map<string, string>][] {
 }
 
 /** A token our sheets spell, as the colour a browser paints for it. */
-export function resolved(
-  values: Map<string, string>,
-  alias: Map<string, string>,
-  name: string,
-): Rgb {
-  const raw = values.get(alias.get(name) ?? name);
+export function resolved(values: Map<string, string>, name: string): Rgb {
+  const raw = values.get(name);
   expect(raw, `${name} resolves to nothing`).toBeTruthy();
   const rgb = parseHex(raw!);
   expect(rgb, `${name} is "${raw}", which is not an opaque colour`).not.toBeNull();
@@ -103,17 +85,45 @@ const hex = (c: Rgb) => `${c.r},${c.g},${c.b}`;
 /** Every Card in the product paints this, so it is the ground a screen tint lands on. */
 const CARD_GROUND = "--color-surface-subtle";
 
+/** The four structural rungs, bottom to top. */
+const RUNGS = [
+  "--color-surface-frame",
+  "--color-surface-background",
+  "--color-surface-subtle",
+  "--color-surface-elevated",
+];
+
+/** Every pair of rungs that resolves to one colour in a palette state. */
+export function collisions(values: Map<string, string>): string[] {
+  const seen = new Map<string, string>();
+  const out: string[] = [];
+  for (const rung of RUNGS) {
+    const at = hex(resolved(values, rung));
+    const already = seen.get(at);
+    if (already) out.push(`${rung} is the same colour as ${already}`);
+    seen.set(at, rung);
+  }
+  return out;
+}
+
+/** The rule a kit component's stylesheet paints its root with. */
+function kitSheet(component: string): string {
+  const dir = dirname(require_.resolve("@crewlethq/ui/styles.css"));
+  const file = readdirSync(dir).find((f) => f.startsWith(`${component}-`) && f.endsWith(".css"));
+  expect(file, `@crewlethq/ui ships no ${component} stylesheet`).toBeTruthy();
+  return readFileSync(join(dir, file!), "utf8");
+}
+
 describe("a screen's tint against the ground it lands on", () => {
   // THE ONE THAT GOES RED ON A REVERT. It reads the token the rule names rather
   // than asserting the name, so it also fails for `--bg-sunken`, for any future
   // token that collapses onto the card ground, and for a tokens bump that
   // flattens the ramp.
   test("a neighbouring month's cell is a different colour from the card it sits on", () => {
-    const alias = aliases();
     const name = token(sheet("screens.css"), ".work-cal-cell.out", "background");
     for (const [state, values] of themes()) {
-      const tint = resolved(values, alias, name);
-      const ground = resolved(values, alias, CARD_GROUND);
+      const tint = resolved(values, name);
+      const ground = resolved(values, CARD_GROUND);
       expect(
         hex(tint),
         `${state}: ${name} is the card's own colour, so the rule draws nothing`,
@@ -125,17 +135,16 @@ describe("a screen's tint against the ground it lands on", () => {
   // with a SINGLE out-of-month cell, and one tinted square at the head of a row
   // reads as a day that is highlighted rather than as a day that is elsewhere.
   test("its numeral is a different ink from the month being read, and both stay readable", () => {
-    const alias = aliases();
     const css = sheet("screens.css");
     const inMonth = token(css, ".work-cal-day", "color");
     const out = token(css, ".work-cal-cell.out .work-cal-day", "color");
     const ground = token(css, ".work-cal-cell.out", "background");
     for (const [state, values] of themes()) {
-      const a = resolved(values, alias, inMonth);
-      const b = resolved(values, alias, out);
+      const a = resolved(values, inMonth);
+      const b = resolved(values, out);
       expect(hex(a), state).not.toBe(hex(b));
-      expect(contrast(a, resolved(values, alias, CARD_GROUND)), state).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(b, resolved(values, alias, ground)), state).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(a, resolved(values, CARD_GROUND)), state).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(b, resolved(values, ground)), state).toBeGreaterThanOrEqual(4.5);
       // A STEP RATHER THAN A ROUNDING.
       expect(contrast(a, b), state).toBeGreaterThanOrEqual(2);
     }
@@ -153,41 +162,32 @@ describe("a screen's tint against the ground it lands on", () => {
   // THE ROOT-CAUSE CASE, and the one that would have caught all thirty-five
   // dead declarations at once rather than the single cell a reader noticed.
   //
-  // A ramp is only a ramp if its rungs are different colours. The package
-  // publishes nine surface names over three opaque values, so a name is no
-  // evidence at all: `--surface-1` was `topbar`, which is `background`, and
-  // `--surface-2` was `topbar-lift`, which is `subtle`. Both parsed, both
-  // applied, neither drew anything, and nothing in this suite could tell —
-  // because it measured one call site rather than the ladder.
+  // A ramp is only a ramp if its rungs are different colours. A name is no
+  // evidence at all — two names over one value both parse, both apply and
+  // neither draws anything on the other — so this measures the ladder.
   test("every rung of the ramp is a different colour from every other", () => {
-    const alias = aliases();
-    const RAMP = ["--bg", "--surface-panel", "--surface-raised"];
     for (const [state, values] of themes()) {
-      const seen = new Map<string, string>();
-      for (const rung of RAMP) {
-        const at = hex(resolved(values, alias, rung));
-        const already = seen.get(at);
-        expect(
-          already,
-          `${state}: ${rung} is the same colour as ${already} — a declaration ` +
-            `naming either one draws nothing on the other`,
-        ).toBeUndefined();
-        seen.set(at, rung);
-      }
+      expect(
+        collisions(values),
+        `${state}: a declaration naming either of two equal rungs draws nothing on the other`,
+      ).toEqual([]);
     }
   });
 
-  // AND A CARD STANDS ON RUNG ONE, which is why there is exactly one rung a
-  // card can show. Stated here rather than in prose alone: if the package ever
-  // moves `Card` onto another value, the sentence every surface comment in
-  // this tree rests on stops being true and this is what says so.
-  test("a card paints the panel rung, so only the raised one shows inside it", () => {
-    const alias = aliases();
-    for (const [state, values] of themes()) {
-      expect(hex(resolved(values, alias, "--surface-panel")), state).toBe(
-        hex(resolved(values, alias, CARD_GROUND)),
-      );
+  // AND EACH RUNG IS PAINTED BY WHAT IT NAMES. The window and its navigation
+  // stand on the frame, the page column is the sheet, and a card is the card
+  // rung — which is the kit's own `Card`, read from its stylesheet, because if
+  // the package ever moves `Card` onto another value the sentence every
+  // surface comment in this tree rests on stops being true and this is what
+  // says so.
+  test("the sidebar paints the frame, the page the sheet, and a card the card rung", () => {
+    const frame = sheet("frame.css");
+    for (const sidebar of [".app", ".rail", ".workspace-side"]) {
+      expect(token(frame, sidebar, "background"), sidebar).toBe("--color-surface-frame");
     }
+    expect(token(frame, ".page", "background")).toBe("--color-surface-background");
+    expect(token(frame, ".page-bar", "background")).toBe("--color-surface-background");
+    expect(token(kitSheet("Card"), ".crewlet-card", "background-color")).toBe(CARD_GROUND);
   });
 
   // AN INTERACTION STATE IS NOT A RUNG.
@@ -206,7 +206,6 @@ describe("a screen's tint against the ground it lands on", () => {
   // parent's colour and the block lost its hover affordance with nothing in
   // the diff to read.
   test("no interaction state paints a structural rung", () => {
-    const RUNGS = ["--bg", "--surface-panel", "--surface-raised"];
     const STATES = /:hover|:focus|:active/;
     const offenders: string[] = [];
     let states = 0;
@@ -239,18 +238,18 @@ describe("a screen's tint against the ground it lands on", () => {
     const states = themes();
     expect(states).toHaveLength(3);
     for (const [, values] of states) expect(values.size).toBeGreaterThan(20);
-    expect(aliases().get("--surface-raised")).toBe("--color-surface-elevated");
   });
 
   // AND IT CAN TELL. The mutation the cases above are worth nothing without:
-  // exercised against a fixture whose tint aliases straight onto the card
-  // ground, `resolved` must report the collision.
-  test("it reports a tint that collapses onto the card ground", () => {
-    const alias = new Map([["--fake-tint", CARD_GROUND]]);
+  // a palette in which two rungs collapse must be reported by the same
+  // measurement the ladder case makes.
+  test("it reports a rung that collapses onto another", () => {
     for (const [, values] of themes()) {
-      expect(hex(resolved(values, alias, "--fake-tint"))).toBe(
-        hex(resolved(values, alias, CARD_GROUND)),
-      );
+      const flattened = new Map(values);
+      flattened.set("--color-surface-elevated", values.get(CARD_GROUND)!);
+      expect(collisions(flattened)).toEqual([
+        "--color-surface-elevated is the same colour as --color-surface-subtle",
+      ]);
     }
   });
 });

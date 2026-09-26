@@ -19,7 +19,7 @@
  */
 
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
-import { BANDS } from "~/contract/spend.ts";
+import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
 import { RANGE_MS, isRange, spanOf } from "~/lib/range.ts";
 import type { Window } from "~/lib/range.ts";
 import type { SeriesPoint, TokenSeries } from "~/protocol/types.ts";
@@ -46,6 +46,21 @@ export function spendDays(w: Window): number {
 export function bandColor(band: string): string {
   const found = BANDS.find((b) => b.value === band);
   return found ? dataColor(found.series - 1) : DATA_COLOR_OTHER;
+}
+
+/**
+ * A PHASE's colour: the hue of the band the engine folds it into.
+ *
+ * `PHASE_BANDS` is `tokens.PhaseBand` by phase, gated against it, so a phase
+ * is drawn in one colour on every chart — and a phase this build has never
+ * heard of takes the Auxiliary band's, which is where the engine counts it.
+ */
+export function phaseColor(phase: string): string {
+  const key = (phase || "").toLowerCase();
+  const band: string = Object.hasOwn(PHASE_BANDS, key)
+    ? PHASE_BANDS[key as keyof typeof PHASE_BANDS]
+    : "auxiliary";
+  return bandColor(band);
 }
 
 /** A phase band's label, or the key itself for a band this build has not met. */

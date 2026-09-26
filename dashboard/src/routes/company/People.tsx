@@ -18,7 +18,7 @@ import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
 import { Card, cx, EmptyState, EmptyValue, Input, Tag } from "@crewlethq/ui";
-import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { UsersGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` commits the option the arrows land on. Both strips here
 // drive a `useTab`, which pushes a history entry — and the view strip swaps the
@@ -389,7 +389,7 @@ export function People() {
 
       {view === "seats" && !groups.length && (
         <EmptyState
-          icon={<GroupGlyph size={32} />}
+          icon={<UsersGlyph size={32} />}
           title={q ? `No seat matches “${q}”` : "This company has no seats"}
           description={
             q

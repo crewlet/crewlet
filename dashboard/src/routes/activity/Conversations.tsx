@@ -30,15 +30,15 @@ import { useCallback, useMemo } from "react";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
-import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
+import { useOrg, useSeatBadgeOf } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { elapsedMs, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
@@ -361,6 +361,7 @@ export function ChannelPeek({ id }: { id: string }) {
 }
 
 export function Conversations({ channelId }: { channelId?: string }) {
+  const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const seatName = useSeatName();
   const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
@@ -432,13 +433,13 @@ export function Conversations({ channelId }: { channelId?: string }) {
           }
         />
         <StatCard
-          icon={<ChatGlyph size="xs" />}
+          icon={<MessageSquareGlyph size="xs" />}
           label="Messages"
           value={rows.reduce((n, c) => n + c.messages, 0)}
           sub={cut ? "across the most recent channels only" : "across every channel in the record"}
         />
         <StatCard
-          icon={<GroupGlyph size="xs" />}
+          icon={<UsersGlyph size="xs" />}
           label="Pairs"
           value={new Set(rows.map((c) => `${c.requester}->${c.target}`)).size}
           sub={cut ? "among the most recent channels only" : "distinct requester/target pairs"}
@@ -488,13 +489,13 @@ export function Conversations({ channelId }: { channelId?: string }) {
                   // draw: both are anchors and every row here is one now, and
                   // an anchor inside an anchor is markup no browser agrees
                   // about. The seat is a link again in the peek's own facts.
-                  cell: (c) => <TextCell icon="memory">{seatName(c.requester)}</TextCell>,
+                  cell: (c) => <SeatLabel {...seatBadge(c.requester)} />,
                 },
                 {
                   key: "to",
                   header: "Asked",
                   sortValue: (c) => seatName(c.target),
-                  cell: (c) => <TextCell icon="memory">{seatName(c.target)}</TextCell>,
+                  cell: (c) => <SeatLabel {...seatBadge(c.target)} />,
                 },
                 {
                   key: "messages",

@@ -139,3 +139,37 @@ test("the seat in the address is sent to the engine as its handle", async () => 
   expect(asked[0]).toMatchObject({ seat: "ceo" });
   expect(asked[0]).not.toHaveProperty("role");
 });
+
+// A ROW NAMES ITS SEAT BY THE SEAT'S BADGE, AND ITS ITEM BY ONE UNBROKEN KEY.
+//
+// The seat cell drew a processor glyph where every other surface identifies a
+// seat by its badge; the key after the summary broke at its hyphen into
+// `ENG-` over `22`, making that row taller than its neighbours. `.item-key`
+// is what holds the key on one line (base.css), and the summary truncates
+// instead.
+test("a row draws the seat's badge and its item key as one token", async () => {
+  mount([
+    row("t-1", "reviewed the work", {
+      complete: true,
+      work_item: { backend: "native", id: "x", key: "ENG-22", project: "ENG" },
+    }),
+  ]);
+  await screen.findByText("reviewed the work");
+  const r = rowOf("reviewed the work");
+  expect(r.querySelector(".cell-seat .crewlet-avatar")).not.toBeNull();
+  const key = [...r.querySelectorAll("span")].find((s) => s.textContent === "ENG-22");
+  expect(key?.classList.contains("item-key")).toBe(true);
+});
+
+// THE CHART'S HINT GIVES WAY BEFORE ITS TITLE. It sat in the header's
+// actions, which never shrink, so on a phone the title read "W" beside a
+// whole sentence; the subtitle is the part the kit lets give way first.
+test("the chart's hint is in the header's subtitle, not its actions", async () => {
+  const { container } = mount([row("t-1", "one turn", { complete: true })]);
+  await screen.findByText("one turn");
+  const subtitle = container.querySelector(".crewlet-card__subtitle");
+  expect(subtitle?.textContent).toMatch(/click one to narrow the window/);
+  expect(container.querySelector(".crewlet-card__header-actions")?.textContent ?? "").not.toMatch(
+    /narrow the window/,
+  );
+});

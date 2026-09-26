@@ -25,11 +25,11 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  BuildGlyph,
-  CableGlyph,
-  Package2Glyph,
+  WrenchGlyph,
+  PlugGlyph,
+  PackageGlyph,
   SearchGlyph,
-  WarningGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState, RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
@@ -379,7 +379,7 @@ function ToolBody({ name }: { name: string }) {
     return (
       <EmptyState
         size="compact"
-        icon={<BuildGlyph size="xl" />}
+        icon={<WrenchGlyph size="xl" />}
         title={`No tool called “${name}”`}
         description="Builtins register at boot and MCP tools are discovered from the servers in mcp_servers. A tool whose server failed to start, or whose name has changed, is not in this node's registry."
       />
@@ -529,7 +529,7 @@ function ToolHeader({ name }: { name: string }) {
   return (
     <ObjectHeader
       kind="Tool"
-      icon="build"
+      icon="wrench"
       identifier={tool.title ? tool.name : undefined}
       title={tool.title || tool.name}
       status={<Tag variant={capabilityVariant(capability)}>{capability}</Tag>}
@@ -565,7 +565,7 @@ export function ToolPeek({ name }: { name: string }) {
       <ObjectHeader
         size="peek"
         kind="Tool"
-        icon="build"
+        icon="wrench"
         // THE NAME IN ONE PLACE. A server that advertised a human title gets
         // both — the identifier a config names and the words a person reads —
         // and one that did not gets the name as the title alone, rather than
@@ -703,25 +703,25 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
       <Card padding="none">
         <StatGroup columns={4}>
           <StatCard
-            icon={<BuildGlyph size="xs" />}
+            icon={<WrenchGlyph size="xs" />}
             label="Total"
             value={tools.length}
             sub="across every origin"
           />
           <StatCard
-            icon={<Package2Glyph size="xs" />}
+            icon={<PackageGlyph size="xs" />}
             label="Built in"
             value={builtins}
             sub="shipped by the engine itself"
           />
           <StatCard
-            icon={<CableGlyph size="xs" />}
+            icon={<PlugGlyph size="xs" />}
             label="From MCP servers"
             value={mcp}
             sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
           />
           <StatCard
-            icon={<WarningGlyph size="xs" />}
+            icon={<TriangleAlertGlyph size="xs" />}
             label="Can write"
             value={writes}
             sub={
@@ -775,7 +775,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
 
       {!tools.length ? (
         <EmptyState
-          icon={<BuildGlyph size="xl" />}
+          icon={<WrenchGlyph size="xl" />}
           title="No tools are registered"
           description="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
         />

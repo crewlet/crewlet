@@ -65,7 +65,7 @@ import { DisplayMenu } from "./toolbar/DisplayMenu.tsx";
 import { FilterChips } from "./toolbar/FilterChips.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { Button, Callout, EmptyState, IconButton, Input, Skeleton, Tabs } from "@crewlethq/ui";
-import { CloseGlyph, DashboardGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { XGlyph, LayoutDashboardGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel this row does not control. The scope
@@ -1108,7 +1108,7 @@ function EmptyList({
 export function NoWorkYet() {
   return (
     <EmptyState
-      icon={<DashboardGlyph size={32} />}
+      icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
       description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
     />
@@ -1162,7 +1162,7 @@ function SubstringSearch({
       <IconButton
         size="sm"
         variant="ghost"
-        icon={<CloseGlyph size="sm" />}
+        icon={<XGlyph size="sm" />}
         label="Stop narrowing by key or title"
         onClick={() => {
           onChange("");

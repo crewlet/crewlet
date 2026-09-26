@@ -118,6 +118,14 @@ export function Histogram({
             height: `${(b.count / peak) * 100}%`,
             minHeight: b.count === 0 ? EMPTY_PX : MIN_PX,
           };
+          // THE CONTROL IS THE SLOT AND THE BAR IS A FILL INSIDE IT. Drawn as
+          // the slot itself, a seven-day window holding one busy day painted a
+          // solid block a seventh of the card wide — a panel rather than a
+          // quantity — which is the defect the spend chart's columns already
+          // had fixed. The fill takes the kit's column proportion (see
+          // `.histogram-fill`), while the click target stays the whole slot,
+          // because a narrower bar is no reason for a smaller control.
+          //
           // A BUTTON WHEN IT DOES SOMETHING AND A DIV WHEN IT DOES NOT, rather
           // than a button that ignores the click: a keyboard reader tabbing
           // through eighty inert controls is worse served than one that is
@@ -130,17 +138,19 @@ export function Histogram({
               title={title}
               aria-label={title}
               data-empty={b.count === 0 ? "" : undefined}
-              style={size}
               onClick={() => onPick({ from: at, to: at + step })}
-            />
+            >
+              <span className="histogram-fill" style={size} />
+            </button>
           ) : (
             <div
               key={b.at}
               className="histogram-bar"
               title={title}
               data-empty={b.count === 0 ? "" : undefined}
-              style={size}
-            />
+            >
+              <span className="histogram-fill" style={size} />
+            </div>
           );
         })}
         {/* THE TOTAL IS THE CALLER'S, stated rather than summed by the reader

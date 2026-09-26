@@ -22,19 +22,29 @@ anything — and an eight-family palette shared between "which agent", "which
 phase" and "which event category" makes one amber mean three things at once on
 one screen.
 
-So colour is spent in exactly four places:
+So colour is spent in exactly three places:
 
 | | What it means | How many |
 |---|---|---|
-| **Status** | positive · caution · critical · info | 4, fixed |
-| **Phase** | onboarding · execute · review | 3, fixed |
-| **Accent** | *where the reader is* — the active nav row, the primary button, the focus ring, the on filter | 1 |
-| **Data** | a chart series, inside a chart that carries a legend | 5 + a neutral residual |
+| **State** | *what a piece of work is doing* — info is working, warning needs a person, danger is stopped, success is done | 4, fixed |
+| **Accent** | *where the reader is, and what to do* — the primary action, the focus ring, the attention count, the on filter, the reader's own badge (a ring) | 1 |
+| **Data** | a chart series, inside a figure that names it (a legend, or the label of a one-series figure such as a meter) | 4 + a neutral residual |
 
-Everything else — a seat, a unit, an event category, an integration's state, a
-node, a tool origin — is **neutral**, and its identity is carried by its name,
-its icon and its position. Those are stable, legible, and do not run out at
-eight.
+Everything else — a seat, a unit, a **phase**, an event category, an
+integration's state, a node, a tool origin — is **neutral**, and its identity
+is carried by its name, its icon and its position. Those are stable, legible,
+and do not run out at eight.
+
+A phase is a category, so it is its **word** on the neutral pill. It used to be
+a fourth use of colour with three hues of its own, and the design system
+removed that family in `@crewlethq/tokens` 0.5.0: beside a state badge the
+state has to be the one coloured thing on the row. Inside a figure a phase is a
+series like any other, drawn in the hue of the **band** the engine folds it
+into (`tokens.PhaseBand`: execute and a coding run are Execute, review is
+Review, delegated workers are Workers, and the rest are Auxiliary), so one
+phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
+fold written out by phase, and `internal/api/queries` holds it against the
+engine's in both directions.
 
 The one exception is a **third-party app's own mark** on the Integrations
 screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
@@ -85,15 +95,27 @@ density scale, the faces and the document baseline, in that order, above every
 other import in `dashboard/src/main.tsx`. Above, because an import is
 evaluated in source order and the components carry their own stylesheets, and
 the baseline has to be the thing a component rule outranks rather than the
-other way round.
+other way round. The dashboard's own sheets (`tokens.css`, `base.css`,
+`components.css`, `frame.css`, `screens.css`) come last.
+
+**There is no alias layer.** Every stylesheet in `dashboard/src` reads the
+package's tokens under their own names — `--color-text-tertiary`,
+`--spacing-4`, `--size-control-md`, `--shadow-focus` — and `tokens.css` keeps
+only three values that are this application's own (a row list's inset, the
+toolbar's band and the sticky offset under it). A short name for a token is a
+second name for one value: it hides a token the package renames behind a name
+that still parses, and it is where the two come to disagree about which value
+a word means. `styles/tokens.test.ts` refuses a stylesheet of ours that
+DECLARES any `--color-*` or `--shadow-*`, and reads every `var()` against the
+installed package.
 
 The rule table and the colour maths are the package's own,
 `@crewlethq/tokens/test/palette`, so the design system and this application
 cannot come to disagree about what a floor is.
 `dashboard/src/styles/palette.test.ts` runs them over the INSTALLED
-stylesheets in that same import order, in **every theme state** (light, dark
-by media query, dark by attribute) and over **every composited surface a token
-can land on**, including a hovered row inside a nested panel, which is where a
+stylesheets in that same import order, in **every theme state** (dark on the
+bare root, light by media query, light by attribute) and over **every
+composited surface a token can land on**, including a hovered row inside a nested panel, which is where a
 ramp anchored to the panel fill quietly falls under its floor. The engine
 measures as well as the package because a tokens release that lowered a ratio
 would otherwise arrive here through an auto-merged bump with nothing in `make
@@ -110,10 +132,9 @@ What is measured, and the floor each clears:
 | every fill step as a MARK on the page surfaces it sits on | 3:1 |
 | `--color-text-on-accent` on the accent, and white on danger | 4.5:1 |
 | the focus ring against every surface | 3:1 |
-| the three phase hues, pairwise, under normal / protan / deutan vision | ΔE 10 |
-| the four status hues, pairwise, under all three | ΔE 10 |
-| adjacent data hues, in series order, under all three | ΔE 9 |
-| every data hue against the reserved danger hue | ΔE 14 |
+| the four state hues, pairwise, under normal / protan / deutan vision | ΔE 10 |
+| adjacent data hues, in series order, under all three | ΔE 9, and ΔE 15 under normal vision |
+| every data hue against the reserved danger hue | ΔE 14 normal, 8 dichromat |
 | every other hue against the accent, under all three | ΔE 10 normal, 8 dichromat |
 | the neutral ramp's chroma | ≤ 2.2 |
 
@@ -134,18 +155,23 @@ fall back to what it used to be — it takes its whole declaration with it.
 `-ink` step is text; a fill step is a mark or a background. Mixing them is how
 the screen this replaces shipped role badges at 1.63:1 — an inline
 `background:` with a hue token in it and the default text colour left on top.
-Only `--accent` is ever a fill behind text. A status is a soft tint carrying its
-own ink step, never a solid block with a label on it, which is also what lets
-the status fills be light enough to read as marks on a dark ground.
+Only `--color-brand-accent` is ever a fill behind a word, under
+`--color-text-on-accent` (and the danger fill behind a destructive action's
+white label, which the package measures to 4.5:1). A state is a soft tint
+carrying its own ink step, never a solid block with a label on it, which is
+also what lets the state fills be light enough to read as marks on a dark
+ground.
 
 ### The ground
 
-Light is the base definition; dark is a token override, declared twice — once
-under `prefers-color-scheme` and once under `[data-theme="dark"]` — so the OS
-setting works AND an explicit choice wins in both directions. A test asserts
-the two blocks agree, and that every colour has a value on bare `:root`: a
-colour whose only definition is inside a media query is a colour that
-disappears for somebody.
+**Dark first.** The design system paints dark on the bare root and light under
+`@media (prefers-color-scheme: light) :root:not([data-theme="dark"])` and
+`:root[data-theme="light"]`, so a browser that reports no preference gets the
+palette the product is drawn in, the OS setting works, and an explicit choice
+wins in both directions. The package's own suite compares the two light blocks
+key for key. The dashboard adds no theme block of its own — `tokens.css`
+declares no colour at all — so there is nothing here for the two to disagree
+about.
 
 The dark ground is deliberately **not** `#000`. An operator reads this page for
 hours, and pure black behind near-white text is the specific combination that
@@ -154,38 +180,44 @@ with `rgba(176, 152, 255, …)`, so the whole product read violet and the accent
 had nothing to separate itself from. A near-neutral ground with one saturated
 accent is what makes the accent mean "here".
 
-**Three opaque rungs, and the names say which.** The design system publishes
-nine surface names over exactly three colours in every state of the cascade:
-the page, one step above it, and one step above that. `--bg` is the page,
-`--surface-panel` is the chrome, a card, a panel or a grid, and
-`--surface-raised` is the only step a panel can show — a block inside a card,
-a grid's head, a badge on the rail, a pill lifted out of a well. Below that
-there is `--surface-inset`, a translucent recess that darkens the ground in
-light and lifts it in dark, so it reads as a well on whatever it lands on.
-There is no fourth rung: a block inside a block inside a card reaches for a
-border or the inset, not for a colour that does not exist.
+**Four opaque rungs, and each is painted by what it names.** `--color-surface-
+frame` is the window and its navigation — the rail and the workspace sidebar
+stand on it; `--color-surface-background` is the SHEET, the page column
+everything is read on, and a bar inside the page (the page bar) stands on it
+too; `--color-surface-subtle` is a card, which is what the kit's `Card` paints;
+and `--color-surface-elevated` is the one step a card can show — a block inside
+a card, a grid's head, a chip, a well. Below them `--color-surface-inset` is a
+translucent recess that reads as a well on whatever it lands on. A card is
+found by its HAIRLINE as much as its rung — the sheet-to-card step is nearly
+flat on purpose, and a page of cards each lifted by a large step is a relief
+map.
 
-The ramp was four names over those three values, and the collision was at the
-bottom, where the chrome lives. `--surface-1` resolved to the page's own
-colour, so the page bar, the rail, the workspace sidebar, every card and every
-grid painted the page and were told apart from it by a 1px border — twenty-two
-declarations, none of which drew anything. `--surface-2` was the other end of
-it: the colour every `Card` already paints, so inside a card it drew nothing
-either, which is how the calendar's out-of-month cells came back as a uniform
-grid. A numbered ramp cannot state which rung a thing stands on, so nothing
-about either rule looked wrong in the file. The rungs are named after where
-they stand, and `styles/surfaces.test.ts` measures them against the installed
-palette: every rung a different colour from every other, in all three states,
-and a card on the panel rung so the sentence every surface comment rests on
-stays true across a tokens bump.
+The ramp was once four numbered names over three values, and the collision
+was at the bottom, where the chrome lives: the rail, the sidebar, every card
+and every grid painted the page's own colour and were told apart from it by a
+1px border — twenty-two declarations, none of which drew anything — and at the
+top, the calendar's out-of-month cells painted the card's own colour. A
+numbered ramp cannot state which rung a thing stands on, so nothing about
+either rule looked wrong in the file. `styles/surfaces.test.ts` measures the
+rungs against the installed palette — all four a different colour from every
+other in every state, the frame under the rail and the sidebar, the sheet under
+the page, the card rung under the kit's `Card` — and refuses an interaction
+state (`:hover`, `:focus`, `:active`) that paints a structural rung rather than
+an overlay.
 
 ### Type
 
-Two self-hosted variable faces — **Inter** and **JetBrains Mono**, the `latin`
-and `latin-ext` subsets, 176 KB, embedded like every other asset. They replace
-three families fetched from a CDN, which was the tree's ONLY external runtime
-reference: on an air-gapped engine — a supported deployment — every face fell
-back to a system font the design was never measured against.
+Two self-hosted variable faces — **Geist** and **Geist Mono**, the `latin`
+and `latin-ext` subsets, 83,736 bytes for the four files, embedded like every
+other asset and served from `/static/dashboard/fonts/` beside their OFL text.
+They arrive from `@crewlethq/tokens`, whose 0.5.0 replaced Inter and JetBrains
+Mono with them. Self-hosted because the faces this tree once had were fetched
+from a CDN, which was its ONLY external runtime reference: on an air-gapped
+engine — a supported deployment — every face fell back to a system font the
+design was never measured against. `TestTheBuiltDashboardIsWhole` requires
+exactly the four Geist faces in the built stylesheet, each under `fonts/`.
+
+The document's line is the kit's: 13px on 1.45.
 
 Nine sizes, `--font-size-2xs` … `--font-size-3xl`, and **they are the only
 sizes in the product**. The system this replaces had 194 `font-size` declarations across 14
@@ -199,18 +231,21 @@ width as it counts makes the column beside it jitter.
 
 ### Space, radius, elevation
 
-A 4px base scale, with `--density` multiplying the tokens that set row height
-and padding — so compact mode is a real change to every surface. Four radii and
-a pill (the previous system had ten literal radii across 44 declarations).
-Three elevation steps: on the dark theme a panel is lifted by the light along
-its top edge, because a shadow is invisible against near-black; on light the
-shadow does the work. One recipe, two grounds, no second component.
+A 4px base scale, with the package's `--density` multiplying every spacing and
+size token — rows, controls, gaps — so compact mode is a real change to every
+surface. A row is `--size-row-md` (36px), a control `--size-control-md` (30px),
+and the rail's rows `--size-nav-row` (30px), all the kit's own steps rather
+than literals written to line up with them. Four radii and a pill (the previous
+system had ten literal radii across 44 declarations). **The card is flat:** it
+is found by its rung and its hairline, and a shadow is spent only on what
+stands OVER the page — a popover, a dialog, the command palette. The focus
+ring is the package's `--shadow-focus`.
 
 The sidebar's inset is the one place that scale is split in two, because a rail
-row has two edges that want different things. `--nav-gutter` insets the
+row has two edges that want different things. `--size-nav-gutter` insets the
 rail, and it is where a row's own background, hover and active tint begin, so
 it decides how much of the rail's width the click target covers.
-`--nav-row-pad` insets
+`--size-nav-row-pad` insets
 the content inside that row. Every glyph in the rail therefore lands on the sum
 of the two, and anything with no row of its own — the brand lockup, the group
 labels — adds them rather than carrying a literal. That is what lets the rows
@@ -459,12 +494,12 @@ domain's at 134 and the icon-bearing parent's at 128. Activity's seat list does
 it over time rather than down the list — a seat that is working carries a dot
 and an idle one does not, so the column combs in and out as the company works.
 `.side-mark` is a 16px slot on every row, which is the same rule
-`--nav-gutter` plus `--nav-row-pad` already states for the rail beside it: every
+`--size-nav-gutter` plus `--size-nav-row-pad` already states for the rail beside it: every
 row at one depth starts its text on ONE vertical line.
 
 **The rail is as wide as its foot, not as its longest label.** `--rail-w` is
 composed — `--rail-foot-w` plus the foot's inset plus the rail's own border —
-rather than picked. It was a flat 80px, which holds "Knowledge" at `--fs-3xs`
+rather than picked. It was a flat 80px, which holds "Knowledge" at `--font-size-2xs`
 comfortably and does not hold the theme and density switches under it: a pill
 row is three hit targets at `--size-target-min`, which is 24px because WCAG 2.2
 says a pointer target may not stand smaller, plus two 2px gaps and the row's own
@@ -482,7 +517,7 @@ own ratio is not 3:2 draws the mark smaller than the box and pads the rest. It
 was given a 24px SQUARE, which drew 24px of mark across 16px of art and
 letterboxed the other 8: a cell 96px wide held a 24×16 speck. Neither axis is
 given a size now. Both are given a MAXIMUM over the file's intrinsic size —
-`max-height` at `--control-h`, the step every control in the same
+`max-height` at `--size-control-md`, the step every control in the same
 `--page-bar-h` band takes, and `max-width` at the column less the inset
 `.rail-rows` already takes — so whichever binds decides the box and the other
 derives from the ratio. Open, the height binds and the mark is 48×32; in the
@@ -490,7 +525,7 @@ derives from the ratio. Open, the height binds and the mark is 48×32; in the
 
 A maximum on *both* axes rather than a size on one and a clamp on the other,
 because a clamp does not carry through a definite size: `height:
-var(--control-h)` with a `max-width` gave a 39×32 box at ratio 1.219 in the
+var(--size-control-md)` with a `max-width` gave a 39×32 box at ratio 1.219 in the
 narrow column and letterboxed the mark inside it exactly as the square had.
 CSS 2.1 § 10.4's table rescales the other axis only where that axis was itself
 derived; a height the author stated is a used value the clamp never revisits.
@@ -684,9 +719,9 @@ things follow from that, and each is a rule a new column has to keep:
   labelled ones, which reads as a rendering fault rather than as a value.
   `app/source.test.ts` is what stops one reaching a screen.
 - **A cell with nothing in it is not a line.** A column draws no value on a row
-  that has none — `PriorityMark` renders null for `normal`, which nearly every
-  task is, and every mark whose rule is "nothing is drawn for the default" does
-  the same. In the table that is an empty track under a head, which is correct
+  that has none — `PriorityMark` renders null for `none`, which a task nobody
+  prioritised carries, and every mark whose rule is "nothing is drawn for no
+  value" does the same. In the table that is an empty track under a head, which is correct
   and is what keeps the row's columns lined up. Here the head is gone and the
   label is the CELL's own, so the card opened with `PRIORITY` alone on a line
   with nothing beside it, on every ordinary row — the labelled form of the
@@ -729,11 +764,11 @@ above it is a word. Measured on a knowledge page's header: `v1` under a 146px
 save", beside three note-less facts at 66 to 75px, so the gaps between the five
 labels ran 85, 162, 90, 169 and the row read as five columns placed at random.
 A note is held to sixteen characters — about two short words a line at
-`--fs-3xs`, roughly the width of the label above it — which brought those gaps
+`--font-size-2xs`, roughly the width of the label above it — which brought those gaps
 to 85, 144, 90, 144. `text-wrap: balance` is what makes the wrap look
 deliberate: at a hard 18ch the same two notes left "2m ago" and "a save" alone
 on a second line, and an orphan reads as a fault. This is deliberately not
-`--measure`: that is a reading measure for prose somebody sits down with, and a
+`--size-measure`: that is a reading measure for prose somebody sits down with, and a
 caption under a fact is read in one glance beside the thing it qualifies.
 
 **A trail of one segment is not a trail.** The knowledge page draws its
@@ -769,26 +804,34 @@ four clauses that travel together because each one was got wrong separately:
   titles the NAME, because there the title is the only place the answer is.
   Either way the cell says more than it draws, and neither spends the title on
   what is already on screen.
-- **Where an avatar is drawn it is initials on a NEUTRAL disc**, built from the
-  resolved name rather than from the handle — initials off a handle make every
-  seat whose handle begins with the same letter the same mark. It takes no
-  colour, by [the one rule](#the-one-rule): a seat is identity, and identity is
-  carried by the name, the mark and the position. The only variant it has is
-  STRUCTURAL — the dashed ring a HUMAN seat wears, which says the engine does
-  not run it — and **every** cell that draws a person resolves the kind and
-  draws it. That is the same resolution as the name and it arrives with it:
+- **Where an avatar is drawn it is initials on a NEUTRAL badge**, built from
+  the resolved name rather than from the handle — initials off a handle make
+  every seat whose handle begins with the same letter the same mark. It takes
+  no colour, by [the one rule](#the-one-rule): a seat is identity, and identity
+  is carried by the name, the mark and the position. The only variant it has is
+  STRUCTURAL — its outline, a circle for a person and a squircle for an agent —
+  and **every** cell that draws a person resolves the kind and draws it. That is the same resolution as the name and it arrives with it:
   `seatLookup` answers both, the row chrome carries both, and the two cells a
   screen hands them to (`SeatCell`, `SeatChip`) take the same `kind` prop, so a
   caller cannot thread the name and drop the kind. Half-threaded is what this
   was: `SeatCell` took the kind and the compact `Assignee` had no way to be
-  handed one, so one human seat was a dashed disc in the table column set and a
-  solid one in the list — on the same grid, over the same row — while eighteen
-  of the nineteen seat chips passed nothing at all. A kind the chart does not
-  hold draws the NEUTRAL disc: a renamed or removed seat is a third answer, not
-  an agent. The two places that pass a literal `agent` are the ones where the
-  chart cannot be wrong — a turn's seat and a coding run's seat, which the
-  engine RUNS, and it never runs a human seat — and they say so at the call
-  rather than leaving a solid disc that reads as a kind nobody threaded. A
+  handed one, so one human seat was a person in the table column set and an
+  agent in the list — on the same grid, over the same row — while eighteen of
+  the nineteen seat chips passed nothing at all. A handle the chart does not
+  hold is resolved from the RECORD next: every change row and comment carries
+  its writer's `actor_kind`/`author_kind`, and `kindWithAuthors` layers those
+  under the chart's answer — `human` and `operator` draw a person, `agent` an
+  agent. That is what an operator needs: a write through an operator token is
+  authored by the TOKEN's name, which no chart lists, and drawn from the chart
+  alone the founder who filed a task was a squircle. A handle with neither
+  answer takes the kit's default, the agent's squircle — the kit has no third
+  outline — and is never drawn as a person, since a circle there would claim an
+  answer nothing gave. Inside a row that is itself a link, `SeatLabel` draws
+  the same badge and name with no anchor of its own, so a seat column is never
+  a processor glyph where every other surface draws the seat's badge. The two places that pass a literal `agent` are the
+  ones where the chart cannot be wrong — a turn's seat and a coding run's seat,
+  which the engine RUNS, and it never runs a human seat — and they say so at
+  the call rather than leaving the default to stand for a kind nobody threaded. A
   badge drawn BESIDE the printed name is decorative, or the row reads "Ada
   Lovelace avatar, Ada Lovelace"; a badge drawn ALONE keeps its accessible
   name, or the columns that draw no word announce the assignee as nothing at
@@ -796,9 +839,8 @@ four clauses that travel together because each one was got wrong separately:
 - **The KIND is marked only where it is not the ordinary one.** Who wrote
   something is a person and a kind — `agent`, `human`, `operator`, `system` —
   and `agent` is what nearly every write in an agent company is. A mark on
-  every row separates nothing, which is the same reason `normal` priority draws
-  no mark: the tag exists so that the writes that were NOT an agent's stand
-  out. The word checked against is the engine's own, and each cell spelling it
+  every row separates nothing: the tag exists so that the writes that were NOT
+  an agent's stand out. The word checked against is the engine's own, and each cell spelling it
   separately is how one of them came to check for a kind the engine does not
   mint and mark every row in its column.
 
@@ -809,14 +851,14 @@ woke, a saved view's owner, a page's watchers and commenters and a delivery's
 recipient — and the rule is written here rather than at any one of them because
 the whole point is that the same person looks the same on every screen they
 appear on. `components/work.test.tsx` and `routes/work/shapes/Grid.test.tsx`
-hold the ring over the pieces and over the grid's two column sets.
+hold the outline over the pieces and over the grid's two column sets.
 
 ### A dropdown's list sizes to its options
 
 The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
 and for a while this tree carried three rules compensating for it. All three
-are gone: they were fixed in the package, and `0.4.4` is the first release that
-carries them.
+are gone: they were fixed in the package, and `0.4.4` was the first release
+that carried them.
 
 What they were is worth keeping, because the shapes recur. A row in the panel
 shrank below its own content — an explicit `min-height` on a flex item replaces
@@ -1069,7 +1111,7 @@ none of it:
 
 | Piece | What it is |
 |---|---|
-| `AppRail` | the workspaces, the badges, the engine pill, theme and density. The engine pill reads only the health slice (`useEngineHealth()`, the `health` push kept whole) and the connection — never a query of its own — and names the fleet's size in its title from `health.nodes`, or "node count unavailable" when the engine could not count (`nodeCountLabel`). `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
+| `AppRail` | the workspaces, the badges, the engine pill, theme and density. The engine pill reads only the health slice (`useEngineHealth()`, the `health` push kept whole) and the connection — never a query of its own — and names the fleet's size in its title from `health.nodes`, or "node count unavailable" when the engine could not count (`nodeCountLabel`). `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for. On the bar the eight rows scroll sideways and the ACTIVE row is scrolled into view on every change of workspace (`revealInline`, the strip alone, never the page behind it); the engine pill is its dot there, as at 960, because with its word the foot pushed the current destination under the scroller's edge. The pill's accessible name carries the word at every width |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1174,6 +1216,15 @@ So the bar does not wrap, and three rules make that safe:
   1587. `.page` is the container; below the width at which a floored trail
   cannot sit beside the controls, they take the row under it and scroll. The
   phone block keeps its own tightening and nothing else.
+- **The search field gives way after the trail, down to its glyph.** The kit's
+  `toolbar` field rests at 200 px and floors there above 1024 px, and a
+  route's own controls may not shrink — so on `#/activity/turns` at 1440 the
+  floor pushed the keycap past the bar's right edge (1152 px of content in a
+  1107 px bar), above the width where the bar breaks a line. `.page-search`
+  makes the width a flex basis rather than a floor, shrinking after the trail
+  to a control square, and a container query on the field's OWN width drops
+  the keycap and then the word — the kit's own phone state, reached whenever
+  the bar needs the room. Its accessible name is on the button throughout.
 
 ### Moving, and going back
 
@@ -2024,14 +2075,14 @@ Four more controls that looked like something they were not:
   muted colour, which wins over the anchor rule, so four real navigations —
   a phase's own event, a turn card's id, a seat's last error, the spend
   screen — rendered as dim static micro-text a reader could only find by
-  hovering. `.t-link` is the caption register that keeps `--accent-ink`,
+  hovering. `.t-link` is the caption register that keeps `--color-brand-accent-ink`,
   which the palette suite already measures.
 - **A link inside a sentence says so, because nothing else can tell it apart.**
   The anchor reset is right for chrome — a breadcrumb, a row that happens to be
   an anchor, a caption-sized navigation — because each of those is a *thing* on
   the page rather than a word in a line. It is wrong the moment an anchor is a
-  word in a line: the sentence around it is `--text` and the link is
-  `--accent-ink`, and colour alone is what WCAG 1.4.1 refuses. `.prose-link`
+  word in a line: the sentence around it is `--color-text-primary` and the link is
+  `--color-brand-accent-ink`, and colour alone is what WCAG 1.4.1 refuses. `.prose-link`
   puts the underline back and keeps it, at rest rather than on hover.
   `.prose.md a` (rendered Markdown) and `.int-form-note a` (the sentence under
   a setup form) are the two containers that get it without asking. The rule was
@@ -2348,7 +2399,7 @@ Three more header rules follow from the same audit:
   of `plan_summary`, not the whole of it. That field is the reviewer's own
   account of the turn, written by a model against the engine's call ledger, and
   a model asked to account for four tool calls writes four sentences: one real
-  turn headed itself with 280 characters at `--fs-xl` semibold, three lines
+  turn headed itself with 280 characters at `--font-size-xl` semibold, three lines
   deep, pushing the fact line under it off a laptop's first screen — and the
   turns list, the peek rail and the feed card all head with the same string. A
   boundary is a stop FOLLOWED BY A SPACE, which keeps `1m 52s`, `v1.2` and
@@ -2565,7 +2616,7 @@ Two things follow, and both were bugs before they were rules:
   ancestry: every `.num-col` sits inside a `.num-rows` inside a `.num-block`.
 - **A fixed column is sized by its heading, not its figure.** `.num-col` is
   `7rem` because the widest label these tables carry — APPROX. TOKENS —
-  measures 103px at `--fs-3xs` with `--track-wide`, and at the 5.5rem this
+  measures 103px at `--font-size-2xs` with `--font-letter-spacing-wide`, and at the 5.5rem this
   started on it wrapped across two lines above values that each sat on one. A
   column cannot grow for its own heading, so the heading is what sets the
   width.
@@ -2624,12 +2675,12 @@ find.
 
 So the frame's own hover vocabulary carries it. `.rail-row`, `.side-link`,
 `.rail-engine` and `.crumb-link` already answer a pointer by moving to
-`--text`, and a link does the same — in dark the accent ink (#8b9ff5) brightens
-toward near-white, in light the indigo (#3e50b8) darkens toward near-black, so
+`--color-text-primary`, and a link does the same — in dark the accent ink (#b3a1ff) brightens
+toward near-white, in light the violet (#5a33de) darkens toward near-black, so
 in BOTH themes hovering makes a link MORE prominent rather than merely
 different. Both ends are measured text rungs, which is what rules out the
 obvious alternative: the accent family publishes exactly one text step, and
-`--accent`, `--accent-hover` and `--accent-active` are fills that
+`--color-brand-accent`, `--color-brand-accent-hover` and `--color-brand-accent-active` are fills that
 `styles/rungs.test.ts` refuses as a colour.
 
 **And where the colour step cannot be seen, the underline is the hover.** Under
@@ -2872,11 +2923,22 @@ is one of the rules on this page applied to a tracker.
   carries a floor of two cards' worth of room as well as its scroll ceiling,
   and the floor wins under a viewport short enough for the two to cross — a
   lane that holds one card and scrolls beats a lane too short to hold one.
-- **Nothing is drawn for the default.** `normal` priority is what a task gets
-  when nobody said, so it is most of a board — a mark on every card is a mark
-  that says nothing, and it buries the four that ARE urgent. A due date drops
-  the year it shares with the reader for the same reason: one year repeated
-  down forty rows is how the one row due next year goes unnoticed.
+- **Priority is signal bars, counted.** Three rising bars filled to the step —
+  one for `low`, two for `normal`, three for `high` — and `urgent` as the alert
+  mark rather than a fourth bar, because urgent is not "more high". The level
+  is read by counting, so it takes no hue; only `urgent`'s mark is drawn in the
+  critical ink. A chevron pair drew it once, and a column of chevrons in a list
+  reads as rows that fold. Where the word is printed beside the mark — the
+  task's header and its properties rail — it is set at the size and ink of the
+  values around it, because priority is a setting there, not a warning.
+- **Every step of the scale is drawn.** `normal` is two bars of three on every
+  card and row, as the approved Board draws it; left blank, a list's priority
+  column was mostly empty, the two-bar state never appeared, and a blank could
+  not be told from a value that never arrived. The urgent rows still stand out,
+  as the only alert mark in a column of bars. `none` — the engine's "nobody
+  said" — is not a step and draws nothing. A due date drops the year it shares
+  with the reader, because one year repeated down forty rows is how the one row
+  due next year goes unnoticed.
 - **Reading an item does not lose the board.** A plain click opens a PEEK
   beside the rows; ⌘-click and middle-click follow the anchor to the item's
   own page, because a card that cannot be opened in a tab is not a link. The
@@ -3106,6 +3168,14 @@ dashboard" — so there is no such actor. A write from a browser is made by the
 through the same operator tools your own assistant calls, and it is recorded
 exactly as that assistant's would be: your token as the author, author kind
 `operator`, your seat as the person.
+
+**The audit log draws an operator as a person.** A write your token made
+reads as you — the person's circle and your seat's name, linking to your seat,
+with the token in the tooltip and in the export's `who` column (`who_seat`
+beside it names the seat). A token no seat binds is a person too, but it has
+no page: its row is the circle and the token's name as plain text, never a
+link to a seat of that name. A seat's own write takes the chart's kind, or,
+for a seat the chart no longer holds, the kind the write was recorded under.
 
 The engine's half is [`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface):
 one catalogue tool per request, a `request_id` the screen mints per gesture
@@ -3704,8 +3774,9 @@ to.
   opening a collapsed unit on the way. The Builder decides which node is
   focused after an add, a delete, a move, an undo or a redo; the mounted view
   performs it.
-- **Colour stays state.** A card is neutral whatever it holds. A human seat
-  has the dashed edge every human seat on the dashboard has, a problem count
+- **Colour stays state.** A card is neutral whatever it holds. A seat leads
+  with its badge, a person's circle or an agent's squircle, on the same solid
+  card — a dashed edge means only "a place nothing fills yet" — a problem count
   takes the critical tone, a reference that names nothing takes the caution
   tone, and the Datadog fallback seat carries a neutral badge while Datadog is
   enabled, the only time the engine routes an alert to it.
@@ -3754,15 +3825,25 @@ to.
    per-category chip colour. If you need to tell two things apart, use their
    names. The third-party app marks in `@crewlethq/icons` are the one, bounded
    exception (see "The one rule" above); nothing else is.
-   **A seat's identity badge is `Avatar`, everywhere**, drawn from its name or
-   handle so the initials are what tell one seat from another, with
-   `variant="dashed"` for a human seat — the engine does not run it, which is a
-   structural fact and therefore an edge rather than a hue. A hand-rolled mark
-   holding a robot glyph drew the KIND, which the roster gives at a glance, in
-   the slot that should have been saying WHO: the same engineer was "FE" on the
-   board and an identical generic robot on Search and on a project's Lead panel.
-   `tone="brand"` is for the one badge that IS the reader, in the rail's own
-   account row, and for nothing else.
+   **A seat's identity badge is `Avatar`, everywhere, through `SeatAvatar`**
+   (`ui/SeatAvatar.tsx`; `seatBadge` for a kit component that draws the badge
+   itself, such as the chart's `OrgLabel`), drawn from its name or handle so
+   the initials are what tell one seat from another. For an AGENT a leading
+   word "agent" is dropped before the initials are made, because the squircle
+   already says it: "Agent CEO" and "Agent CTO" are `CE` and `CT`, where the
+   kit alone drew both as `AC`. What a screen reader hears is still the whole
+   name. Its `kind`
+   is its OUTLINE — a circle for a person, a squircle for an agent — which is
+   the one cue telling them apart: who holds a seat is a structural fact and
+   therefore a shape rather than a hue. A kind the chart does not hold is
+   read from the writer's recorded kind where the screen has one (an operator
+   token is a person no chart lists), and otherwise takes the kit's default,
+   the agent's squircle. A hand-rolled mark holding a robot glyph drew the KIND, which the
+   roster gives at a glance, in the slot that should have been saying WHO: the
+   same engineer was "FE" on the board and an identical generic robot on
+   Search and on a project's Lead panel. `ring="brand"` — the accent drawn as a
+   ring round the neutral badge, meaning *selected* — is for the one badge that
+   IS the reader, in the rail's own account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
@@ -3839,12 +3920,12 @@ to.
 16a. **And every anchor register answers the pointer.** A register that pins its
     own colour silently takes the `a:hover` step away — `.work-col-foot a` and
     `.int-form-note a` are (0,1,1) exactly as the step is, and the later sheet
-    wins — and one that is already `--text` at rest, like `.cell-seat` and
-    `.wl-who`, is handed a step to `--text` that moves nothing. Three of those
+    wins — and one that is already `--color-text-primary` at rest, like `.cell-seat` and
+    `.wl-who`, is handed a step to `--color-text-primary` that moves nothing. Three of those
     shipped, each invisible for as long as the baseline's hover underline was
     quietly doing the work: with it reset, hovering them changed nothing at
-    all. A register whose rest colour is the accent ink steps to `--text`; one
-    that is `--text` at rest steps to the accent ink, which is what says *this
+    all. A register whose rest colour is the accent ink steps to `--color-text-primary`; one
+    that is `--color-text-primary` at rest steps to the accent ink, which is what says *this
     name* is the link rather than the row around it. Nothing in
     `styles/` can check this today — it needs a real cascade, not a parse.
 16b. **Text takes the ink, never the fill.** Every status family is three
@@ -3853,17 +3934,19 @@ to.
     `-ink` is the one of the three that is a text colour. The design system
     measures the pairs it publishes; nothing but `styles/rungs.test.ts`
     measures which rung this application spends where, and both mistakes are
-    silent. Spending `--accent` as text gives 3.09:1 on its own soft ground and
+    silent. Spending `--color-brand-accent` as text gives 3.09:1 on its own soft ground and
     3.71 on the page, against the 4.5 small text needs; the ink gives 5.96 and
     7.15. Putting an `-ink` **on** its family's solid fill is the one pairing
     of the three that was never measured — the rail's attention badge did it,
-    at 1.72:1 on a 9px digit, so the unread count rendered as a dot.
+    at 1.72:1 on a 9px digit, so the unread count rendered as a dot. That
+    badge is the ACCENT's ink on the accent's soft ground now: a count of
+    things waiting for the reader is "act here", never a caution.
 16c. **The faint rung is decoration, and that is a contrast rule.**
-    `--text-faint` is about 3:1 against the ground in *both* themes, which is
+    `--color-text-muted` is about 3:1 against the ground in *both* themes, which is
     the floor a non-text mark takes and not the 4.5 a word needs. Spent on a
     word it is a word nobody can read — it had decayed onto twenty-six rules,
     every grid column head and sidebar section name among them. A word takes
-    `--text-muted` (6.6–7.0:1). What is left on the faint rung is ten marks —
+    `--color-text-tertiary` (6.1–6.6:1). What is left on the faint rung is ten marks —
     two tree characters, a breadcrumb slash, four icons and three icon-only
     controls — each named in `styles/rungs.test.ts` with the reason it is one.
 17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI

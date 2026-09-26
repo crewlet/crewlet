@@ -281,13 +281,13 @@ func resolve(from, ref string) (string, error) {
 func crawlFixture() fstest.MapFS {
 	return fstest.MapFS{
 		"dashboard/index.html": {Data: []byte(`<!doctype html>
-<link rel="icon" type="image/svg+xml" href="/static/crewlet-icon.svg" />
+<link rel="icon" type="image/svg+xml" href="/static/dashboard/crewlet-icon.svg" />
 <script type="module" crossorigin src="/static/dashboard/assets/index-Bmgzty1J.js"></script>
 <link rel="modulepreload" crossorigin href="/static/dashboard/assets/rolldown-runtime-hePW80VL.js">
 <link rel="modulepreload" crossorigin href="/static/dashboard/assets/react-wiHys0m2.js">
 <link rel="stylesheet" crossorigin href="/static/dashboard/assets/index-BS_xpF9S.css">
 <div id="root"></div>`)},
-		"crewlet-icon.svg": {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
+		"dashboard/crewlet-icon.svg": {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
 
 		// The entry: two static imports, the preload helper and its list, two
 		// lazy screens, an imported asset, and one of the sentences ending in
@@ -311,10 +311,10 @@ func crawlFixture() fstest.MapFS {
 			`import{t as e}from"./rolldown-runtime-hePW80VL.js";var t=Symbol.for("react.element");export{t as i};`,
 		)},
 		"dashboard/assets/index-BS_xpF9S.css": {Data: []byte(
-			`@font-face{font-family:Inter;src:url(/static/dashboard/fonts/inter-latin.woff2)format("woff2")}`,
+			`@font-face{font-family:Geist;src:url(/static/dashboard/fonts/geist-latin.woff2)format("woff2")}`,
 		)},
 		"dashboard/assets/brand-Kj12Hg34.svg": {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
-		"dashboard/fonts/inter-latin.woff2":   {Data: []byte("wOF2 inter")},
+		"dashboard/fonts/geist-latin.woff2":   {Data: []byte("wOF2 geist")},
 
 		// A lazy screen that imports back into the entry, as every real one
 		// does, and has a lazy chunk of its own in single quotes.
@@ -359,12 +359,12 @@ func TestTheCrawlFollowsEveryReferenceTheBuildWrites(t *testing.T) {
 
 	const assets = dashboardBase + "assets/"
 	want := map[string]route{
-		"/static/crewlet-icon.svg":                fromShell,
+		dashboardBase + "crewlet-icon.svg":        fromShell,
 		assets + "index-Bmgzty1J.js":              fromShell,
 		assets + "rolldown-runtime-hePW80VL.js":   fromShell,
 		assets + "react-wiHys0m2.js":              fromShell,
 		assets + "index-BS_xpF9S.css":             fromShell,
-		dashboardBase + "fonts/inter-latin.woff2": fromSheet,
+		dashboardBase + "fonts/geist-latin.woff2": fromSheet,
 		assets + "Spend-1UNPEVFb.js":              fromDynamic,
 		assets + "Budgets-OCFe1hZV.js":            fromDynamic,
 		assets + "Budgets-DEpC4reb.css":           fromPreload,

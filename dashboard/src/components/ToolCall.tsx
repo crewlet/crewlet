@@ -17,11 +17,7 @@
 import { useState } from "react";
 import { callText, callsFor, type Subject, type ToolCall as Call } from "~/lib/toolcall.ts";
 import { Button, InlineCode, Tag, cx, useClipboard } from "@crewlethq/ui";
-import {
-  ChevronRightGlyph,
-  ContentCopyGlyph,
-  KeyboardArrowDownGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ChevronRightGlyph, CopyGlyph, ChevronDownGlyph } from "@crewlethq/icons/glyphs";
 
 /** How long the copy button says it worked. */
 const COPIED_MS = 1_400;
@@ -46,7 +42,7 @@ export function ToolCallBlock({ subject, viewer }: { subject: Subject; viewer?: 
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
+        {open ? <ChevronDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <span>Change this with your assistant</span>
       </button>
       {open && (
@@ -98,8 +94,8 @@ function CallRow({ call }: { call: Call }) {
         <span className="spacer" />
         <Button
           size="small"
-          variant="tertiary"
-          leadingIcon={<ContentCopyGlyph />}
+          variant="ghost"
+          leadingIcon={<CopyGlyph />}
           onClick={() => void clip.copy(text)}
         >
           {clip.state === "copied" ? "Copied" : "Copy"}

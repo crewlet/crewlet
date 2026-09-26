@@ -126,13 +126,13 @@ import { nodeTone, seatTone } from "./nodeTone.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
-  AccountTreeGlyph,
+  NetworkGlyph,
   ChevronRightGlyph,
-  CloseGlyph,
-  CycleGlyph,
-  DeleteGlyph,
-  EditGlyph,
-  KeyboardArrowDownGlyph,
+  XGlyph,
+  Repeat2Glyph,
+  TrashGlyph,
+  PencilGlyph,
+  ChevronDownGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -155,6 +155,7 @@ import {
   type TreeModel,
   VisuallyHidden,
 } from "@crewlethq/ui";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * The canvas of the Builder lens.
@@ -348,12 +349,6 @@ function StructureChart({
       onNodeKeyDown={(id, event) => !api.readOnly && moveKey(reorder, id as NodeKey, event)}
       isNode={(id) => structure.nodes.has(id)}
       hasNodeMenu={(id) => structure.nodes.has(id)}
-      // A HUMAN SEAT WEARS THE DASHED EDGE every human seat on this dashboard
-      // wears, and it is the node's frame, so the design system draws it.
-      cardOutline={(id) => {
-        const view = structure.nodes.get(id);
-        return view?.type === "seat" && view.kind === "human";
-      }}
       // AN AGENT SEAT CARRIES A HUE, derived from its key: see `nodeTone.ts`.
       cardTone={(id) => nodeTone(structure.nodes.get(id))}
       renderCard={(id, card) => (
@@ -422,7 +417,7 @@ function ReportingChart({
   if (!chart.known) {
     return (
       <EmptyState
-        icon={<AccountTreeGlyph />}
+        icon={<NetworkGlyph />}
         title="Reporting lines appear after the check"
         description="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
       />
@@ -431,7 +426,7 @@ function ReportingChart({
   if (chart.roots.length === 0 && chart.cycles.length === 0) {
     return (
       <EmptyState
-        icon={<AccountTreeGlyph />}
+        icon={<NetworkGlyph />}
         title="No seats to report on"
         description="Who reports to whom is drawn here once the organization has a seat."
       />
@@ -459,7 +454,6 @@ function ReportingChart({
       onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
       hasNodeMenu={(id) => seatOf(id) !== undefined}
-      cardOutline={(id) => chart.items.get(id)?.kind === "human"}
       cardTone={(id) => {
         const item = chart.items.get(id);
         return item ? seatTone(item.kind, item.key ?? undefined) : undefined;
@@ -507,7 +501,6 @@ function Chart({
   cardOf,
   renderCard,
   renderUnder,
-  cardOutline,
   cardTone,
   onNodeKey,
   onNodeKeyDown,
@@ -525,7 +518,6 @@ function Chart({
   cardOf: (id: string) => string;
   renderCard: (id: string, card: TreeCardContext) => ReactNode;
   renderUnder?: (id: string, card: TreeCardContext) => ReactNode;
-  cardOutline?: (id: string) => boolean;
   cardTone?: (id: string) => TreeCardTone | undefined;
   onNodeKey: (id: string, action: Exclude<TreeItemAction, "menu">) => boolean;
   onNodeKeyDown?: (id: string, event: KeyboardEvent<HTMLElement>) => boolean;
@@ -576,7 +568,6 @@ function Chart({
         cardOf={cardOf}
         renderCard={renderCard}
         renderUnder={renderUnder}
-        cardOutline={cardOutline}
         cardTone={cardTone}
         onNodeKey={onNodeKey}
         onNodeKeyDown={onNodeKeyDown}
@@ -637,15 +628,12 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={seatTitle(view)}>
           <OrgNodeLabel
-            icon={<NodeGlyph kind={nodeGlyphKind(view)} />}
-            iconRing={view.kind === "human" ? "dashed" : "none"}
-            // AN AGENT SEAT WEARS THE LARGE MARK. The chart this is drawn from
-            // sizes a mark by what it stands for: a container at half its icon
-            // zone and the thing the chart is ABOUT at three quarters of it,
-            // which is what tells an agent seat from a unit at the far end of
-            // a chart. A human seat keeps the small figure inside its dashed
-            // ring, which is the boundary that says what it is.
-            iconSize={view.kind === "human" ? "md" : "lg"}
+            // A SEAT LEADS WITH ITS BADGE, and the badge's outline is who
+            // holds it: a person's circle, an agent's squircle. That is the
+            // one cue — the card is the same solid card for both, and the
+            // dashed edge a person's seat used to wear now means only "a place
+            // nothing fills yet".
+            avatar={seatBadge(view.name, view.kind)}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
@@ -761,9 +749,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          icon={<NodeGlyph kind={item.kind === "human" ? "human" : "agent"} />}
-          iconRing={item.kind === "human" ? "dashed" : "none"}
-          iconSize={item.kind === "human" ? "md" : "lg"}
+          avatar={seatBadge(item.name, item.kind)}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
@@ -793,7 +779,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
     <>
       <div {...card.item(CYCLE_GROUP)} title={note}>
         <OrgNodeLabel
-          icon={<CycleGlyph />}
+          icon={<Repeat2Glyph />}
           name="Reporting cycle"
           caption={plural(count, "cycle")}
         />
@@ -857,7 +843,7 @@ function NodeActions({
     <div {...card.actions(id)}>
       <IconButton
         label={`Edit ${label}`}
-        icon={<EditGlyph />}
+        icon={<PencilGlyph />}
         size="sm"
         variant="ghost"
         tabIndex={-1}
@@ -869,7 +855,7 @@ function NodeActions({
       {deletable && (
         <IconButton
           label={`Delete ${label}`}
-          icon={<DeleteGlyph />}
+          icon={<TrashGlyph />}
           size="sm"
           variant="ghost-danger"
           tabIndex={-1}
@@ -961,7 +947,7 @@ function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; n
     <OrgNodeDisclosure {...card.press(id)}>
       <IconButton
         label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-        icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
+        icon={expanded ? <ChevronDownGlyph /> : <ChevronRightGlyph />}
         size="sm"
         variant="ghost"
         tabIndex={-1}
@@ -1095,7 +1081,7 @@ function LeadChip({
               clear: (
                 <IconButton
                   label={`Clear the lead of ${unit.name}`}
-                  icon={<CloseGlyph />}
+                  icon={<XGlyph />}
                   size="sm"
                   variant="ghost"
                   tabIndex={-1}

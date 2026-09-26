@@ -35,6 +35,32 @@ export const BANDS = [
 ] as const;
 
 /**
+ * Which of those bands each PHASE value is drawn in — `tokens.PhaseBand`,
+ * written out by phase, for the charts that list phases rather than bands (the
+ * live window's by-phase answer keeps every phase it saw).
+ *
+ * A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR OF ITS OWN: the design
+ * system removed its phase family, and inside a figure a phase is a series.
+ * Taking the series of the band the engine already folds it into is what keeps
+ * one phase one colour on every chart — a coding run is Execute on the Spend
+ * chart and in the live list alike. A phase this build has not met (a newer
+ * peer's) is Auxiliary, which is exactly where the engine puts it.
+ *
+ * `internal/api/queries`' phase-band gate holds every entry against
+ * `tokens.PhaseBand` and requires every phase in `phase.All`.
+ */
+export const PHASE_BANDS = {
+  execute: "execute",
+  sandbox: "execute",
+  plan: "execute",
+  review: "review",
+  subagent: "workers",
+  auxiliary: "auxiliary",
+  judge: "auxiliary",
+  onboarding: "auxiliary",
+} as const;
+
+/**
  * What a capped budget window is doing, as the ENGINE judges it — the
  * `state` on every window of the `budget` push and the `budgets` answer.
  *

@@ -26,7 +26,7 @@ import {
 } from "~/lib/timeline.ts";
 import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { EmptyState, Tag, cx } from "@crewlethq/ui";
-import { TimelineGlyph } from "@crewlethq/icons/glyphs";
+import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
 
 /** How wide one day is, in pixels. */
@@ -322,7 +322,7 @@ export function TimelineView({
       // by default, which is right for a feed and wrong here — this is the
       // date axis, and it is the axis that has nothing on it.
       <EmptyState
-        icon={<TimelineGlyph size={32} />}
+        icon={<ChartNoAxesGanttGlyph size={32} />}
         title="Nothing to lay out"
         description="No item on this node's copy of the tracker matches these filters."
       />

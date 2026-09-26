@@ -7,10 +7,11 @@ import {
   bandsOf,
   columnsOf,
   ghostHeights,
+  phaseColor,
   spendDays,
   unbandedTokens,
 } from "./spend.ts";
-import { BANDS } from "~/contract/spend.ts";
+import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
 import type { Bucket, SeriesPoint, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
@@ -108,6 +109,26 @@ describe("the legend", () => {
     expect(BANDS.map((b) => b.series)).toEqual([1, 2, 3, 4]);
     expect(bandColor("a-band-this-build-never-met")).toBe(DATA_COLOR_OTHER);
     expect(bandLabel("a-band-this-build-never-met")).toBe("a-band-this-build-never-met");
+  });
+
+  // A PHASE IS DRAWN IN ITS BAND'S HUE. The design system removed its phase
+  // family, so inside a figure a phase is a series — and the only series that
+  // keeps one phase one colour on every chart is the band the engine already
+  // folds it into: a coding run is Execute on the Spend chart and in the live
+  // list alike, and a newer peer's phase is Auxiliary, where the engine counts
+  // it. Four hues, and nothing outside the ramp.
+  it("draws a phase in the hue of the band it folds into", () => {
+    expect(phaseColor("execute")).toBe(dataColor(0));
+    expect(phaseColor("Sandbox")).toBe(dataColor(0));
+    expect(phaseColor("review")).toBe(dataColor(1));
+    expect(phaseColor("subagent")).toBe(dataColor(2));
+    for (const aux of ["auxiliary", "judge", "onboarding", "", "a-phase-from-a-newer-peer"]) {
+      expect(phaseColor(aux)).toBe(dataColor(3));
+    }
+    // Never a key of the object's prototype read as a band.
+    expect(phaseColor("constructor")).toBe(dataColor(3));
+    const drawn = new Set(Object.keys(PHASE_BANDS).map(phaseColor));
+    expect([...drawn].sort()).toEqual([0, 1, 2, 3].map(dataColor).sort());
   });
 });
 

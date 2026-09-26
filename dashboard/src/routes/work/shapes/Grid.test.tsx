@@ -61,6 +61,16 @@ function badge(container: HTMLElement): HTMLElement {
   return marks[0] as HTMLElement;
 }
 
+/** Which outline the kit drew the badge in: a person's circle or an agent's squircle. */
+function outline(container: HTMLElement): "human" | "agent" {
+  const mark = badge(container);
+  const human = mark.classList.contains("crewlet-avatar--human");
+  const agent = mark.classList.contains("crewlet-avatar--agent");
+  if (human === agent)
+    throw new Error(`the badge is drawn as both kinds or neither: ${mark.className}`);
+  return human ? "human" : "agent";
+}
+
 const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => ({
   id: "h-1",
   log_seq: 9,
@@ -183,36 +193,35 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
-// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The dashed ring is the
-// only variant an identity badge has and it is STRUCTURAL — a human seat, the
-// engine does not run it — so it cannot depend on which set is drawing. It
-// did: `SeatCell` took a kind and the compact `Assignee` had no way to be
-// handed one, so the same person was drawn two ways on one grid.
-test("a human seat wears the dashed ring on both column sets", () => {
+// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
+// variant an identity badge has and it is STRUCTURAL — who holds the seat — so
+// it cannot depend on which set is drawing. It did: `SeatCell` took a kind and
+// the compact `Assignee` had no way to be handed one, so the same person was
+// drawn two ways on one grid.
+test("a human seat is drawn as a person on both column sets", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "iris" })]);
-    expect(badge(container).className).toContain("dashed");
+    expect(outline(container)).toBe("human");
     cleanup();
   }
 });
 
-// AND AN AGENT DOES NOT, which is what makes the ring worth drawing: a mark
-// every row wears separates nothing, the same rule `normal` priority keeps.
-test("an agent seat wears no ring on either column set", () => {
+// AND AN AGENT AS AN AGENT, on both.
+test("an agent seat is drawn as an agent on either column set", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "ada" })]);
-    expect(badge(container).className).not.toContain("dashed");
+    expect(outline(container)).toBe("agent");
     cleanup();
   }
 });
 
-// A HANDLE THE CHART DOES NOT HOLD IS NOT AN AGENT. It is a seat that was
-// renamed or removed, and the honest badge is the neutral disc rather than a
-// ring claiming the chart said something it did not.
-test("a handle the chart does not hold falls back to the neutral disc", () => {
+// A HANDLE THE CHART DOES NOT HOLD is a seat that was renamed or removed. It
+// takes the kit's default outline, never a person's circle: a person is always
+// declared, and a circle would claim the chart said something it did not.
+test("a handle the chart does not hold is never drawn as a person", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row({ assignee: "departed" })]);
-    expect(badge(container).className).not.toContain("dashed");
+    expect(outline(container)).toBe("agent");
     cleanup();
   }
 });
@@ -252,8 +261,8 @@ test("a plain click on a row peeks and a modified click follows the link", () =>
 // THE TRASH'S `removed_by` IS THE THIRD CELL ON THIS GRID THAT DRAWS A PERSON,
 // and it reads the same resolver: somebody who emptied a subtree is drawn the
 // way they are drawn on the row above.
-test("a human removal wears the ring in the trash column", () => {
+test("a human removal is drawn as a person in the trash column", () => {
   const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
   const { container } = mount("table", [row({})], removals);
-  expect(badge(container).className).toContain("dashed");
+  expect(outline(container)).toBe("human");
 });

@@ -18,10 +18,10 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { Tag, type TagVariant } from "@crewlethq/ui";
+import { Tag } from "@crewlethq/ui";
 
 import { SeatCard } from "./common.tsx";
-import { drawnClasses, isDrawnAs } from "~/testing.tsx";
+import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, LiveCall } from "~/protocol/index.ts";
 
@@ -58,38 +58,35 @@ const running = (phase: string, roundNum = 0): AgentRow =>
     } as LiveCall,
   }) as AgentRow;
 
-const PHASES: [phase: string, variant: TagVariant][] = [
-  ["execute", "phase-execute"],
-  ["review", "phase-review"],
-];
+const PHASES = ["execute", "review"] as const;
 
-test("a running seat's phase is drawn in that phase's own hue", () => {
-  const base = drawnClasses(Tag, { children: "x" })[0]!;
-  const drawn = PHASES.map(([phase, variant]) => {
+// A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system took
+// its phase hues away because beside a state badge the state must be the one
+// coloured thing on the row; a seat card that tinted its phase pill again would
+// be a second hue saying "where", competing with the one saying "how".
+test("a running seat's phase is a word on the neutral pill, never a hue", () => {
+  const neutral = drawnClasses(Tag, { variant: "neutral", children: "x" });
+  const drawn = PHASES.map((phase) => {
     const { getByText, unmount } = render(
       <SeatCard seat={seat()} agent={running(phase)} sandboxes={[]} />,
     );
-    const pill = getByText(phase).closest(`.${base}`)!;
-    expect(
-      isDrawnAs(pill, Tag, { variant, children: phase }, { children: phase }),
-      `the ${phase} pill is not drawn as ${variant}`,
-    ).toBe(true);
+    const pill = getByText(phase).closest(`.${neutral[0]}`)!;
     const classes = [...pill.classList];
+    expect(classes.sort(), `the ${phase} pill is not drawn as the neutral tag`).toEqual(
+      [...neutral].sort(),
+    );
     unmount();
     return classes;
   });
-  // THE REPORTED DEFECT ITSELF, and the assertion that stays red however the
-  // pill is respelled: two phases, two fills. One hardcoded variant for every
-  // phase passes every per-phase check above only if each of them names that
-  // variant, and fails this one always.
-  expect(drawn[0]).not.toEqual(drawn[1]);
+  // And the two phases are drawn IDENTICALLY — only the word differs — which
+  // stays red however a per-phase fill is respelled.
+  expect(drawn[0]).toEqual(drawn[1]);
 });
 
-test("the phase word is beside the colour, never replaced by it", () => {
-  // Colour is never the only carrier: protan and deutan vision are what the hues
-  // are measured against, and a reader with neither still reads a word. It is
-  // lowercased on the way, because the value is a store column and nothing
-  // normalises its case on the wire.
+test("the phase is said as its word", () => {
+  // The word IS the phase now, so it has to be there. It is lowercased on the
+  // way, because the value is a store column and nothing normalises its case
+  // on the wire.
   render(<SeatCard seat={seat()} agent={running("Execute")} sandboxes={[]} />);
   expect(screen.getByText("execute")).not.toBeNull();
 });

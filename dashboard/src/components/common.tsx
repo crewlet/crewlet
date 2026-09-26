@@ -10,7 +10,6 @@
 
 import type { ReactNode } from "react";
 import {
-  Avatar,
   Button,
   Callout,
   EmptyState,
@@ -19,7 +18,8 @@ import {
   Tag,
   cx,
 } from "@crewlethq/ui";
-import { CableGlyph, KeyGlyph, ScheduleGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
@@ -96,16 +96,16 @@ export function SeatChip({
       // the accent everywhere it appears is identity-colouring by accident.
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
-      style={{ gap: "var(--space-2)", minWidth: 0 }}
+      style={{ gap: "var(--spacing-2)", minWidth: 0 }}
       href={href(["company", "people", target])}
     >
-      {/* `dashed` IS A HUMAN SEAT, in uilet's own words: its Avatar doc calls
-          the drawn edge "a HUMAN seat: the engine does not run it", which is
-          the structural fact ours carried. A kind the chart does not hold
-          draws the neutral disc rather than claiming the seat is an agent.
+      {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
+          agent as a squircle, and that is the one cue telling them apart. A
+          kind the chart does not hold takes the kit's default, the agent's
+          squircle — the engine runs agents, and a person is always declared.
           `decorative` because the name is printed immediately beside it —
           without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
-      <Avatar name={name} size={size} variant={kind === "human" ? "dashed" : "solid"} decorative />
+      <SeatAvatar name={name} size={size} kind={kind === "human" ? "human" : "agent"} decorative />
       <span className="truncate">{name}</span>
     </a>
   );
@@ -141,10 +141,10 @@ export function SeatCard({
     // handle for is addressed by NAME, and `#/company/people/` opens nothing.
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
-        <Avatar
+        <SeatAvatar
           name={seat.name}
           size="lg"
-          variant={seat.kind === "human" ? "dashed" : "solid"}
+          kind={seat.kind === "human" ? "human" : "agent"}
           decorative
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
@@ -152,7 +152,10 @@ export function SeatCard({
           <span className="truncate t-caption mono">@{seat.handle}</span>
         </div>
         {seat.kind === "human" ? (
-          <Tag appearance="outline">human</Tag>
+          // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
+          // circle was the outline said twice; the word stays for a
+          // screen reader, which does not see the outline.
+          <span className="sr-only">human</span>
         ) : (
           <StateBadge agent={agent} />
         )}
@@ -209,7 +212,7 @@ export function AttentionRow({ item }: { item: Attention }) {
         <Mark name={item.icon} size="sm" />
       </span>
       <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-        <span className="t-body" style={{ fontWeight: "var(--fw-medium)" }}>
+        <span className="t-body" style={{ fontWeight: "var(--font-weight-medium)" }}>
           {item.title}
         </span>
         <span className="t-caption">{item.detail}</span>
@@ -267,9 +270,9 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
       <span className="feed-actor truncate">{event.actor || "engine"}</span>
       <span className="feed-what truncate">
         {event.failed && (
-          <WarningGlyph
+          <TriangleAlertGlyph
             size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
         )}
         {event.summary || event.type}
@@ -373,7 +376,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   unavailable: (
-    <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+    <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
       This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
       it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
       again on its own.
@@ -386,7 +389,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   timeout: (
-    <Callout variant="warning" icon={<ScheduleGlyph size="md" />}>
+    <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine did not answer within 10 seconds. It may be under load.
     </Callout>
   ),
@@ -401,7 +404,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
-    <Callout variant="neutral" icon={<CableGlyph size="md" />}>
+    <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
       The connection went away before this answered. Nothing refused it; the screen reads again once
       the socket is back.
     </Callout>

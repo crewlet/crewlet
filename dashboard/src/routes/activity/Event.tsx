@@ -10,13 +10,13 @@ import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  ForkRightGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  SplitGlyph,
   LayersGlyph,
-  NeurologyGlyph,
-  PersonGlyph,
-  TagGlyph,
+  BrainGlyph,
+  UserGlyph,
+  HashGlyph,
 } from "@crewlethq/icons/glyphs";
 // OURS, AND THERE IS NO PEER. `Copyable` renders the value it copies and is
 // named by it; this is a bare ACTION over text derived at press time — a
@@ -143,7 +143,7 @@ function envelopeProperties(event: EventRecord): Property[] {
 function eventStatus(event: EventRecord) {
   if (!event.failed) return undefined;
   return (
-    <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
+    <Tag variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
       failed
     </Tag>
   );
@@ -175,7 +175,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
               <Button
                 size="small"
                 variant="secondary"
-                leadingIcon={<ForkRightGlyph size="xs" />}
+                leadingIcon={<SplitGlyph size="xs" />}
                 onClick={() => nav.to(["activity", "traces", data.trace_id])}
               >
                 Trace
@@ -195,7 +195,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
               <Button
                 size="small"
                 variant="secondary"
-                leadingIcon={<PersonGlyph size="xs" />}
+                leadingIcon={<UserGlyph size="xs" />}
                 onClick={() => nav.to(["company", "people", data.actor])}
               >
                 {data.actor}
@@ -220,7 +220,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
       {data && (
         <ObjectHeader
           kind="Event"
-          icon="timeline"
+          icon="chart-no-axes-gantt"
           identifier={data.id}
           title={name}
           status={eventStatus(data)}
@@ -240,7 +240,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
         {data && (
           <>
             <Card>
-              <Card.Header icon={<DescriptionGlyph size="sm" />}>
+              <Card.Header icon={<FileTextGlyph size="sm" />}>
                 <Card.Title>Envelope</Card.Title>
               </Card.Header>
               <PropertiesRail groups={[{ properties: envelopeProperties(data) }]} />
@@ -252,7 +252,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
               // vertical-only step is the one that keeps a card's body on the
               // same line as its title.
               <Card padding="sm">
-                <Card.Header icon={<NeurologyGlyph size="sm" />}>
+                <Card.Header icon={<BrainGlyph size="sm" />}>
                   <Card.Title>The phase this event records</Card.Title>
                 </Card.Header>
                 <PhaseCard record={phase} defaultOpen showRole />
@@ -305,7 +305,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
             {data.tags && Object.keys(data.tags).length > 0 && (
               <Card>
-                <Card.Header icon={<TagGlyph size="sm" />}>
+                <Card.Header icon={<HashGlyph size="sm" />}>
                   <Card.Title>Tags</Card.Title>
                 </Card.Header>
                 <PropertiesRail
@@ -364,7 +364,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
         <ObjectHeader
           size="peek"
           kind="Event"
-          icon="timeline"
+          icon="chart-no-axes-gantt"
           identifier={data.id}
           title={eventTitle(data)}
           status={eventStatus(data)}
@@ -391,7 +391,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           {data && (
             <>
               <Card>
-                <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                <Card.Header icon={<FileTextGlyph size="sm" />}>
                   <Card.Title>Record</Card.Title>
                 </Card.Header>
                 <PropertiesRail

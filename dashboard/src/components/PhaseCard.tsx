@@ -65,9 +65,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
-  KeyboardArrowDownGlyph,
-  TerminalGlyph,
-  WarningGlyph,
+  ChevronDownGlyph,
+  SquareTerminalGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 // STILL OURS. `PhaseTag` HAS a peer — uilet's `Tag` carries `phase-onboarding`,
 // `phase-execute` and `phase-review` — but it is a primitive in `~/ui`, and
@@ -307,7 +307,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
-              <WarningGlyph size="xs" /> this attempt was abandoned mid-answer and retried
+              <TriangleAlertGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
             {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
@@ -398,7 +398,7 @@ export function PhaseCard({
       )}
     >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
-        {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
+        {open ? <ChevronDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
         <PhaseTag phase={record.phase} />
         {record.iteration > 1 && (
           <span className="t-caption" title="self-iterate round">
@@ -467,7 +467,7 @@ export function PhaseCard({
           </Tag>
         )}
         {record.backend === "sandbox" && (
-          <Tag variant="info" leadingIcon={<TerminalGlyph />}>
+          <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
             {record.codingAgent || "sandbox"}
           </Tag>
         )}

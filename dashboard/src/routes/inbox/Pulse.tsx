@@ -38,14 +38,13 @@ import type { ReactNode } from "react";
 import { EmptyValue } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import {
-  BlockGlyph,
-  CalendarClockGlyph,
-  GroupGlyph,
+  BanGlyph,
+  UsersGlyph,
   ListGlyph,
   PauseGlyph,
-  ScheduleGlyph,
-  TokenGlyph,
-  WarningGlyph,
+  ClockGlyph,
+  CoinsGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 
 export interface PulseFact {
@@ -94,11 +93,11 @@ export function Pulse({ facts }: { facts: PulseFact[] }) {
 
 /** What the strip is made of, so the Inbox reads as a list of claims. */
 export const PULSE_GLYPHS = {
-  seats: <GroupGlyph size="xs" />,
+  seats: <UsersGlyph size="xs" />,
   parked: <PauseGlyph size="xs" />,
   open: <ListGlyph size="xs" />,
-  overdue: <ScheduleGlyph size="xs" />,
-  blocked: <BlockGlyph size="xs" />,
-  tokens: <TokenGlyph size="xs" />,
-  alarms: <WarningGlyph size="xs" />,
+  overdue: <ClockGlyph size="xs" />,
+  blocked: <BanGlyph size="xs" />,
+  tokens: <CoinsGlyph size="xs" />,
+  alarms: <TriangleAlertGlyph size="xs" />,
 } as const;

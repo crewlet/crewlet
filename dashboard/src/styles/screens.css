@@ -8,17 +8,17 @@
    nobody can read while it is running. */
 
 .turn-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
   overflow: hidden;
 }
 .turn-card.live {
-  border-color: var(--info-soft);
-  box-shadow: inset 2px 0 0 var(--info);
+  border-color: var(--color-feedback-info-soft);
+  box-shadow: inset 2px 0 0 var(--color-feedback-info);
 }
 .turn-card.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A HEAD WRAPS, which is rule 15 of the design doc and the one place in this
    file that was not keeping it. A phase's head is up to fifteen items — the
@@ -44,55 +44,55 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
   cursor: pointer;
   text-align: left;
   min-width: 0;
 }
 .turn-head:hover,
 .phase-head:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .turn-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-3);
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-3) var(--spacing-3);
 }
 
 .phase-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  background: var(--surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
   overflow: hidden;
 }
 .phase-card.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .phase-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 /* The header's trailing facts sit in a fixed order at a fixed size, so a live
    phase and a finished one are the same shape and the row does not change
    height the moment it completes. */
 .phase-meta {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .phase-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
   min-width: 0;
 }
 
@@ -125,23 +125,23 @@
 /* The block-padding is what separates one round from the next, and it has to
    beat `.round-body`'s own gap by enough to be read as a different KIND of
    boundary: 24px between rounds against 8px inside one. At the previous
-   `--space-2` the two were 16 and 8, and the ledger's boundary to the phase
+   `--spacing-2` the two were 16 and 8, and the ledger's boundary to the phase
    sections below it (`.phase-body`'s 12px gap) sat between them — so the
    three levels of the hierarchy were 8 / 12 / 16 and read as one flat list.
    The ledger's own frame, below, supplies the outer boundary. */
 .round {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2) var(--space-3) 0;
-  border-radius: var(--r-sm);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-2) var(--spacing-3) 0;
+  border-radius: var(--radius-sm);
 }
 /* Two steps, alternating — enough to separate adjacent blocks, not enough to
    claim a meaning. Mixed against the accent rather than taken from a grey
    ramp so the band survives dark mode, where two adjacent surface steps are
    nearly the same colour. */
 .round:nth-child(even) {
-  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  background: color-mix(in srgb, var(--color-brand-accent) 4%, transparent);
 }
 .round-rail {
   position: relative;
@@ -156,12 +156,12 @@
   width: 18px;
   flex: none;
   margin-top: 2px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-text-tertiary);
   font-size: 10px;
-  font-weight: var(--fw-medium);
+  font-weight: var(--font-weight-medium);
   position: relative;
 }
 /* Drawn from under the node to the bottom of THIS round's own content, on
@@ -186,19 +186,19 @@
   bottom: 0;
   width: 2px;
   border-radius: 1px;
-  /* `--border`, not `--border-subtle`. This line is now the thing that says
+  /* `--color-border-hover`, not `--color-border-default`. This line is now the thing that says
      which blocks are one round, and the subtle step is 0.06 alpha in dark
      mode — a rule a reader has to look for is not doing that job. */
-  background: var(--border);
+  background: var(--color-border-hover);
 }
 .round-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 /* ONE LEFT EDGE for everything a round holds. A disclosure head carries its
-   own `--space-2` so its hover band has room to sit under the chevron, and a
+   own `--spacing-2` so its hover band has room to sit under the chevron, and a
    tool row's head the same inside its box — so the model's SPEECH, the one
    block with no inset, started 8px to the left of every other piece of ink in
    the round. Three kinds of round content on three different edges is the
@@ -206,7 +206,7 @@
 .round-body > .prose,
 .round-body > .abandoned,
 .round-body > .round-thinking {
-  margin-inline: var(--space-2);
+  margin-inline: var(--spacing-2);
 }
 .round-tools {
   display: flex;
@@ -221,25 +221,25 @@
    previously a small icon inside a collapsed row. Three node states in total
    — normal, failed, live — not one per round. */
 .round.errored .round-node {
-  border-color: color-mix(in srgb, var(--critical) 55%, transparent);
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  border-color: color-mix(in srgb, var(--color-feedback-danger) 55%, transparent);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 
 /* The round in flight. The accent is doing real work here — it is the one
    place a reader looks to answer "where is it now". */
 .round.live .round-node {
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+  border-color: var(--color-brand-accent);
+  color: var(--color-brand-accent-ink);
+  background: var(--color-brand-accent-soft);
 }
 .round.live .round-node::before {
   content: "";
   position: absolute;
   height: 18px;
   width: 18px;
-  border-radius: var(--r-full);
-  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-brand-accent);
   animation: round-pulse 1.8s ease-out infinite;
 }
 @keyframes round-pulse {
@@ -256,8 +256,8 @@
   width: 6px;
   height: 6px;
   flex: none;
-  border-radius: var(--r-full);
-  background: var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
   animation: waiting-fade 1.6s ease-in-out infinite;
 }
 /* A live indicator that will not stop is exactly the thing this setting is
@@ -290,9 +290,9 @@
    reshaping at exactly the instant it became complete, which is the defect
    rule 5 of this card forbids for its header and is no better here. */
 .tail-scroll {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-1) var(--spacing-2);
 }
 /* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
    one is a document and simply flows, because there is nothing to follow. */
@@ -310,25 +310,25 @@
    paragraph breaks, which are load-bearing in a long answer. */
 .prose {
   margin: 0;
-  font-family: var(--font-sans);
-  font-size: var(--fs-xs);
-  line-height: var(--lh-relaxed);
-  color: var(--text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-relaxed);
+  color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 78ch;
 }
 .prose.muted {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
 
 .tool-row {
-  border-radius: var(--r-xs);
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
 }
 .tool-row.failed {
-  border-color: color-mix(in srgb, var(--critical) 40%, transparent);
+  border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -336,10 +336,10 @@
 .attention-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   width: 100%;
-  padding: var(--space-3) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-3) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
   min-width: 0;
 }
@@ -347,7 +347,7 @@
   border-bottom: none;
 }
 .attention-row.clickable:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .attention-row .attention-icon {
   display: flex;
@@ -355,7 +355,7 @@
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   flex: none;
 }
 /* THE TINT IS ON THE ICON, whatever contains it. Two of the three used to be
@@ -365,18 +365,18 @@
    one screen and not the next is worse than no severity at all. */
 .attention-row[data-severity="critical"] .attention-icon,
 .attention-icon[data-severity="critical"] {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 .attention-row[data-severity="caution"] .attention-icon,
 .attention-icon[data-severity="caution"] {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 .attention-row[data-severity="info"] .attention-icon,
 .attention-icon[data-severity="info"] {
-  background: var(--info-soft);
-  color: var(--info-ink);
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
 }
 /* The geometry too, for the same reason. */
 .attention-icon {
@@ -385,7 +385,7 @@
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   flex: none;
 }
 
@@ -394,37 +394,37 @@
 .seat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .seat-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-panel);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
   text-align: left;
   min-width: 0;
-  transition: border-color var(--dur-fast) var(--ease);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .seat-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--color-border-strong);
 }
 /* The tone is what the seat is DOING, never who it is. `quiet` takes no tint
    at all: an idle seat used to draw a glowing tile that read as activity. */
 .seat-card[data-tone="working"] {
-  box-shadow: inset 2px 0 0 var(--info);
+  box-shadow: inset 2px 0 0 var(--color-feedback-info);
 }
 .seat-card[data-tone="needs"] {
-  box-shadow: inset 2px 0 0 var(--caution);
+  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
 }
 .seat-card[data-tone="broken"] {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .seat-line {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   min-height: 1.2em;
 }
 
@@ -433,55 +433,70 @@
 .org-tree {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   overflow-x: auto;
-  padding-bottom: var(--space-2);
+  padding-bottom: var(--spacing-2);
 }
 .org-unit {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  padding: var(--space-3);
-  background: var(--surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-3);
+  background: var(--color-surface-elevated);
   min-width: 0;
 }
+/* THE HEAD WRAPS AND THE NAME DOES NOT SHRINK. One unwrapped row shrank every
+   part together, and the name was the only part with text that could give way
+   — so at phone width "Developer Relations" kept 18px of its 138 while its
+   kind tag, lead chip and count kept all of theirs. The name now takes its own
+   width (up to the whole line, where a name longer than the card still
+   ellipsises) and whatever does not fit beside it drops to a second line. */
 .org-unit-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: var(--spacing-1) var(--spacing-2);
+  margin-bottom: var(--spacing-2);
   min-width: 0;
+}
+.org-unit-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-width: 0;
+}
+/* A count is one phrase: broken across two lines it reads as two facts. */
+.org-unit-count {
+  white-space: nowrap;
 }
 .org-children {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding-left: var(--space-4);
-  border-left: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding-left: var(--spacing-4);
+  border-left: 1px solid var(--color-border-default);
 }
 .org-seats {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .org-node {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  background: var(--surface-panel);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
   min-width: 190px;
   text-align: left;
 }
 .org-node:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
-}
-.org-node.human {
-  border-style: dashed;
-  background: transparent;
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
 }
 
 /* ---- Org builder: the lens ----------------------------------------------
@@ -510,7 +525,7 @@
 
    THE HEIGHT ITSELF COMES FROM THE SHELL, which the screen ASKS for rather
    than reaches into: `useFillScreen` raises the request, the shell answers it
-   with `data-fill` on its own scroller, and shell.css is where that column is
+   with `data-fill` on its own scroller, and frame.css is where that column is
    given the window's remaining height. Nothing here names a class the shell
    draws, and nothing there names one of these. */
 .org-builder:has(> .org-builder-body.fill) {
@@ -522,7 +537,7 @@
 .org-builder-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   min-width: 0;
 }
 .org-builder-body.fill {
@@ -535,15 +550,15 @@
 .org-builder:fullscreen {
   display: flex;
   flex-direction: column;
-  padding: var(--space-4);
-  background: var(--bg);
+  padding: var(--spacing-4);
+  background: var(--color-surface-background);
   overflow: auto;
 }
 
 .org-builder-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -569,34 +584,34 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* A sentence that follows the one before it in a banner, on its own line. */
 .org-builder-note {
   display: block;
-  margin-top: var(--space-1);
+  margin-top: var(--spacing-1);
 }
 
 .org-builder-conflict {
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 /* ---- Org builder: canvas ------------------------------------------------
    The builder's charts (`routes/org/builder/CanvasView.tsx`).
 
    THE CHART IS THE DESIGN SYSTEM'S `TreeCanvas`, so almost nothing about it is
-   here. The card's surface, boundary, radius and lift, the dashed edge a human
-   seat wears, the inset on each node, the focus ring, the accent ring on the
+   here. The card's surface, boundary, radius and lift, the inset on each node, the focus ring, the accent ring on the
    selection, the connectors, the gap probe and the reveal of every
    pointer-only control are all drawn by the package. What is left below is
    what the ENGINE says inside a card, which the package could not know.
 
    Nothing here is a per-entity colour: a card is neutral whatever it holds,
-   and what marks a human seat is the boundary the package draws, so the mark
-   reads to somebody who cannot separate the hue at all. */
+   and what marks a human seat is its badge's outline (a circle where an agent
+   has a squircle), a shape the package draws, so the mark reads to somebody
+   who cannot separate the hue at all. */
 
 .bchart {
   display: flex;
@@ -617,16 +632,16 @@
    for the chart beneath it. */
 .bchart-note {
   position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
-  right: var(--space-2);
+  top: var(--spacing-2);
+  left: var(--spacing-2);
+  right: var(--spacing-2);
   margin: 0;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  background: var(--surface-glass);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-glass);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
   pointer-events: none;
 }
 
@@ -664,7 +679,7 @@
    WHICH LEAVES NOTHING TO DRAW. `.btable-name` and `.btable-label` are
    HANDLES, not styles: the suite finds a row by its NAME cell rather than by
    whichever cell happens to mention a name. Every declaration they used to
-   carry was already set on the same elements by `.crewlet-org-table__node`,
+   carry was already set on the same elements by `.crewlet-org-label--row`,
    `__icon` and `__name`, four of them byte for byte, and the one that was not
    (`min-width` on the label span) was inert, since the span is not a flex item
    and the ellipsis lives on `__name`. */
@@ -680,17 +695,17 @@
    tool inside Integrations) is a sub-part, not a new part, and takes no rule,
    which the depth says directly rather than by being cancelled again below. */
 .builder-section[data-depth="0"] {
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 .builder-section-title {
   margin: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 .builder-section .builder-section .builder-section-title {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 .builder-section p,
 .builder-fact p,
@@ -699,10 +714,10 @@
 }
 .builder-list {
   margin: 0;
-  padding-left: var(--space-4);
+  padding-left: var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* Two fields that make one answer (a contact's surface and its identity) sit
@@ -716,7 +731,7 @@
 .builder-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   min-width: 0;
 }
 
@@ -729,13 +744,13 @@
 .feed-row {
   display: grid;
   grid-template-columns: 62px 132px minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 /* A row on a page about ONE turn.
@@ -750,62 +765,62 @@
 .turn-row {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 .turn-row:last-child {
   border-bottom: none;
 }
 .turn-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .turn-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .turn-row > .what {
-  color: var(--text);
+  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-row:last-child {
   border-bottom: none;
 }
 .feed-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .feed-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A TIMESTAMP IS THE FEED'S PRIMARY SORT KEY, so it is a fact and not
-   decoration. `--text-faint` is annotated in tokens.css as decoration only —
+   decoration. `--color-text-muted` is annotated in tokens.css as decoration only —
    it is measured between 2.8:1 and 4.5:1 deliberately, to keep it out of
    exactly this kind of cell — and the one column every reader scans was
    painted in it. */
 .feed-time {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .feed-actor {
-  color: var(--text-secondary);
-  font-weight: var(--fw-medium);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
 }
 .feed-what {
-  color: var(--text);
+  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-tail {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--fs-3xs);
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 
@@ -817,7 +832,7 @@
    one of its own: a count set larger than the row's quietest column would
    read as a badge, and this is a footnote to a line. */
 .run-count {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 @media (max-width: 700px) {
   .feed-row {
@@ -836,7 +851,7 @@
 .split {
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   align-items: start;
 }
 @media (max-width: 860px) {
@@ -848,9 +863,9 @@
 .thread-entry {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
 .thread-entry:last-child {
@@ -873,14 +888,14 @@
   cursor: pointer;
 }
 .thread-entry.as-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .thread-entry.as-row.selected {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 .thread-entry.as-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-brand-accent);
   outline-offset: -2px;
 }
 
@@ -895,9 +910,9 @@
   display: inline-block;
   min-width: 1.75em;
   text-align: right;
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -906,22 +921,22 @@
 .hit {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
 .hit:last-child {
   border-bottom: none;
 }
 .hit-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--accent-ink);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-brand-accent-ink);
 }
 .hit-snippet {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 
 /* ---- Config ------------------------------------------------------------- */
@@ -929,27 +944,27 @@
 .diff-line {
   display: grid;
   grid-template-columns: 18px minmax(0, 200px) minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: 2px var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  border-radius: var(--r-xs);
+  gap: var(--spacing-2);
+  padding: 2px var(--spacing-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  border-radius: var(--radius-xs);
   align-items: baseline;
 }
 /* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
    These selectors read add / remove / replace, which no answer has ever
    carried, so every diff line rendered unstyled. */
 .diff-line[data-kind="added"] {
-  background: var(--positive-soft);
-  color: var(--positive-ink);
+  background: var(--color-feedback-success-soft);
+  color: var(--color-feedback-success-ink);
 }
 .diff-line[data-kind="removed"] {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 .diff-line[data-kind="changed"] {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 
 /* ---- A live screen that stays readable ---------------------------------- */
@@ -959,13 +974,13 @@
    doing real work: it is the visible promise that motion stops at this
    edge. */
 .live-region {
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-brand-accent) 28%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-brand-accent) 3%, transparent);
   /* Generous, and more above than below: the label sits at the top edge and
      small tracked caps read as crowded long before body text does. */
-  padding: var(--space-4) var(--space-4) var(--space-3);
-  gap: var(--space-3);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
+  gap: var(--spacing-3);
 }
 
 /* The pill that holds finished rows back. Splicing them in at the top pushed
@@ -976,32 +991,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  background: var(--surface-raised);
-  color: var(--text-secondary);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition:
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    border-color var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .new-rows:hover {
-  border-color: var(--accent);
-  color: var(--accent-ink);
+  border-color: var(--color-brand-accent);
+  color: var(--color-brand-accent-ink);
 }
 
 /* HEADER SPACING. A turn head, the phase head nested inside it and the
    "Rounds" label were stacked with nothing between them, so three rows of
    chrome read as one dense block. Each gets air above what it labels. */
 .turn-card > .turn-body {
-  padding-top: var(--space-2);
+  padding-top: var(--spacing-2);
 }
 .turn-body .phase-card + .phase-card {
-  margin-top: var(--space-2);
+  margin-top: var(--spacing-2);
 }
 
 /* The workers a phase delegated to, rendered INSIDE it.
@@ -1013,17 +1028,17 @@
 .phase-nest {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-left: var(--space-3);
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--border);
+  gap: var(--spacing-2);
+  margin-left: var(--spacing-3);
+  padding-left: var(--spacing-3);
+  border-left: 2px solid var(--color-border-hover);
 }
 .phase-card > .phase-body {
-  padding-top: var(--space-2);
+  padding-top: var(--spacing-2);
 }
 .phase-head,
 .turn-head {
-  padding-block: var(--space-2);
+  padding-block: var(--spacing-2);
 }
 
 /* A FLUSH CARD CLIPS RATHER THAN HIDES, which is the difference between a
@@ -1077,6 +1092,39 @@
   text-overflow: ellipsis;
 }
 
+/* AND THE NAME BLOCK DOES NOT GIVE WAY WHILE A SUBTITLE STILL CAN. The kit
+   makes the subtitle shrink at a hundred to one, which is proportional rather
+   than ordered: with a long subtitle on a phone the name block still lost a
+   quarter of a pixel, and with the ellipsis above that was enough to draw
+   "When" as "Wh…" beside a whole sentence of subtitle. Taken out of the
+   shrink, the subtitle absorbs all of it; `max-width` is the valve that still
+   ellipses a title longer than the whole header.
+
+   ONLY WHERE THE HEAD HOLDS NOTHING ELSE RIGID. Actions and a panel's own
+   controls are `flex: none`; beside them a full-width name block would push
+   them past the card's edge, so there the kit's proportional shrink stands. */
+.crewlet-card__header-main:not(
+  :has(~ .crewlet-card__header-actions, ~ .crewlet-card__header-chrome:not(:empty))
+) {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+/* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
+   `nowrap` and reserves exactly one line, so that a row of tiles where only
+   some carry one still stands at one height — but inside a StatGroup the grid
+   already stretches every tile in a row to the tallest, so the reserve buys
+   nothing there and the ellipsis costs the ending of every sentence longer
+   than a tile: "6 seats idle and waiting for …" on a phone, and a caption cut
+   mid-clause at 1440. The line qualifies the number above it, so its end is
+   the half that says what the number means. The one-line reserve stays; this
+   only lets a longer line have a second. What uilet needs is the same rule
+   upstream, after which this one and its ALLOWED entry go. */
+.crewlet-statcard__sub {
+  white-space: normal;
+  text-wrap: balance;
+}
+
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
    trigger sets `gap: var(--spacing-1)`, which is right for the card's own
    folds (Prompt, Tool surface) where the chevron and two words are the whole
@@ -1092,7 +1140,7 @@
    not even match: the glyph is inside the meta span rather than a direct
    child of the trigger. */
 .tool-row .crewlet-disclosure__trigger {
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* A PILL ROW SCROLLS RATHER THAN PUSHING THE SCREEN SIDEWAYS, which is the
@@ -1129,18 +1177,18 @@
    needed: a running turn that looks different from a finished one at a
    glance, rather than only by reading its badge. */
 .phase-card.streaming {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, var(--color-border-hover));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 9%, transparent);
 }
 .turn-card.live {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 7%, transparent);
 }
 
 /* Text that is being written. The transition is on COLOR only — never on
    height: animating the height of a growing block makes every append a
    reflow the reader can feel, which is the opposite of the point. */
 .prose.stream {
-  transition: color var(--dur-slow) var(--ease);
+  transition: color var(--motion-duration-slow) var(--motion-easing-default);
 }
 .prose.stream::after {
   content: "";
@@ -1149,7 +1197,7 @@
   height: 1em;
   margin-left: 2px;
   vertical-align: text-bottom;
-  background: var(--accent);
+  background: var(--color-brand-accent);
   animation: caret 1.1s steps(1) infinite;
 }
 @keyframes caret {
@@ -1166,12 +1214,12 @@
 /* An attempt a provider gave up on. Dimmed and ruled off rather than deleted
    — a reader has already read it, and making it vanish reads as a glitch. */
 .abandoned {
-  border-left: 2px solid color-mix(in srgb, var(--critical) 45%, transparent);
-  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--color-feedback-danger) 45%, transparent);
+  padding-left: var(--spacing-3);
   opacity: 0.65;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1197,26 +1245,26 @@
 .int-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 
 .int-card {
-  background: var(--surface-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: border-color var(--dur) var(--ease-out);
+  transition: border-color var(--motion-duration-base) var(--motion-easing-emphasized);
 }
 .int-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--color-border-strong);
 }
 
 /* A tool nobody has connected: one row, no disclosure. */
 .int-card-absent {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6);
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-6);
 }
 /* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
    so it is the last thing that should look switched off: greying it reads as
@@ -1225,14 +1273,14 @@
    here carries STATE and never identity. The only difference from a connected
    card is that there is nothing yet to disclose. */
 .int-card-absent:hover {
-  border-color: var(--border);
+  border-color: var(--color-border-hover);
 }
 
 .int-card-head {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding-right: var(--space-6);
+  gap: var(--spacing-3);
+  padding-right: var(--spacing-6);
 }
 
 /* The disclosure is the identity block rather than the whole header, so the
@@ -1241,10 +1289,10 @@
 .int-card-toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   flex: 1;
   min-width: 0;
-  padding: var(--space-4) var(--space-2) var(--space-4) var(--space-6);
+  padding: var(--spacing-4) var(--spacing-2) var(--spacing-4) var(--spacing-6);
   background: none;
   border: none;
   cursor: pointer;
@@ -1257,10 +1305,10 @@
    they are about to press, and a highlight stopping halfway reads as a
    rendering fault. */
 .int-card-head:has(.int-card-toggle:hover) {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .int-card-toggle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-brand-accent);
   outline-offset: -2px;
 }
 
@@ -1272,16 +1320,16 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: var(--row-h-lg);
-  height: var(--row-h-lg);
-  border-radius: var(--r-full);
-  background: var(--surface-raised);
-  color: var(--text);
+  width: var(--size-row-lg);
+  height: var(--size-row-lg);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
 }
 .vendor-mark {
   display: block;
-  width: var(--fs-xl);
-  height: var(--fs-xl);
+  width: var(--font-size-xl);
+  height: var(--font-size-xl);
 }
 
 .int-heading {
@@ -1292,27 +1340,27 @@
   flex: 1;
 }
 .int-name {
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The second line carries whatever the card most needs to say: what the tool
    is for when there is nothing wrong, and what is wrong when there is. */
 .int-desc {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 .int-desc.attention {
-  color: var(--caution-ink);
+  color: var(--color-feedback-warning-ink);
 }
 
 .int-card-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex: none;
 }
 
@@ -1322,25 +1370,25 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--row-h-sm);
-  height: var(--row-h-sm);
+  width: var(--size-row-sm);
+  height: var(--size-row-sm);
   padding: 0;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   cursor: pointer;
 }
 .int-chevron:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 .int-chevron:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-brand-accent);
   outline-offset: 2px;
 }
 .int-chevron svg {
-  transition: transform var(--dur) var(--ease-out);
+  transition: transform var(--motion-duration-base) var(--motion-easing-emphasized);
 }
 .int-chevron.is-open svg {
   transform: rotate(180deg);
@@ -1354,8 +1402,8 @@
 .int-card-body {
   display: flex;
   flex-direction: column;
-  padding: var(--space-1) var(--space-6) var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--spacing-1) var(--spacing-6) var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
@@ -1373,9 +1421,9 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  border-top: 1px solid var(--color-border-default);
 }
 .int-row:first-child {
   border-top: none;
@@ -1401,13 +1449,13 @@
   flex: 1 1 15rem;
 }
 .int-row-name {
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   font-weight: 600;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .int-row-detail {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
 }
 
@@ -1418,14 +1466,14 @@
    it belongs to, which is the one ambiguity a form must not have. */
 .int-form-intro {
   margin: 0;
-  font-size: var(--fs-xs);
-  line-height: var(--lh-normal);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-secondary);
 }
 .int-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--spacing-5);
 }
 /* SENTENCE CASE, scoped to this form.
    The product's field label is an uppercase micro-label, which reads as a
@@ -1439,11 +1487,11 @@
    selector reaches the same element it always did. Specificity is what makes
    this land: `(0,2,1)` here against the package's `(0,1,0)`. */
 .int-form .field > label {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-normal);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-normal);
   text-transform: none;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 /* AN AGENT'S ROW IN A CARD'S ROSTER.
@@ -1455,7 +1503,7 @@
  */
 .int-seat-row {
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .int-seat-row .int-row-identity {
   gap: 2px;
@@ -1477,34 +1525,34 @@
    a change may not do: "No new colour, size, radius or spacing literal. If a
    component needs one, the TOKEN is what gets added."
    
-   --fs-3xs is the smallest step and the pill is made small by its PADDING
+   --font-size-2xs is the smallest step and the pill is made small by its PADDING
    rather than by a tenth type size, because a step nothing else uses is a
    scale of ten pretending to be a scale of nine. */
 .int-seat-tier {
-  margin-left: var(--space-2);
-  padding: 0 var(--space-1);
-  border-radius: var(--r-xs);
-  font-size: var(--fs-3xs);
+  margin-left: var(--spacing-2);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-2xs);
   font-weight: 600;
   line-height: 1.3;
-  letter-spacing: var(--track-wide);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
   white-space: nowrap;
-  border: 1px solid var(--border);
-  /* MUTED, NEVER FAINT. --text-faint is decoration only, and the tier is a
+  border: 1px solid var(--color-border-hover);
+  /* MUTED, NEVER FAINT. --color-text-muted is decoration only, and the tier is a
      fact about what this agent may do to a repository. */
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* Weight follows trust: full access carries the accent, review a lighter
    share of it, read-only stays neutral. */
 .int-seat-tier--full_access {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  color: color-mix(in srgb, var(--accent) 65%, var(--text));
+  border-color: color-mix(in srgb, var(--color-brand-accent) 40%, transparent);
+  color: color-mix(in srgb, var(--color-brand-accent) 65%, var(--color-text-primary));
 }
 .int-seat-tier--review {
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: color-mix(in srgb, var(--accent) 35%, var(--text-secondary));
+  border-color: color-mix(in srgb, var(--color-brand-accent) 22%, transparent);
+  color: color-mix(in srgb, var(--color-brand-accent) 35%, var(--color-text-secondary));
 }
 
 /* What configures the connection, folded away from what makes it.
@@ -1524,10 +1572,10 @@
   margin: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-3xs);
-  line-height: var(--lh-normal);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-tertiary);
 }
 /* A PERMANENT UNDERLINE, and it says so in both states. This sits in a
    sentence, so the underline is its only non-colour cue (base.css, WCAG
@@ -1544,7 +1592,7 @@
   color: inherit;
 }
 .int-form-note a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The icon is the handle for the tooltip, so it takes a cursor that says
    there is something to hover and does not shrink out of reach. */
@@ -1559,18 +1607,18 @@
      than sitting in the field flow with a hairline through the middle. The
      parent's own gap already separates it from the last field; a margin on
      top of that put the rule closer to the fold than to the form it ends. */
-  border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-5);
 }
 /* The disclosure is a control, so it reads as one: the same weight as a
    field's label, with a marker that says which way it opens. */
 .int-form-more > summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-secondary);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
 }
 .int-form-more > summary::before {
   content: "";
@@ -1579,21 +1627,21 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  transition: transform var(--dur-fast) var(--ease);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
 }
 .int-form-more[open] > summary::before {
   transform: rotate(90deg);
 }
 .int-form-more > summary:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The fields inside carry the form's own rhythm, so opening the fold does
    not change the spacing of the questions below it. */
 .int-form-more-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding-top: var(--space-5);
+  gap: var(--spacing-5);
+  padding-top: var(--spacing-5);
 }
 
 /* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
@@ -1601,23 +1649,23 @@
    agent: a ten-agent company opened twenty inputs in one scroll with no way
    to see how many were left, and the dialog now opens as the roster it is. */
 .int-seat-form {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   /* THE RUNG ABOVE ITS GROUND. This block lives inside a modal, and a modal
    paints the panel rung. */
-  background: var(--surface-raised);
+  background: var(--color-surface-elevated);
 }
 .int-seat-form + .int-seat-form {
-  margin-top: calc(var(--space-3) - var(--space-5));
+  margin-top: calc(var(--spacing-3) - var(--spacing-5));
 }
 .int-seat-summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
   cursor: pointer;
   list-style: none;
-  border-radius: var(--r-md);
+  border-radius: var(--radius-md);
 }
 .int-seat-summary::-webkit-details-marker {
   display: none;
@@ -1632,8 +1680,8 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  color: var(--text-muted);
-  transition: transform var(--dur-fast) var(--ease);
+  color: var(--color-text-tertiary);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
 }
 .int-seat-form[open] > .int-seat-summary::before {
   transform: rotate(90deg);
@@ -1643,20 +1691,20 @@
    worked only while `.int-seat-form` stood on the page itself; the form is on
    the raised rung now (it opens inside a modal, and a modal paints the panel
    one), so naming that same rung here drew the summary in its own parent's
-   colour and the block lost its hover affordance entirely. `--surface-hover`
+   colour and the block lost its hover affordance entirely. `--color-surface-hover`
    is a translucent overlay, so it lifts whatever it lands on — which is what
    every other hover in the product already uses. */
 .int-seat-summary:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 /* The badge sits at the far end, so a column of blocks reads down its right
    edge as a list of what is left to do. */
 .int-seat-name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1664,17 +1712,17 @@
 .int-seat-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: 0 var(--space-4) var(--space-4);
+  gap: var(--spacing-5);
+  padding: 0 var(--spacing-4) var(--spacing-4);
 }
 
 /* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
    FOLDED, because it is forty lines of JSON and the two boxes under it are
    what the form is for: it is opened once per agent, at the start. */
 .int-manifest {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  padding: var(--space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-3);
 }
 /* The label, the aside, and the Copy button on one line: copying is what an
    operator does with this, and a button below the fold is one they have to
@@ -1682,7 +1730,7 @@
 .int-manifest-summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: auto;
 }
 /* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
@@ -1695,8 +1743,8 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  color: var(--text-muted);
-  transition: transform var(--dur-fast) var(--ease);
+  color: var(--color-text-tertiary);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
 }
 .int-manifest[open] > .int-manifest-summary::before {
   transform: rotate(90deg);
@@ -1708,7 +1756,7 @@
   white-space: nowrap;
 }
 .int-manifest > .int-manifest-text {
-  margin-top: var(--space-3);
+  margin-top: var(--spacing-3);
 }
 /* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
    read against the app they already have, and a dialog that grew to forty
@@ -1718,12 +1766,12 @@
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  padding: var(--space-3);
-  border-radius: var(--r-sm);
-  background: var(--surface-raised);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
   line-height: 1.5;
   white-space: pre;
   -webkit-user-select: all;
@@ -1735,7 +1783,7 @@
 .int-row-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -1743,7 +1791,7 @@
 .int-row-badges {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-shrink: 0;
 }
 
@@ -1754,14 +1802,14 @@
 .int-row-note {
   flex-basis: 100%;
   display: flex;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--r-md);
-  background: var(--surface-raised);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .int-row-note-text {
   min-width: 0;
@@ -1773,17 +1821,17 @@
      line spacing inside any one of them, so a paragraph and the disclosure
      summary beneath it read as one run-on line: `…nothing else can do it.`
      followed immediately by `1 more finding`. */
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .int-row-note-when {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
    while everything around it is quieter. */
 .int-note-problem {
   margin: 0;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 /* WHAT TO DO: one step down, because it is read second and only once. It is
@@ -1794,30 +1842,30 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
 }
 
 /* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
    needs to be visibly not part of the sentence above it. */
 .int-more {
   margin: 0;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
 }
 .int-more .int-findings > li {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
    drawn at the muted step rather than the faint one: tokens.css marks
-   --text-faint decoration only, never a fact, and it falls under the 4.5:1
+   --color-text-muted decoration only, never a fact, and it falls under the 4.5:1
    contrast floor on both themes. */
 .int-summary {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 details > summary.int-summary {
   cursor: pointer;
@@ -1831,15 +1879,15 @@ details > summary.int-summary::-webkit-details-marker {
 /* A section heading inside the setup dialog, for a tool the engine reaches
    over more than one surface. */
 .int-section {
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .int-findings {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-4);
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
 }
 
 /* WHICH THINGS A FINDING IS ABOUT, as chips.
@@ -1853,7 +1901,7 @@ details > summary.int-summary::-webkit-details-marker {
 .int-subjects {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1862,15 +1910,15 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .int-subject {
   display: inline-block;
-  padding: 1px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  padding: 1px var(--spacing-2);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-sm);
   /* THE RUNG ABOVE ITS GROUND. A chip inside `.int-card`, which is a panel, so
    at the panel rung it drew nothing — and it drew nothing before this ramp was
    named either, when both were the page's colour. */
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
   /* The addresses and URLs this carries have no spaces to break at. */
   overflow-wrap: anywhere;
 }
@@ -1881,11 +1929,11 @@ details > summary.int-summary::-webkit-details-marker {
 .int-subject-more {
   cursor: pointer;
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 .int-subject-more:hover {
-  color: var(--text);
-  border-color: var(--text-faint);
+  color: var(--color-text-primary);
+  border-color: var(--color-text-muted);
 }
 
 /* ---- The work tracker ---------------------------------------------------
@@ -1915,7 +1963,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 
@@ -1936,19 +1984,19 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   min-width: 0;
 }
 .work-strip-more {
   flex: 0 0 auto;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   white-space: nowrap;
 }
 
 /* ---- The bar, the chips and the two menus ------------------------------- */
 
 /* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
-   `--z-sticky`, opaque, wrapping, and a `--toolbar-h` floor. `.screen:has(
+   `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. `.screen:has(
    .toolbar)` publishes `--sticky-top`, so every other thing that sticks in the
    scroller offsets itself by it; a copy of the toolbar's declarations under
    another class name is what left the grid's column heads parked underneath an
@@ -1959,7 +2007,7 @@ details > summary.int-summary::-webkit-details-marker {
    the count at the edge. So the wrap rules the three groups needed are gone —
    there is nothing left to wrap. */
 .work-bar {
-  column-gap: var(--space-3);
+  column-gap: var(--spacing-3);
 }
 /* SEARCH IS THE ONE CONTROL A PERSON TYPES INTO, so it takes the slack when it
    is open and nothing at all when it is not — which is most of the time, and is
@@ -1967,7 +2015,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-bar-find {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   flex: 1 1 220px;
   max-width: 380px;
   min-width: 160px;
@@ -1979,16 +2027,16 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .work-coverage {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* ---- The chips ---------------------------------------------------------- */
@@ -2001,22 +2049,22 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) 0;
   min-width: 0;
 }
 /* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
    relation, and the value is the answer — so the value is the only one at full
    ink. A chip set in one register reads as a label rather than as a sentence. */
 .work-chip-field {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
 .work-chip-verb {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .work-chip-value {
-  color: var(--text);
-  font-weight: var(--fw-medium);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
 }
 
 /* ---- The two menus ------------------------------------------------------ */
@@ -2033,42 +2081,42 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .work-menu-find,
 .work-menu-head {
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .work-menu-list {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   max-height: min(52dvh, 420px);
-  padding: var(--space-1);
+  padding: var(--spacing-1);
 }
 .work-menu-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
   min-height: var(--size-target-min);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--spacing-1) var(--spacing-2);
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   text-align: left;
   cursor: pointer;
 }
 .work-menu-row:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 /* THE ANSWER THAT IS CURRENT, as the accent — which is what the accent is for:
    where the reader is. A pressed row is the one value of this field that is on,
    and pressing it again takes it off, which is what the state promises. */
 .work-menu-row[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
 }
 /* A FIXED SLOT WHETHER OR NOT THERE IS A MARK IN IT, which is the rule
    `.side-mark` states for the rail: every row at one depth starts its text on
@@ -2079,41 +2127,41 @@ details > summary.int-summary::-webkit-details-marker {
   justify-content: center;
   width: 16px;
   flex: none;
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 /* THE KEY IT WRITES, at the quietest step: this product's address bar is a
    surface people read, and a reader who has seen `assignee=` in a URL can then
    write one. It is decoration in the contrast sense — never the only carrier of
-   anything — so `--text-muted` is the step it is allowed. */
+   anything — so `--color-text-tertiary` is the step it is allowed. */
 .work-menu-key {
   margin-left: auto;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 .work-menu-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
 }
 .work-menu-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 /* THE TWO SET QUESTIONS UNDER A TYPED FIELD'S BOX are the same rows a listed
    field ends with, so they are the same list — divided from the form above it
    by the rule every other section of this panel is divided by, rather than
    reading as two more things to type into. */
 .work-menu-form + .work-menu-list {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--color-border-default);
 }
 .work-menu-empty {
-  padding: var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* The Display panel is a form rather than a list, so it is padded as one. */
@@ -2124,8 +2172,8 @@ details > summary.int-summary::-webkit-details-marker {
    second class carrying them would be a copy waiting to drift. `.work-menu`
    above is the bare panel underneath it. */
 .work-display {
-  gap: var(--space-3);
-  padding: var(--space-3);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
   min-width: 300px;
 }
 /* THE SHAPES ARE A ROW OF FIVE, each a mark over its own name: a shape is
@@ -2133,42 +2181,42 @@ details > summary.int-summary::-webkit-details-marker {
 .work-display-shapes {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 .work-display-shape {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: var(--space-2) 2px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
+  padding: var(--spacing-2) 2px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   font: inherit;
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   cursor: pointer;
 }
 .work-display-shape:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
 }
 .work-display-shape[aria-pressed="true"] {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
   border-color: transparent;
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .work-display-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  gap: var(--spacing-3);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 .work-display-foot {
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* ---- The body ------------------------------------------------------------
@@ -2195,7 +2243,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   align-items: start;
   min-width: 0;
 }
@@ -2209,13 +2257,13 @@ details > summary.int-summary::-webkit-details-marker {
      panel that had finished rather than as a lane with room in it. The
      body's own max-height is what bounds them all. */
   align-items: stretch;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   overflow-x: auto;
-  padding-bottom: var(--space-2);
+  padding-bottom: var(--spacing-2);
   min-width: 0;
   scroll-snap-type: x proximity;
 }
-/* A LANE IS A RECESS IN THE PAGE, and `--surface-inset` is the token whose
+/* A LANE IS A RECESS IN THE PAGE, and `--color-surface-inset` is the token whose
    job that is — an overlay that darkens the ground in light and lifts it in
    dark, so the lane reads as a surface under the cards in BOTH. The retired
    `--bg-sunken` was the wrong one: it resolved to the panel colour, ABOVE the
@@ -2227,22 +2275,22 @@ details > summary.int-summary::-webkit-details-marker {
   width: min(292px, 82vw);
   display: flex;
   flex-direction: column;
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  background: var(--color-surface-inset);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   scroll-snap-align: start;
   min-width: 0;
 }
 .work-col-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-wide);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   min-width: 0;
 }
 .work-col-head .count-chip {
@@ -2251,8 +2299,8 @@ details > summary.int-summary::-webkit-details-marker {
 .work-col-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: 0 var(--space-2) var(--space-2);
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-2) var(--spacing-2);
   /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
   overflow-y: auto;
   /* A LANE IS A RANGE, NOT A CEILING. `flex: 1 1 auto` below fills whatever
@@ -2274,10 +2322,10 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 1 1 auto;
 }
 .work-col-foot {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  border-top: 1px solid var(--color-border-default);
 }
 /* IT ANSWERS THE POINTER. `.work-col-foot a` is (0,1,1) and so is the
    `a:hover` colour step, and this sheet is imported second — so pinning the
@@ -2286,15 +2334,15 @@ details > summary.int-summary::-webkit-details-marker {
    hovering `N more →` changed nothing whatsoever. (0,2,1) puts the step back
    where the tie cannot reach it. */
 .work-col-foot a {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .work-col-foot a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .work-col-empty {
-  padding: var(--space-4) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-4) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   text-align: center;
 }
 
@@ -2303,37 +2351,37 @@ details > summary.int-summary::-webkit-details-marker {
 .work-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-3);
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-1);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
   min-width: 0;
   transition:
-    border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+    border-color var(--motion-duration-fast) var(--motion-easing-default),
+    box-shadow var(--motion-duration-fast) var(--motion-easing-default);
 }
 .work-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-2);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
 }
 .work-card.selected {
-  border-color: var(--accent-line);
-  box-shadow: var(--shadow-2);
+  border-color: var(--color-brand-accent-soft-strong);
+  box-shadow: var(--shadow-md);
 }
 /* A BLOCKED CARD WEARS A RAIL, the same idiom a stopped seat's card does:
    the badge says it in words and the rail makes a column of forty scannable
    for the three that cannot move. */
 .work-card[data-blocked="true"] {
   box-shadow:
-    inset 2px 0 0 var(--critical),
-    var(--shadow-1);
+    inset 2px 0 0 var(--color-feedback-danger),
+    var(--shadow-sm);
 }
 .work-card-top {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 /* THE CLAMP IS `.clamp` IN base.css, which this element carries. What stays
@@ -2345,14 +2393,14 @@ details > summary.int-summary::-webkit-details-marker {
    flex parent. */
 .work-card-title {
   --clamp-lines: 3;
-  font-size: var(--fs-xs);
-  line-height: var(--lh-snug);
-  color: var(--text);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-snug);
+  color: var(--color-text-primary);
 }
 .work-card-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -2360,8 +2408,8 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The marks a row and a card share ----------------------------------- */
 
 .work-key {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex: none;
@@ -2369,40 +2417,72 @@ details > summary.int-summary::-webkit-details-marker {
 .work-type {
   display: inline-flex;
   align-items: center;
-  color: var(--text-faint);
+  color: var(--color-text-muted);
   flex: none;
 }
+/* THE PRIORITY TAKES THE SIZE AND INK OF WHATEVER IT SITS IN. Its word is a
+   property value on the task page and in a grid's priority column, and a
+   value drawn a step smaller and in a status hue than every value beside it
+   read as a warning rather than as a setting. The MARK carries the scale; only
+   `urgent`'s alert mark takes a tone. */
 .work-prio {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  color: var(--text-muted);
-  font-size: var(--fs-3xs);
+  gap: var(--spacing-1);
   flex: none;
 }
-.work-prio[data-priority="urgent"] {
-  color: var(--critical-ink);
+.work-prio[data-priority="urgent"] > svg {
+  color: var(--color-feedback-danger-ink);
 }
-.work-prio[data-priority="high"] {
-  color: var(--caution-ink);
+/* The signal bars: three rising bars, filled to the step (`components/work.tsx`
+   PriorityMark). The unfilled bars are the strong hairline and the filled
+   ones the secondary ink — the approved Board's two inks — so a level is read
+   by counting, never by hue. Sized to the 14px glyph box it stands in for. */
+.work-prio-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  width: 14px;
+  height: 14px;
+  padding: 1.5px 1px;
+  flex: none;
+}
+.work-prio-bars > i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+}
+.work-prio-bars > i:nth-child(1) {
+  height: 40%;
+}
+.work-prio-bars > i:nth-child(2) {
+  height: 70%;
+}
+.work-prio-bars > i:nth-child(3) {
+  height: 100%;
+}
+.work-prio-bars[data-level="1"] > i:nth-child(-n + 1),
+.work-prio-bars[data-level="2"] > i:nth-child(-n + 2),
+.work-prio-bars[data-level="3"] > i {
+  background: var(--color-text-secondary);
 }
 .work-due {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex: none;
 }
 .work-due.overdue {
-  color: var(--critical-ink);
-  font-weight: var(--fw-medium);
+  color: var(--color-feedback-danger-ink);
+  font-weight: var(--font-weight-medium);
 }
 .work-size {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex: none;
@@ -2415,16 +2495,16 @@ details > summary.int-summary::-webkit-details-marker {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   width: 20px;
   height: 20px;
-  border-radius: var(--r-xs);
-  border: 1px dashed var(--border);
-  color: var(--text-faint);
+  border-radius: var(--radius-xs);
+  border: 1px dashed var(--color-border-hover);
+  color: var(--color-text-muted);
   flex: none;
 }
 .work-nobody .muted {
-  margin-left: var(--space-2);
+  margin-left: var(--spacing-2);
   white-space: nowrap;
 }
 
@@ -2457,14 +2537,14 @@ details > summary.int-summary::-webkit-details-marker {
      floating inside the panel. A browser adds that inset back when it sizes a
      CONTENT-based track — the trailing `auto` holding the timestamp comes out
      16px wider, which is why the right-hand end has always looked right — but
-     it cannot add it to a fixed one. `--row-inline` is `--space-4`, 16px at
+     it cannot add it to a fixed one. `--row-inline` is `--spacing-4`, 16px at
      the default density, and the priority track was a bare `16px`: the cell
      resolved to EXACTLY ZERO wide, the mark overflowed it into the gutter,
      and it came to rest on the key. Measured at 1400px: the mark spanning
      [37,49] against a key starting at 49, so `↑LEAD-3` read as one identifier
      with a stray character on the front.
      STATED AS THE TOKEN PLUS A LITERAL, which is also the only form that
-     holds at every density: the inset term is `--space-4` and follows the
+     holds at every density: the inset term is `--spacing-4` and follows the
      density multiplier exactly as the row's padding does, while the mark is a
      glyph of a fixed size and does not. A literal 32px would be right at one
      setting and wrong at the other two. */
@@ -2487,7 +2567,7 @@ details > summary.int-summary::-webkit-details-marker {
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
      key beside it. */
-  column-gap: var(--space-3);
+  column-gap: var(--spacing-3);
 }
 /* A LIST WHOSE ORDER IS ITS CONTENT OPENS WITH THE PLACE, and the track is
    declared on the LIST because that is where every track here lives — a row
@@ -2499,7 +2579,7 @@ details > summary.int-summary::-webkit-details-marker {
    AND THE OPENING TRACK CARRIES THE ROW'S INSET, which is now this one rather
    than the priority mark's — a subgrid item's padding comes out of the first
    track it spans, so a bare width there resolves to nothing and the value
-   overflows onto the cell beside it. 20px is two tabular digits at `--fs-3xs`,
+   overflows onto the cell beside it. 20px is two tabular digits at `--font-size-2xs`,
    which is the whole range a stored queue has (`tracker.MaxPriorities` is 32).
    The priority mark keeps the bare 16px it needs, one column along. */
 .work-rows[data-ordinals="true"] {
@@ -2513,19 +2593,19 @@ details > summary.int-summary::-webkit-details-marker {
    column under the pointer on the one list a reader is scanning down. */
 .work-cell-ord {
   justify-content: flex-start;
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .work-row {
   display: grid;
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
   align-items: center;
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: var(--row-h);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
+  min-height: var(--size-row-md);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 /* A cell the row keeps even when its value is absent — see [WorkRow]. It
@@ -2560,21 +2640,21 @@ details > summary.int-summary::-webkit-details-marker {
   border-bottom: none;
 }
 .work-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .work-row.selected {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 .work-row-title {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .work-row-when {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -2587,9 +2667,9 @@ details > summary.int-summary::-webkit-details-marker {
 .work-list {
   display: flex;
   flex-direction: column;
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   /* THE LIST MAKES NO SCROLLPORT OF ITS OWN — the same rule `.grid-wrap` gives
      in frame.css, and for the same reason. What the panel wants is the rows
      rounded off at its own radius, which `clip` does exactly as `hidden` did;
@@ -2617,7 +2697,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-census {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   max-width: 560px;
 }
 /* IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the grid,
@@ -2633,7 +2713,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-lastchange {
   display: flex;
   align-items: baseline;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   min-width: 0;
 }
 
@@ -2649,9 +2729,9 @@ details > summary.int-summary::-webkit-details-marker {
 .work-log {
   display: flex;
   flex-direction: column;
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   overflow: hidden;
   min-width: 0;
 }
@@ -2659,27 +2739,27 @@ details > summary.int-summary::-webkit-details-marker {
   display: grid;
   grid-template-columns: 84px 92px minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--row-inline);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: var(--row-h);
-  font-size: var(--fs-xs);
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
+  min-height: var(--size-row-md);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 .work-log-row:last-child {
   border-bottom: none;
 }
 .work-log-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .work-log-when {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .work-log-key {
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 /* THE DELTA WRAPS RATHER THAN ELLIPSING. It is the one cell here that is
@@ -2687,17 +2767,17 @@ details > summary.int-summary::-webkit-details-marker {
    ellipsis on it cuts the half that says where the value WENT. The same rule
    the work item's own history entry keeps one screen over. */
 .work-log-what {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .work-log-who {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   justify-content: flex-end;
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   min-width: 0;
 }
 
@@ -2711,15 +2791,15 @@ details > summary.int-summary::-webkit-details-marker {
 .work-cal-nav {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .work-cal-month {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  color: var(--heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-tight);
+  color: var(--color-text-primary);
   min-width: 10ch;
 }
 .work-cal-grid {
@@ -2727,23 +2807,23 @@ details > summary.int-summary::-webkit-details-marker {
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 .work-cal-dow {
-  padding: var(--space-2);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  padding: var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   text-align: center;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .work-cal-cell {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-height: 116px;
-  padding: var(--space-1);
-  border-right: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-1);
+  border-right: 1px solid var(--color-border-default);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
 .work-cal-cell:nth-child(7n) {
@@ -2760,20 +2840,20 @@ details > summary.int-summary::-webkit-details-marker {
    this product paints, in all three states of the cascade. So every cell of
    the grid came back the card's own colour and the leading 31 was
    indistinguishable from the 1st. The ramp is named by rung now and there is
-   exactly one step above a panel; see uilet.css's surfaces note.
+   exactly one step above a card: `--color-surface-elevated`.
    `styles/surfaces.test.ts` resolves every pair against the installed palette
    and fails if any of them collide again. */
 .work-cal-cell.out {
-  background: var(--surface-raised);
+  background: var(--color-surface-elevated);
 }
 .work-cal-day {
   align-self: flex-start;
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  color: var(--text);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
   font-variant-numeric: tabular-nums;
-  padding: 1px var(--space-1);
-  border-radius: var(--r-full);
+  padding: 1px var(--spacing-1);
+  border-radius: var(--radius-pill);
   min-width: 18px;
   text-align: center;
 }
@@ -2784,8 +2864,8 @@ details > summary.int-summary::-webkit-details-marker {
    the design system's own device on `.crewlet-calendar__day.is-outside`: body
    ink for the month being read, tertiary for the months either side.
 
-   NOT `--text-faint`. That is `--color-text-muted`, #8f8f95, which is declared
-   decoration-only for exactly this reason: a date is read, not decorated. Nor a
+   NOT `--color-text-muted`, which the palette declares decoration-only (about
+   3:1 on either sheet) for exactly this reason: a date is read, not decorated. Nor a
    WEIGHT step — thirty semibold numerals is a grid that shouts, and the accent
    pill below is already the emphasis this cell has.
 
@@ -2795,51 +2875,51 @@ details > summary.int-summary::-webkit-details-marker {
    other way this muted ink would land on the accent fill and today's pill would
    lose its contrast. */
 .work-cal-cell.out .work-cal-day {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .work-cal-cell.today .work-cal-day {
-  background: var(--accent);
-  color: var(--text-on-fill);
+  background: var(--color-brand-accent);
+  color: var(--color-text-on-accent);
 }
 .work-cal-chip {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px var(--space-1);
-  border-radius: var(--r-xs);
-  background: var(--surface-inset);
-  font-size: var(--fs-3xs);
-  color: var(--text-secondary);
+  padding: 2px var(--spacing-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-inset);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
   min-width: 0;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
 .work-cal-chip:hover {
-  background: var(--surface-active);
+  background: var(--color-surface-pressed);
 }
 .work-cal-chip[data-overdue="true"] {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 /* FINISHED WORK IS QUIETER, not hidden: a calendar that dropped it would
    answer "what is due" with a month that forgets what was delivered. */
 .work-cal-chip[data-done="true"] {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .work-cal-chip .work-cal-key {
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
   flex: none;
 }
 .work-cal-more {
   align-self: flex-start;
-  font-size: var(--fs-3xs);
-  color: var(--accent-ink);
-  padding: 0 var(--space-1);
+  font-size: var(--font-size-2xs);
+  color: var(--color-brand-accent-ink);
+  padding: 0 var(--spacing-1);
 }
 .work-cal-note {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* ---- The peek, and the item page ---------------------------------------- */
@@ -2847,7 +2927,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   align-items: start;
   min-width: 0;
 }
@@ -2855,7 +2935,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-item-side {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 /* THE SUBTASK LIST MEASURES ITSELF. A named container rather than an
@@ -2885,21 +2965,21 @@ details > summary.int-summary::-webkit-details-marker {
    Said in a word beside the value rather than by dimming it: "archived" and
    "this build could not read it" are different facts and neither is a shade. */
 .work-field-state {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  margin-left: var(--space-1);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  margin-left: var(--spacing-1);
 }
 
 .work-check {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
-  font-size: var(--fs-xs);
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) 0;
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 .work-check.done .work-check-name {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   text-decoration: line-through;
 }
 .work-check-name {
@@ -2912,7 +2992,7 @@ details > summary.int-summary::-webkit-details-marker {
 /* A comment carrying a QUESTION wears the caution rail: somebody owes it an
    answer, which is the one state in a thread that is about the reader. */
 .work-ask {
-  box-shadow: inset 2px 0 0 var(--caution);
+  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
 }
 .work-hist {
   display: flex;
@@ -2943,30 +3023,30 @@ details > summary.int-summary::-webkit-details-marker {
      content, so with nothing between them a row that carried both painted the
      marker hard against the instant — and the one place that looked like a gap
      was the 6px of slack inside the 18px glyph column, which is the glyph's own
-     track and says nothing about the other three boundaries. `--space-3` is
+     track and says nothing about the other three boundaries. `--spacing-3` is
      `.work-feed-row`'s, the sibling grid of the same font size drawing the same
      kind of line, so the two cannot drift; the tail keeps its tighter
-     `--space-2` inside itself, because `quiet` and `turn →` are one group and
+     `--spacing-2` inside itself, because `quiet` and `turn →` are one group and
      the tracks around them are columns. */
-  gap: var(--space-3);
-  /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--space-1` was not: 4px of
+  gap: var(--spacing-3);
+  /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--spacing-1` was not: 4px of
      padding put 8px between two entries while the lines inside one sit 18px
      apart, so a wrapped panel read as a single block of prose with no boundary
      anywhere. The hairline is what every other variable-height list here already
      uses — `.work-feed-row`, `.thread-entry`. */
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
   /* STATED rather than inherited from `body`, because the glyph's offset below
      is computed from it. */
-  line-height: var(--lh-normal);
+  line-height: var(--font-line-height-normal);
   min-width: 0;
 }
 .work-hist-row:last-child {
   border-bottom: none;
 }
 .work-hist-row > svg {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
   /* ON THE ENTRY'S FIRST LINE, never in the middle of it. The row aligns on the
      FIRST baseline, so the timestamp stays level with the opening line; an icon
      centred in the ROW tracks the row's HEIGHT instead and slides to the middle
@@ -2976,7 +3056,7 @@ details > summary.int-summary::-webkit-details-marker {
      taller one. 12px is the `xs` glyph's own edge; `1em` is this row's own font
      size. */
   align-self: start;
-  margin-top: calc((1em * var(--lh-normal) - 12px) / 2);
+  margin-top: calc((1em * var(--font-line-height-normal) - 12px) / 2);
 }
 /* The description, wrapping. `anywhere` rather than `break-word`: a value can be
    a uuid or a JSON object — `describeHistory`'s `scalar` stringifies both — and
@@ -2989,11 +3069,11 @@ details > summary.int-summary::-webkit-details-marker {
 /* The tail: what the row's sentence must not be able to swallow. */
 .work-hist-tail {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   white-space: nowrap;
 }
 .work-hist-when {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -3003,10 +3083,10 @@ details > summary.int-summary::-webkit-details-marker {
   display: grid;
   grid-template-columns: 68px 96px 76px minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-2xs);
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
   min-width: 0;
 }
 .work-feed-row:last-child {
@@ -3014,12 +3094,12 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .work-feed-when,
 .work-feed-who {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .work-feed-what {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   min-width: 0;
 }
 
@@ -3053,8 +3133,8 @@ a.work-cal-chip {
    body's floor is the one already measured for the list: 444px is under what
    a work row needs for a key, a title and an assignee (see
    `--peek-drawer-max` in frame.css), and an item page draws that row for
-   every subtask. Beside it the rail is 300, the gap is `--space-4` and the
-   page's own inset is `--space-5` twice — 56px at normal density and 63.84 at
+   every subtask. Beside it the rail is 300, the gap is `--spacing-4` and the
+   page's own inset is `--spacing-5` twice — 56px at normal density and 63.84 at
    comfortable — so 444 + 300 + 64 = 808, and the WIDEST density is what the
    one number has to clear, exactly as the peek's own threshold argues. */
 @container page (max-width: 808px) {
@@ -3144,7 +3224,7 @@ a.work-cal-chip {
   margin: 0;
 }
 .prose.md > * + * {
-  margin-top: var(--space-3);
+  margin-top: var(--spacing-3);
 }
 .prose.md h2,
 .prose.md h3,
@@ -3152,36 +3232,36 @@ a.work-cal-chip {
 .prose.md h5,
 .prose.md h6 {
   font-weight: 600;
-  line-height: var(--lh-tight);
-  color: var(--heading);
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
 }
 /* A heading opens a section, so it gets more air above it than a paragraph —
    except the first one, which has the panel's own padding above it already. */
 .prose.md > * + :is(h2, h3, h4, h5, h6) {
-  margin-top: var(--space-5);
+  margin-top: var(--spacing-5);
 }
 .prose.md h2 {
-  font-size: var(--fs-md);
+  font-size: var(--font-size-md);
 }
 .prose.md h3 {
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
 }
 .prose.md h4,
 .prose.md h5,
 .prose.md h6 {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 .prose.md ul,
 .prose.md ol {
-  padding-inline-start: var(--space-5);
+  padding-inline-start: var(--spacing-5);
 }
 .prose.md li + li {
-  margin-top: var(--space-1);
+  margin-top: var(--spacing-1);
 }
 .prose.md li > ul,
 .prose.md li > ol {
-  margin-top: var(--space-1);
+  margin-top: var(--spacing-1);
 }
 /* A task list keeps its box on the line rather than in the marker's place:
    the marker is what says "list", and the box is what says "done". */
@@ -3192,7 +3272,7 @@ a.work-cal-chip {
 .prose.md ul.md-tasks > li {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 /* The item's own content is ONE column beside the box, never a second cell
    of the row: a sublist belongs under the line it hangs off, not beside it. */
@@ -3201,14 +3281,14 @@ a.work-cal-chip {
   flex: 1;
 }
 .prose.md .md-task-body > * + * {
-  margin-top: var(--space-2);
+  margin-top: var(--spacing-2);
 }
 .prose.md ul.md-tasks input[type="checkbox"] {
   margin-top: 0.2em;
   /* The box is a RENDERING of what the document says and this surface writes
      nothing, so it is disabled — and a disabled control at its browser
      default reads as greyed-out noise beside the text it belongs to. */
-  accent-color: var(--accent);
+  accent-color: var(--color-brand-accent);
   opacity: 0.85;
 }
 /* A FENCED BLOCK WRAPS RATHER THAN SCROLLING, which is the whole of the fix
@@ -3226,23 +3306,23 @@ a.work-cal-chip {
    no spaces to break at: a minified payload, a base64 blob and a long path
    are each one word to a line breaker. */
 .prose.md pre.md-code {
-  background: var(--surface-inset);
-  border-radius: var(--r-sm);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-2xs);
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .prose.md blockquote {
   margin: 0;
-  padding-inline-start: var(--space-3);
-  border-inline-start: 2px solid var(--border-strong);
-  color: var(--text-secondary);
+  padding-inline-start: var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
 }
 .prose.md hr {
   border: 0;
-  border-top: 1px solid var(--border-subtle);
-  margin: var(--space-4) 0;
+  border-top: 1px solid var(--color-border-default);
+  margin: var(--spacing-4) 0;
 }
 /* Rendered Markdown is running prose by definition, so its links keep the
    permanent underline base.css describes — through hover too, which the
@@ -3255,7 +3335,7 @@ a.work-cal-chip {
   text-underline-offset: 2px;
 }
 .prose.md a {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 /* AND IT ANSWERS THE POINTER, which `.prose.md a` pinning the colour at
    (0,2,1) stopped `a:hover` from doing. Measured: this was the one register in
@@ -3263,11 +3343,11 @@ a.work-cal-chip {
    underline is permanent here, so it says "link" without help, but it cannot
    say "the pointer is on THIS one". Same step as every other link takes. */
 .prose.md a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .prose.md img {
   max-width: 100%;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
@@ -3278,17 +3358,17 @@ a.work-cal-chip {
 .md-table table {
   border-collapse: collapse;
   width: 100%;
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 .md-table th,
 .md-table td {
-  padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
 }
 .md-table th {
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -3297,34 +3377,34 @@ a.work-cal-chip {
    it. Marked with a glyph as well as a tint: colour alone is not a signal, and
    a printed or forced-colours render loses the tint entirely. */
 .diff {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  line-height: var(--lh-normal);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
 }
 .diff-section + .diff-section,
 .diff-skip + .diff-line {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--color-border-default);
 }
 /* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
    ends looks like one rewritten in the middle. */
 .diff-skip {
-  padding: var(--space-1) var(--space-3);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-family: var(--font-sans);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-1) var(--spacing-3);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
 }
 .diff-line {
   display: grid;
   grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: 1px var(--space-3) 1px var(--space-2);
+  gap: var(--spacing-2);
+  padding: 1px var(--spacing-3) 1px var(--spacing-2);
 }
 .diff-no {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   text-align: right;
   user-select: none;
 }
@@ -3337,22 +3417,22 @@ a.work-cal-chip {
   overflow-wrap: anywhere;
 }
 .diff-line.is-add {
-  background: var(--positive-soft);
+  background: var(--color-feedback-success-soft);
 }
 .diff-line.is-add .diff-mark {
-  color: var(--positive-ink);
+  color: var(--color-feedback-success-ink);
 }
 .diff-line.is-remove {
-  background: var(--critical-soft);
+  background: var(--color-feedback-danger-soft);
 }
 .diff-line.is-remove .diff-mark {
-  color: var(--critical-ink);
+  color: var(--color-feedback-danger-ink);
 }
 .diff-add-ink {
-  color: var(--positive-ink);
+  color: var(--color-feedback-success-ink);
 }
 .diff-del-ink {
-  color: var(--critical-ink);
+  color: var(--color-feedback-danger-ink);
 }
 
 /* The fires a cron expression works out to — a plain ordered list without the
@@ -3364,7 +3444,7 @@ a.work-cal-chip {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* ---- The timeline ------------------------------------------------------
@@ -3379,38 +3459,38 @@ a.work-cal-chip {
 .tl {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   min-width: 0;
-  padding: var(--space-3);
+  padding: var(--spacing-3);
 }
 .tl-band {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .tl-band-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .tl-band-name {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  color: var(--heading);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-tight);
+  color: var(--color-text-primary);
 }
 .tl-band-count {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .tl-none {
-  font-size: var(--fs-sm);
-  color: var(--text-muted);
-  padding: var(--space-3);
-  border: 1px dashed var(--border-subtle);
-  border-radius: var(--r-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  padding: var(--spacing-3);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 /* THE SCROLLER holds the axis; the names are laid over its left edge and
@@ -3419,9 +3499,9 @@ a.work-cal-chip {
   position: relative;
   overflow-x: auto;
   overflow-y: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
 }
 .tl-inner {
   position: relative;
@@ -3434,13 +3514,13 @@ a.work-cal-chip {
 .tl-axis {
   position: relative;
   height: 24px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .tl-tick {
   position: absolute;
   top: 5px;
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
   padding-left: 4px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -3450,7 +3530,7 @@ a.work-cal-chip {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }
 .tl-rows {
   position: relative;
@@ -3460,14 +3540,14 @@ a.work-cal-chip {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--border-subtle);
+  background: var(--color-border-default);
 }
 .tl-now {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--accent-line);
+  background: var(--color-brand-accent-soft-strong);
 }
 .tl-arrows {
   position: absolute;
@@ -3480,13 +3560,13 @@ a.work-cal-chip {
   stroke-width: 1.5;
 }
 .tl-arrow.is-open {
-  stroke: var(--critical-ink);
+  stroke: var(--color-feedback-danger-ink);
 }
 .tl-arrow.is-cleared {
-  stroke: var(--border-strong);
+  stroke: var(--color-border-strong);
 }
 .tl-head {
-  fill: var(--border-strong);
+  fill: var(--color-border-strong);
 }
 
 .tl-bar {
@@ -3494,9 +3574,9 @@ a.work-cal-chip {
   height: 22px;
   display: flex;
   align-items: center;
-  border-radius: var(--r-sm);
-  padding: 0 var(--space-2);
-  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--spacing-2);
+  font-size: var(--font-size-compact);
   overflow: hidden;
   border: 1px solid transparent;
   min-width: 10px;
@@ -3505,7 +3585,7 @@ a.work-cal-chip {
   filter: brightness(1.06);
 }
 .tl-bar.selected {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 .tl-bar-label {
@@ -3514,30 +3594,30 @@ a.work-cal-chip {
   text-overflow: ellipsis;
 }
 .tl-bar[data-tone="planned"] {
-  background: var(--surface-raised);
-  border-color: var(--border-strong);
-  color: var(--text);
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
 }
 .tl-bar[data-tone="active"] {
-  background: var(--info-soft);
-  border-color: var(--info-ink);
-  color: var(--info-ink);
+  background: var(--color-feedback-info-soft);
+  border-color: var(--color-feedback-info-ink);
+  color: var(--color-feedback-info-ink);
 }
 .tl-bar[data-tone="done"] {
-  background: var(--positive-soft);
-  border-color: var(--positive-ink);
-  color: var(--positive-ink);
+  background: var(--color-feedback-success-soft);
+  border-color: var(--color-feedback-success-ink);
+  color: var(--color-feedback-success-ink);
 }
 .tl-bar[data-tone="overdue"] {
-  background: var(--caution-soft);
-  border-color: var(--caution-ink);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  border-color: var(--color-feedback-warning-ink);
+  color: var(--color-feedback-warning-ink);
 }
 .tl-bar[data-tone="blocked"],
 .tl-bar[data-tone="critical"] {
-  background: var(--critical-soft);
-  border-color: var(--critical-ink);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  border-color: var(--color-feedback-danger-ink);
+  color: var(--color-feedback-danger-ink);
 }
 /* A ONE-DAY BAR IS A MARKER, not a span: the two dashed ends say the other
    end of the span was never stated, so nobody reads it as work that takes
@@ -3551,8 +3631,8 @@ a.work-cal-chip {
     45deg,
     transparent,
     transparent 4px,
-    var(--critical-soft) 4px,
-    var(--critical-soft) 8px
+    var(--color-feedback-danger-soft) 4px,
+    var(--color-feedback-danger-soft) 8px
   );
 }
 
@@ -3564,58 +3644,58 @@ a.work-cal-chip {
   /* THE RUNG ABOVE ITS GROUND. The frozen name column sits over `.tl-scroll`,
    which is a panel, and an opaque background is the whole reason it has one —
    at the same rung the bars scrolled under it invisibly. */
-  background: var(--surface-raised);
-  border-right: 1px solid var(--border-subtle);
+  background: var(--color-surface-elevated);
+  border-right: 1px solid var(--color-border-default);
 }
 .tl-name {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   height: 30px;
-  padding: 0 var(--space-2);
-  font-size: var(--fs-xs);
-  color: var(--text);
+  padding: 0 var(--spacing-2);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
   min-width: 0;
 }
 .tl-name:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .tl-name.selected {
-  background: var(--accent-soft);
+  background: var(--color-brand-accent-soft);
 }
 
 .tl-aside {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .tl-unscheduled {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .tl-aside-note {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 .tl-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .tl-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   max-width: 28ch;
-  padding: 2px var(--space-2);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-xs);
-  color: var(--text);
+  padding: 2px var(--spacing-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
 }
 .tl-chip:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 /* A NARROW BAR'S LABEL, beside it. `pointer-events: none` so it never eats a
    click meant for the bar it names or for one further along the row. */
@@ -3624,8 +3704,8 @@ a.work-cal-chip {
   height: 22px;
   display: flex;
   align-items: center;
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -3643,65 +3723,65 @@ a.work-cal-chip {
 .wl-row {
   display: grid;
   grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   align-items: center;
-  padding: var(--space-2) var(--row-inline);
+  padding: var(--spacing-2) var(--row-inline);
 }
 .wl-head {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-wide);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
+  color: var(--color-text-tertiary);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .wl-row + .wl-row {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--color-border-default);
 }
 .wl-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .wl-who {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  color: var(--text);
-  font-size: var(--fs-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
 }
 /* THE NAME IS THE LINK, so it has to be the thing that answers the pointer.
    The row already washes on hover, but the row washes from anywhere in it —
    the badge column, the load bar — so the wash says "this row", never "this
-   name is a link". At rest the name is `--text` and `a:hover` moves it to
-   `--text`, which is no move at all; the step here is the other direction,
+   name is a link". At rest the name is `--color-text-primary` and `a:hover` moves it to
+   `--color-text-primary`, which is no move at all; the step here is the other direction,
    onto the accent's one text rung, which is the same ink every other link in
    the product wears. Same decision as `.cell-seat` in frame.css, which is the
    same object — a person's name inside a table row. */
 .wl-who:hover {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .wl-handle {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 .wl-counts {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
 .wl-open {
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .wl-soft {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 .wl-num {
   text-align: right;
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 /* THE TRACK IS THE HEAVIEST QUEUE ON SCREEN, so the table reads as a
@@ -3711,7 +3791,7 @@ a.work-cal-chip {
   position: relative;
   height: 8px;
   border-radius: 999px;
-  background: var(--surface-inset);
+  background: var(--color-surface-inset);
   overflow: hidden;
 }
 .wl-bar {
@@ -3724,13 +3804,13 @@ a.work-cal-chip {
   min-width: 2px;
 }
 .wl-bar.is-positive {
-  background: var(--positive);
+  background: var(--color-feedback-success);
 }
 .wl-bar.is-caution {
-  background: var(--caution);
+  background: var(--color-feedback-warning);
 }
 .wl-bar.is-critical {
-  background: var(--critical);
+  background: var(--color-feedback-danger);
 }
 /* THERE IS NO NEUTRAL BAR. A seat holding nothing draws an empty track,
    because the track IS the comparison and a bar of zero width and a bar of
@@ -3743,64 +3823,64 @@ a.work-cal-chip {
 .toolcall {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-3);
+  gap: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
 }
 .toolcall-toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   background: none;
   border: 0;
   padding: 0;
   cursor: pointer;
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
   text-align: left;
 }
 .toolcall-toggle:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .toolcall-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .toolcall-note {
   margin: 0;
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 .toolcall-row {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-raised);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
 }
 /* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
    text on a page, and a block that shouted would be a delete button. */
 .toolcall-row.is-destructive {
   border-style: dashed;
-  border-color: var(--critical-ink);
+  border-color: var(--color-feedback-danger-ink);
 }
 .toolcall-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .toolcall-label {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  color: var(--text);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
 }
 .toolcall-code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  color: var(--text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
@@ -3817,40 +3897,43 @@ a.work-cal-chip {
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
-  gap: var(--space-1) var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 .pulse-fact {
   display: flex;
   align-items: baseline;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-sm);
-  color: var(--text-secondary);
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
   /* THE ONLY TRANSITION ON THIS STRIP, and it is on colour. The figures
      re-render on every push, and a transition on anything geometric would
      make a number arriving look like the strip moving. */
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
 .pulse-fact:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .pulse-fact:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  /* A TRANSPARENT OUTLINE, not none: forced-colors mode drops the
+     shadow and paints this outline in the system colour, which is the kit
+     baseline's own pairing (tokens/css/base.css). */
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
 }
 .pulse-glyph {
   display: flex;
   align-self: center;
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 .pulse-value {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
   /* TABULAR, AND WITH A FLOOR. A figure going from 9 to 10 on a poll would
      otherwise widen its own cell and shove the seven facts to its right along
      by a character. Two digits of room is where the jitter stops being
@@ -3860,13 +3943,13 @@ a.work-cal-chip {
   text-align: right;
 }
 .pulse-value[data-tone="caution"] {
-  color: var(--caution-ink);
+  color: var(--color-feedback-warning-ink);
 }
 .pulse-value[data-tone="critical"] {
-  color: var(--critical-ink);
+  color: var(--color-feedback-danger-ink);
 }
 .pulse-label {
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 
 /* TWO PANES. The list keeps its width when the detail changes, because the
@@ -3876,13 +3959,13 @@ a.work-cal-chip {
 .inbox-panes {
   display: grid;
   grid-template-columns: minmax(0, 46fr) minmax(0, 54fr);
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   align-items: start;
 }
 .inbox-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 .inbox-detail {
@@ -3890,10 +3973,10 @@ a.work-cal-chip {
   /* Under whatever band the page already parks at the top of the scroller. */
   top: var(--sticky-top);
   min-width: 0;
-  padding: var(--space-3);
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  padding: var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 /* ONE PANE UNDER THE PLAN'S PHONE WIDTH. A human teammate answering an ask
@@ -3911,18 +3994,18 @@ a.work-cal-chip {
 .inbox-band {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .inbox-band-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .inbox-band-count {
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   min-width: 2ch;
 }
 /* A BAND WITH NOTHING IN IT STILL SAYS WHAT IT IS. Drawn as a quiet block
@@ -3932,10 +4015,10 @@ a.work-cal-chip {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--space-3);
-  background: var(--surface-panel);
-  border: 1px dashed var(--border-subtle);
-  border-radius: var(--r-md);
+  padding: var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 /* THE BAND'S FILTERS SIT IN ITS OWN FLOW. The reason rail moved out of the list
@@ -3949,39 +4032,42 @@ a.work-cal-chip {
 .inbox-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
   cursor: pointer;
   color: inherit;
   font: inherit;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--motion-duration-fast) var(--motion-easing-default);
 }
 .inbox-row:last-child {
   border-bottom: none;
 }
 .inbox-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .inbox-row:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  /* A TRANSPARENT OUTLINE, not none: forced-colors mode drops the
+     shadow and paints this outline in the system colour, which is the kit
+     baseline's own pairing (tokens/css/base.css). */
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
 }
 /* THE SELECTED ROW, which is the one the pane beside it is showing. The bar is
    inside the padding rather than a border, so selecting a row does not move
    its text by a pixel. */
 .inbox-row[aria-current] {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 /* Read is quieter, never hidden: an inbox you have read is still the record of
    what reached you. */
 .inbox-row[data-read] .inbox-row-body {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .inbox-row-body {
   gap: 2px;
@@ -3999,5 +4085,5 @@ a.work-cal-chip {
   background: none;
 }
 .inbox-unread[data-on] {
-  background: var(--accent);
+  background: var(--color-brand-accent);
 }

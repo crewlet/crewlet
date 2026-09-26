@@ -329,7 +329,13 @@ describe("the dev server proxy", () => {
     ),
     ...shell,
   ];
-  const read = tree.filter((r) => r.path !== null);
+  // A PATH UNDER `base` IS THE DEV SERVER'S OWN FILE, never the engine's: the
+  // dashboard's modules and every file the build emits beside them (the brand
+  // mark, the favicon) are served there by Vite, the mark and the favicon by
+  // the `brandAssets` plugin. Forwarding one would hand the dev server's own
+  // tree to whatever the running engine last embedded.
+  const own = base();
+  const read = tree.filter((r) => r.path !== null && !(own && r.path.startsWith(own)));
   const entries = proxied();
 
   test("forwards every engine path the dashboard reaches", () => {
@@ -357,9 +363,8 @@ describe("the dev server proxy", () => {
     // Vite serves the dashboard's own modules under `base`, and an entry whose
     // prefix covers it hands every one of them to the engine: the dev server
     // then runs whatever bundle the engine last embedded rather than the
-    // source being edited. Which is why the brand mark's entry is its one
-    // file and not `/static`.
-    const own = base();
+    // source being edited. The brand mark, which once had a one-file entry of
+    // its own, is under `base` now and the dev server serves it.
     expect(own, "vite.config.ts no longer declares a base").not.toBeNull();
     const captured = entries.filter((e) => own!.startsWith(e.prefix)).map((e) => e.prefix);
     expect(captured, "this entry forwards the dashboard's own modules to the engine").toEqual([]);
@@ -395,10 +400,17 @@ describe("the dev server proxy", () => {
       expect(paths, `nothing reached ${path}`).toContain(path);
     }
     expect(read.some((r) => r.socket && r.path === "/ws/stream")).toBe(true);
-    // And the markup halves: the shell names at least its tab icon, and a JSX
-    // attribute is read at all.
-    expect(shell.length, "the shell's markup names no path any more").toBeGreaterThan(0);
-    expect(read.some((r) => r.call.startsWith("<") && r.file !== "index.html")).toBe(true);
+    // And the markup halves. The shell's own markup names NO engine path now:
+    // its one script is Vite's entry, and the tab icon's <link> is written by
+    // the build from `base` (vite.config.ts, `brandAssets`) because the dev
+    // server and the build disagree about a literal there — so what holds the
+    // shell scanner is its own case below, and this asserts the shell was
+    // read and found nothing rather than asserting a count it no longer has.
+    expect(shell, "the shell's markup names an engine path; proxy it or serve it").toEqual([]);
+    expect(tree.some((r) => r.call.startsWith("<") && r.file !== "index.html")).toBe(true);
+    // And the one JSX path under `base` is the brand mark, which the dev
+    // server serves itself: the exemption above is exercised, not idle.
+    expect(tree.some((r) => r.path === `${own}crewlet-icon.svg`)).toBe(true);
   });
 
   // THE SCANNER'S OWN CASES: each shape the tree writes a URL in, read to the

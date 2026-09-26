@@ -83,8 +83,8 @@ test("an option with a glyph is still named by its label alone", () => {
       value="chart"
       onChange={() => {}}
       options={[
-        { value: "chart", label: "Chart", icon: "account_tree" },
-        { value: "directory", label: "Directory", icon: "person" },
+        { value: "chart", label: "Chart", icon: "network" },
+        { value: "directory", label: "Directory", icon: "user" },
         { value: "charter", label: "Charter" },
       ]}
     />,

@@ -100,8 +100,8 @@ reports to. A derived value is shown only while the draft still holds what
 the check saw, so just after a change a card can read "Handle after the
 check", "Lead after the check" or "Manager after the check" for a moment
 rather than show an answer the engine has not given. Colour is state, never
-identity: a human seat has a dashed edge, and a card is otherwise neutral
-whatever it holds.
+identity: a person's badge is a circle and an agent's a squircle, and a card
+is otherwise neutral whatever it holds.
 
 ### The canvas
 

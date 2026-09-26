@@ -22,7 +22,8 @@ import { useMemo } from "react";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { MeterCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
+import { useSeatBadgeOf } from "~/lib/store-hooks.ts";
 
 import { stateTone, windowOf } from "~/lib/budget.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -72,6 +73,7 @@ function monthUsed(windows: readonly BudgetWindow[]): number {
 }
 
 export function Budgets() {
+  const seatBadge = useSeatBadgeOf();
   const budgets = useQuery("budgets", undefined, { pollMs: 30_000 });
   const { open: openPeek } = usePeekControls();
   // SORTED THE WAY THE TABLE OPENS — the grid applies `defaultSort` to whatever
@@ -114,7 +116,7 @@ export function Budgets() {
           <Callout
             variant="neutral"
             icon={<DatabaseGlyph size="md" />}
-            style={{ margin: "var(--space-3)" }}
+            style={{ margin: "var(--spacing-3)" }}
           >
             The durable counter could not be READ — which is not the same as it being zero. It lives
             in the fleet's coordination store; this node could not reach it.
@@ -154,7 +156,7 @@ export function Budgets() {
                   // draw: both are anchors, and this row is one now whose target
                   // is that same seat — a second link over the name would take
                   // the plain click the peek opens on.
-                  cell: (s) => <TextCell icon="memory">{s.role}</TextCell>,
+                  cell: (s) => <SeatLabel {...seatBadge(s.role)} />,
                 },
                 {
                   key: "day",

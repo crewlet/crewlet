@@ -56,7 +56,7 @@ import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
 import { Button, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
-import { ScheduleGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -149,7 +149,7 @@ export function WorkSearch() {
         // NOT AN EMPTY RESULT. See the file head: this node has the items and
         // not yet the index, and a reader told "no matches" acts on it.
         <EmptyState
-          icon={<ScheduleGlyph size="xl" />}
+          icon={<ClockGlyph size="xl" />}
           title="This node is still indexing"
           description={
             hits.data.note ||

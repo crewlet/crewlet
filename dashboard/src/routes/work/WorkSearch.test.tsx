@@ -21,7 +21,7 @@ import { WorkSearch } from "./WorkSearch.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { LOCAL_DRAWINGS } from "~/ui/glyph.tsx";
+import { BugGlyph } from "@crewlethq/icons/glyphs";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -99,9 +99,10 @@ test("a hit wears its own type's mark, and says which type that is", async () =>
   // THE VISIBLE DEFECT: the DRAWING varies per row. A component that named the
   // type correctly but drew one mark for all of them passes the two above.
   expect(pathOf(bug)).not.toBe(pathOf(task));
-  // AND IT IS THE SAME GLYPH THE BOARD AND THE LIST GIVE IT. `TypeIcon` passes
-  // `size="sm"` = 14px, and `glyphOpticalSize` only returns 24 above 20.
-  expect(pathOf(bug)).toBe(LOCAL_DRAWINGS["bug_report"]?.[20]);
+  // AND IT IS THE SAME GLYPH THE BOARD AND THE LIST GIVE IT: the design
+  // system's own bug, one Lucide drawing at every size.
+  const { container: reference } = render(<BugGlyph />);
+  expect(pathOf(bug)).toBe(reference.querySelector("path")?.getAttribute("d"));
 });
 
 // TWO ANSWERS ON ONE ROW. A tick is the completion mark, so a hit the engine

@@ -138,11 +138,29 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		t.Fatalf("the shell names %s and the tree does not have it: %v", sheetPath, err)
 	}
 	faces := regexp.MustCompile(`url\(([^)]*\.woff2)\)`).FindAllSubmatch(css, -1)
-	// A FLOOR, because a stylesheet that asks for no face at all passes every
-	// assertion below it — which is exactly what dropping the font import
-	// would look like. Two families at two subsets each is four.
-	if len(faces) < 4 {
-		t.Errorf("the stylesheet asks for %d faces; two families at two subsets each is four", len(faces))
+	// EXACTLY THE FOUR GEIST FACES: Geist and Geist Mono, at two subsets each.
+	// A stylesheet that asks for no face at all passes every assertion below
+	// it — which is exactly what dropping the font import would look like —
+	// and one that asks for a FIFTH is a family the design system no longer
+	// ships (0.5.0 retired Inter and JetBrains Mono) arriving from somewhere
+	// it should not. The subsets are the package's to name, so only the
+	// family prefix is read: two faces of `geist-mono-*`, two of `geist-*`.
+	families := map[string]int{}
+	for _, face := range faces {
+		name := path.Base(strings.Trim(string(face[1]), `"'`))
+		switch {
+		case strings.HasPrefix(name, "geist-mono-"):
+			families["Geist Mono"]++
+		case strings.HasPrefix(name, "geist-"):
+			families["Geist"]++
+		default:
+			t.Errorf("the stylesheet asks for %s, which is not a Geist face — the "+
+				"design system's families are Geist and Geist Mono", name)
+		}
+	}
+	if len(faces) != 4 || families["Geist"] != 2 || families["Geist Mono"] != 2 {
+		t.Errorf("the stylesheet asks for %d faces (%v); the design system ships "+
+			"exactly four — Geist and Geist Mono at two subsets each", len(faces), families)
 	}
 	for _, face := range faces {
 		ref := strings.Trim(string(face[1]), `"'`)
@@ -175,31 +193,46 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
-	// the design system's three packages, the fonts and the Material Symbols
+	// the design system's three packages, the Geist faces and the Lucide
 	// drawings, all under licenses that require their text alongside, and the
 	// release archives and image copy this file from here. Written by the build
 	// (vite.config.ts), so a build that lost `build.license` or the step
-	// appending the fonts and the symbols leaves a tree that serves perfectly
+	// appending the fonts and the glyphs leaves a tree that serves perfectly
 	// and owes notices it no longer carries.
+	//
+	// AND WHAT IT NO LONGER COVERS IS GONE. The faces were Inter and JetBrains
+	// Mono and the glyphs Material Symbols until 0.5.0; a notice still naming
+	// them is a notice written from a file the build no longer reads, which
+	// means the step that appends the real ones is not running either.
 	notices, err := os.ReadFile(filepath.Join(served, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
 			"dashboard/ writes it through build.license: %v", err)
 	}
 	for _, want := range []string{
-		"## react - ",               // a bundled package, from build.license
-		"## react-dom - ",           // and its renderer
-		"## @crewlethq/ui",          // the design system's components
-		"## @crewlethq/tokens",      // its palette, type and faces
-		"## @crewlethq/icons",       // its glyphs and marks
-		"SIL OPEN FONT LICENSE",     // the font license, appended by sourceNotices
-		"The Inter Project Authors", // naming both faces
-		"The JetBrains Mono Project Authors",
-		"Apache License", // the Material Symbols drawings, appended too
-		"Material Symbols",
+		"## react - ",                   // a bundled package, from build.license
+		"## react-dom - ",               // and its renderer
+		"## @crewlethq/ui",              // the design system's components
+		"## @crewlethq/tokens",          // its palette, type and faces
+		"## @crewlethq/icons",           // its glyphs and marks
+		"SIL OPEN FONT LICENSE",         // the font license, appended by sourceNotices
+		"The Geist Project Authors",     // naming the faces
+		"ISC License",                   // the Lucide drawings, appended too
+		"Lucide Icons and Contributors", // naming who holds them
 	} {
 		if err == nil && !bytes.Contains(notices, []byte(want)) {
 			t.Errorf("THIRD_PARTY_NOTICES.txt does not carry %q", want)
+		}
+	}
+	for _, gone := range []string{
+		"The Inter Project Authors",
+		"The JetBrains Mono Project Authors",
+		"Apache License",
+		"Material Symbols",
+	} {
+		if err == nil && bytes.Contains(notices, []byte(gone)) {
+			t.Errorf("THIRD_PARTY_NOTICES.txt still carries %q, which nothing in "+
+				"this build redistributes any more", gone)
 		}
 	}
 
@@ -420,6 +453,13 @@ func sameOrigin(url string) bool {
 // it: the source says `import` and the cascade says which import was evaluated
 // first, which is the bundler's answer rather than the author's. This reads
 // what the browser is handed.
+//
+// The arrangement it holds is main.tsx's: the kit's token sheets (variables,
+// themes, density, fonts, base) above every module import, the components'
+// own sheets with the modules that import them, and this application's sheets
+// last. There is no alias layer between the kit and ours any more — every
+// sheet here reads the kit's tokens under their own names — so what is left
+// to order is exactly this one tie.
 func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
@@ -453,6 +493,20 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 				"@crewlethq/tokens stylesheets above every module import in main.tsx",
 				m[1], base[0], first[0])
 		}
+		// AND NOTHING RESTATES IT BELOW THEM. A bare focus rule written after
+		// the components is the same tie lost the other way: `:focus { outline:
+		// none }` erased the baseline's ring from every control relying on it,
+		// and the `:focus-visible` copy that answered it drew a second ring
+		// on the field inside every kit Input and a clipped one on the command
+		// palette's field, which the kit draws with none.
+		for _, late := range bareFocus.FindAllIndex(sheet[first[0]:], -1) {
+			at := first[0] + late[0]
+			t.Errorf("%s declares a bare focus rule at %d, after the first component "+
+				"rule (%d): %q. It wins every one-class tie against a component's "+
+				"own focus treatment; leave the ring to @crewlethq/tokens/css/base, "+
+				"and give a control that resets its outline its ring back by name",
+				m[1], at, first[0], strings.TrimSpace(string(sheet[at:min(len(sheet), at+48)])))
+		}
 	}
 	if sheets == 0 {
 		t.Error("the shell named no stylesheet, so nothing was measured")
@@ -463,6 +517,10 @@ var (
 	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
 	// a complete selector, which is how it is told from a component's.
 	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
+	// bareFocus matches any focus rule with no subject of its own — `:focus`
+	// or `:focus-visible` as a complete selector, alone or in a list, which
+	// is the one-class shape that ties with a component.
+	bareFocus = regexp.MustCompile(`(?:^|[{},])\s*:focus(?:-visible)?\s*[{,]`)
 	// componentRule matches the first rule of any design system component.
 	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
 )

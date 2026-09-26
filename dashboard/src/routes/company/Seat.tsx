@@ -26,7 +26,6 @@ import { Asks, Checklist } from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
-  Avatar,
   BarList,
   Button,
   Callout,
@@ -42,35 +41,33 @@ import {
   Tag,
   tabId,
 } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
-  ArrowForwardGlyph,
-  Book2Glyph,
-  BoltGlyph,
-  CalendarTodayGlyph,
-  ChatGlyph,
+  ArrowRightGlyph,
+  BookOpenGlyph,
+  ZapGlyph,
+  CalendarGlyph,
+  MessageSquareGlyph,
   CheckGlyph,
   DatabaseGlyph,
-  ErrorGlyph,
+  CircleAlertGlyph,
   FlagGlyph,
-  GroupGlyph,
-  HelpGlyph,
+  UsersGlyph,
+  CircleQuestionMarkGlyph,
   InboxGlyph,
   KeyGlyph,
   LayersGlyph,
   LinkGlyph,
-  MemoryGlyph,
-  NeurologyGlyph,
-  PersonGlyph,
-  ScheduleGlyph,
+  CpuGlyph,
+  BrainGlyph,
+  UserGlyph,
+  ClockGlyph,
   TargetGlyph,
-  TimelineGlyph,
-  TokenGlyph,
+  ChartNoAxesGanttGlyph,
+  CoinsGlyph,
 } from "@crewlethq/icons/glyphs";
-// OURS, AND THERE IS NO PEER. `phaseColor` picks one of `--color-phase-*`,
-// which uilet publishes as tokens without a function that chooses between
-// them; `Charts` exports only `dataColor` over the neutral data ramp. See the
-// report.
-import { phaseColor } from "~/ui/charts.tsx";
+// A phase is drawn in the series of the band the engine folds it into.
+import { phaseColor } from "~/lib/spend.ts";
 // ONE PHASE PILL for this screen and the Model screen alike — it is uilet's
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -501,7 +498,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   // A HANDLE IS NOT A NAME, AND IT IS NOT A KIND EITHER. The tracker's rows
   // carry handles; a reader knows people by name, and an identity badge draws
-  // the dashed ring off the seat's kind. Both come from the chart, so every
+  // its outline off the seat's kind. Both come from the chart, so every
   // row renderer takes the resolution rather than each one doing its own
   // lookup — and they travel as a pair, because the kind is the half every
   // builder forgot when each wrote its own name resolver.
@@ -806,7 +803,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     return (
       <>
         <EmptyState
-          icon={<PersonGlyph size={32} />}
+          icon={<UserGlyph size={32} />}
           title={`No seat called “${handle}”`}
           description="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
           action={
@@ -829,7 +826,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <PageActions>
         {
           <Button
-            leadingIcon={<TimelineGlyph size="xs" />}
+            leadingIcon={<ChartNoAxesGanttGlyph size="xs" />}
             size="small"
             variant="secondary"
             onClick={() => nav.to(["activity"], { actor: seat.name })}
@@ -847,7 +844,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           is the status, and the unit is the fact it always was. */}
       <ObjectHeader
         kind="Seat"
-        icon={human ? "person" : "memory"}
+        icon={human ? "user" : "cpu"}
         identifier={seat.handle ? `@${seat.handle}` : undefined}
         title={seat.name}
         status={human ? <Tag appearance="outline">human seat</Tag> : <StateBadge agent={agent} />}
@@ -877,7 +874,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       {sandbox && awaitingPerson(sandbox.status) && (
         <Callout
           variant="warning"
-          icon={<HelpGlyph size="md" />}
+          icon={<CircleQuestionMarkGlyph size="md" />}
           action={
             <Button
               size="small"
@@ -924,22 +921,26 @@ export function SeatScreen({ handle }: { handle: string }) {
         items={
           human
             ? [
-                { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
+                { value: "overview", label: "Overview", icon: <UserGlyph size="sm" /> },
                 { value: "work", label: "Work", icon: <LayersGlyph size="sm" /> },
                 { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
               ]
             : [
-                { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
+                { value: "overview", label: "Overview", icon: <UserGlyph size="sm" /> },
                 { value: "work", label: "Work", icon: <LayersGlyph size="sm" /> },
-                { value: "turns", label: "Turns", icon: <NeurologyGlyph size="sm" /> },
-                { value: "threads", label: "Conversations", icon: <ChatGlyph size="sm" /> },
+                { value: "turns", label: "Turns", icon: <BrainGlyph size="sm" /> },
+                {
+                  value: "threads",
+                  label: "Conversations",
+                  icon: <MessageSquareGlyph size="sm" />,
+                },
                 { value: "memory", label: "Memory", icon: <DatabaseGlyph size="sm" /> },
-                { value: "cost", label: "Cost", icon: <TokenGlyph size="sm" /> },
+                { value: "cost", label: "Cost", icon: <CoinsGlyph size="sm" /> },
                 { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
                 {
                   value: "schedules",
                   label: "Schedules",
-                  icon: <CalendarTodayGlyph size="sm" />,
+                  icon: <CalendarGlyph size="sm" />,
                 },
               ]
         }
@@ -1032,14 +1033,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                 rather than a shorter row. */}
             <StatGroup columns={human ? 2 : 4}>
               <StatCard
-                icon={<BoltGlyph size="xs" />}
+                icon={<ZapGlyph size="xs" />}
                 label="State"
                 value={human ? "human" : state}
                 sub={statusLine(agent, { sandbox, seat })}
               />
               {!human && (
                 <StatCard
-                  icon={<TokenGlyph size="xs" />}
+                  icon={<CoinsGlyph size="xs" />}
                   // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
                   // hardcoded one. This tile is fed by the PUSHED rollup —
                   // which is why Overview fires no query for it — and that
@@ -1075,7 +1076,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
               )}
               <StatCard
-                icon={<GroupGlyph size="xs" />}
+                icon={<UsersGlyph size="xs" />}
                 label="Direct reports"
                 // THE CAPTION IS THIS NUMBER'S FOOTNOTE, so it breaks this
                 // number down. It read "reports to <manager>" — who manages this
@@ -1101,7 +1102,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
             <div className="grid grid-auto-lg">
               <Card>
-                <Card.Header icon={<PersonGlyph size="sm" />}>
+                <Card.Header icon={<UserGlyph size="sm" />}>
                   <Card.Title>Who this is</Card.Title>
                 </Card.Header>
                 <PropertiesRail
@@ -1179,10 +1180,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   so when it could not be read — rather than drawing "not set"
                   over a setting nobody was allowed to see. */}
               <Card>
-                <Card.Header
-                  icon={<NeurologyGlyph size="sm" />}
-                  subtitle="from the company document"
-                >
+                <Card.Header icon={<BrainGlyph size="sm" />} subtitle="from the company document">
                   <Card.Title>Configured</Card.Title>
                 </Card.Header>
                 <SettingsState
@@ -1212,7 +1210,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<Book2Glyph size="sm" />}>
+                <Card.Header icon={<BookOpenGlyph size="sm" />}>
                   <Card.Title>Profile</Card.Title>
                 </Card.Header>
                 <div className="col gap-3">
@@ -1227,7 +1225,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       <div className="t-label">Responsibilities</div>
                       <ul
                         className="col gap-1"
-                        style={{ paddingLeft: "var(--space-4)", margin: 0 }}
+                        style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}
                       >
                         {seat.responsibilities.map((r, i) => (
                           <li key={i} className="t-cell">
@@ -1242,7 +1240,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       <div className="t-label">Behavioural guidelines</div>
                       <ul
                         className="col gap-1"
-                        style={{ paddingLeft: "var(--space-4)", margin: 0 }}
+                        style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}
                       >
                         {seat.guidelines.map((r, i) => (
                           <li key={i} className="t-cell">
@@ -1274,14 +1272,15 @@ export function SeatScreen({ handle }: { handle: string }) {
                       // goes through it.
                       <a key={r.key} className="seat-card" href={href(seatPath(r))}>
                         <div className="row">
-                          {/* Their `variant="dashed"` is our `human`: a human
-                              seat is drawn rather than tinted, because the
-                              engine does not run it. Their `md` is 32px where
-                              ours was 26, so the step moves down one. */}
-                          <Avatar
+                          {/* The kind is the outline — a person's circle, an
+                              agent's squircle — drawn rather than tinted,
+                              because who holds a seat is structure. The kit's
+                              `md` is 32px where ours was 26, so the step moves
+                              down one. */}
+                          <SeatAvatar
                             name={r.name}
                             size="sm"
-                            variant={r.kind === "human" ? "dashed" : "solid"}
+                            kind={r.kind === "human" ? "human" : "agent"}
                             decorative
                             title={r.name}
                           />
@@ -1289,7 +1288,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                             {r.name}
                           </span>
                           {r.kind === "human" ? (
-                            <Tag appearance="outline">human</Tag>
+                            // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
+                            // circle was the outline said twice; the word stays for a
+                            // screen reader, which does not see the outline.
+                            <span className="sr-only">human</span>
                           ) : (
                             <StateBadge agent={agents.find((a) => a.role === r.name)} />
                           )}
@@ -1327,14 +1329,14 @@ export function SeatScreen({ handle }: { handle: string }) {
             {schedules.length === 0 ? (
               <EmptyState
                 size="compact"
-                icon={<CalendarTodayGlyph size={28} />}
+                icon={<CalendarGlyph size={28} />}
                 title="Nothing recurring reaches them"
                 description="A schedule wakes a seat on a cron, scoped to a role or to a unit. This seat declares none and is named by none."
               />
             ) : (
               <Card padding="none">
                 <Card.Header
-                  icon={<CalendarTodayGlyph size="sm" />}
+                  icon={<CalendarGlyph size="sm" />}
                   count={schedules.length}
                   subtitle="Their own, and every unit schedule a fire actually reaches them through."
                 >
@@ -1353,7 +1355,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       key: "name",
                       header: "Name",
-                      cell: (row) => <TextCell icon="calendar_today">{row.name}</TextCell>,
+                      cell: (row) => <TextCell icon="calendar">{row.name}</TextCell>,
                       sortValue: (row) => row.name,
                     },
                     {
@@ -1377,7 +1379,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         row.scope_type === "role" ? (
                           <span className="muted">theirs</span>
                         ) : (
-                          <TextCell icon="apartment">{row.scope_id}</TextCell>
+                          <TextCell icon="building-complex">{row.scope_id}</TextCell>
                         ),
                       sortValue: (row) => `${row.scope_type}/${row.scope_id}`,
                     },
@@ -1503,7 +1505,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {(turnList.data?.turns ?? []).length > 0 && (
               <Card padding="none">
                 <Card.Header
-                  icon={<NeurologyGlyph size="sm" />}
+                  icon={<BrainGlyph size="sm" />}
                   count={(turnList.data?.turns ?? []).length}
                   subtitle="Every turn the event store holds for this seat, newest first."
                 >
@@ -1532,7 +1534,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           </span>
                           {t.work_item && (
                             <span
-                              className="mono t-caption"
+                              className="mono t-caption item-key"
                               title="the work item this turn was about"
                             >
                               {t.work_item.key || `${t.work_item.backend}:${t.work_item.id}`}
@@ -1609,7 +1611,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {!history.loading && !history.error && !turns.length && (
               <EmptyState
                 size="compact"
-                icon={<NeurologyGlyph size={32} />}
+                icon={<BrainGlyph size={32} />}
                 title="No phases in the record for this seat"
                 description="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
               />
@@ -1688,7 +1690,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <div className="split">
                 <Card padding="none">
                   <Card.Header
-                    icon={<ChatGlyph size="sm" />}
+                    icon={<MessageSquareGlyph size="sm" />}
                     count={threads.data?.conversations?.length ?? 0}
                   >
                     <Card.Title>Threads</Card.Title>
@@ -1717,7 +1719,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <EmptyState
                       size="compact"
-                      icon={<ChatGlyph size={32} />}
+                      icon={<MessageSquareGlyph size={32} />}
                       title="No conversations recorded"
                       description="A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
                     />
@@ -1726,7 +1728,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Card padding="none">
                   <Card.Header
-                    icon={<ScheduleGlyph size="sm" />}
+                    icon={<ClockGlyph size="sm" />}
                     // A COUNT IS A FACT ABOUT THE THREAD THE READER OPENED.
                     // `entries` is what this seat said in that ONE thread, and
                     // the answer carries `entries: []` whenever no
@@ -1757,7 +1759,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   {!thread ? (
                     <EmptyState
                       size="compact"
-                      icon={<ScheduleGlyph size={32} />}
+                      icon={<ClockGlyph size={32} />}
                       title="Nothing selected"
                       description="Choose a thread to see the turns this seat recorded in it."
                     />
@@ -1770,7 +1772,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <EmptyState
                       size="compact"
-                      icon={<ScheduleGlyph size={32} />}
+                      icon={<ClockGlyph size={32} />}
                       title="No turns in this thread"
                       description="The ledger is trimmed per conversation, so an old thread can list a count it no longer carries the turns for."
                     />
@@ -1790,7 +1792,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <div className="col gap-4">
                 <Card padding="none">
                   <Card.Header
-                    icon={<Book2Glyph size="sm" />}
+                    icon={<BookOpenGlyph size="sm" />}
                     count={memory.data?.diary?.length ?? 0}
                     subtitle="what this seat chose to remember"
                   >
@@ -1812,7 +1814,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <EmptyState
                       size="compact"
-                      icon={<Book2Glyph size={32} />}
+                      icon={<BookOpenGlyph size={32} />}
                       title="Nothing written yet"
                       description="A seat writes here by calling reflect_and_persist during a turn."
                     />
@@ -1906,7 +1908,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Card padding="none">
                   <Card.Header
-                    icon={<BoltGlyph size="sm" />}
+                    icon={<ZapGlyph size="sm" />}
                     // `?? 0` for the ANSWER, never for the field:
                     // `skills_total` is always sent, so falling back to
                     // `skills.length` would only ever substitute the page size
@@ -1943,7 +1945,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <EmptyState
                       size="compact"
-                      icon={<BoltGlyph size={32} />}
+                      icon={<ZapGlyph size={32} />}
                       title="No synthesised skills"
                       description="The learning loop drafts these from repeated work. A young company has none."
                     />
@@ -1952,7 +1954,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Card padding="none">
                   <Card.Header
-                    icon={<GroupGlyph size="sm" />}
+                    icon={<UsersGlyph size="sm" />}
                     count={memory.data?.counterparties?.length ?? 0}
                   >
                     <Card.Title>Who it has worked with</Card.Title>
@@ -1966,7 +1968,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <EmptyState
                       size="compact"
-                      icon={<GroupGlyph size={32} />}
+                      icon={<UsersGlyph size={32} />}
                       title="No counterparty profiles"
                       description="Built up from observed interactions. Nothing read these until now — the key was on the answer and the store behind it was never asked."
                     />
@@ -1982,7 +1984,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {/* The flush Panel is gone: StatGroup draws that surface itself. */}
             <StatGroup columns={3}>
               <StatCard
-                icon={<TokenGlyph size="xs" />}
+                icon={<CoinsGlyph size="xs" />}
                 label="Tokens · 7d"
                 value={
                   spend.data ? (
@@ -1994,16 +1996,19 @@ export function SeatScreen({ handle }: { handle: string }) {
                 sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
               />
               <StatCard
-                icon={<ArrowForwardGlyph size="xs" />}
+                icon={<ArrowRightGlyph size="xs" />}
                 label="Input / output"
+                // The output is the UNIT, as the Cost screen draws this pair:
+                // one display-size "5.1M / 164k" is cut mid-digit on a phone.
                 value={
                   spend.data ? (
-                    `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
+                    fmtCount(spend.data.totals.input_tokens)
                   ) : (
                     <EmptyValue label="Nothing recorded" />
                   )
                 }
-                sub="input includes any cached prefix, as the provider reports it"
+                unit={spend.data ? `/ ${fmtCount(spend.data.totals.output_tokens)}` : undefined}
+                sub="input includes the cached prefix"
               />
               <StatCard
                 icon={<TargetGlyph size="xs" />}
@@ -2085,7 +2090,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   />
                 </Card>
                 <Card>
-                  <Card.Header icon={<MemoryGlyph size="sm" />}>
+                  <Card.Header icon={<CpuGlyph size="sm" />}>
                     <Card.Title>By model</Card.Title>
                   </Card.Header>
                   <BarList
@@ -2331,7 +2336,7 @@ export function SeatPeek({ handle }: { handle: string }) {
     return (
       <EmptyState
         size="compact"
-        icon={<PersonGlyph size={32} />}
+        icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
         description="Seats are addressed by handle. A company revision may have renamed or removed this one."
       />
@@ -2347,7 +2352,7 @@ export function SeatPeek({ handle }: { handle: string }) {
       <ObjectHeader
         size="peek"
         kind="Seat"
-        icon={human ? "person" : "memory"}
+        icon={human ? "user" : "cpu"}
         identifier={`@${seat.handle}`}
         title={seat.name}
         status={human ? <Tag appearance="outline">human seat</Tag> : <StateBadge agent={agent} />}
@@ -2397,7 +2402,7 @@ export function SeatPeek({ handle }: { handle: string }) {
             // question stops this seat until somebody answers it, and a peek
             // that showed "writing code in a sandbox" and nothing else would
             // hide the half that needs them.
-            <Callout variant="warning" icon={<HelpGlyph size="md" />}>
+            <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
               A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
             </Callout>
           )}
@@ -2454,10 +2459,10 @@ export function SeatPeek({ handle }: { handle: string }) {
                 return (
                   <a key={r.key} className="thread-entry" href={href(seatPath(r))}>
                     <div className="row gap-2">
-                      <Avatar
+                      <SeatAvatar
                         name={r.name}
                         size="xs"
-                        variant={r.kind === "human" ? "dashed" : "solid"}
+                        kind={r.kind === "human" ? "human" : "agent"}
                         decorative
                         title={r.name}
                       />
@@ -2465,7 +2470,10 @@ export function SeatPeek({ handle }: { handle: string }) {
                         {r.name}
                       </span>
                       {r.kind === "human" ? (
-                        <Tag appearance="outline">human</Tag>
+                        // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
+                        // circle was the outline said twice; the word stays for a
+                        // screen reader, which does not see the outline.
+                        <span className="sr-only">human</span>
                       ) : (
                         <StateBadge agent={agents.find((a) => a.role === r.name)} />
                       )}
@@ -2622,7 +2630,7 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
       {entry.reply && <p className="t-caption">{entry.reply}</p>}
       {entry.unsent && (
         // THE ONE THAT REACHED NOBODY, marked. See the doc above.
-        <Callout variant="warning" icon={<ErrorGlyph size="md" />}>
+        <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
           <strong>Nothing was delivered.</strong> {entry.unsent}
         </Callout>
       )}

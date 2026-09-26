@@ -6,7 +6,8 @@ import { describe, expect, test } from "vitest";
 
 /**
  * The chrome's layout rules that fail SILENTLY and correctly in every other
- * gate — frame.css, shell.css, the shared panel in components.css, and the
+ * gate — frame.css (the page column's own furniture included), the shared
+ * panel in components.css, and the
  * screens whose own rules have to agree with the chrome's sticky band.
  *
  * `classes.test.ts` proves a class is declared and `tokens.test.ts` proves a
@@ -210,7 +211,7 @@ describe("the frame's layout", () => {
     // toolbar itself is parked, opaque and ten z-levels up.
     expect(block(css, ".grid-head")).toMatch(/top:\s*var\(--sticky-top\)/);
     expect(block(css, ".grid-band-head")).toMatch(
-      /top:\s*calc\(var\(--sticky-top\) \+ var\(--row-h\)\)/,
+      /top:\s*calc\(var\(--sticky-top\) \+ var\(--size-row-md\)\)/,
     );
 
     // NOR MAY THE CARD A GRID SITS IN. The rule is about the whole chain
@@ -240,7 +241,7 @@ describe("the frame's layout", () => {
   // flex container already — so moving it onto the scroller moved the
   // container with it, and this declaration did not follow.
   test("a screen that asked for the height is a column that can give it one", () => {
-    const css = sheet("shell.css");
+    const css = sheet("frame.css");
     const fill = block(css, ".screen[data-fill]");
     expect(fill).toMatch(/display:\s*flex/);
     expect(fill).toMatch(/flex-direction:\s*column/);
@@ -426,12 +427,12 @@ describe("the frame's layout", () => {
     // AND IT IS DELAYED ONE WAY AND NOT THE OTHER, which is the whole reason
     // it can sit beside a slide: hidden only once the drawer has finished
     // leaving, visible the moment it starts arriving.
-    expect(shut).toMatch(/visibility 0s linear var\(--dur\)/);
+    expect(shut).toMatch(/visibility 0s linear var\(--motion-duration-base\)/);
     expect(open).toMatch(/visibility 0s(?!\s+linear)/);
     // A SHORTHAND STILL CARRIES THE SLIDE. Writing `transition: visibility ...`
     // alone would replace it and the drawer would jump.
-    expect(shut).toMatch(/transform var\(--dur\) var\(--ease\)/);
-    expect(open).toMatch(/transform var\(--dur\) var\(--ease\)/);
+    expect(shut).toMatch(/transform var\(--motion-duration-base\) var\(--motion-easing-default\)/);
+    expect(open).toMatch(/transform var\(--motion-duration-base\) var\(--motion-easing-default\)/);
   });
 
   // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
@@ -470,7 +471,7 @@ describe("the frame's layout", () => {
     const col = block(css, ".num-col");
     expect(col, "a column that can flex is not a column").toMatch(/flex:\s*none/);
     // A FLOOR, NOT THE VALUE. 7rem is derived from a RENDERED heading —
-    // APPROX. TOKENS measures 102px at `--fs-3xs` with `--track-wide` — which
+    // APPROX. TOKENS measures 102px at `--font-size-2xs` with `--font-letter-spacing-wide` — which
     // is font metrics and lives in no file, so a gate cannot re-derive it.
     // What it can hold is that the column did not shrink back under the
     // heading it was widened for. Measured by stepping the width: the heading
@@ -541,7 +542,7 @@ describe("the frame's layout", () => {
   // count in Turn.tsx, `.num-col` here, a gap in a token package, WHICH ROW
   // the turn produced — a re-delivered self-iterating phase measures 746px
   // against a header's 684 — and the rendered width of a heading at
-  // `--fs-3xs`, which is font metrics and lives in no file at all. A gate
+  // `--font-size-2xs`, which is font metrics and lives in no file at all. A gate
   // checking a literal against those needs a slack constant of its own, set
   // from the same measurement that set 38rem, and it would have stayed green
   // through this exact regression. So the rule is that there is no literal:
@@ -644,9 +645,12 @@ describe("the frame's layout", () => {
     // 48px of column holds neither.
     expect(block(at(960), ".rail-label")).toMatch(/display:\s*none/);
     expect(block(at(960), ".rail-engine > .truncate")).toMatch(/display:\s*none/);
-    // A 56px bar row holds both, and the later rule is what restores them.
+    // A 56px bar row holds the label, and the later rule is what restores it.
     expect(block(at(860), ".rail-label")).toMatch(/display:\s*block/);
-    expect(block(at(860), ".rail-engine > .truncate")).toMatch(/display:\s*inline/);
+    // THE ENGINE'S WORD DOES NOT COME BACK on the bottom bar: the foot shares
+    // the bar with eight destinations, and with the word it pushed the active
+    // one under the scroller's edge. The dot is the state there, as at 960.
+    expect(at(860)).not.toMatch(/\.rail-engine\s*>\s*\.truncate/);
     expect(
       css.indexOf("@media (max-width: 860px)"),
       "the bottom bar's block has to come after the 960 one to win the tie",
@@ -658,7 +662,7 @@ describe("the frame's layout", () => {
   // `crewlet-icon.svg` is 1467x978 and MEETS its box, so a box whose own ratio
   // is not 3:2 draws the mark smaller than the box and pads the rest. It has
   // been given such a box TWICE: a 24px square, which drew 24x16 of mark in a
-  // cell 96px wide; and then `height: var(--control-h)` with a `max-width`,
+  // cell 96px wide; and then `height: var(--size-control-md)` with a `max-width`,
   // which looks like it preserves the ratio and does not — the clamp shrinks
   // the width and leaves a height the author stated, so the 48px column got a
   // 39x32 box at ratio 1.219 and the mark letterboxed inside it again.
@@ -680,7 +684,7 @@ describe("the frame's layout", () => {
     // the mark takes the whole intrinsic 978px of the band; no `max-width` and
     // the 48px column gets a mark wider than the column.
     expect(b, "the band no longer bounds the mark's height").toMatch(
-      /max-height:\s*var\(--control-h\)/,
+      /max-height:\s*var\(--size-control-md\)/,
     );
     expect(b, "the column no longer bounds the mark's width").toMatch(/max-width:\s*calc\(/);
     // AND NEITHER AXIS IS SIZED. `auto` is the only value that lets the other
@@ -698,12 +702,10 @@ describe("the frame's layout", () => {
   //
   // `all: unset` is how a <button> becomes a plain box, and `all` is every
   // property — `outline` among them. So each of these rules sets
-  // `outline-style: none`, and `base.css`'s `:focus-visible` then loses a TIE
-  // rather than a fight: one pseudo-class against one class is the same
-  // specificity, and frame.css is imported second. The same failure the
-  // comment above that `:focus-visible` already describes for the design
-  // system's components — visible to somebody using the keyboard and to
-  // nobody else.
+  // `outline-style: none`, and the kit baseline's `:focus-visible` then loses
+  // a TIE rather than a fight: one pseudo-class against one class is the same
+  // specificity, and frame.css is imported after the baseline. Visible to
+  // somebody using the keyboard and to nobody else.
   //
   // Measured with a tab walk against a running engine: the rail's collapse
   // control took focus with no ring on EVERY screen in the product, and the
@@ -726,7 +728,7 @@ describe("the frame's layout", () => {
     // The one rule that hands the ring back, and what it hands back.
     const ring = new Set<string>();
     for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      if (!/outline:\s*2px solid var\(--focus\)/.test(m[2]!)) continue;
+      if (!/outline:\s*2px solid var\(--color-focus\)/.test(m[2]!)) continue;
       expect(m[2]!, "an offset ring is what the baseline draws").toMatch(/outline-offset:/);
       for (const one of m[1]!.split(",")) ring.add(one.trim().replace(/:focus-visible$/, ""));
     }
@@ -743,8 +745,8 @@ describe("the frame's layout", () => {
 
   // A ROW LIST LINES UP WITH ITS OWN HEADING.
   //
-  // A row list usually sits in a `Card`, and `Card.Header` pads `--space-4`.
-  // Every row class in the tree wrote `--space-3` instead, so on the turn page
+  // A row list usually sits in a `Card`, and `Card.Header` pads `--spacing-4`.
+  // Every row class in the tree wrote `--spacing-3` instead, so on the turn page
   // four panels drew their content four pixels inside their own titles while
   // the panels between them did not, and the screen read as though two people
   // had built it. It is one token now, which is the only shape under which
@@ -765,10 +767,10 @@ describe("the frame's layout", () => {
       );
     }
     // AND THE TOKEN IS THE HEADING'S OWN STEP. `Card.Header` is the design
-    // system's and pads `--spacing-4`, which `uilet.css` aliases as
-    // `--space-4`; a row list that took any other step would be back to the
-    // misalignment with one place to change it instead of seven.
-    expect(block(sheet("tokens.css"), ":root")).toMatch(/--row-inline:\s*var\(--space-4\)/);
+    // system's and pads with the kit's own `--spacing-4`, which this tree reads
+    // under the same name; a row list that took any other step would be back
+    // to the misalignment with one place to change it instead of seven.
+    expect(block(sheet("tokens.css"), ":root")).toMatch(/--row-inline:\s*var\(--spacing-4\)/);
   });
 
   // A DISCLOSURE HEAD WRAPS, which is rule 15 of the design doc.
@@ -885,7 +887,7 @@ describe("the frame's layout", () => {
     expect(fact).toMatch(/grid-row:\s*span 4/);
 
     // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
-    // 16ch` could only narrow the problem — sixteen characters at `--fs-3xs`
+    // 16ch` could only narrow the problem — sixteen characters at `--font-size-2xs`
     // is still wider than most values — and left with the track doing the
     // bounding it would cut a note the column had room for.
     expect(
@@ -1057,15 +1059,48 @@ describe("the frame's layout", () => {
     // `--sticky-top` is what the heads above are offset by, so the band has to
     // have a height — and a screen with no toolbar must keep 0, or every
     // header on it parks below a strip of scrolling page.
-    const shell = sheet("shell.css");
+    const shell = sheet("frame.css");
     expect(block(shell, ".toolbar")).toMatch(/min-height:\s*var\(--toolbar-h\)/);
     expect(block(shell, ".screen:has(.toolbar)")).toMatch(/--sticky-top:\s*var\(--toolbar-h\)/);
     expect(sheet("tokens.css")).toMatch(/--sticky-top:\s*0px/);
   });
+
+  // THE SEARCH FIELD IS NOT A FLOOR THE BAR OWES.
+  //
+  // The kit's `toolbar` field floors at its 200px resting width above 1024px,
+  // and on `#/activity/turns` at 1440 that floor pushed the keycap past the
+  // bar's right edge (content 1152px in a 1107px bar), because a route's own
+  // controls cannot shrink and the bar does not wrap above its 1100px container
+  // query. What fixes it is a SHAPE, asserted here because jsdom computes no
+  // layout: the wrapper's width can shrink (a basis, not a min-width), the
+  // kit's floor is cancelled inside it, it stops at a control square, and it
+  // sheds the keycap and then the word by its OWN width.
+  test("the page bar's search field gives way down to its glyph", () => {
+    const css = sheet("frame.css");
+    const wrap = block(css, ".page-search");
+    expect(wrap).toMatch(/container:\s*page-search\s*\/\s*inline-size/);
+    expect(wrap).toMatch(/flex:\s*0 1 200px/);
+    expect(wrap).toMatch(/min-width:\s*var\(--size-control-md\)/);
+    const field = block(css, ".page-search > .crewlet-search-trigger--toolbar");
+    expect(field).toMatch(/--crewlet-search-trigger-width:\s*0px/);
+    expect(field).toMatch(/min-width:\s*0/);
+    expect(field).toMatch(/overflow:\s*hidden/);
+    const query = (px: number): string => {
+      const from = css.indexOf(`@container page-search (max-width: ${px}px)`);
+      expect(from, `the ${px}px field query is gone`).toBeGreaterThan(-1);
+      return css.slice(from, css.indexOf("\n}", from));
+    };
+    expect(block(query(176), ".page-search .crewlet-search-trigger__shortcut")).toMatch(
+      /display:\s*none/,
+    );
+    expect(block(query(96), ".page-search .crewlet-search-trigger__label")).toMatch(
+      /display:\s*none/,
+    );
+  });
 });
 
 test("no stylesheet negates a var() with a unary minus", () => {
-  // `left: -var(--space-1)` is not CSS. There is no unary minus in front of a
+  // `left: -var(--spacing-1)` is not CSS. There is no unary minus in front of a
   // function, so the value is invalid at computed-value time and the WHOLE
   // declaration is dropped — silently, with the property falling back to its
   // initial value. It shipped on `.rail-row.active::before`, where `left:
@@ -1074,7 +1109,7 @@ test("no stylesheet negates a var() with a unary minus", () => {
   // is `calc(-1 * var(--x))`.
   // EVERY SHEET IN THE DIRECTORY, read rather than listed. The five names
   // that used to be written here were a list nobody was going to extend:
-  // `tokens.css`, `uilet.css` and `fonts.css` were never in it, and a sheet
+  // `tokens.css` and `fonts.css` were never in it, and a sheet
   // added tomorrow would not be either — so the one check that catches this
   // would silently stop covering the file it was added for.
   const found: string[] = [];
@@ -1117,14 +1152,14 @@ describe("a work item's history", () => {
     // tail has a track of its own, so the sentence cannot swallow the control.
     expect(block(css, ".work-hist-row > svg")).toMatch(/align-self:\s*start/);
     const row = block(css, ".work-hist-row");
-    expect(row).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
+    expect(row).toMatch(/border-bottom:\s*1px solid var\(--color-border-default\)/);
     expect(row).toMatch(/align-items:\s*baseline/);
     expect(row).toMatch(/grid-template-columns:\s*18px minmax\(0, 1fr\) auto auto/);
     // AND ITS TRACKS ARE SEPARATED. See the rule below for the class of
-    // defect; this is the row it was found on, and `--space-3` is the
+    // defect; this is the row it was found on, and `--spacing-3` is the
     // sibling `.work-feed-row`'s so the two grammars cannot drift.
-    expect(row).toMatch(/gap:\s*var\(--space-3\)/);
-    expect(block(css, ".work-feed-row")).toMatch(/gap:\s*var\(--space-3\)/);
+    expect(row).toMatch(/gap:\s*var\(--spacing-3\)/);
+    expect(block(css, ".work-feed-row")).toMatch(/gap:\s*var\(--spacing-3\)/);
   });
 });
 
@@ -1182,4 +1217,95 @@ test("a grid row with more than one content-sized track declares a gap", () => {
     offenders,
     "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
   ).toEqual([]);
+});
+
+// ONE GAP BETWEEN EVERY CRUMB. The 5ch floor that keeps the object's own
+// crumb an ellipsised stub rather than nothing was on `.crumb-here`, which
+// also draws an ancestor with no page of its own — "Item", "seats" — and a
+// floor on a part that never shrinks only pads a short word: "Work / Item   /
+// items". Scoped to the last part, which is the only one that gives way.
+test("the crumb floor is the last part's alone", () => {
+  const css = sheet("frame.css");
+  expect(block(css, ".crumb-here")).not.toMatch(/min-width/);
+  expect(block(css, ".crumb-part:last-child > .crumb-here")).toMatch(/min-width:\s*5ch/);
+});
+
+// A TIME-SERIES BAR IS A BAR, NOT ITS SLOT. Filled edge to edge, a one-day
+// spend window was one column the width of the card — a solid block. The bar
+// takes the kit's own proportion (63% of the slot, capped at `--spacing-7`,
+// as `.crewlet-stacked-columns__column` does), centred, and the ghost sits
+// over the bar rather than the slot; and a segment that exists has a pixel.
+test("a stacked time-series column is capped and centred in its slot", () => {
+  const css = sheet("components.css");
+  expect(block(css, ".stackseries-col")).toMatch(/justify-content:\s*center/);
+  for (const sel of [".stackseries-stack", ".stackseries-ghost"]) {
+    const b = block(css, sel);
+    expect(b, sel).toMatch(/width:\s*63%/);
+    expect(b, sel).toMatch(/max-width:\s*var\(--spacing-7\)/);
+  }
+  expect(block(css, ".stackseries-stack > span")).toMatch(/min-height:\s*1px/);
+});
+
+// A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
+// filled its whole slot, so a week holding one busy day drew a block a seventh
+// of the card wide, and it painted that block in the accent the kit reserves
+// for HERE/ACT. The fill takes the same capped, centred proportion as the
+// spend columns, is drawn on the data ramp, and an empty bucket's floor is a
+// tone that shows on the card rung rather than one within a shade of it.
+test("a histogram bar is a capped data-coloured fill centred in its slot", () => {
+  const css = sheet("frame.css");
+  expect(block(css, ".histogram-bar")).toMatch(/justify-content:\s*center/);
+  expect(block(css, ".histogram-bar")).not.toMatch(/background/);
+  const fill = block(css, ".histogram-fill");
+  expect(fill).toMatch(/width:\s*63%/);
+  expect(fill).toMatch(/max-width:\s*var\(--spacing-7\)/);
+  expect(fill).toMatch(/background:\s*var\(--color-data-1\)/);
+  expect(block(css, ".histogram-bar[data-empty] > .histogram-fill")).toMatch(
+    /background:\s*var\(--color-border-strong\)/,
+  );
+});
+
+// A UNIT'S NAME IS WHAT ITS HEAD SAYS, SO IT IS NOT WHAT GIVES WAY. One
+// unwrapped row shrank the name alone — the only part with text that could —
+// and a phone drew "Developer Relations" in 18px beside a full kind tag, lead
+// chip and count. The head wraps, and the name keeps its own width.
+test("an org unit's head wraps rather than shrinking its name", () => {
+  const css = sheet("screens.css");
+  expect(block(css, ".org-unit-head")).toMatch(/flex-wrap:\s*wrap/);
+  const name = block(css, ".org-unit-name");
+  expect(name).toMatch(/flex:\s*0 0 auto/);
+  expect(name).toMatch(/max-width:\s*100%/);
+  expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
+});
+
+// A SEGMENTED GROUP WIDER THAN ITS CONTAINER WRAPS. Its options never shrink,
+// so on one unbroken row a phone clipped the spend chart's "Split by" at
+// "Worke", with the rest of the choice unreachable.
+test("a segmented control wraps within its container rather than overflowing it", () => {
+  const b = block(sheet("components.css"), ".segmented");
+  expect(b).toMatch(/flex-wrap:\s*wrap/);
+  expect(b).toMatch(/max-width:\s*100%/);
+});
+
+// A STAT'S SECOND LINE KEEPS ITS ENDING. The kit's sub is one `nowrap` line
+// that ellipsises, which cut "6 seats idle and waiting for work" on a phone and
+// a caption at 1440 — the qualifying half of the sentence is its end.
+test("a stat card's sub wraps rather than ellipsising", () => {
+  expect(block(sheet("screens.css"), ".crewlet-statcard__sub")).toMatch(/white-space:\s*normal/);
+});
+
+// A CARD'S TITLE DOES NOT GIVE WAY WHILE ITS SUBTITLE CAN. The kit's 100-to-1
+// shrink is proportional, so a long subtitle on a phone still took a quarter
+// pixel off the name block and the title's ellipsis drew "When" as "Wh…".
+// Where the head holds nothing else rigid the name block is out of the shrink,
+// with `max-width` as the valve for a title longer than the whole head.
+test("a card's name block is out of the shrink beside a subtitle alone", () => {
+  const css = sheet("screens.css").replace(/\s+/g, " ");
+  const m =
+    /\.crewlet-card__header-main:not\( :has\(~ \.crewlet-card__header-actions, ~ \.crewlet-card__header-chrome:not\(:empty\)\) \) \{([^}]*)\}/.exec(
+      css,
+    );
+  expect(m, "the rule is gone").not.toBeNull();
+  expect(m![1]).toMatch(/flex-shrink:\s*0/);
+  expect(m![1]).toMatch(/max-width:\s*100%/);
 });

@@ -35,8 +35,8 @@ func tree() fstest.MapFS {
 		// ending that prefix.
 		"dashboard/assets-previous/index-Cndv8LWe.js": {Data: entryModule},
 		// The unhashed files the build keeps at stable paths.
-		"dashboard/protocol.js": {Data: repeat("export function decode(frame) { return frame }\n")},
-		"crewlet-icon.svg":      {Data: repeat(`<path d="M0 0h24v24H0z"/>`)},
+		"dashboard/protocol.js":      {Data: repeat("export function decode(frame) { return frame }\n")},
+		"dashboard/crewlet-icon.svg": {Data: repeat(`<path d="M0 0h24v24H0z"/>`)},
 		// Already-compressed kinds, with bytes that are NOT (see font).
 		"dashboard/fonts/face.woff2": {Data: font},
 		"dashboard/images/brand.png": {Data: font},
@@ -255,7 +255,7 @@ func TestTheShellAndEveryUnhashedFileRevalidate(t *testing.T) {
 	for _, path := range []string{
 		"/dashboard",
 		"/favicon.ico",
-		"/static/crewlet-icon.svg",
+		"/static/dashboard/crewlet-icon.svg",
 		"/static/dashboard/index.html",
 		"/static/dashboard/protocol.js",
 		"/static/dashboard/fonts/face.woff2",
@@ -306,9 +306,9 @@ func TestATextAssetIsGzippedWhenAsked(t *testing.T) {
 		for path, file := range map[string]string{
 			hashedJS: "dashboard/assets/index-Cndv8LWe.js",
 			"/static/dashboard/assets/index-BS_xpF9S.css": "dashboard/assets/index-BS_xpF9S.css",
-			"/dashboard":                    "dashboard/index.html",
-			"/static/dashboard/protocol.js": "dashboard/protocol.js",
-			"/static/crewlet-icon.svg":      "crewlet-icon.svg",
+			"/dashboard":                         "dashboard/index.html",
+			"/static/dashboard/protocol.js":      "dashboard/protocol.js",
+			"/static/dashboard/crewlet-icon.svg": "dashboard/crewlet-icon.svg",
 		} {
 			res := fetch(t, a, path, map[string]string{"Accept-Encoding": accept})
 			assertGzipped(t, path+" ("+accept+")", res, files[file].Data)

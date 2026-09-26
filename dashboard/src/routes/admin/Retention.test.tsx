@@ -14,6 +14,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  BlockedBanner,
   DomainBlock,
   DomainSize,
   gateAction,
@@ -239,6 +240,33 @@ test("an answer served at stale renders no banner at all", () => {
   // field must not paint this screen red.
   const missing = render(<ServedLevelBanner />);
   expect(missing.container.textContent).toBe("");
+});
+
+// THE SERVER'S SENTENCE IS THE WHOLE SENTENCE. `statelog`'s report composes
+// "Nothing is being trimmed on tracker: <why>." — the headline included,
+// because the CLI prints the same line — and the banner once put its own
+// headline in front of it, so the operator read the headline twice. It is
+// printed once; only a report with no sentence gets the banner's own.
+test("a blocked trim's banner states its headline exactly once", () => {
+  const blocked = (over: Partial<RetentionDomain>) =>
+    ({ domain: "tracker", blocked_by: "backup_max_age", ...over }) as RetentionDomain;
+  const { container } = render(
+    <BlockedBanner
+      domain={blocked({
+        prose: "Nothing is being trimmed on tracker: no backup has been recorded.",
+      })}
+      now={Date.now()}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text.match(/Nothing is being trimmed/g)).toHaveLength(1);
+  expect(text).toContain("no backup has been recorded.");
+  expect(text).not.toContain("..");
+
+  // No sentence from the server: the banner composes one, naming the term.
+  cleanup();
+  const bare = render(<BlockedBanner domain={blocked({})} now={Date.now()} />).container;
+  expect(bare.textContent).toMatch(/Nothing is being trimmed on tracker: the backup_max_age term/);
 });
 
 // A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.

@@ -14,7 +14,7 @@
  */
 
 import { Button, Tag } from "@crewlethq/ui";
-import { CloseGlyph } from "@crewlethq/icons/glyphs";
+import { XGlyph } from "@crewlethq/icons/glyphs";
 import type { FilterChipSpec } from "~/lib/work.ts";
 
 export function FilterChips({
@@ -49,12 +49,7 @@ export function FilterChips({
       {/* CLEAR IS NOT A CHIP. It removes every one of them, so drawing it as a
           pill in the same row would put a control that empties the row beside
           the controls that do not. */}
-      <Button
-        size="small"
-        variant="tertiary"
-        leadingIcon={<CloseGlyph size="sm" />}
-        onClick={onClear}
-      >
+      <Button size="small" variant="ghost" leadingIcon={<XGlyph size="sm" />} onClick={onClear}>
         Clear
       </Button>
     </div>

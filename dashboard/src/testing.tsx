@@ -115,17 +115,10 @@ export function treeCanvasParts(): {
   /** The space the chart keeps around itself, which the layout also measures. */
   margin: string;
   links: string;
-  /** What a card gains when it stands for somebody outside the system. */
-  outlined: string;
 } {
-  const plain = referenceChart(false);
-  const marked = referenceChart(true);
-  const names = {
-    ...plain,
-    outlined: marked.cardClasses.filter((name) => !plain.cardClasses.includes(name))[0] ?? "",
-  };
+  const names = referenceChart();
   for (const [part, name] of Object.entries(names)) {
-    if (typeof name === "string" && !name) {
+    if (!name) {
       throw new Error(`the tree canvas draws no ${part} this harness can find`);
     }
   }
@@ -133,12 +126,11 @@ export function treeCanvasParts(): {
 }
 
 /** One chart rendered to be read: what it calls each part it draws. */
-function referenceChart(outline: boolean): {
+function referenceChart(): {
   card: string;
   gap: string;
   margin: string;
   links: string;
-  cardClasses: string[];
 } {
   // RENDERED THE WAY EVERY SUITE RENDERS, into the document, because this one
   // is a whole chart rather than a single element: it holds a layer host that
@@ -152,7 +144,6 @@ function referenceChart(outline: boolean): {
       nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
       cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
       cardOf: (id: string) => id,
-      cardOutline: () => outline,
       renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
     }),
   );
@@ -184,7 +175,6 @@ function referenceChart(outline: boolean): {
     gap: className(probes[0] ?? null),
     margin: className(probes[1] ?? null),
     links: className(svg),
-    cardClasses: [...(card?.classList ?? [])],
   };
   unmount();
   return read;

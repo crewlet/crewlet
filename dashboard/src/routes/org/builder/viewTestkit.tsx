@@ -375,11 +375,6 @@ export function chartCards(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(`.${known().card}`)];
 }
 
-/** Whether a card carries the mark the chart draws for somebody outside the system. */
-export function isOutlinedCard(card: HTMLElement): boolean {
-  return card.classList.contains(known().outlined);
-}
-
 /** The drawing of the connectors between the cards. */
 export function chartLinks(container: HTMLElement): HTMLElement {
   const links = container.querySelector<HTMLElement>(`.${known().links}`);

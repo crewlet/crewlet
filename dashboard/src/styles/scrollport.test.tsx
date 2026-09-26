@@ -22,7 +22,7 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * so it grows to its rows and its scroll offset is 0 for ever; and every group
  * heading was therefore held 48px DOWN from the top of the list. Each band left
  * its own slot blank and painted over the first row of its own group — a row in
- * the DOM, laid out, drawn, and covered by an opaque box at `--z-sticky`. On a
+ * the DOM, laid out, drawn, and covered by an opaque box at `--z-index-sticky`. On a
  * nine-item list that is one task per group a reader cannot see and cannot
  * click. `overflow: clip` rounds the corners exactly as `hidden` did and makes
  * no scroll container, which is the whole of the fix.

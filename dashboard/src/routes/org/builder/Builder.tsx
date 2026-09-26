@@ -106,27 +106,26 @@ import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { screenPath } from "./dialogParts.tsx";
 import {
   type GlyphProps,
-  AccountTreeGlyph,
-  AddGlyph,
-  CableGlyph,
+  NetworkGlyph,
+  PlusGlyph,
+  PlugGlyph,
   CheckGlyph,
-  DeleteGlyph,
-  DnsGlyph,
-  ErrorGlyph,
-  FullscreenExitGlyph,
-  FullscreenGlyph,
+  TrashGlyph,
+  ServerGlyph,
+  CircleAlertGlyph,
+  MinimizeGlyph,
+  MaximizeGlyph,
   KeyGlyph,
-  KeyboardArrowDownGlyph,
-  KeyboardArrowUpGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
   ListGlyph,
-  MemoryGlyph,
-  MoreVertGlyph,
+  CpuGlyph,
+  EllipsisVerticalGlyph,
   RedoGlyph,
-  RefreshGlyph,
-  RemoveGlyph,
+  RotateCwGlyph,
   SaveGlyph,
   UndoGlyph,
-  WarningGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -326,15 +325,15 @@ interface StatusLook {
 function statusLook(status: CheckStatus, problems: number, tokenStored: boolean): StatusLook {
   switch (status) {
     case "checking":
-      return { label: "Checking", tone: "neutral", icon: RefreshGlyph };
+      return { label: "Checking", tone: "neutral", icon: RotateCwGlyph };
     case "clean":
       return { label: "No problems", tone: "success", icon: CheckGlyph };
     case "problems":
-      return { label: plural(problems, "problem"), tone: "danger", icon: ErrorGlyph };
+      return { label: plural(problems, "problem"), tone: "danger", icon: CircleAlertGlyph };
     case "unreachable":
-      return { label: "Could not reach the engine to check", tone: "warning", icon: CableGlyph };
+      return { label: "Could not reach the engine to check", tone: "warning", icon: PlugGlyph };
     case "conflict":
-      return { label: "The configuration changed", tone: "warning", icon: WarningGlyph };
+      return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
       return {
         label: tokenStored ? "The engine refused the token" : "Needs an operator token",
@@ -1331,20 +1330,20 @@ function Lens({
     {
       key: "expand",
       label: "Expand all",
-      icon: <KeyboardArrowDownGlyph />,
+      icon: <ChevronDownGlyph />,
       onSelect: handlers.expandAll,
     },
     {
       key: "collapse",
       label: "Collapse all",
-      icon: <KeyboardArrowUpGlyph />,
+      icon: <ChevronUpGlyph />,
       onSelect: handlers.collapseAll,
     },
     { kind: "separator", key: "s2" },
     {
       key: "discard",
       label: "Discard changes",
-      icon: <DeleteGlyph />,
+      icon: <TrashGlyph />,
       onSelect: handlers.discard,
       disabled: readOnly || !changed,
       danger: true,
@@ -1364,7 +1363,7 @@ function Lens({
               onValueChange={setView}
               size="sm"
               options={[
-                { value: "visualization", label: "Visualization", icon: <AccountTreeGlyph /> },
+                { value: "visualization", label: "Visualization", icon: <NetworkGlyph /> },
                 // `ListGlyph` rather than a table glyph: `@crewlethq/icons`
                 // ships none, and a rows-of-records mark is what this one is.
                 { value: "table", label: "Table", icon: <ListGlyph /> },
@@ -1395,10 +1394,10 @@ function Lens({
                   buttons that moved from the toolbar to the table's top edge
                   when the reader changed view. `TableView` passes
                   `controls={false}` so this is the only one. */}
-              <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
+              <Button size="small" variant="ghost" onClick={handlers.expandAll}>
                 Expand all
               </Button>
-              <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
+              <Button size="small" variant="ghost" onClick={handlers.collapseAll}>
                 Collapse all
               </Button>
             </span>
@@ -1407,7 +1406,7 @@ function Lens({
             </span>
             <Menu
               label={selectedView ? `Actions for ${selectedName}` : "Add to the organization"}
-              icon={selectedView ? <MoreVertGlyph /> : <AddGlyph />}
+              icon={selectedView ? <EllipsisVerticalGlyph /> : <PlusGlyph />}
               items={toolbarItems}
               trigger={selectedView ? selectedName : "Add"}
             />
@@ -1421,7 +1420,7 @@ function Lens({
             <span className="org-builder-wide">
               <Button
                 size="small"
-                variant="tertiary"
+                variant="ghost"
                 onClick={handlers.discard}
                 disabled={readOnly || !changed}
               >
@@ -1457,7 +1456,7 @@ function Lens({
           </Callout>
         )}
         {posture.kind === "unreachable" && (
-          <Callout variant="warning" icon={<CableGlyph />}>
+          <Callout variant="warning" icon={<PlugGlyph />}>
             The engine could not be reached to read the configuration again. Your draft is kept on
             this page.
           </Callout>
@@ -1483,7 +1482,7 @@ function Lens({
         {conflict && conflict.reason === "already_configured" && !companyExists && (
           <Callout
             variant="warning"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             action={
               <Button size="small" variant="primary" onClick={openExistingCompany}>
                 Discard it and open the company
@@ -1497,7 +1496,7 @@ function Lens({
         {conflict && conflict.reason === "no_active_revision" && (
           <Callout
             variant="warning"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             action={
               <Button
                 variant="secondary"
@@ -1518,7 +1517,7 @@ function Lens({
         {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
           <Callout
             variant="warning"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             action={
               <span className="row gap-1 wrap">
                 {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
@@ -1528,7 +1527,7 @@ function Lens({
                 {state.base.revision && conflict.currentRevisionId && (
                   <ButtonLink
                     size="small"
-                    variant="tertiary"
+                    variant="ghost"
                     href={href(screenPath("config"), {
                       lens: "diff",
                       revision: conflict.currentRevisionId,
@@ -1554,7 +1553,7 @@ function Lens({
           </Callout>
         )}
         {loaded && !isBaseKeyed(state) && status === "unreachable" && (
-          <Callout variant="warning" icon={<CableGlyph />}>
+          <Callout variant="warning" icon={<PlugGlyph />}>
             The engine could not be reached to describe this company. Editing starts once it
             answers.
           </Callout>
@@ -1583,7 +1582,7 @@ function Lens({
           <Callout
             variant={keeping.notice.tone}
             action={
-              <Button size="small" variant="tertiary" onClick={keeping.dismissNotice}>
+              <Button size="small" variant="ghost" onClick={keeping.dismissNotice}>
                 Dismiss
               </Button>
             }
@@ -1592,7 +1591,7 @@ function Lens({
           </Callout>
         )}
         {noProvider && (
-          <Callout variant="warning" icon={<MemoryGlyph />}>
+          <Callout variant="warning" icon={<CpuGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
             waits on its inbox until one is added. The dashboard does not write providers: add one
             with <InlineCode>crewlet config import</InlineCode> or{" "}
@@ -1603,7 +1602,7 @@ function Lens({
           <Callout
             variant="warning"
             action={
-              <Button size="small" variant="tertiary" onClick={() => setRefusal(null)}>
+              <Button size="small" variant="ghost" onClick={() => setRefusal(null)}>
                 Dismiss
               </Button>
             }
@@ -1706,7 +1705,7 @@ function Lens({
             open
             stackBody
             title="Leave the builder?"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             onClose={() => setLeaving(null)}
             footer={
               <>
@@ -1738,7 +1737,7 @@ function Lens({
             open
             stackBody
             title="A company already exists on this engine"
-            icon={<WarningGlyph />}
+            icon={<TriangleAlertGlyph />}
             onClose={() => setCompanyExists(false)}
             footer={
               <>
@@ -1936,7 +1935,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
       className="org-builder-problems"
       role="group"
       aria-label="Problems with the whole configuration"
-      icon={<ErrorGlyph size="sm" />}
+      icon={<CircleAlertGlyph size="sm" />}
     >
       <ul className="col gap-1">
         {problems.map((p, i) => (
@@ -1987,7 +1986,7 @@ function PostureScreen({
     case "behind":
       return (
         <EmptyState
-          icon={<RefreshGlyph />}
+          icon={<RotateCwGlyph />}
           title="This node has not caught up with the fleet's configuration yet."
           description="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
           action={retry}
@@ -2013,7 +2012,7 @@ function PostureScreen({
     case "unserved":
       return (
         <EmptyState
-          icon={<DnsGlyph />}
+          icon={<ServerGlyph />}
           title="This process does not serve the configuration"
           description="The builder reads and writes the company through the node that runs it. Open the dashboard on a node running the engine."
         />
@@ -2021,7 +2020,7 @@ function PostureScreen({
     case "unreachable":
       return (
         <EmptyState
-          icon={<CableGlyph />}
+          icon={<PlugGlyph />}
           title="The engine could not be reached"
           description={posture.detail || "Nothing answered the request for the configuration."}
           action={retry}
@@ -2030,7 +2029,7 @@ function PostureScreen({
     case "failed":
       return (
         <EmptyState
-          icon={<ErrorGlyph />}
+          icon={<CircleAlertGlyph />}
           title="The engine could not serve the configuration"
           description={posture.detail}
           action={retry}
@@ -2078,7 +2077,7 @@ function FullscreenToggle({ container }: { container: RefObject<HTMLDivElement |
   return (
     <IconButton
       label={active ? "Leave fullscreen" : "Fullscreen"}
-      icon={active ? <FullscreenExitGlyph /> : <FullscreenGlyph />}
+      icon={active ? <MinimizeGlyph /> : <MaximizeGlyph />}
       size="sm"
       onClick={() => {
         const el = container.current;

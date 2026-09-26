@@ -25,7 +25,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Avatar,
   Button,
   ButtonLink,
   Callout,
@@ -37,16 +36,17 @@ import {
   Tag,
   type Tone,
 } from "@crewlethq/ui";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
-  CableGlyph,
-  KeyboardArrowDownGlyph,
+  PlugGlyph,
+  ChevronDownGlyph,
   KeyGlyph,
   LayersGlyph,
   LinkGlyph,
   InboxGlyph,
-  RefreshGlyph,
+  RotateCwGlyph,
   SettingsGlyph,
-  WarningGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
@@ -1324,12 +1324,16 @@ export function EntryRow({
         </Tag>
       )}
       {action && onConnect && (
-        <Button size="small" variant="primary" onClick={() => onConnect()}>
+        // SECONDARY. This card is one row of a list of integrations, and
+        // every unconnected one carries this button — six stacked primaries
+        // is six claims to be the one thing on the page to press. The system
+        // spends one primary per view; a list's row actions are secondary.
+        <Button size="small" variant="secondary" onClick={() => onConnect()}>
           {action.label}
         </Button>
       )}
       {!absent && onDisconnect && (
-        <Button size="small" variant="tertiary" onClick={onDisconnect}>
+        <Button size="small" variant="ghost" onClick={onDisconnect}>
           Disconnect
         </Button>
       )}
@@ -1397,7 +1401,7 @@ export function EntryRow({
             aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
             onClick={() => setOpen((was) => !was)}
           >
-            <KeyboardArrowDownGlyph size="sm" />
+            <ChevronDownGlyph size="sm" />
           </button>
           {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
               chevron. It sat at the foot of the open card, which put an
@@ -1450,7 +1454,7 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <Avatar name={seat.name || seat.handle} size="sm" decorative />
+                <SeatAvatar name={seat.name || seat.handle} kind="agent" size="sm" decorative />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -2165,7 +2169,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     // banner at the top of the screen is where the token is supplied.
     return (
       <Card>
-        <Card.Header icon={<RefreshGlyph size="sm" />}>Provisioning passes</Card.Header>
+        <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
         <span className="t-caption">
           Reading what a pass found needs an operator token, so this is what the engine will not say
           without one.
@@ -2257,7 +2261,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<RefreshGlyph size="sm" />}
+        icon={<RotateCwGlyph size="sm" />}
         count={runs.length}
         subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
       >
@@ -2283,10 +2287,10 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
         // alarming one, said first.
         empty={
           loading
-            ? { title: "Reading this node's passes", icon: "refresh" }
+            ? { title: "Reading this node's passes", icon: "rotate-cw" }
             : {
                 title: "No pass has run on this node",
-                icon: "refresh",
+                icon: "rotate-cw",
                 hint: "The loop runs one per surface on its own cadence, and connecting an integration runs one at once. A pass another node ran is remembered on that node.",
               }
         }
@@ -2510,7 +2514,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
     return (
       <EmptyState
         size="compact"
-        icon={<CableGlyph size="xl" />}
+        icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
         description="The link that opened this names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
       />
@@ -2526,7 +2530,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
       <ObjectHeader
         size="peek"
         kind="Integration"
-        icon="cable"
+        icon="plug"
         identifier={entry.key}
         title={entry.name}
         status={
@@ -2555,7 +2559,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
           {data && present.length === 0 && (
             <EmptyState
               size="compact"
-              icon={<CableGlyph size="xl" />}
+              icon={<PlugGlyph size="xl" />}
               title={`${entry.name} is not connected`}
               description={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
             />
@@ -2609,7 +2613,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<WarningGlyph size="sm" />} count={findings.length}>
+                <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
                   Findings
                 </Card.Header>
                 {findings.length > 0 ? (
@@ -2877,7 +2881,7 @@ export function Integrations({ kind }: { kind?: string }) {
       {focus && focusState && (
         <ObjectHeader
           kind="Integration"
-          icon="cable"
+          icon="plug"
           identifier={focus.key}
           title={focus.name}
           status={
@@ -2960,7 +2964,7 @@ export function Integrations({ kind }: { kind?: string }) {
             so, and the cards render without their writes. */}
         {kind && !focus && (
           <EmptyState
-            icon={<CableGlyph size="xl" />}
+            icon={<PlugGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
             description="The link that brought you here names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
           />
@@ -3067,7 +3071,7 @@ export function Integrations({ kind }: { kind?: string }) {
 
         {data && !kind && configured.length === 0 && (
           <EmptyState
-            icon={<CableGlyph size="xl" />}
+            icon={<PlugGlyph size="xl" />}
             title="No integration is connected yet"
             description="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />

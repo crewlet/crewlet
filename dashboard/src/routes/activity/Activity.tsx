@@ -24,7 +24,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
-import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
+import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
@@ -268,7 +268,7 @@ export function Activity() {
         <TimeRangePicker range={range} ariaLabel="Window" />
         {filtered ? (
           <Button
-            leadingIcon={<CloseGlyph size="xs" />}
+            leadingIcon={<XGlyph size="xs" />}
             size="small"
             variant="secondary"
             onClick={() => {
@@ -290,18 +290,13 @@ export function Activity() {
 
       <Card>
         <Card.Header
-          icon={<TimelineGlyph size="sm" />}
+          icon={<ChartNoAxesGanttGlyph size="sm" />}
+          // THE HINT RIDES THE SUBTITLE, which gives way before the title
+          // does; as an action it never shrank, and cut the title on a phone.
           subtitle={
             series.data
-              ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)}`
+              ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)} · one bar per ${series.data.bucket}, click one to narrow the window`
               : undefined
-          }
-          actions={
-            series.data ? (
-              <span className="t-caption">
-                one bar per {series.data.bucket} — click one to narrow the window
-              </span>
-            ) : undefined
           }
         >
           <Card.Title>When</Card.Title>

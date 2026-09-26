@@ -43,15 +43,15 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  DnsGlyph,
-  GroupGlyph,
+  ServerGlyph,
+  UsersGlyph,
   KeyGlyph,
-  MemoryGlyph,
-  PersonGlyph,
-  PowerSettingsNewGlyph,
+  CpuGlyph,
+  UserGlyph,
+  PowerGlyph,
   TargetGlyph,
-  TuneGlyph,
-  WarningGlyph,
+  SlidersVerticalGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -60,9 +60,9 @@ import {
   DurationCell,
   KeyCell,
   NumberCell,
+  SeatLabel,
   StatusCell,
   TagsCell,
-  TextCell,
 } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -71,7 +71,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useSeatBadgeOf } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
@@ -105,6 +105,7 @@ export function Fleet({ node }: { node?: string }) {
 // ---------------------------------------------------------------------------
 
 function FleetScreen() {
+  const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   const { open: openPeek } = usePeekControls();
@@ -153,13 +154,13 @@ function FleetScreen() {
       <Card padding="none">
         <StatGroup columns={4}>
           <StatCard
-            icon={<DnsGlyph size="xs" />}
+            icon={<ServerGlyph size="xs" />}
             label="Live nodes"
             value={nodes.length}
             sub="holding an unexpired lease"
           />
           <StatCard
-            icon={<GroupGlyph size="xs" />}
+            icon={<UsersGlyph size="xs" />}
             label="Seats placed"
             value={data?.seats?.length ?? 0}
             sub={
@@ -169,7 +170,7 @@ function FleetScreen() {
             }
           />
           <StatCard
-            icon={<WarningGlyph size="xs" />}
+            icon={<TriangleAlertGlyph size="xs" />}
             label="Unplaceable"
             value={data?.unplaceable?.length ?? 0}
             sub={
@@ -179,7 +180,7 @@ function FleetScreen() {
             }
           />
           <StatCard
-            icon={<TuneGlyph size="xs" />}
+            icon={<SlidersVerticalGlyph size="xs" />}
             label="Behind on config"
             value={behind.length}
             sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
@@ -201,7 +202,7 @@ function FleetScreen() {
         }
       >
         <Card padding="none">
-          <Card.Header icon={<DnsGlyph size="sm" />} count={nodes.length}>
+          <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
             Nodes
           </Card.Header>
           <DataGrid<FleetNode>
@@ -334,7 +335,7 @@ function FleetScreen() {
 
         {nodes.some((n) => n.config_error) && (
           <Card>
-            <Card.Header icon={<WarningGlyph size="sm" />}>Config apply errors</Card.Header>
+            <Card.Header icon={<TriangleAlertGlyph size="sm" />}>Config apply errors</Card.Header>
             <div className="col gap-2">
               {nodes
                 .filter((n) => n.config_error)
@@ -351,7 +352,7 @@ function FleetScreen() {
 
         <div className="grid grid-auto-lg">
           <Card padding="none">
-            <Card.Header icon={<GroupGlyph size="sm" />} count={data?.seats?.length ?? 0}>
+            <Card.Header icon={<UsersGlyph size="sm" />} count={data?.seats?.length ?? 0}>
               Seat placement
             </Card.Header>
             <DataGrid<FleetSeatLease>
@@ -372,7 +373,7 @@ function FleetScreen() {
                   // NOT `SeatCell`, and not the seat chip this column used to
                   // draw: both are links and every row here is one now, and an
                   // anchor inside an anchor is markup no browser agrees about.
-                  cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
+                  cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
                 },
                 {
                   key: "node",
@@ -401,7 +402,7 @@ function FleetScreen() {
           </Card>
 
           <Card padding="none">
-            <Card.Header icon={<MemoryGlyph size="sm" />} count={data?.duties?.length ?? 0}>
+            <Card.Header icon={<CpuGlyph size="sm" />} count={data?.duties?.length ?? 0}>
               Company-wide duties
             </Card.Header>
             <DataGrid<FleetDutyLease>
@@ -449,10 +450,10 @@ function FleetScreen() {
             wrong, and here was one with no label at all. */}
         {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
           <Card>
-            <Card.Header icon={<WarningGlyph size="sm" />}>Not running anywhere</Card.Header>
+            <Card.Header icon={<TriangleAlertGlyph size="sm" />}>Not running anywhere</Card.Header>
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (
-                <Callout key={r} variant="warning" icon={<PersonGlyph size="md" />}>
+                <Callout key={r} variant="warning" icon={<UserGlyph size="md" />}>
                   <span>
                     <strong>{r}</strong> has no seat running on any node. Work published to its
                     mailbox waits there — a durable subscription retains it — but nothing is
@@ -541,7 +542,7 @@ export function NodeScreen({ id }: { id: string }) {
             <>
               <ObjectHeader
                 kind="Node"
-                icon="dns"
+                icon="server"
                 // NO IDENTIFIER BESIDE THE TITLE: a node's id IS its name, and
                 // a header that printed it twice would spend its widest line
                 // saying one thing.
@@ -551,7 +552,7 @@ export function NodeScreen({ id }: { id: string }) {
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
-                <Card.Header icon={<TuneGlyph size="sm" />}>Placement</Card.Header>
+                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>Placement</Card.Header>
                 <div className="col gap-2">
                   <div className="row wrap gap-2">
                     <span className="t-label">Roles</span>
@@ -618,7 +619,7 @@ export function NodePeek({ id }: { id: string }) {
               <ObjectHeader
                 size="peek"
                 kind="Node"
-                icon="dns"
+                icon="server"
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
@@ -742,6 +743,7 @@ export function nodeFacts({
  * fleet-wide duties that landed on it.
  */
 function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswer; now: number }) {
+  const seatBadge = useSeatBadgeOf();
   const { open: openPeek } = usePeekControls();
   const seats = answer.seats.filter((s) => s.node === node.id);
   const duties = answer.duties.filter((d) => d.node === node.id);
@@ -758,7 +760,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           operator came for; the first is the one they check next. */}
       <Card>
         <Card.Header
-          icon={<PowerSettingsNewGlyph size="sm" />}
+          icon={<PowerGlyph size="sm" />}
           subtitle="what this process is doing, and the revision it is doing it on"
         >
           Running
@@ -817,7 +819,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
         >
           Leases
         </Card.Header>
-        <div className="row wrap gap-2" style={{ padding: "var(--space-3)" }}>
+        <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
           <span className="t-label">Its own lease</span>
           <DurationCell ms={leaseMs(node.expires_in)} />
           <span className="t-caption">
@@ -842,7 +844,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               header: "Seat",
               sortValue: (s) => s.handle,
               // NOT `SeatCell`: it is a link and this row is one already.
-              cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
+              cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
             },
             {
               key: "ttl",
@@ -857,7 +859,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
       </Card>
 
       <Card padding="none">
-        <Card.Header icon={<MemoryGlyph size="sm" />} count={duties.length}>
+        <Card.Header icon={<CpuGlyph size="sm" />} count={duties.length}>
           Duties
         </Card.Header>
         <DataGrid<FleetDutyLease>
@@ -904,7 +906,7 @@ function NoSuchNode({ id, inline }: { id: string; inline?: boolean }) {
   return (
     <EmptyState
       size={inline ? "compact" : "default"}
-      icon={<DnsGlyph size="xl" />}
+      icon={<ServerGlyph size="xl" />}
       title={`No node called “${id}” holds a lease`}
       description="Either it never existed, or it stopped renewing and the fleet has since dropped it — a node is live exactly as long as its lease is."
     />

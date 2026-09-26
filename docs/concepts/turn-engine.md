@@ -43,7 +43,7 @@ A fresh agent (no onboarding marker for its current org chain) needs to read its
 
 The marker invalidates itself when the org chain changes (`learning.ChainHash`, a hash of the seat's path through the organization), so a role move or a reorganization re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to disable the dedicated pass. When no marker store is wired (a node with no store), onboarding is skipped, because there is no way to record completion and the pass would otherwise run every turn. A human seat never onboards.
 
-On the dashboard, onboarding renders as its own phase within the turn it rode in on, with a neutral tag rather than one of the phase hues — it is one-time setup that happens to ride the first turn, not part of that turn's task, and colour is reserved for the phases a reader tracks across every screen.
+On the dashboard, onboarding renders as its own phase within the turn it rode in on, on the same neutral tag every phase takes — a phase is a category, and a category is its word rather than a colour. Inside a chart it is counted in the Auxiliary band: it is one-time setup that happens to ride the first turn, not part of that turn's task.
 
 ---
 
@@ -1042,7 +1042,7 @@ input and output kept apart from the turn's own totals.
 
 Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration (a branded Slack or Jira badge with the sender) instead of a generic "external notification". **Turns** renders this as the turn's own header line (what woke it, and the integration badge when one did) and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/activity/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
 
-Each phase row in that view is keyed to its **phase colour** (execute / review / auxiliary / worker / judge — the same hue as the phase pill): a left accent stripe identifies the phase at a glance even while the row is collapsed, and expanding a row tints its border, header, and body with that colour so several open sections stay visually distinct instead of blurring into one neutral stack. The standalone per-phase detail card carries the same accent.
+Each phase row in that view leads with its **phase word** on the neutral pill (execute / review / auxiliary / subagent / judge / sandbox / onboarding): a phase is a category, and the dashboard spends colour only on state, so a row that FAILED is the one that carries a hue — the danger rail — and every other row reads by its word. The standalone per-phase detail card is drawn the same way. Inside a chart a phase takes the series of the band the engine counts it in (see the [dashboard design](../reference/dashboard-design.md#the-one-rule)).
 
 | Event | Purpose |
 |-------|---------|

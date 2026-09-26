@@ -45,7 +45,7 @@ import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
-import { GroupGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
+import { UsersGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -57,7 +57,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useOrg, useSeatBadgeOf } from "~/lib/store-hooks.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { BUCKET_MS, RANGE_MS, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
@@ -66,7 +66,7 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { ModelActivity } from "../company/Model.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DateCell, DurationCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { DateCell, DurationCell, NumberCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { TurnRow } from "~/protocol/index.ts";
 
@@ -205,6 +205,7 @@ function foldBars(rows: TurnRow[], since: string, until: string, bucket: Bucket)
 }
 
 function TurnList({ view, onChange }: { view: string; onChange: (v: string) => void }) {
+  const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const org = useOrg();
   const { open: openPeek } = usePeekControls();
@@ -282,11 +283,12 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
 
       <Card>
         <Card.Header
-          icon={<TimelineGlyph size="sm" />}
-          subtitle={`${plural(rows.length, "turn")} on this page, over ${spanWords(since, until)}`}
-          actions={
-            <span className="t-caption">one bar per {bucket} — click one to narrow the window</span>
-          }
+          icon={<ChartNoAxesGanttGlyph size="sm" />}
+          // THE HINT RIDES THE SUBTITLE, which gives way first (the kit's
+          // `flex-shrink: 100`). It sat in `actions`, which never shrinks, so
+          // on a phone the title was cut to "W" while the hint kept its whole
+          // width.
+          subtitle={`${plural(rows.length, "turn")} on this page, over ${spanWords(since, until)} · one bar per ${bucket}, click one to narrow the window`}
         >
           <Card.Title>When</Card.Title>
         </Card.Header>
@@ -318,7 +320,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
           size="small"
           variant={seat ? "primary" : "secondary"}
           onClick={() => setSeat("")}
-          leadingIcon={<GroupGlyph size="xs" />}
+          leadingIcon={<UsersGlyph size="xs" />}
         >
           {seat ? (chosen?.name ?? seat) : "every seat"}
         </Button>
@@ -405,7 +407,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               // The seat's own page is one click away from the turn.
               cell: (t) =>
                 t.role ? (
-                  <TextCell icon="memory">{t.role}</TextCell>
+                  <SeatLabel {...seatBadge(t.role)} />
                 ) : (
                   // NOT a dash: a turn with no seat is not a turn whose seat
                   // went unrecorded, it is the engine's own work.
@@ -425,7 +427,10 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
                     // THE KEY, not a link to it — see the row's own comment.
                     // It still says which item this turn was about, and the
                     // turn's page links to it from inside.
-                    <span className="mono t-caption" title="the work item this turn was about">
+                    <span
+                      className="mono t-caption item-key"
+                      title="the work item this turn was about"
+                    >
                       {t.work_item.key || `${t.work_item.backend}:${t.work_item.id}`}
                     </span>
                   )}

@@ -48,12 +48,12 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import {
-  ContentCopyGlyph,
+  CopyGlyph,
   DatabaseGlyph,
-  DnsGlyph,
-  Package2Glyph,
-  ScheduleGlyph,
-  WarningGlyph,
+  ServerGlyph,
+  PackageGlyph,
+  ClockGlyph,
+  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
@@ -76,6 +76,33 @@ import type { GateGesture } from "./GateDialog.tsx";
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
 const POLL_MS = 60_000;
+
+/** One domain whose trim is blocked, in the sentence the server composed. */
+export function BlockedBanner({ domain: d, now }: { domain: RetentionDomain; now: number }) {
+  return (
+    <Callout variant="warning">
+      <span>
+        {d.prose ? (
+          d.prose.replace(/\.$/, "")
+        ) : (
+          <>
+            Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>: the {d.blocked_by} term
+            is holding it
+          </>
+        )}
+        {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
+        <a
+          className="prose-link"
+          href="https://docs.crewlet.ai/guides/retention"
+          target="_blank"
+          rel="noreferrer"
+        >
+          What the six terms mean
+        </a>
+      </span>
+    </Callout>
+  );
+}
 
 /** The trim's sixth term (D72), and the number an operator has to fix when the
  *  banner names `snapshot_floor`. */
@@ -152,23 +179,13 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
       {/* THE BANNER NAMES THE TERM IN THE OPERATOR'S OWN WORDS, and never the
           term name alone: `backup_max_age` is a field, and "the newest
           complete backup is 3 days old" is the fact somebody acts on. The
-          server composes that sentence, because the CLI renders the same one. */}
+          server composes that sentence, because the CLI renders the same one
+          — and it is the WHOLE sentence, headline included ("Nothing is being
+          trimmed on tracker: …"), so it is printed as it came rather than
+          after a headline of our own, which drew the headline twice. Only a
+          report with no sentence is given one here. */}
       {blocked.map((d) => (
-        <Callout key={d.domain} variant="warning">
-          <span>
-            Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>:{" "}
-            {d.prose || `the ${d.blocked_by} term is holding it`}
-            {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
-            <a
-              className="prose-link"
-              href="https://docs.crewlet.ai/guides/retention"
-              target="_blank"
-              rel="noreferrer"
-            >
-              What the six terms mean
-            </a>
-          </span>
-        </Callout>
+        <BlockedBanner key={d.domain} domain={d} now={now} />
       ))}
 
       {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
@@ -194,7 +211,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 
       {(data?.alarms?.length ?? 0) > 0 && (
         <Card>
-          <Card.Header icon={<WarningGlyph size="sm" />} count={data?.alarms.length}>
+          <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={data?.alarms.length}>
             Alarms
           </Card.Header>
           <div className="col gap-2">
@@ -218,7 +235,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
       )}
 
       <Card padding="none">
-        <Card.Header icon={<DnsGlyph size="sm" />} count={nodes.length}>
+        <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
           Replication
         </Card.Header>
         <DataGrid<RetentionNode>
@@ -328,7 +345,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                       </Tag>
                     )}
                     <Button
-                      variant="tertiary"
+                      variant="ghost"
                       size="small"
                       onClick={() => setGate({ node: n.node_id, evict: action.evict })}
                     >
@@ -358,7 +375,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 
       <Card padding="none">
         <Card.Header
-          icon={<Package2Glyph size="sm" />}
+          icon={<PackageGlyph size="sm" />}
           count={data?.snapshots?.length}
           subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
         >
@@ -428,7 +445,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 
       {data?.replica && (
         <Card>
-          <Card.Header icon={<ContentCopyGlyph size="sm" />}>This node as a replica</Card.Header>
+          <Card.Header icon={<CopyGlyph size="sm" />}>This node as a replica</Card.Header>
           <StatGroup>
             <StatCard
               icon={<DatabaseGlyph size="xs" />}
@@ -437,7 +454,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sub="what a joining peer has to receive"
             />
             <StatCard
-              icon={<ScheduleGlyph size="xs" />}
+              icon={<ClockGlyph size="xs" />}
               label="Projected join"
               value={fmtDuration(data.replica.projected_join_seconds * 1000)}
               sub={

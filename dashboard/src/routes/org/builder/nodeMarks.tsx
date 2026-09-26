@@ -40,13 +40,13 @@ import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.t
 import type { NodeKey } from "./model/keys.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
-  AccountTreeGlyph,
-  ApartmentGlyph,
-  CycleGlyph,
+  NetworkGlyph,
+  BuildingComplexGlyph,
+  Repeat2Glyph,
   LinkGlyph,
-  NotificationsGlyph,
-  PersonGlyph,
-  WarningGlyph,
+  BellGlyph,
+  UserGlyph,
+  TriangleAlertGlyph,
   cssLength,
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
@@ -106,9 +106,9 @@ export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
  * says a size still gets it.
  */
 export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSize }) {
-  if (kind === "company") return <ApartmentGlyph size={size} />;
-  if (kind === "unit") return <AccountTreeGlyph size={size} />;
-  if (kind === "human") return <PersonGlyph size={size ?? "sm"} />;
+  if (kind === "company") return <BuildingComplexGlyph size={size} />;
+  if (kind === "unit") return <NetworkGlyph size={size} />;
+  if (kind === "human") return <UserGlyph size={size ?? "sm"} />;
   const side = cssLength(size);
   return <CrewletIcon width={side} height={side} />;
 }
@@ -235,7 +235,7 @@ export function seatMarkNotes(view: SeatView): string[] {
  */
 export function UnitMarks({ view }: { view: UnitView }) {
   if (view.danglingLead === null) return null;
-  return <Mark note={view.danglingNote ?? "Lead names no seat"} glyph={WarningGlyph} />;
+  return <Mark note={view.danglingNote ?? "Lead names no seat"} glyph={TriangleAlertGlyph} />;
 }
 
 /** The wiring marks of a seat, as glyphs: see [UnitMarks]. */
@@ -248,10 +248,10 @@ export function SeatMarks({ view }: { view: SeatView }) {
         <Mark note="Declared at the root with a unit reference" glyph={LinkGlyph} />
       )}
       {dangling && (
-        <Mark note={view.danglingNote ?? `No unit named ${dangling}`} glyph={WarningGlyph} />
+        <Mark note={view.danglingNote ?? `No unit named ${dangling}`} glyph={TriangleAlertGlyph} />
       )}
       {view.datadogFallback && (
-        <Mark note="Alerts that name no seat wake this seat" glyph={NotificationsGlyph} />
+        <Mark note="Alerts that name no seat wake this seat" glyph={BellGlyph} />
       )}
     </>
   );
@@ -270,7 +270,7 @@ export function SeatMarks({ view }: { view: SeatView }) {
 export function ReportingMarks({ item }: { item: Pick<ReportingItem, "cycleSize"> }) {
   if (item.cycleSize === undefined) return null;
   return (
-    <Mark note={`In a reporting cycle of ${plural(item.cycleSize, "seat")}`} glyph={CycleGlyph} />
+    <Mark note={`In a reporting cycle of ${plural(item.cycleSize, "seat")}`} glyph={Repeat2Glyph} />
   );
 }
 

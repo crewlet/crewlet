@@ -85,6 +85,7 @@ var contract = []Entry{
 	// spend.ts
 	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
 	{"BANDS", ReadLiteral, "internal/api/queries.TestTheSpendChartDrawsExactlyTheEnginesPhaseBands"},
+	{"PHASE_BANDS", ReadLiteral, "internal/api/queries.TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto"},
 	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
 
 	// work.ts

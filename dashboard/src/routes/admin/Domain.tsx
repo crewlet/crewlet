@@ -33,7 +33,7 @@
 
 import { useMemo } from "react";
 import { Card, EmptyValue, InlineCode, Skeleton, Tag } from "@crewlethq/ui";
-import { DnsGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
+import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -197,7 +197,7 @@ export function DomainScreen({ name }: { name: string }) {
 
               <Card padding="none">
                 <Card.Header
-                  icon={<DnsGlyph size="sm" />}
+                  icon={<ServerGlyph size="sm" />}
                   count={positions.length}
                   subtitle="The trim takes a minimum across these, so the lowest row is what the floor is waiting on."
                 >
@@ -212,7 +212,7 @@ export function DomainScreen({ name }: { name: string }) {
                     {
                       key: "node",
                       header: "Node",
-                      cell: (p) => <TextCell icon="dns">{p.node_id}</TextCell>,
+                      cell: (p) => <TextCell icon="server">{p.node_id}</TextCell>,
                       sortValue: (p) => p.node_id,
                     },
                     {

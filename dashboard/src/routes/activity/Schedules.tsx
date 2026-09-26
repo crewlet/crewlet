@@ -25,10 +25,10 @@ import { useMemo, type ReactNode } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Card, EmptyState, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
-  CalendarTodayGlyph,
-  DescriptionGlyph,
-  ErrorGlyph,
-  ScheduleGlyph,
+  CalendarGlyph,
+  FileTextGlyph,
+  CircleAlertGlyph,
+  ClockGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
@@ -196,7 +196,7 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
   const said = describeCron(row.cron);
   return (
     <Card>
-      <Card.Header icon={<DescriptionGlyph size="sm" />}>
+      <Card.Header icon={<FileTextGlyph size="sm" />}>
         <Card.Title>Definition</Card.Title>
       </Card.Header>
       <PropertiesRail
@@ -313,7 +313,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
   return (
     <Card>
       <Card.Header
-        icon={<CalendarTodayGlyph size="sm" />}
+        icon={<CalendarGlyph size="sm" />}
         subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone}`}
       >
         <Card.Title>And after that</Card.Title>
@@ -334,7 +334,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
         // READER's, like every other timestamp on this screen. Saying which is
         // which beats a reader working out why `0 9 * * *` in Asia/Tokyo is
         // listed at midnight.
-        <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+        <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
           This schedule is evaluated in <code className="inline">{row.timezone}</code>; the instants
           above are the same fires shown in your own timezone.
         </p>
@@ -471,19 +471,19 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={3}>
         <StatCard
-          icon={<CalendarTodayGlyph size="xs" />}
+          icon={<CalendarGlyph size="xs" />}
           label="Schedules"
           value={schedules.length}
           sub="across every seat and unit"
         />
         <StatCard
-          icon={<ScheduleGlyph size="xs" />}
+          icon={<ClockGlyph size="xs" />}
           label="Firing within the hour"
           value={due.length}
           sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
         />
         <StatCard
-          icon={<ErrorGlyph size="xs" />}
+          icon={<CircleAlertGlyph size="xs" />}
           label="Cannot fire"
           tone={broken.length ? "danger" : undefined}
           value={broken.length}
@@ -515,7 +515,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         }
       >
         <Card padding="none">
-          <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={schedules.length}>
+          <Card.Header icon={<CalendarGlyph size="sm" />} count={schedules.length}>
             <Card.Title>Defined</Card.Title>
           </Card.Header>
           <DataGrid
@@ -660,7 +660,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         </Card>
 
         <Card padding="none">
-          <Card.Header icon={<ScheduleGlyph size="sm" />} count={runs.length}>
+          <Card.Header icon={<ClockGlyph size="sm" />} count={runs.length}>
             <Card.Title>Recent runs</Card.Title>
           </Card.Header>
           <DataGrid
@@ -826,7 +826,7 @@ function OneSchedule({
           in full. */}
       <ObjectHeader
         kind="Schedule"
-        icon="calendar_today"
+        icon="calendar"
         identifier={`${scopeType}:${scopeId}`}
         title={name}
         // NEITHER THE BADGE NOR THE NOTE MAKES THE CLAIM BEFORE THE ANSWER
@@ -856,7 +856,7 @@ function OneSchedule({
       >
         <Card padding="none">
           <Card.Header
-            icon={<ScheduleGlyph size="sm" />}
+            icon={<ClockGlyph size="sm" />}
             count={runs.length}
             // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
             // schedule that has fired exactly that many times.
@@ -975,7 +975,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
       <ObjectHeader
         size="peek"
         kind="Schedule"
-        icon="calendar_today"
+        icon="calendar"
         identifier={`${scopeType}:${scopeId}`}
         // THE NAME OUT OF THE ADDRESS, not out of the row: a schedule the
         // configuration has dropped still has a name, and a rail that waited
@@ -1008,7 +1008,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
 
               <Card padding="none">
                 <Card.Header
-                  icon={<ScheduleGlyph size="sm" />}
+                  icon={<ClockGlyph size="sm" />}
                   count={runs.length}
                   // WHICH OF THE COUNT IS DRAWN. The chip is the ledger's own
                   // total and the rows are the newest few of it — a panel that
@@ -1052,7 +1052,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                 ) : (
                   <EmptyState
                     size="compact"
-                    icon={<ScheduleGlyph size={32} />}
+                    icon={<ClockGlyph size={32} />}
                     title="This schedule has not fired"
                     description="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
                   />

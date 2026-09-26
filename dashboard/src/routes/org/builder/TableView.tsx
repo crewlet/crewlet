@@ -61,7 +61,7 @@ import {
 import { nodeTone } from "./nodeTone.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { DeleteGlyph, EditGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph, PencilGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
 import {
   EmptyValue,
   IconButton,
@@ -77,6 +77,7 @@ import {
   type TreeItemAction,
   type TreeViewHandle,
 } from "@crewlethq/ui";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What a row says, beside its name.
@@ -182,8 +183,13 @@ export function TableView() {
                cell happens to mention a name. */
             <OrgTableName
               className="btable-name"
-              icon={NodeGlyph({ kind: nodeGlyphKind(view) })}
-              iconRing={view.type === "seat" && view.kind === "human" ? "dashed" : "none"}
+              // A SEAT IS ITS BADGE, as it is on the chart: the outline says
+              // who holds it. A container keeps its glyph.
+              {...(view.type === "seat"
+                ? {
+                    avatar: seatBadge(view.name, view.kind),
+                  }
+                : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
               // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
@@ -357,7 +363,7 @@ function RowControls({
         <IconButton
           size="sm"
           label={`Edit ${name}`}
-          icon={<EditGlyph />}
+          icon={<PencilGlyph />}
           onClick={() => api.openEditor(view.key)}
         />
         {isDeletable(view) && (
@@ -365,7 +371,7 @@ function RowControls({
             size="sm"
             variant="ghost-danger"
             label={`Delete ${view.name}`}
-            icon={<DeleteGlyph />}
+            icon={<TrashGlyph />}
             {...(api.readOnly ? { disabledReason: REFUSED } : {})}
             onClick={() => api.openDelete(view.key)}
           />
@@ -377,7 +383,7 @@ function RowControls({
                named controls, and none of them says which row it would act
                on. */
             label={`Actions for ${name}`}
-            icon={<MoreVertGlyph />}
+            icon={<EllipsisVerticalGlyph />}
             align="end"
             open={grid.menuOpen(view.key)}
             onOpenChange={(up) => grid.setMenuOpen(view.key, up)}

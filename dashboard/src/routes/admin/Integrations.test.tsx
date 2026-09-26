@@ -862,6 +862,23 @@ test("an unconnected tool offers no settings square", () => {
   expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
 });
 
+// A ROW'S CONNECT IS SECONDARY. The screen is a list of integrations and
+// every unconnected one carries the button, so drawn primary the page had six
+// stacked claims to be the one thing to press.
+test("a card's Connect is a secondary button", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "gitlab")!}
+      rows={rowsOf()}
+      sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
+      onConnect={() => {}}
+    />,
+  );
+  const connect = screen.getByRole("button", { name: "Connect" });
+  expect(connect.className).toContain("crewlet-btn--secondary");
+  expect(connect.className).not.toContain("crewlet-btn--primary");
+});
+
 // THE AGENTS ARE THE POINT, so the card lists them.
 //
 // Only Slack had a roster, because it was the only app with a route per seat

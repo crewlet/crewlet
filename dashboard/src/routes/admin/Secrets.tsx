@@ -41,10 +41,10 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import {
-  AddGlyph,
-  CloseGlyph,
+  PlusGlyph,
+  XGlyph,
   DatabaseGlyph,
-  EditGlyph,
+  PencilGlyph,
   KeyGlyph,
   ShieldGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -442,7 +442,7 @@ export function Secrets({ name }: { name?: string }) {
         {<Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
         {
           <Button
-            leadingIcon={<AddGlyph size="sm" />}
+            leadingIcon={<PlusGlyph size="sm" />}
             variant="primary"
             onClick={() => setWriting({ editing: "" })}
           >
@@ -582,7 +582,7 @@ export function Secrets({ name }: { name?: string }) {
                     <IconButton
                       size="sm"
                       variant="ghost"
-                      icon={<EditGlyph size="sm" />}
+                      icon={<PencilGlyph size="sm" />}
                       label={`Edit ${s.name}`}
                       title={`Edit ${s.name}`}
                       onClick={rowAction(() => setWriting({ editing: s.name }))}
@@ -590,7 +590,7 @@ export function Secrets({ name }: { name?: string }) {
                     <IconButton
                       size="sm"
                       variant="ghost"
-                      icon={<CloseGlyph size="sm" />}
+                      icon={<XGlyph size="sm" />}
                       label={`Remove ${s.name}`}
                       title={`Remove ${s.name}`}
                       onClick={rowAction(() => setRemoving(s.name))}

@@ -565,3 +565,26 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 		t.Errorf("the agents push carried activity %v, want idle", got)
 	}
 }
+
+// TestTheOrgMeterIsAListBeforeAnyReport holds the one state no report builds:
+// the projection before a node's first `budget_meters` frame. Its zero meter
+// went out as `"windows": null`, and the dashboard — which reads the list the
+// wire promises — threw on the Cost screen for the seconds after every engine
+// start. A seat meter with no windows marshals the same way.
+func TestTheOrgMeterIsAListBeforeAnyReport(t *testing.T) {
+	s := livestate.New()
+	raw, err := json.Marshal(s.Budget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"org":{"windows":[]}`) {
+		t.Fatalf("the unreported org meter must state an empty list, got %s", raw)
+	}
+	seat, err := json.Marshal(&livestate.BudgetMeter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(seat) != `{"windows":[]}` {
+		t.Fatalf("a meter with no windows must state an empty list, got %s", seat)
+	}
+}

@@ -61,7 +61,7 @@ import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
-import { DashboardGlyph, ViewColumnGlyph } from "@crewlethq/icons/glyphs";
+import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
@@ -125,7 +125,7 @@ const DEFAULT_SORT = "-todo";
  */
 const EMPTY = {
   archived: {
-    icon: "view_column" as const,
+    icon: "columns-3" as const,
     title: "No project is archived",
     hint: "An archived project keeps its work and stops taking new items.",
   },
@@ -143,7 +143,7 @@ const EMPTY = {
 function activeEmpty(archived: number, href: string) {
   if (archived > 0) {
     return {
-      icon: "view_column" as const,
+      icon: "columns-3" as const,
       title: "No project is active",
       hint: (
         <>
@@ -163,7 +163,7 @@ function activeEmpty(archived: number, href: string) {
     };
   }
   return {
-    icon: "view_column" as const,
+    icon: "columns-3" as const,
     title: "No project is active",
     hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
   };
@@ -525,8 +525,8 @@ export function Projects() {
           trigger={(open, toggle) => (
             <Button
               size="small"
-              variant="tertiary"
-              leadingIcon={<ViewColumnGlyph size="sm" />}
+              variant="ghost"
+              leadingIcon={<Columns3Glyph size="sm" />}
               aria-expanded={open}
               aria-haspopup="dialog"
               onClick={toggle}
@@ -662,7 +662,7 @@ function LastChange({
 function NoProjectsYet() {
   return (
     <EmptyState
-      icon={<DashboardGlyph size={32} />}
+      icon={<LayoutDashboardGlyph size={32} />}
       title="No project has been created yet"
       description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. One appears here the moment a unit in the company configuration declares its `project` key — the engine mints it, so there is nothing to create by hand."
     />

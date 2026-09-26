@@ -135,3 +135,25 @@ test("a bar names its own bucket in the caller's noun", () => {
   expect(bars[0]!.title).toContain("0 changes");
   expect(bars[1]!.title).toContain("1 change");
 });
+
+// THE HEIGHT IS THE FILL'S, NOT THE SLOT'S. The slot is the control and spans
+// its whole column; were the height on it, the stylesheet's 63% cap would have
+// nothing to narrow and a lone busy day would be a card-wide block again.
+test("a bar's height is carried by a fill inside its slot", () => {
+  const { container } = render(
+    <Histogram
+      bars={days(2, [0, 4])}
+      bucket="day"
+      total={4}
+      noun="change"
+      over="loaded"
+      onPick={() => {}}
+    />,
+  );
+  const slots = [...container.querySelectorAll<HTMLElement>(".histogram-bar")];
+  expect(slots).toHaveLength(2);
+  for (const slot of slots) expect(slot.style.height).toBe("");
+  const fills = slots.map((s) => s.querySelector<HTMLElement>(":scope > .histogram-fill")!);
+  expect(fills.map((f) => f.style.height)).toEqual(["0%", "100%"]);
+  expect(slots[0]!.hasAttribute("data-empty")).toBe(true);
+});

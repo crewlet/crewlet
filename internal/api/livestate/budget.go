@@ -68,7 +68,7 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 		MeterID:  meterID,
 		Seq:      seq,
 		Timezone: report.Timezone,
-		Org:      BudgetMeter{Windows: windowsOrEmpty(report.Org.Windows)},
+		Org:      BudgetMeter{Windows: report.Org.Windows},
 	}
 	// Only an ADVANCE moves the guard. A report with no usable timestamp is
 	// still applied, for the reason every other guard here lets one
@@ -92,7 +92,7 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 		if agent.runtimeID == "" {
 			agent.runtimeID = seat.AgentID
 		}
-		agent.budget = &BudgetMeter{Windows: windowsOrEmpty(seat.Windows)}
+		agent.budget = &BudgetMeter{Windows: seat.Windows}
 		change.agentMoved(seat.Role)
 	}
 	for _, agent := range s.agents {
@@ -104,15 +104,6 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 		}
 	}
 	return change
-}
-
-// windowsOrEmpty is a window list the push states as `[]` rather than null
-// when a scope caps none: the client reads null as "not loaded yet".
-func windowsOrEmpty(ws []WindowMeter) []WindowMeter {
-	if ws == nil {
-		return []WindowMeter{}
-	}
-	return ws
 }
 
 // decodePayload reads a generic payload into its wire type, reporting whether

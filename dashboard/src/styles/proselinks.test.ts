@@ -10,8 +10,8 @@ import { modules } from "../test/source.ts";
  * chrome this product is mostly made of — a breadcrumb, a row that happens to
  * be an anchor, a caption-sized navigation — because each of those is a THING
  * on the page rather than a word in a line. It is wrong the moment an anchor
- * IS a word in a line: the sentence around it is `--text`, the link is
- * `--accent-ink`, and colour alone is what WCAG 1.4.1 refuses. Those anchors
+ * IS a word in a line: the sentence around it is `--color-text-primary`, the link is
+ * `--color-brand-accent-ink`, and colour alone is what WCAG 1.4.1 refuses. Those anchors
  * take `.prose-link`, which puts the underline back and keeps it.
  *
  * # Why a scan, and why it keys on the CLASS ATTRIBUTE

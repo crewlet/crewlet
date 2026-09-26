@@ -35,7 +35,7 @@ import {
   Skeleton,
   Tag,
 } from "@crewlethq/ui";
-import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
+import { XGlyph, BrainGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
@@ -467,7 +467,7 @@ export function ModelActivity() {
           <Button
             size="small"
             variant="secondary"
-            leadingIcon={<CloseGlyph size="xs" />}
+            leadingIcon={<XGlyph size="xs" />}
             onClick={() => {
               setRole("");
               setPhase("");
@@ -486,7 +486,7 @@ export function ModelActivity() {
 
       {!loading && !filtered.length && !error && (
         <EmptyState
-          icon={<NeurologyGlyph size={32} />}
+          icon={<BrainGlyph size={32} />}
           title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
           description={
             filtering

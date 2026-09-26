@@ -23,9 +23,8 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { href } from "../router.tsx";
 import { Button, IconButton, Kbd, SearchTrigger, cx } from "@crewlethq/ui";
-import { ContentCopyGlyph, MenuGlyph } from "@crewlethq/icons/glyphs";
+import { CopyGlyph, MenuGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 // THE STAR HAS NO GLYPH IN UILET — see `StarPage` below.
-import { Mark } from "~/ui/glyph.tsx";
 import { PAGE_ACTIONS_SLOT } from "./PageActions.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 
@@ -122,8 +121,8 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
   return (
     <Button
       size="small"
-      variant="tertiary"
-      leadingIcon={<ContentCopyGlyph size="sm" />}
+      variant="ghost"
+      leadingIcon={<CopyGlyph size="sm" />}
       onClick={copy}
       title={label}
     >
@@ -159,26 +158,19 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
     setSaid(`${MaxStars} is the limit`);
     window.setTimeout(() => setSaid(""), 2_400);
   };
-  // THE STAR IS A DRAWING THIS BUILD HOLDS, because `@crewlethq/icons` has not
-  // vendored one and nothing in its set carries "kept" — `FlagGlyph` is the
-  // nearest and means a thing marked for attention rather than a thing you
-  // chose to keep. It is not ours in any sense except that we are holding it:
-  // it is the same Material Symbol at the same pinned commit, so it sits in
-  // the family rather than beside it. `src/ui/symbols/README.md` records the
-  // one command that retires it upstream.
-  //
-  // TWO DRAWINGS RATHER THAN ONE FILLED, which is the change from our Feather
-  // star: a stroked outline has an inside to fill and a Material Symbol does
-  // not, so `fill` on it would colour the whole mark instead of its middle.
-  // Upstream draws the pair and this picks between them.
+  // THE KEPT STATE IS THE SAME STAR FILLED. `star` is the one glyph the
+  // design system lists as `FILLABLE` — a closed silhouette whose inside
+  // reads as the mark — and it is listed for exactly this toggle, so the
+  // pressed state is `filled` rather than a second drawing. `pressed` says
+  // the same thing to assistive technology.
   return (
     <Button
       size="small"
-      variant="tertiary"
+      variant="ghost"
       onClick={onClick}
       title={said || (kept ? "Remove from Starred" : "Keep in Starred")}
       pressed={kept}
-      leadingIcon={<Mark name={kept ? "star-fill" : "star"} size="sm" />}
+      leadingIcon={<StarGlyph filled={kept} size="sm" />}
     >
       {/* `undefined` RATHER THAN `""` WHEN THERE IS NOTHING TO SAY: their
           Button falls back to `title` for the accessible name only when it has
@@ -239,7 +231,7 @@ export function PageBar({
             a portal needs a node to land in, and one that appears only when
             the frame already knows there are controls could never be found by
             the screen that has them. */}
-        <div className="row gap-1 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
+        <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         {actions}
       </div>
       {viewer}
@@ -253,14 +245,31 @@ export function PageBar({
           ctrlKey`, so the chord has always worked on both platforms while the
           hardcoded `⌘K` named a key a Windows or Linux reader does not have.
           `Kbd keys={["Mod", "k"]}` draws the platform's own and reads it as a
-          sentence rather than as "place of interest sign K". */}
-      <SearchTrigger
-        label="Search"
-        title="Search everything"
-        onClick={onSearch}
-        keyshortcuts="Meta+K Control+K"
-        shortcut={<Kbd keys={["Mod", "k"]} subtle />}
-      />
+          sentence rather than as "place of interest sign K".
+
+          `toolbar`, NAMED, because the kit's default is `rail` — the
+          sidebar's field, `width: 100%` and never giving up its words. As the
+          default here it took every pixel the trail left at a desktop width
+          and, under 1024px, a line of its own below the trail, where this bar
+          is written to keep it beside the viewer chip. `toolbar` is the bar's
+          field: a resting width, the card's ground, the glyph alone below the
+          shell breakpoint.
+
+          INSIDE `.page-search`, which is what lets it give way on a desktop
+          bar too: the kit's resting width is a floor, and a route whose
+          controls fill the line pushed the keycap past the edge. The wrapper
+          makes the width flexible and collapses the field by its own width —
+          see `.page-search` in frame.css. */}
+      <span className="page-search">
+        <SearchTrigger
+          variant="toolbar"
+          label="Search"
+          title="Search everything"
+          onClick={onSearch}
+          keyshortcuts="Meta+K Control+K"
+          shortcut={<Kbd keys={["Mod", "k"]} subtle />}
+        />
+      </span>
     </header>
   );
 }

@@ -22,15 +22,16 @@ import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, stateLabel } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
-// `MarkName` `typeIcon` returns.
+// `GlyphName` `typeIcon` returns.
 import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
 import { QueryState } from "~/components/common.tsx";
-import { markByName, type MarkName } from "~/ui/glyph.tsx";
+import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { glyphFor } from "~/ui/glyph.tsx";
 
 interface Hit {
   id: string;
   group: string;
-  icon: MarkName;
+  icon: GlyphName;
   label: string;
   hint: string;
   go: () => void;
@@ -86,14 +87,14 @@ function score(text: string, q: string): number {
  */
 function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
   const out: Hit[] = [];
-  const add = (id: string, icon: MarkName, label: string, hint: string, go: () => void) =>
+  const add = (id: string, icon: GlyphName, label: string, hint: string, go: () => void) =>
     out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
 
   for (const choice of THEMES) {
     if (choice === prefs.theme) continue;
     add(
       `theme-${choice}`,
-      choice === "dark" ? "dark_mode" : choice === "light" ? "light_mode" : "computer",
+      choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
       `Theme: ${choice}`,
       choice === "system" ? "follow this machine's setting" : `always ${choice}`,
       () => prefs.setTheme(choice),
@@ -111,7 +112,7 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
     void navigator.clipboard?.writeText(window.location.href);
   });
   add("token", "key", "Set the API token", "for the operator-only screens", requestToken);
-  add("clear-recents", "schedule", "Clear recents", "this browser only", forgetAll);
+  add("clear-recents", "clock", "Clear recents", "this browser only", forgetAll);
   return out;
 }
 
@@ -210,7 +211,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `recent-${r.path.join("/")}`,
             group: "Recent",
-            icon: "schedule",
+            icon: "clock",
             label: r.label,
             hint: r.workspace || r.path.join(" / "),
             go: () => nav.to(r.path),
@@ -299,7 +300,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `event-${query}`,
           group: "Open by id",
-          icon: "description",
+          icon: "file-text",
           label: query,
           hint: "as an event",
           go: () => nav.to(["activity", "events", query]),
@@ -310,7 +311,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `trace-${query}`,
           group: "Open by id",
-          icon: "fork_right",
+          icon: "split",
           label: query,
           hint: "as a trace — every event that carries it",
           // THE TRACE PAGE, which is the only screen that assembles one: it
@@ -367,7 +368,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `seat-${seat.handle}`,
           group: "Seats",
-          icon: seat.kind === "human" ? "person" : "group",
+          icon: seat.kind === "human" ? "user" : "users",
           label: seat.name,
           hint:
             seat.kind === "human"
@@ -392,7 +393,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `unit-${unit.name}`,
           group: "Units",
-          icon: "account_tree",
+          icon: "network",
           label: unit.name,
           hint: `${unit.type || "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
           // BY NAME. A unit's stable `id:` is part of the guarded
@@ -412,7 +413,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `tool-${tool.name}`,
             group: "Tools",
-            icon: "build",
+            icon: "wrench",
             label: tool.name,
             hint: tool.source,
             go: () => nav.to(["admin", "tools"], { q: tool.name }),
@@ -424,7 +425,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-events",
           group: "Search",
-          icon: "timeline",
+          icon: "chart-no-axes-gantt",
           label: `Events mentioning “${q.trim()}”`,
           hint: "the event log, filtered",
           go: () => nav.to(["activity", "events"], { q: q.trim() }),
@@ -435,7 +436,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-knowledge",
           group: "Search",
-          icon: "book_2",
+          icon: "book-open",
           label: `Knowledge base for “${q.trim()}”`,
           hint: "live search, run as the company",
           go: () => nav.to(["knowledge"], { q: q.trim() }),
@@ -516,12 +517,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               or could not complete, and a company with no such work. Each
               sends the reader somewhere different, so each says so. */}
           {!hits.length && sigil === "#" && term.length < 2 && (
-            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+            <div className="palette-item" style={{ color: "var(--color-text-tertiary)" }}>
               Type at least two characters to search the company&rsquo;s work.
             </div>
           )}
           {!hits.length && searching && (
-            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+            <div className="palette-item" style={{ color: "var(--color-text-tertiary)" }}>
               Searching…
             </div>
           )}
@@ -531,7 +532,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               away" ended up both reading as "nothing matched". */}
           {refusal && <QueryState error={refusal} loading={false} />}
           {!hits.length && !(sigil === "#" && (term.length < 2 || searching || !!refusal)) && (
-            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+            <div className="palette-item" style={{ color: "var(--color-text-tertiary)" }}>
               Nothing matches “{term || q}”.
             </div>
           )}
@@ -598,7 +599,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
  * other call site in this tree imports the one glyph it draws and never
  * reaches a lookup at all.
  */
-function HitGlyph({ name }: { name: MarkName }) {
-  const Glyph = markByName(name);
+function HitGlyph({ name }: { name: GlyphName }) {
+  const Glyph = glyphFor(name);
   return <Glyph size="sm" />;
 }

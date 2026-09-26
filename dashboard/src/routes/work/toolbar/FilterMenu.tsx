@@ -34,7 +34,12 @@
 
 import { useMemo, useState } from "react";
 import { Button, Input, Popover, Tag } from "@crewlethq/ui";
-import { CheckGlyph, ChevronLeftGlyph, SearchGlyph, TuneGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CheckGlyph,
+  ChevronLeftGlyph,
+  SearchGlyph,
+  SlidersVerticalGlyph,
+} from "@crewlethq/icons/glyphs";
 import {
   DUE_FILTERS,
   PRIORITIES,
@@ -101,8 +106,8 @@ export function FilterMenu(props: FilterMenuProps) {
       trigger={(open, toggle) => (
         <Button
           size="small"
-          variant="tertiary"
-          leadingIcon={<TuneGlyph size="sm" />}
+          variant="ghost"
+          leadingIcon={<SlidersVerticalGlyph size="sm" />}
           aria-expanded={open}
           aria-haspopup="dialog"
           onClick={toggle}
@@ -392,7 +397,7 @@ function FilterPanel({
       <div className="work-menu-head">
         <Button
           size="small"
-          variant="tertiary"
+          variant="ghost"
           leadingIcon={<ChevronLeftGlyph size="sm" />}
           onClick={() => setParam("")}
         >
@@ -430,7 +435,7 @@ function FilterPanel({
               {current && (
                 <Button
                   size="small"
-                  variant="tertiary"
+                  variant="ghost"
                   onClick={() => {
                     onSet(chosen.param, "");
                     close();

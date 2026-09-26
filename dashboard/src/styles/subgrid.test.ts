@@ -18,7 +18,7 @@ import { expect, test } from "vitest";
  * is part of what it contributes to sizing an `auto` track, so the trailing
  * column simply comes out that much wider. It cannot give it back to a FIXED
  * one. `.work-rows` opened with a bare `16px` for the priority mark while
- * `.work-row` padded itself by `--row-inline`, which is `--space-4` — 16px, the
+ * `.work-row` padded itself by `--row-inline`, which is `--spacing-4` — 16px, the
  * same number — so the cell resolved to exactly zero wide. The mark overflowed
  * into the gutter and came to rest on the key: measured at 1400px, a mark
  * spanning [37,49] against a key starting at 49, so `↑LEAD-3` read as one

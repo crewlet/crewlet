@@ -102,7 +102,7 @@ import {
   Tag,
   type SelectOption,
 } from "@crewlethq/ui";
-import { FlagGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+import { FlagGlyph, KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
@@ -321,13 +321,13 @@ export function MyWork() {
           />
         ) : viewer.unbound ? (
           <EmptyState
-            icon={<PersonGlyph size={32} />}
+            icon={<UserGlyph size={32} />}
             title="This token is not bound to a person"
             description={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody above.`}
           />
         ) : (
           <EmptyState
-            icon={<PersonGlyph size={32} />}
+            icon={<UserGlyph size={32} />}
             title="Nobody chosen"
             description="A day belongs to somebody."
           />

@@ -16,8 +16,8 @@
 // focused control the baseline's radius and squared off every button the
 // moment a reader tabbed to it.
 //
-// Cascade order within the set: the variables, the themes that repaint them,
-// density, the faces, then the document baseline.
+// Cascade order within the set: the kit's variables, the themes that repaint
+// them, density, the faces, then the document baseline.
 import "@crewlethq/tokens/css";
 import "@crewlethq/tokens/css/themes";
 import "@crewlethq/tokens/css/density";
@@ -32,17 +32,12 @@ import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
 
-// OUR NAMES, RESOLVED TO THEIRS. Between uilet's variables and our
-// stylesheets: the targets have to exist before an alias can resolve, and
-// tokens.css below still owns the layout constants uilet has no opinion
-// about — the rail's width, a row's height, the peek's column.
-import "./styles/uilet.css";
+// OURS, AFTER ALL OF THEIRS. There is no alias layer between the two: every
+// stylesheet here reads the design system's tokens under their own names, so
+// the only thing ours adds is layout and the screens' own rules.
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/components.css";
-import "./styles/shell.css";
-// THE FRAME AFTER THE SHELL, so the rail, the workspace sidebar and the page
-// bar win over the single-sidebar layout the shell still carries rules for.
 import "./styles/frame.css";
 import "./styles/screens.css";
 
