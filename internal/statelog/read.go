@@ -224,6 +224,29 @@ type Query struct {
 	// enumeration.
 	Scope ScopeSet
 
+	// Resolve replaces Scope for a read whose object is named by a
+	// REFERENCE — a key, an alias, an address — rather than by the path
+	// its own records are filed under. Exactly one of the two is set, and
+	// [Query.Set] still decides what a deferral does: a point read refuses
+	// and a read that reports its coverage is served and says so.
+	//
+	// A PATH CANNOT BE FORMED FROM A REFERENCE ALONE, and forming one
+	// anyway is the failure this exists for: a task named "ENG-12" is
+	// filed under `t/c/ENG/o/<uuid>`, and a scope built from the key as
+	// though it were the id (`t/c/workspace/o/ENG-12`) contains nothing
+	// any record is filed under — so the probe passes on every deferral
+	// there is, and the point read answers from rows a record it cannot
+	// decode has already made wrong. Only the rows know where the object
+	// is filed, so the resolver reads them, and it reads them INSIDE THE
+	// TRANSACTION THE ANSWER IS READ IN: a scope resolved in one and
+	// probed in another would certify an object a rename had moved.
+	//
+	// A reference that resolves to NOTHING still answers a scope — the
+	// widest one the reference itself bounds (an address, or the domain)
+	// — because "not found" is a claim about the rows too, and a deferred
+	// create is precisely a row this node does not have.
+	Resolve Resolver
+
 	// Session is the caller's own high-water mark on this stream, which
 	// is what a session read waits for.
 	Session Position
@@ -260,6 +283,23 @@ type Query struct {
 	// absence with no local row — so it is served at the level asked for
 	// and makes no completeness claim at all.
 	Set bool
+}
+
+// Resolver answers the scope a point read is about by reading the rows its
+// reference resolves to. See [Query.Resolve].
+type Resolver func(ctx context.Context, tx *sql.Tx) (ScopeSet, error)
+
+// scopeIn is the scope a query is about, resolved inside tx when it names its
+// object by reference.
+func (q Query) scopeIn(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+	if q.Resolve == nil {
+		return q.Scope, nil
+	}
+	s, err := q.Resolve(ctx, tx)
+	if err != nil {
+		return ScopeSet{}, fmt.Errorf("statelog: resolve what this read is about: %w", err)
+	}
+	return s, nil
 }
 
 // Answer is what a read returns beside its rows.
@@ -412,6 +452,11 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
 			q.Level, ReadLevels)
 	}
+	if q.Resolve != nil && !q.Scope.Empty() {
+		return Answer{}, fmt.Errorf("statelog: this read both declares a scope " +
+			"and resolves one — an object named by reference has no scope " +
+			"until its rows are read")
+	}
 	h := r.health()
 
 	// 1. THE LOCAL REFUSALS, in order.
@@ -440,7 +485,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	// 2. COVERAGE, before any append.
 	answer := Answer{Level: q.Level, Position: h.Position, Lag: h.Lag, Complete: true}
 	if h.Deferred > 0 {
-		gap, err := r.coverage(ctx, q.Scope)
+		gap, err := r.coverage(ctx, q)
 		if err != nil {
 			return r.refuse(h, q, RefuseDeferredScopeUnknown, err.Error(), started)
 		}
@@ -516,19 +561,49 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 5. ONE transaction, coverage first.
 	if err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		if h.Deferred > 0 && !q.Set {
-			// THE SAME HOLE THROUGH ANOTHER DOOR. A deferred record
-			// landing between the probe above and this transaction
-			// would otherwise be invisible to both.
-			if d, hit, err := r.tables.deferredIn(ctx, tx, q.Scope); err != nil {
-				return err
-			} else if hit {
-				return &Refused{
-					Code: RefuseDeferred, Level: q.Level,
-					Detail: fmt.Sprintf("a record at version %d this node cannot "+
-						"decode, at %s, landed while this read was waiting",
-						d.Version, d.Position),
-				}
+		// THE SAME HOLE THROUGH ANOTHER DOOR. A deferred record landing
+		// between the probe above and this transaction would otherwise be
+		// invisible to both.
+		//
+		// UNCONDITIONAL, and not gated on the health read in step 1. That
+		// snapshot was taken BEFORE the wait, and the wait is exactly
+		// where a record this node cannot decode arrives: a linearizable
+		// read's barrier sits above it, so the applier has to cross it to
+		// release the read. Gated on the old snapshot, a node that held
+		// nothing deferred when the read began skipped this probe on the
+		// one path it was written for, and certified rows the record had
+		// already made wrong. The probe is an indexed join over the
+		// retained records, which is to say over nothing on every node
+		// that has nothing retained.
+		scope, err := q.scopeIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		d, hit, err := r.tables.deferredIn(ctx, tx, scope)
+		switch {
+		case err != nil:
+			return err
+		case hit && !q.Set:
+			return &Refused{
+				Code: RefuseDeferred, Level: q.Level,
+				Detail: fmt.Sprintf("a record at version %d this node cannot "+
+					"decode, at %s, covers what this read is about — it "+
+					"landed while the read was waiting, or the reference "+
+					"now resolves to an object it covers",
+					d.Version, d.Position),
+			}
+		case hit && answer.Complete:
+			// A SET READ CONTINUES AND CLAIMS NOTHING, here as in
+			// step 2 — and for the same reason it cannot be skipped
+			// here: a set read that began complete and waited across
+			// a deferral would otherwise report every row as there.
+			answer.Complete = false
+			answer.Incomplete = &Incomplete{
+				Records:   1,
+				From:      d.Position,
+				Scope:     d.Scope,
+				Direction: "unknown",
+				Version:   d.Version,
 			}
 		}
 		return fn(tx)
@@ -554,15 +629,19 @@ type gap struct {
 
 // coverage probes this node's deferred scope index for anything covering what
 // the read is about.
-func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
-	if s.Empty() {
-		// A READ THAT NAMES NO OBJECTS cannot be certified about any,
-		// so it is the domain term rather than a free pass.
-		return nil, fmt.Errorf("this read declares no scope, so nothing can be " +
-			"said about what a deferred record would cover")
-	}
+func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
 	var found *gap
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
+		s, err := q.scopeIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if s.Empty() {
+			// A READ THAT NAMES NO OBJECTS cannot be certified about
+			// any, so it is the domain term rather than a free pass.
+			return fmt.Errorf("this read declares no scope, so nothing can " +
+				"be said about what a deferred record would cover")
+		}
 		d, hit, err := r.tables.deferredIn(ctx, tx, s)
 		if err != nil {
 			return err

@@ -12,19 +12,33 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// stubStore is a database for the cases that never open a transaction: the
-// local refusals, which are answered from what this node already knows.
+// stubStore counts the transactions a read opens over a real, empty estate.
+//
+// REAL rather than a nil transaction, because every read that is SERVED opens
+// one and its first statement is the coverage probe: a stub that handed the
+// reader nothing could only stand in for a read that is refused before it gets
+// there, and a case that thought it was one of those and was not would panic
+// rather than say so. The local refusals still never reach it, which is what
+// the counter shows.
 type stubStore struct {
+	inner interface {
+		Read(context.Context, func(*sql.Tx) error) error
+	}
 	reads atomic.Int64
 	err   error
 }
 
-func (s *stubStore) Read(_ context.Context, fn func(*sql.Tx) error) error {
+func newStubStore(t *testing.T) *stubStore {
+	t.Helper()
+	return &stubStore{inner: newApplyHarness(t, probeDomain{}).db.Replicated()}
+}
+
+func (s *stubStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	s.reads.Add(1)
 	if s.err != nil {
 		return s.err
 	}
-	return fn(nil)
+	return s.inner.Read(ctx, fn)
 }
 
 // stubWaiter reports a position and never blocks, so a case about WHICH
@@ -141,7 +155,7 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
-			db := &stubStore{}
+			db := newStubStore(t)
 			r := newReader(t, db, tc.health, &stubWaiter{at: healthy().Position}, index)
 
 			_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
@@ -193,7 +207,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 		h.TrimFloor, h.Lag = &floor, &lag
 		return h
 	}
-	db := &stubStore{}
+	db := newStubStore(t)
 	r := newReader(t, db, replaying, &stubWaiter{at: healthy().Position}, index)
 
 	for _, level := range []statelog.ReadLevel{
@@ -252,14 +266,14 @@ func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 
 	// THE CONTROL: at the floor the exemption holds, or the case below
 	// would pass on a reader that refuses every stalled read.
-	db := &stubStore{}
+	db := newStubStore(t)
 	r := newReader(t, db, stalled(statelog.FloorOK), &stubWaiter{at: healthy().Position}, index)
 	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadConsistentPrefix),
 		func(*sql.Tx) error { return nil }); err != nil {
 		t.Fatalf("a stalled node at the floor refused a consistent-prefix read: %v", err)
 	}
 
-	db = &stubStore{}
+	db = newStubStore(t)
 	r = newReader(t, db, stalled(statelog.FloorReplaying), &stubWaiter{at: healthy().Position}, index)
 	_, err = r.Read(t.Context(), pointQuery(statelog.ReadConsistentPrefix),
 		func(*sql.Tx) error { return nil })
@@ -304,7 +318,7 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, index)
 
 	_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
 		func(*sql.Tx) error { return nil })
@@ -357,7 +371,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
 	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, &stubStore{}, healthy, w, index)
+	r := newReader(t, newStubStore(t), healthy, w, index)
 
 	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadSession),
 		func(*sql.Tx) error { return nil }); err != nil {
@@ -396,7 +410,7 @@ func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T)
 		t.Fatalf("NewReadIndex: %v", err)
 	}
 	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, &stubStore{}, healthy, w, index)
+	r := newReader(t, newStubStore(t), healthy, w, index)
 
 	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
 		func(*sql.Tx) error { return nil }); err != nil {
@@ -427,7 +441,7 @@ func TestAReadThatCannotReachItsTargetRefusesWithADerivedHint(t *testing.T) {
 		return h
 	}
 	w := &stubWaiter{at: healthy().Position, err: context.DeadlineExceeded}
-	r := newReader(t, &stubStore{}, lagged, w, nil)
+	r := newReader(t, newStubStore(t), lagged, w, nil)
 
 	q := pointQuery(statelog.ReadSession)
 	q.Session = statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
@@ -577,7 +591,7 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 		h.Lag = &lag
 		return h
 	}
-	r := newReader(t, &stubStore{}, lagged, &stubWaiter{at: healthy().Position}, nil)
+	r := newReader(t, newStubStore(t), lagged, &stubWaiter{at: healthy().Position}, nil)
 
 	q := pointQuery(statelog.ReadStale)
 	q.MaxLag = time.Second
@@ -615,7 +629,7 @@ func TestAStaleReadRefusesPastTheBoundItAsksFor(t *testing.T) {
 		h.Lag = nil
 		return h
 	}
-	r = newReader(t, &stubStore{}, unknown, &stubWaiter{at: healthy().Position}, nil)
+	r = newReader(t, newStubStore(t), unknown, &stubWaiter{at: healthy().Position}, nil)
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerUnreachable {
 		t.Fatalf("a bounded stale read with an unknown lag = %v, want "+
@@ -642,7 +656,7 @@ func TestTheReadLevelsAreAClosedSet(t *testing.T) {
 	if statelog.ReadLevel("eventual").Valid() {
 		t.Error("an unknown level reports itself valid")
 	}
-	r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, nil)
+	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, nil)
 	if _, err := r.Read(t.Context(), pointQuery("eventual"),
 		func(*sql.Tx) error { return nil }); err == nil {
 		t.Fatal("a read at an unknown level was served")
@@ -735,7 +749,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 		statelog.ReadStale, statelog.ReadConsistentPrefix,
 	} {
 		w := &stubWaiter{at: healthy().Position}
-		r := newReader(t, &stubStore{}, healthy, w, index)
+		r := newReader(t, newStubStore(t), healthy, w, index)
 		q := pointQuery(level)
 		q.MinPosition = floor
 		if _, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil }); err != nil {
@@ -758,7 +772,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	// that never appends — the one where a wait for a foreign sequence
 	// would otherwise run out the whole budget.
 	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, &stubStore{}, healthy, w, index)
+	r := newReader(t, newStubStore(t), healthy, w, index)
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
@@ -803,7 +817,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 			statelog.ReadStale, statelog.ReadConsistentPrefix,
 		} {
 			w := &stubWaiter{at: healthy().Position}
-			r := newReader(t, &stubStore{}, healthy, w, index)
+			r := newReader(t, newStubStore(t), healthy, w, index)
 			q := pointQuery(level)
 			q.MinPosition = floor
 			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
@@ -845,7 +859,7 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 		return hp
 	}
 	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, &stubStore{}, drifting, w, nil)
+	r := newReader(t, newStubStore(t), drifting, w, nil)
 
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
@@ -875,5 +889,148 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 		t.Errorf("the answer reports lag %v, want the post-wait 5000 — a lag "+
 			"from before the wait describes a different moment from the rows "+
 			"it is printed beside", answer.Lag)
+	}
+}
+
+// landingWaiter delivers a record while a read waits for its target, which is
+// the interval a health snapshot taken before the wait cannot see into.
+type landingWaiter struct {
+	stubWaiter
+	land func()
+}
+
+func (w *landingWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+	if w.land != nil {
+		w.land()
+	}
+	return w.stubWaiter.WaitCommitted(ctx, p)
+}
+
+// A DEFERRAL LANDING DURING THE WAIT IS CAUGHT EVEN WHEN NOTHING WAS DEFERRED
+// WHEN THE READ BEGAN.
+//
+// The wait is where such a record arrives: the applier has to cross it to reach
+// the position the read is waiting for. The answer's own transaction probed only
+// when the health read BEFORE the wait already reported a deferral, so on a node
+// holding none when the read began — every healthy node, which is the only kind
+// that meets a newer peer's record for the first time — the probe was skipped on
+// the one path it exists for, and a point read certified rows the record had
+// already made wrong.
+func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testing.T) {
+	t.Parallel()
+	for _, set := range []bool{false, true} {
+		t.Run(map[bool]string{false: "point", true: "set"}[set], func(t *testing.T) {
+			t.Parallel()
+			h := newApplyHarness(t, probeDomain{})
+			waiter := &landingWaiter{
+				stubWaiter: stubWaiter{at: healthy().Position},
+				land: func() {
+					h.fetch.offer(1, env(1, "edit", "a", "op-1", 9, "project/ENG"))
+					if err := h.run(1); err != nil {
+						t.Errorf("land the deferred record: %v", err)
+					}
+				},
+			}
+			// Nothing is deferred as far as the snapshot before the wait
+			// knows, which is what makes the probe before the barrier
+			// pass and leaves the answer's transaction as the only door.
+			r := newReader(t, h.db.Replicated(), healthy, waiter, nil)
+			q := statelog.Query{
+				Level:       statelog.ReadSession,
+				Scope:       statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
+				MinPosition: healthy().Position,
+				Set:         set,
+			}
+			answer, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+			if waiter.waited.Load() == 0 {
+				t.Fatal("the read did not wait, so this case is not about the wait")
+			}
+			if !set {
+				var refusal *statelog.Refused
+				if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferred {
+					t.Fatalf("Read = %v, want a deferred refusal — the record "+
+						"landed while the read waited, and the rows it is about "+
+						"may already be wrong", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a set read = %v, want it served", err)
+			}
+			if answer.Complete || answer.Incomplete == nil {
+				t.Fatalf("a set read that waited across a deferral claimed "+
+					"completeness: %+v", answer)
+			}
+		})
+	}
+}
+
+// A POINT READ NAMED BY REFERENCE IS PROBED ON WHERE THE REFERENCE RESOLVES.
+//
+// A path formed from the reference itself — a key read as though it were an
+// id, an object with no container — is filed under nothing, so the probe
+// passed on every deferral there is. The resolver reads the rows, in the
+// answer's own transaction, and the probe asks about what it found.
+func TestAPointReadNamedByReferenceIsProbedWhereItResolves(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 9, "project/ENG"))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	deferred := func() statelog.Health {
+		s := healthy()
+		s.Deferred = 1
+		s.DeferredFrom = 1
+		return s
+	}
+	r := newReader(t, h.db.Replicated(), deferred, &stubWaiter{at: healthy().Position}, nil)
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+
+	var resolved atomic.Int64
+	inside := func(context.Context, *sql.Tx) (statelog.ScopeSet, error) {
+		resolved.Add(1)
+		return statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}}, nil
+	}
+	_, err := r.Read(t.Context(), fresh.Resolved(inside, false), func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferred {
+		t.Fatalf("a reference resolving inside the deferred scope = %v, want a "+
+			"deferred refusal", err)
+	}
+	if resolved.Load() == 0 {
+		t.Fatal("the resolver was never asked, so the probe was about nothing")
+	}
+
+	// THE CONTROL: the same reader serves a reference that resolves
+	// elsewhere, or the case above passes on a reader that refuses every
+	// point read while anything is deferred.
+	outside := func(context.Context, *sql.Tx) (statelog.ScopeSet, error) {
+		return statelog.ScopeSet{Paths: []string{"project/OPS/object/c"}}, nil
+	}
+	answer, err := r.Read(t.Context(), fresh.Resolved(outside, false), func(*sql.Tx) error { return nil })
+	if err != nil || !answer.Complete {
+		t.Fatalf("a reference resolving outside every deferral = (%+v, %v), want "+
+			"a complete answer", answer, err)
+	}
+
+	// A READ THAT REPORTS ITS COVERAGE is served over the same resolution,
+	// and says what it could not account for rather than refusing.
+	answer, err = r.Read(t.Context(), fresh.Resolved(inside, true), func(*sql.Tx) error { return nil })
+	if err != nil {
+		t.Fatalf("a reporting read resolving inside the deferral = %v, want it "+
+			"served", err)
+	}
+	if answer.Complete || answer.Incomplete == nil {
+		t.Fatalf("a reporting read resolving inside the deferral claimed "+
+			"completeness: %+v", answer)
+	}
+
+	// AND THE CONTRACT IS EXACTLY ONE OF THE TWO: an object named by
+	// reference has no scope until its rows are read.
+	both := fresh.Resolved(outside, false)
+	both.Scope = statelog.ScopeSet{Paths: []string{"project/OPS"}}
+	if _, err := r.Read(t.Context(), both, func(*sql.Tx) error { return nil }); err == nil {
+		t.Error("a read that declared a scope AND resolved one was served")
 	}
 }
