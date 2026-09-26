@@ -9,9 +9,12 @@
  * union is exhaustive: a screen added to the union and not drawn here is a
  * compile error rather than a blank page.
  *
- * A flat import list rather than lazy chunks: the whole application is served
- * from the same binary as the API, and a code-split chunk buys a round trip
- * against a server that is already answering.
+ * EVERY SCREEN IS A LAZY CHUNK, one per workspace (`lazyScreen.ts` says why
+ * the flat import list this replaced was the wrong trade), so the names below
+ * are components that suspend until their workspace's code is in. The routed
+ * screen sits inside `ScreenBoundary` (`boundaries.tsx`): a suspense boundary
+ * drawing a skeleton while the chunk loads, and an error boundary that takes
+ * down only the screen when it throws or its chunk never arrives.
  *
  * # Keyed on the subject, every screen that has one
  *
@@ -22,7 +25,7 @@
  * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Shell } from "./Shell.tsx";
 import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
@@ -30,41 +33,48 @@ import { resolve, type Resolved } from "./routes.ts";
 import { sectionOf } from "./nav.ts";
 import { OperatorRequired } from "./frame/OperatorRequired.tsx";
 import { useViewer } from "~/lib/viewer.ts";
-import { Home } from "~/routes/home/Home.tsx";
-import { Inbox } from "~/routes/inbox/Inbox.tsx";
-import { MyWork } from "~/routes/me/MyWork.tsx";
-import { People } from "~/routes/agents/People.tsx";
-import { SeatScreen } from "~/routes/agents/Seat.tsx";
-import { OrgChart, OrgEdit, Teams, UnitScreen } from "~/routes/agents/Company.tsx";
-import { Schedules } from "~/routes/agents/Schedules.tsx";
-import { Work } from "~/routes/work/Work.tsx";
-import { Project } from "~/routes/work/Project.tsx";
-import { Projects } from "~/routes/work/Projects.tsx";
-import { History } from "~/routes/work/History.tsx";
-import { WorkItem } from "~/routes/work/WorkItem.tsx";
-import { SavedViews } from "~/routes/work/SavedViews.tsx";
-import { WorkSearch } from "~/routes/work/WorkSearch.tsx";
-import { Pages, PageView } from "~/routes/knowledge/Pages.tsx";
-import { Knowledge } from "~/routes/knowledge/Knowledge.tsx";
-import { LiveNow } from "~/routes/live/LiveNow.tsx";
-import { Turns } from "~/routes/live/Turns.tsx";
-import { TurnScreen } from "~/routes/live/Turn.tsx";
-import { Runs } from "~/routes/live/Runs.tsx";
-import { Conversations } from "~/routes/live/Conversations.tsx";
-import { TraceScreen } from "~/routes/live/Trace.tsx";
-import { Activity } from "~/routes/live/Activity.tsx";
-import { EventScreen } from "~/routes/live/Event.tsx";
-import { Spend } from "~/routes/spend/Spend.tsx";
-import { Budgets } from "~/routes/spend/Budgets.tsx";
-import { General } from "~/routes/settings/General.tsx";
-import { Fleet } from "~/routes/settings/Fleet.tsx";
-import { Backups } from "~/routes/settings/Backups.tsx";
-import { Integrations } from "~/routes/settings/Integrations.tsx";
-import { Tools } from "~/routes/settings/Tools.tsx";
-import { ConfigScreen } from "~/routes/settings/Config.tsx";
-import { Secrets } from "~/routes/settings/Secrets.tsx";
-import { Audit } from "~/routes/settings/Audit.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
+import { lazyScreen, prefetchOnIdle } from "./lazyScreen.ts";
+import { ScreenBoundary } from "./boundaries.tsx";
+
+const Home = lazyScreen("home", (m) => m.Home);
+const Inbox = lazyScreen("inbox", (m) => m.Inbox);
+const MyWork = lazyScreen("me", (m) => m.MyWork);
+const Work = lazyScreen("work", (m) => m.Work);
+const Projects = lazyScreen("work", (m) => m.Projects);
+const SavedViews = lazyScreen("work", (m) => m.SavedViews);
+const History = lazyScreen("work", (m) => m.History);
+const WorkSearch = lazyScreen("work", (m) => m.WorkSearch);
+const Project = lazyScreen("work", (m) => m.Project);
+const WorkItem = lazyScreen("work", (m) => m.WorkItem);
+const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
+const People = lazyScreen("agents", (m) => m.People);
+const Teams = lazyScreen("agents", (m) => m.Teams);
+const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
+const Schedules = lazyScreen("agents", (m) => m.Schedules);
+const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
+const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const LiveNow = lazyScreen("live", (m) => m.LiveNow);
+const Turns = lazyScreen("live", (m) => m.Turns);
+const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
+const Runs = lazyScreen("live", (m) => m.Runs);
+const Conversations = lazyScreen("live", (m) => m.Conversations);
+const TraceScreen = lazyScreen("live", (m) => m.TraceScreen);
+const Activity = lazyScreen("live", (m) => m.Activity);
+const EventScreen = lazyScreen("live", (m) => m.EventScreen);
+const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
+const Pages = lazyScreen("knowledge", (m) => m.Pages);
+const PageView = lazyScreen("knowledge", (m) => m.PageView);
+const Spend = lazyScreen("spend", (m) => m.Spend);
+const Budgets = lazyScreen("spend", (m) => m.Budgets);
+const General = lazyScreen("settings", (m) => m.General);
+const Integrations = lazyScreen("settings", (m) => m.Integrations);
+const Tools = lazyScreen("settings", (m) => m.Tools);
+const Secrets = lazyScreen("settings", (m) => m.Secrets);
+const Fleet = lazyScreen("settings", (m) => m.Fleet);
+const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
+const Backups = lazyScreen("settings", (m) => m.Backups);
+const Audit = lazyScreen("settings", (m) => m.Audit);
 
 /** One resolved screen, drawn. */
 export function screenFor(route: Resolved): ReactNode {
@@ -182,6 +192,10 @@ function Screen() {
 }
 
 export function App() {
+  const route = useRoute();
+  // EVERY OTHER WORKSPACE, FETCHED WHILE NOBODY IS WAITING — see
+  // `prefetchOnIdle`. Once per tab: the effect has no dependency to re-run on.
+  useEffect(() => prefetchOnIdle(), []);
   return (
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
@@ -197,7 +211,9 @@ export function App() {
           inside a dialog did is readable over the dialog that caused it. */}
       <LayerHost>
         <Shell>
-          <Screen />
+          <ScreenBoundary resetKey={route.path.join("/")}>
+            <Screen />
+          </ScreenBoundary>
         </Shell>
       </LayerHost>
     </ToastProvider>

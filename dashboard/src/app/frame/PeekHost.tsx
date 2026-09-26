@@ -37,6 +37,7 @@ import {
 
 import { DetailRail, usePeek, usePeekControls } from "./DetailRail.tsx";
 import { PEEKS } from "./peeks.tsx";
+import { PeekBoundary } from "../boundaries.tsx";
 import { refToken, type ObjectRef } from "./objects.ts";
 
 interface Neighbours {
@@ -107,7 +108,12 @@ export function PeekHost() {
           a chosen tab, a held refusal — describes A until something clears
           it. The token is the whole identity, kind and id, so a page and an
           item that happen to share an id are still two bodies. */}
-      <Fragment key={refToken(object)}>{body({ id: object.id })}</Fragment>
+      <Fragment key={refToken(object)}>
+        {/* A PEEK THAT THROWS TAKES ONLY ITS BODY DOWN — the rail's close,
+            its stepper and `Open ↗` are outside, and the screen behind is
+            not in this tree at all. See `app/boundaries.tsx`. */}
+        <PeekBoundary resetKey={refToken(object)}>{body({ id: object.id })}</PeekBoundary>
+      </Fragment>
     </DetailRail>
   );
 }

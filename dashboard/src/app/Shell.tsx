@@ -50,6 +50,7 @@ import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
+import { PaletteBoundary } from "./boundaries.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
 import { PageHeader, SectionColumn } from "./header/PageHeader.tsx";
@@ -371,7 +372,14 @@ function Frame({ children }: { children: ReactNode }) {
         )}
       </AppShell>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
+          open, so a palette that threw is a dialog saying so — closed the
+          way the palette closes — and the next ⌘K is a fresh palette. */}
+      {paletteOpen && (
+        <PaletteBoundary onClose={() => setPaletteOpen(false)}>
+          <CommandPalette onClose={() => setPaletteOpen(false)} />
+        </PaletteBoundary>
+      )}
       {tokenOpen && (
         <TokenDialog
           onClose={() => setTokenOpen(false)}

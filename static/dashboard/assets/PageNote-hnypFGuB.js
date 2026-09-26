@@ -1,0 +1,1 @@
+import{t as e}from"./react-D3MgmOsQ.js";var t=e();function n({children:e}){return(0,t.jsx)(`p`,{className:`page-note`,children:e})}export{n as t};

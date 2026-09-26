@@ -1,0 +1,1 @@
+var e={day:`daily`,week:`weekly`,month:`monthly`};function t(e,t){let n;for(let r of e??[])r.state===t&&(!n||Date.parse(r.resets_at)>=Date.parse(n.resets_at))&&(n=r);return n}function n(e){return e===`refusing`?`critical`:e===`near`?`caution`:`neutral`}function r(e,t){return e?.find(e=>e.period===t)}export{r as i,n,t as r,e as t};

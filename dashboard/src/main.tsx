@@ -8,21 +8,25 @@
  */
 
 // THE DESIGN SYSTEM, ABOVE EVERY MODULE IMPORT. An import statement is
-// evaluated in source order, and the module graph under `./app/App.tsx`
-// carries a side-effect stylesheet per uilet component — so a baseline
-// imported below it is emitted below all of them. Order decides a tie and
+// evaluated in source order, so a baseline imported below the components'
+// sheets is emitted below all of them. Order decides a tie and
 // there is one: `:focus-visible` in the baseline and `.crewlet-btn` in the
 // component are both a single class, so a baseline that came last gave every
 // focused control the baseline's radius and squared off every button the
 // moment a reader tabbed to it.
 //
 // Cascade order within the set: the kit's variables, the themes that repaint
-// them, density, the faces, then the document baseline.
+// them, density, the faces, the document baseline, then the components.
 import "@crewlethq/tokens/css";
 import "@crewlethq/tokens/css/themes";
 import "@crewlethq/tokens/css/density";
 import "@crewlethq/tokens/css/fonts";
 import "@crewlethq/tokens/css/base";
+// THE COMPONENTS' SHEETS, WHOLE AND HERE — not one per component as each
+// module is reached, which a code-split build turns into a sheet per lazy
+// chunk appended after ours. `vite.config.ts`'s `designSystemSheet` says why
+// and is what answers this import.
+import "virtual:crewlet-design-system.css";
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

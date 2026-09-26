@@ -19,14 +19,21 @@
  */
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { Router, parseHash } from "~/app/router.tsx";
 import { screenFor } from "~/app/App.tsx";
 import { resolve } from "~/app/routes.ts";
+import { loadChunk } from "~/app/lazyScreen.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, storeToken } from "~/protocol/index.ts";
 import { company, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
+
+// The two chunks these addresses draw, in before a case starts, so a case
+// times what a section draws rather than a cold `import()`.
+beforeAll(async () => {
+  await Promise.all([loadChunk("agents"), loadChunk("org")]);
+});
 
 beforeEach(() => {
   localStorage.clear();

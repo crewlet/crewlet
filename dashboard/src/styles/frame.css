@@ -249,6 +249,40 @@
   padding: 0 var(--size-nav-gutter) var(--spacing-3);
 }
 
+/* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
+   heading stays, and one caption line under it says so, set in from the rail
+   the way a row's words are, with the retry beside the words rather than a
+   panel-sized block the rail has no room for. */
+.side-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0 var(--size-nav-gutter);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+
+/* A SCREEN WHOSE CHUNK NEVER CAME: Reload and Try again, side by side in the
+   callout's action slot. */
+.boundary-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* The palette's fallback dialog: the thrown message, which wraps rather than
+   scrolls, since a reader asked to report it should see all of it. */
+.boundary-message {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* A LOCKED ROW keeps its words and adds the key after them. */
 .side-locked,
 .section-column-label {

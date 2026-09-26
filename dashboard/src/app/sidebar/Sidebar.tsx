@@ -51,6 +51,8 @@ import { useStarred } from "~/lib/starred.ts";
 import { useKeyChords } from "~/lib/keys.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { HealthCard, healthReading } from "./HealthCard.tsx";
+import { RailBoundary } from "../boundaries.tsx";
+import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 
 /** How many projects the sidebar asks for: the engine's own page of them. */
@@ -83,6 +85,7 @@ export function Sidebar({
   const { connected, authRejected } = useConnection();
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
+  const at = route.path.join("/");
 
   // THE ENGINE'S WORD for working, off the agents push — never a projection's
   // own reading of a seat's call state.
@@ -179,11 +182,15 @@ export function Sidebar({
               />
             ))}
           </SidebarNav>
-          <HealthCard
-            reading={healthReading({ connected, authRejected, health })}
-            onSetToken={onSetToken}
-          />
-          <UserBlock viewer={viewer} seatName={seatName} onSetToken={onSetToken} />
+          <RailBoundary label="Engine" resetKey={at}>
+            <HealthCard
+              reading={healthReading({ connected, authRejected, health })}
+              onSetToken={onSetToken}
+            />
+          </RailBoundary>
+          <RailBoundary label="You" resetKey={at}>
+            <UserBlock viewer={viewer} seatName={seatName} onSetToken={onSetToken} />
+          </RailBoundary>
         </>
       }
     >
@@ -204,9 +211,18 @@ export function Sidebar({
         <SidebarNav.Group label="Workspace">
           {WORKSPACES.filter((ws) => ws.place === "workspace").map(row)}
         </SidebarNav.Group>
-        <ProjectsSection path={route.path} />
-        <PinnedSection path={route.path} viewer={viewer.handle} />
-        <StarredSection path={route.path} />
+        {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
+            engine or the browser's storage sent, and a malformed one must
+            cost that list and never the navigation above it. */}
+        <RailBoundary label="Projects" resetKey={at}>
+          <ProjectsSection path={route.path} />
+        </RailBoundary>
+        <RailBoundary label="Pinned" resetKey={at}>
+          <PinnedSection path={route.path} viewer={viewer.handle} />
+        </RailBoundary>
+        <RailBoundary label="Starred" resetKey={at}>
+          <StarredSection path={route.path} />
+        </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
   );
@@ -228,9 +244,16 @@ interface NavRowProps {
   count?: { value: number | string; label: string; mark?: ReactNode };
 }
 
-/** One row, a plain anchor: a hash link is a real link, so ⌘-click opens a tab. */
+/**
+ * One row, a plain anchor: a hash link is a real link, so ⌘-click opens a tab.
+ *
+ * HOVER OR FOCUS STARTS FETCHING WHERE IT LEADS (`lazyScreen.ts`'s
+ * `preload`), so the chunk is usually in by the time the click lands — the
+ * pointer's hover and the keyboard's focus are both the reader deciding.
+ */
 function NavRow({ label, icon, glyph, lead, path, current, badge, count }: NavRowProps) {
   const Glyph = icon ? glyphFor(icon) : undefined;
+  const warm = () => preload(path);
   return (
     <SidebarNav.Item
       label={label}
@@ -240,6 +263,12 @@ function NavRow({ label, icon, glyph, lead, path, current, badge, count }: NavRo
       current={current}
       badge={badge}
       count={count}
+      // THE KIT'S OWN ELEMENT, with two listeners added: its class, its
+      // `href` and its `aria-current` pass through untouched, so the row is
+      // drawn exactly as the kit draws it.
+      renderLink={({ className, ...link }) => (
+        <a className={className} {...link} onPointerEnter={warm} onFocus={warm} />
+      )}
     />
   );
 }

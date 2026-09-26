@@ -12,8 +12,8 @@
  * charter itself — mission, vision, the standing policies — is the company's
  * own settings and lives at Settings › General (`routes/settings/General.tsx`).
  *
- * The builder (`routes/org/builder/Builder.tsx`) is the odd one: the two read
- * sections draw the ANONYMOUS org projection this node has applied, and the
+ * The builder (`routes/org/OrgEdit.tsx`, a chunk of its own) is the odd
+ * one: the two read sections draw the ANONYMOUS org projection this node has applied, and the
  * builder edits the GUARDED configuration document a revision behind it. That
  * is why [PreviousRevisionNote] is drawn on the chart and the teams and not on
  * the builder — between a save and this node applying it, the chart has not
@@ -66,8 +66,6 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
-import { Builder } from "~/routes/org/builder/Builder.tsx";
-import { builderSurfaces } from "~/routes/org/builder/surfaces.ts";
 
 /**
  * A unit's seats, as rows.
@@ -410,17 +408,6 @@ export function Teams() {
       )}
     </>
   );
-}
-
-/**
- * Agents › Edit org: the builder, which edits the company's configuration.
- *
- * THE SURFACES ARE PASSED, NOT IMPORTED BY THE BUILDER: every dialog and both
- * views are injected so a suite can drive it with fakes. `builderSurfaces` is
- * the real set.
- */
-export function OrgEdit() {
-  return <Builder surfaces={builderSurfaces} />;
 }
 
 /**

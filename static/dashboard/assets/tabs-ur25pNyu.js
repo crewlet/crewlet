@@ -1,0 +1,1 @@
+import{Kt as e}from"./clock-C6LlzaT0.js";import{E as t}from"./index-EXsFzPv3.js";function n(n,r,i=`section`){let a=r[0],[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t(r.slice(0,9).map((e,t)=>({key:String(t+1),run:()=>s(e),when:i===`section`}))),[c,s]}export{n as t};

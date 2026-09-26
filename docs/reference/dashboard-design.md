@@ -3357,11 +3357,12 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
                             out of the design system
   src/routes/<workspace>/   one directory per workspace — home, inbox, me,
                             work, agents, live, knowledge, spend, settings — and
-                            one file per screen inside it. Two things sit
+                            one file per screen inside it, with an index.ts
+                            naming what its lazy chunk exports. Two things sit
                             outside that shape: NotFound, which belongs to no
                             workspace and is what the dispatch falls through
-                            to, and routes/org/builder/, the organization
-                            builder — one screen big enough to be a directory
+                            to, and routes/org/, the organization builder — one
+                            screen big enough to be a directory, and a chunk,
                             of its own (see below)
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
@@ -3449,6 +3450,43 @@ or a reference the crawl cannot read — and a crawl that silently skipped a laz
 chunk would certify a screen nobody can open. Every stylesheet the crawl
 reaches, a lazy one included, is also held to the Content-Security-Policy.
 
+**A chunk per workspace, and the next one fetched while nobody waits.** Every
+screen is loaded by `app/lazyScreen.ts`, one chunk per workspace's
+`routes/<workspace>/index.ts` plus one for the org builder, which is a section
+of Agents and larger than any whole workspace. The entry the shell loads holds
+the frame — the sidebar, the page header, the palette, the socket client — and
+nothing a screen draws, so a reader who came to read the Inbox parses the
+Inbox and not the org builder. A screen's peek lives in its workspace's chunk
+beside it. Two things keep the second click fast: hovering or focusing a
+sidebar row starts fetching the chunk it leads to, and once the first screen is
+up every other chunk is fetched in turn, one at a time, each in an idle moment
+the browser reports (and not at all for a reader whose browser asks to save
+data). `app/lazy.test.tsx` refuses a static import of a screen's module from
+outside `routes/`, because the bundler follows one wherever it is and it would
+pull that workspace back into the entry with nothing failing.
+
+**A chunk that does not arrive says so, and can be retried.** The usual reason
+is an upgrade: the page names its chunks by content hash, and an engine
+upgraded while the tab was open serves different ones. The screen then names
+what is missing ("The Spend screens could not be loaded"), says the page is
+probably from another engine version, and offers Reload — which is what fixes it — beside Try again,
+for the other reason, a request the network dropped. Try again really asks
+again: a failed load is forgotten rather than cached for the life of the page
+the way `React.lazy` caches one.
+
+**The design system's stylesheet is one sheet, above ours.** A uilet component
+imports its own stylesheet as a side effect of its module, which in a
+code-split build puts a component reached only from one workspace into that
+workspace's chunk — and a browser appends a lazy chunk's sheet after the
+dashboard's own, so every one-class tie the dashboard's rules win would flip
+the first time a reader opened that workspace. So `main.tsx` takes every
+component sheet the kit and its icons ship as one stylesheet between the token
+sheets and ours (`vite.config.ts`'s `designSystemSheet`, over the kit's own
+single-sheet build), and every per-component import is answered empty. The
+engine's suite holds the result from the built artifact:
+`TestNoLazyStylesheetCarriesTheDesignSystem` fails any stylesheet a lazy chunk
+brings that carries a design-system rule.
+
 ### What the client half guarantees
 
 - **The store derives nothing.** The server computes the projection once and
@@ -3476,12 +3514,24 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
   way whatever the engine sent. The guarded half of a screen is drawn only
   while the guarded read succeeds: a refused re-read takes it off the page
   rather than leaving the last answer beside the banner.
-- **A screen that throws takes only itself down.** `app/App.tsx` wraps the
-  routed screen in an error boundary, so a malformed field renders "This
-  screen could not be drawn" with the error's message and a Try again button,
-  inside a shell whose navigation still works. Without it React unmounts the
-  whole application on a render error, which is what a seat whose `llm` was a
-  per-phase mapping once did. The boundary resets when the reader navigates.
+- **A region that throws takes only itself down.** Without a boundary React
+  unmounts the whole application on a render error, which is what a seat whose
+  `llm` was a per-phase mapping once did: a blank page and no way out. So
+  `app/boundaries.tsx` puts one around every region that draws what the engine
+  sent, and never around the frame, which is the reader's way somewhere else:
+  - the ROUTED SCREEN, which renders "This screen could not be drawn" with the
+    error's message and Try again, inside a frame whose sidebar and ⌘K still
+    work. It resets when the resolved path changes; a query string alone (a
+    filter, an open peek) is the same screen and keeps its failure on view;
+  - the PEEK's body, inside the rail, so the rail's Close and the screen
+    behind it stand. It resets when the peek moves to another object;
+  - the COMMAND PALETTE, whose failure is a dialog of its own ("Search could
+    not be drawn") that closes the way the palette does — the next ⌘K is a
+    fresh palette;
+  - each LIVE SIDEBAR SECTION — Projects, Pinned, Starred, the engine card and
+    the account block — which keeps its heading and says "Could not be drawn"
+    with Try again, so a malformed project row costs the Projects list and
+    never the navigation above it.
 - **One REST transport, one REST loader.** `protocol/rest.ts` is the only
   path to a REST route: `rest.request(method, path, options)` answers the
   status and the `ETag` beside the body, takes a caller's `AbortSignal`, never

@@ -9,7 +9,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { screenScroller } from "~/lib/scroller.ts";
@@ -19,6 +19,7 @@ import { DESTINATIONS, WORKSPACES } from "./nav.ts";
 import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -59,6 +60,15 @@ function mountAs(viewer: Promise<unknown>) {
   );
   return { view };
 }
+
+// EVERY SCREEN'S CODE IS IN BEFORE A CASE STARTS. The screens are lazy
+// chunks, and what this suite asserts is what each screen draws on the state it
+// is given — not how long a cold `import()` takes under a test transformer,
+// which a `findBy` timeout would otherwise be measuring. The loading path has
+// its own suite, `lazy.test.tsx`.
+beforeAll(async () => {
+  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
+});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -135,6 +145,10 @@ describe("routing", () => {
         hash,
       ).toBeGreaterThan(0);
       expect(view.container.textContent, hash).not.toMatch(/there is no such screen/);
+      // AND NOT A BOUNDARY'S FALLBACK. A screen that throws is caught now,
+      // and a caught failure is not a blank — so without this line a screen
+      // that threw on an empty engine would pass the check above.
+      expect(view.container.textContent, hash).not.toMatch(/could not be (drawn|loaded)/);
       view.unmount();
     }
   });
@@ -167,6 +181,10 @@ describe("routing", () => {
       location.hash = hash;
       const { view } = mount();
       expect(view.container.textContent, hash).not.toMatch(/there is no such screen/);
+      // AND NOT A BOUNDARY'S FALLBACK. A screen that throws is caught now,
+      // and a caught failure is not a blank — so without this line a screen
+      // that threw on an empty engine would pass the check above.
+      expect(view.container.textContent, hash).not.toMatch(/could not be (drawn|loaded)/);
       view.unmount();
     }
   });

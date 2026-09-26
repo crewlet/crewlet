@@ -10,7 +10,7 @@
 // same idiom `go mod tidy -diff` and the generated `schema/` already use.
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // The notices for everything the built dashboard redistributes, served beside it
@@ -174,8 +174,68 @@ function sourceNotices(): Plugin {
   };
 }
 
+// designSystemSheet makes the design system's component stylesheets ONE
+// sheet, loaded once, in its place in the cascade.
+//
+// Every uilet component — and the two drawings @crewlethq/icons ships with a
+// stylesheet — imports its own sheet as a side effect of its module. That is
+// right for a page built as one chunk: the sheets land in the entry's CSS in
+// module order, above ours (main.tsx says why that order is the whole game —
+// a one-class tie between a kit rule and ours goes to whichever is written
+// later). A code-split build breaks it silently. A component used only by a
+// lazy workspace takes its sheet INTO THAT WORKSPACE'S chunk, which a browser
+// appends when the chunk loads — after our sheets — so every tie ours used to
+// win flips on the first navigation there, and nothing in the source says so.
+// Measured on the first split build: twelve lazy stylesheets carried kit
+// rules, 140 KB of them.
+//
+// So main.tsx imports DESIGN_SYSTEM_SHEET, which this plugin answers with
+// every component sheet the two packages ship — @crewlethq/ui's own
+// single-sheet build, `styles.css`, which its README names as the supported
+// way to take the whole set, then the icons' — and each per-component
+// side-effect import is answered with an empty module. The rules are then in
+// exactly one place, whichever chunk reaches a component first, and
+// internal/api's TestTheDesignSystemCascadesInOrder fails a lazy stylesheet
+// that carries one. `enforce: "pre"` so the answers are given before Vite's
+// own resolver and loader see the files; both key on the RESOLVED path, so
+// the dev server's pre-bundled copy of the kit is answered as the build is.
+const DESIGN_SYSTEM_SHEET = "virtual:crewlet-design-system.css";
+const DESIGN_SYSTEM_ID = `\0${DESIGN_SYSTEM_SHEET}`;
+const EMPTIED_ID = "\0crewlet-design-system-sheet-already-loaded";
+const UI_DIST = fileURLToPath(new URL("./node_modules/@crewlethq/ui/dist/", import.meta.url));
+const ICONS_DIST = fileURLToPath(new URL(`${ICONS}/dist/`, import.meta.url));
+
+function designSystemSheet(): Plugin {
+  const componentSheet = (file: string) =>
+    file.endsWith(".css") &&
+    (file.startsWith(ICONS_DIST) || (file.startsWith(UI_DIST) && file !== `${UI_DIST}styles.css`));
+  return {
+    name: "crewlet:design-system-sheet",
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      if (source === DESIGN_SYSTEM_SHEET) return DESIGN_SYSTEM_ID;
+      if (!source.endsWith(".css") || !importer) return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      return resolved && componentSheet(resolved.id.split("?")[0] ?? "") ? EMPTIED_ID : null;
+    },
+    load(id) {
+      if (id === EMPTIED_ID) return "export {};";
+      if (id !== DESIGN_SYSTEM_ID) return null;
+      const icons = readdirSync(ICONS_DIST)
+        .filter((f) => f.endsWith(".css"))
+        .sort();
+      return [`${UI_DIST}styles.css`, ...icons.map((f) => `${ICONS_DIST}${f}`)]
+        .map((file) => {
+          this.addWatchFile(file);
+          return readFileSync(file, "utf-8");
+        })
+        .join("\n");
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), fontLicence(), brandAssets(), sourceNotices()],
+  plugins: [react(), designSystemSheet(), fontLicence(), brandAssets(), sourceNotices()],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an

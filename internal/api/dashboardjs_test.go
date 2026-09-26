@@ -513,6 +513,51 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 	}
 }
 
+// TestNoLazyStylesheetCarriesTheDesignSystem holds the other half of that
+// order: every design system rule is in the sheet the SHELL links, and none
+// arrives with a lazy chunk.
+//
+// The dashboard is split into a chunk per workspace, and a uilet component
+// imports its own stylesheet as a side effect of its module — so a component
+// reached only from one workspace takes its sheet into that workspace's chunk,
+// and a browser appends that sheet when the chunk loads, AFTER the dashboard's
+// own. Every one-class tie the dashboard's rules win against a component's is
+// then lost the moment a reader first opens that workspace, on that screen and
+// every screen after it, and on no screen before. The source says nothing
+// about it and a first-paint screenshot cannot see it. vite.config.ts's
+// `designSystemSheet` is what prevents it: the whole set in one sheet above
+// ours, and every per-component import answered empty.
+func TestNoLazyStylesheetCarriesTheDesignSystem(t *testing.T) {
+	t.Parallel()
+	c := crawlDashboard(t, newApp(t, api.Options{}))
+	for _, p := range c.problems {
+		t.Error(p)
+	}
+	chunks := 0
+	for _, f := range c.ofKind(".js") {
+		if f.how == fromDynamic {
+			chunks++
+		}
+	}
+	// The premise: a build with no lazy chunk has no lazy sheet either, and
+	// would pass below having checked nothing.
+	if chunks == 0 {
+		t.Fatal("no lazy chunk was reached, so the dashboard is not code-split and " +
+			"this test measures nothing; app/lazyScreen.ts imports each workspace with import()")
+	}
+	for _, sheet := range c.ofKind(".css") {
+		if sheet.how == fromShell {
+			continue
+		}
+		if at := componentRule.FindIndex(sheet.body); at != nil {
+			t.Errorf("%s, loaded with a lazy chunk (named by %s), carries a design system rule: %q. "+
+				"It is appended after the dashboard's own sheets and wins every tie they used to; "+
+				"vite.config.ts's designSystemSheet must answer that component's stylesheet import",
+				sheet.url, sheet.by, strings.TrimSpace(string(sheet.body[at[0]:min(len(sheet.body), at[0]+48)])))
+		}
+	}
+}
+
 var (
 	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
 	// a complete selector, which is how it is told from a component's.
