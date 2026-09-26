@@ -104,3 +104,38 @@ test("a parked turn is marked parked, never running or finished", async () => {
   expect(rowOf("the running one").textContent).not.toContain("parked");
   expect(rowOf("the finished one").textContent).not.toMatch(/parked|running/);
 });
+
+/**
+ * ONE SEAT'S TURNS ARE ASKED FOR BY ITS HANDLE.
+ *
+ * The sidebar's seat rows link here with `seat=<handle>`, and the list used to
+ * read a `role` parameter instead — so every one of those rows landed on the
+ * whole company's turns. The engine resolves the handle to the seat's own id,
+ * which a role name shared by two unit seats cannot name.
+ */
+test("the seat in the address is sent to the engine as its handle", async () => {
+  location.hash = "#/activity/turns?seat=ceo";
+  const store = new Store();
+  store.applyHealth({ status: "healthy" });
+  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  const socket = new LiveSocket(store);
+  const asked: Record<string, unknown>[] = [];
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, params) => {
+    if (what === "turns") asked.push(params ?? {});
+    return Promise.resolve(what === "turns" ? { turns: [], next: null } : {});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Turns />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+  expect(asked[0]).toMatchObject({ seat: "ceo" });
+  expect(asked[0]).not.toHaveProperty("role");
+});

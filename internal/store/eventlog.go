@@ -214,6 +214,20 @@ type ListQuery struct {
 	TraceID  string
 	Actor    string
 
+	// ChannelID selects the events of one agent-to-agent conversation, by
+	// the channel id every A2A event carries — the promoted `channel_id`
+	// column (schema/0001), which is set on those events alone. It is what
+	// a conversation's page asks the log, "what happened on this channel",
+	// and it reads the partial index schema/0032 ships.
+	ChannelID string
+
+	// AgentID selects the events ONE SEAT published, by the id every node
+	// derives for it ([org.DeriveAgentID]) — the promoted `agent_id`
+	// column. NOT a role name, which two unit seats share and a rename
+	// changes, and NOT [ListQuery.RelatedAgent], which matches by name the
+	// events that merely involve a seat and pulls in their traces.
+	AgentID string
+
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
 	// inside it. Rows written before migration 0014 carry an empty
@@ -522,14 +536,31 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 			args = append(args, val)
 		}
 	}
+	// A COLUMN WHOSE INDEX IS PARTIAL takes its index's own predicate as a
+	// second term, which is redundant to the answer and is the only thing
+	// that lets the planner use the index at all: it proves a query implies
+	// `x <> ''` only when the query SAYS so, never from `x = ?` with a bound
+	// value it cannot see. Without the term every one of these filters
+	// walked the primary key newest-first until it had a page — for an item,
+	// a unit of work or a channel with fewer rows than a page, the whole
+	// thirty-day log (measured with EXPLAIN QUERY PLAN; see
+	// TestEveryPartiallyIndexedFilterSeeksItsIndex).
+	addIndexed := func(name, val string) {
+		if val != "" {
+			where = append(where, col(name)+" = ?", col(name)+" <> ''")
+			args = append(args, val)
+		}
+	}
 	addEq("event_type", q.Type)
 	addEq("source", q.Source)
 	addEq("category", q.Category)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
-	addEq("work_key", q.WorkKey)
-	addEq("work_item", q.WorkItem)
+	addEq("agent_id", q.AgentID)
+	addIndexed("work_key", q.WorkKey)
+	addIndexed("work_item", q.WorkItem)
+	addIndexed("channel_id", q.ChannelID)
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -560,7 +591,26 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
+	query, args := q.listSQL(limit)
+	out, err := l.scanRows(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if q.RelatedAgent != "" {
+		siblings, err := l.traceSiblings(ctx, out, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = mergeRelated(out, siblings, limit)
+	}
+	return out, nil
+}
 
+// listSQL is the statement [EventLog.List] runs for one page, and its
+// arguments — a function of its own so the plan a filter gets can be read
+// back for exactly the statement that runs (see
+// TestEveryPartiallyIndexedFilterSeeksItsIndex).
+func (q ListQuery) listSQL(limit int) (string, []any) {
 	from, where, args, col := q.predicate()
 	joined := q.RelatedAgent != ""
 
@@ -585,19 +635,7 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	query := "SELECT " + qualifiedListColumns(joined) +
 		" FROM " + from + " WHERE " + strings.Join(where, " AND ") +
 		" ORDER BY " + col("event_time") + " DESC, " + col("event_id") + " DESC LIMIT ?"
-
-	out, err := l.scanRows(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	if joined {
-		siblings, err := l.traceSiblings(ctx, out, limit)
-		if err != nil {
-			return nil, err
-		}
-		out = mergeRelated(out, siblings, limit)
-	}
-	return out, nil
+	return query, args
 }
 
 // traceSiblings fetches the other events in the traces a page of direct

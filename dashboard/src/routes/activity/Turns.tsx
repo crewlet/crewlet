@@ -211,7 +211,11 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
   // not three.
-  const [role, setRole] = useParam("role", "", "filter");
+  // A SEAT BY ITS HANDLE, which the engine resolves to the seat's own id. It
+  // was a role name, so the sidebar's seat rows — which link here with
+  // `seat=<handle>` — landed on every seat's turns, and two unit seats
+  // stamped from one template could not be told apart.
+  const [seat, setSeat] = useParam("seat", "", "filter");
   const [failed, setFailed] = useParam("failed", "", "filter");
   // ALIGNED, because this window drives a chart as well as a list: the top
   // edge is the END of the bucket in progress, so the current column is drawn
@@ -224,7 +228,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
     {
       days: windowDays(range.window),
       limit: PAGE,
-      ...(role ? { role } : {}),
+      ...(seat ? { seat } : {}),
       ...(failed ? { failed } : {}),
     },
     { pollMs: 20_000 },
@@ -262,7 +266,8 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   usePeekNeighbours(
     useMemo(() => rows.map((t) => ({ kind: "turn" as const, id: t.turn_id })), [rows]),
   );
-  const seats = (org?.roles ?? []).filter((r) => r.kind !== "human");
+  const seats = (org?.roles ?? []).filter((r) => r.kind !== "human" && !!r.handle);
+  const chosen = seats.find((r) => r.handle === seat);
 
   return (
     <>
@@ -311,20 +316,20 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
       <div className="row gap-2 wrap">
         <Button
           size="small"
-          variant={role ? "primary" : "secondary"}
-          onClick={() => setRole("")}
+          variant={seat ? "primary" : "secondary"}
+          onClick={() => setSeat("")}
           leadingIcon={<GroupGlyph size="xs" />}
         >
-          {role || "every seat"}
+          {seat ? (chosen?.name ?? seat) : "every seat"}
         </Button>
-        {seats.slice(0, 8).map((seat) => (
+        {seats.slice(0, 8).map((r) => (
           <Button
-            key={seat.name}
+            key={r.handle}
             size="small"
-            variant={role === seat.name ? "primary" : "secondary"}
-            onClick={() => setRole(role === seat.name ? "" : seat.name)}
+            variant={seat === r.handle ? "primary" : "secondary"}
+            onClick={() => setSeat(seat === r.handle ? "" : (r.handle ?? ""))}
           >
-            {seat.name}
+            {r.name}
           </Button>
         ))}
         <span className="spacer" />

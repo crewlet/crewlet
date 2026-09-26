@@ -684,6 +684,10 @@ export interface EventBar {
   /** The bucket's START, RFC3339 — never its middle and never its end. */
   at: string;
   count: number;
+  /** How many of `count` reported a failure — a SPLIT of the bar, never an
+   *  addition to it, counted by the engine with the rule a turn's own
+   *  `failed` mark uses. */
+  failed: number;
 }
 
 /**
@@ -703,6 +707,8 @@ export interface EventSeries {
   bars: EventBar[];
   /** The window's whole count, stated rather than left as a sum of the bars. */
   total: number;
+  /** The window's failed count — the sum of the bars' `failed`. */
+  failed: number;
   /**
    * How many rows each category would give, over the window, with the CATEGORY
    * filter lifted and every other one applied — which is the only meaning a

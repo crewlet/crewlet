@@ -233,8 +233,10 @@ func MergeSeries(base store.EventHistogram, others []store.EventHistogram) (stor
 		}
 		for j := range out.Bars {
 			out.Bars[j].Count += h.Bars[j].Count
+			out.Bars[j].Failed += h.Bars[j].Failed
 		}
 		out.Total += h.Total
+		out.Failed += h.Failed
 		for k, v := range h.ByCategory {
 			out.ByCategory[k] += v
 		}
