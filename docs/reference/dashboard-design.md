@@ -1069,7 +1069,7 @@ none of it:
 
 | Piece | What it is |
 |---|---|
-| `AppRail` | the workspaces, the badges, the engine pill, theme and density. `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
+| `AppRail` | the workspaces, the badges, the engine pill, theme and density. The engine pill reads only the health slice (`useEngineHealth()`, the `health` push kept whole) and the connection — never a query of its own — and names the fleet's size in its title from `health.nodes`, or "node count unavailable" when the engine could not count (`nodeCountLabel`). `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -3603,7 +3603,8 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   than replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
   keeps `{revision_id, epoch}` in a tab-lived store outside any screen
-  (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the
+  (`savedRevision.ts`), reads this node's `applied_epoch` off the health push
+  (which carries it every five seconds, so there is nothing to poll) and the
   `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
   N of M nodes, or the node that refused it with a link to the Fleet screen.
   Its View changes opens the saved revision against its parent

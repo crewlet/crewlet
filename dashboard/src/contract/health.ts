@@ -1,6 +1,28 @@
+import type { Coverage } from "./coverage.ts";
+
 /**
- * What a node says about itself: the `stream` query's answer, which is
- * `api.Health` in Go, whole.
+ * The alarm table as a public health body carries it: how many are firing and
+ * which has stood longest. `api.HealthAlarms` in Go, held member for member by
+ * the same gate as `EngineHealth`.
+ *
+ * A COUNT AND ONE NAME, never the rows: the envelope is public, and what each
+ * alarm measured is the operator-only `work_retention` answer.
+ */
+interface HealthAlarms {
+  /** How many alarms are firing. Zero is a real zero: the table was evaluated. */
+  count: number;
+  /**
+   * The alarm that has been firing LONGEST — the condition that has gone
+   * unanswered longest, since the engine's table asserts no severity of its
+   * own. Absent when nothing is firing.
+   */
+  worst?: string;
+}
+
+/**
+ * What a node says about itself: the `health` push, which is `api.Health` in
+ * Go, WHOLE — in the snapshot and on every five-second tick. There is no query
+ * for it any more; read it with `useEngineHealth()`.
  *
  * EVERY JSON TAG ON THAT STRUCT IS A MEMBER HERE AND NOTHING ELSE IS, held by
  * `internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports` —
@@ -66,4 +88,22 @@ export interface EngineHealth {
    * long it has been stranded in seconds — present only while one is.
    */
   unproven_seconds?: Record<string, number>;
+  /**
+   * How many nodes hold a presence lease — the fleet this node's fan-outs
+   * divide their work by. ABSENT WHEN THE PRESENCE READ FAILED, never 0: say
+   * "node count unavailable" (`nodeCountLabel` in `lib/format.ts`).
+   */
+  nodes?: number;
+  /**
+   * This node's standing alarms, from the one evaluation the engine's gauge and
+   * alarm log lines come from. Absent before that evaluation first runs and on
+   * a node running no state log — neither has looked, which is not healthy.
+   */
+  alarms?: HealthAlarms;
+  /**
+   * Which nodes this node's live projection was seeded from at boot — the
+   * feed, the spend window and each seat's last turn every screen starts from.
+   * Absent until the seed has run.
+   */
+  seeded_from?: Coverage;
 }

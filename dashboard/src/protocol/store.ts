@@ -20,7 +20,6 @@ import type {
   AgentRow,
   FeedRow,
   EventEnvelope,
-  HealthPush,
   OrgBudget,
   OrgProjection,
   Overlay,
@@ -33,6 +32,7 @@ import type {
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
 import { MAX_EVENTS } from "../contract/wire.ts";
+import type { EngineHealth } from "../contract/health.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -78,7 +78,13 @@ export interface StoreState {
   sandboxes: SandboxEntry[];
   org: OrgProjection;
   tools: ToolRow[];
-  health: HealthPush;
+  /**
+   * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
+   * by the snapshot and by every five-second tick. `{status: "unknown"}` while
+   * the socket is down — the one value here that is not a push, and asserts
+   * nothing beyond that it is not known.
+   */
+  health: EngineHealth;
   tokens: Rollup | null;
   budget: OrgBudget;
   schedules: ScheduleRow[] | null;
@@ -273,7 +279,7 @@ export class Store {
     this.emit("tools");
   }
 
-  applyHealth(health: HealthPush | null | undefined): void {
+  applyHealth(health: EngineHealth | null | undefined): void {
     this.state.health = health ?? { status: "unknown" };
     this.state.connected = !!health && health.status !== "unknown";
     this.emit("health");

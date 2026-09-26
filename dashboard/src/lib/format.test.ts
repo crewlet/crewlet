@@ -17,6 +17,7 @@ import {
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
+  nodeCountLabel,
   formatPhaseLLM,
   fmtCount,
   fmtDate,
@@ -280,6 +281,21 @@ describe("a value read from the redacted document", () => {
     // And a field that is NOT a credential still shows its literal: a contact
     // identity is a public handle at a vendor.
     expect(configValueKind("U0FOUNDER")).toBe("literal");
+  });
+});
+
+describe("how many nodes", () => {
+  test("a count the engine reported is said as one", () => {
+    expect(nodeCountLabel(1)).toBe("1 node");
+    expect(nodeCountLabel(3)).toBe("3 nodes");
+  });
+
+  // NEVER 0, and never a guessed 1: an absent count is a read that did not
+  // happen, or an older node that predates the field.
+  test("an absent count says it is unavailable", () => {
+    for (const absent of [undefined, null, 0, Number.NaN]) {
+      expect(nodeCountLabel(absent)).toBe("node count unavailable");
+    }
   });
 });
 

@@ -188,7 +188,7 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 
 	// Every other read keeps answering, which is how an operator watches
 	// the drain: the dashboard, the REST reads and the query surface.
-	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/stream"} {
+	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer"} {
 		if rec := send(t, a, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s answered %d during a drain, want 200", path, rec.Code)
 		}

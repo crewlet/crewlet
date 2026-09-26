@@ -236,6 +236,27 @@ if (state.tokens === null) {
   }
 }
 
+// THE ENGINE'S HEALTH, WHOLE. The push carries the envelope GET /health
+// answers, and the screens read the applied epoch and the posture off it rather
+// than polling for them — so a push narrowed back to a few fields, or a store
+// that kept only some of what arrived, leaves the rail unable to say whether
+// the company's configuration applied.
+const health = state.health;
+// PRESENT rather than positive: the capture's company is seeded from a file,
+// active before the control plane minted an epoch, and 0 says exactly that.
+if (!health || typeof health.applied_epoch !== "number") {
+  problems.push(
+    `the health slice names no applied epoch (${JSON.stringify(health)}): no ` +
+      "screen can say whether the configuration it saved has applied",
+  );
+}
+if (!health || !health.posture) {
+  problems.push(
+    `the health slice names no posture (${JSON.stringify(health)}): a node out ` +
+      "of rotation would read exactly like one serving",
+  );
+}
+
 if (flags.includes("--print")) {
   console.log(JSON.stringify({
     agents: state.agents,

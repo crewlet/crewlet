@@ -260,11 +260,11 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	// outcome as reading it as "not ready", except it takes the whole probe
 	// timeout to get there and the operator learns nothing.
 	//
-	// posturePollBudget is an eighth of the reconcile cadence and inside a
+	// ProbeReadBudget is an eighth of the reconcile cadence and inside a
 	// typical 5s liveness timeout, so a slow plane degrades to the
 	// fail-open PostureServe answer below — which this function's own
 	// comment already promises for a plane it cannot read.
-	ctx, cancel := context.WithTimeout(ctx, posturePollBudget)
+	ctx, cancel := context.WithTimeout(ctx, ProbeReadBudget)
 	defer cancel()
 
 	view, err := r.view(ctx)
@@ -281,18 +281,23 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	return r.decide(configplane.DecidePosture(view))
 }
 
-// posturePollBudget bounds one posture read.
+// ProbeReadBudget bounds one coordination read made for a health probe: the
+// posture read here, and the envelope's presence count, which the API bounds
+// with this same value and runs BESIDE the posture read rather than after it.
 //
-// AN EIGHTH of the reconcile cadence, so a probe can never outlive the tick
-// that would have corrected what it is reporting, and comfortably inside the
-// 5-second liveness timeout an orchestrator defaults to. What it buys is that
-// a broker which has stopped answering makes /health and /ready slow by two
-// seconds rather than by their caller's entire patience.
+// ONE VALUE FOR BOTH because they are one probe's reads, and a second budget
+// would be a second answer to "how long may a coordination read hold up
+// /health". An EIGHTH of the reconcile cadence, so a probe can never outlive
+// the tick that would have corrected what it is reporting, and comfortably
+// inside the 5-second liveness timeout an orchestrator defaults to. What it
+// buys is that a broker which has stopped answering makes /health and /ready
+// slow by two seconds rather than by their caller's entire patience.
 //
-// Failing this read is SAFE by construction: the caller already treats an
-// unreadable plane as PostureServe, on the reasoning that the safe answer to
-// "am I behind?" is the one that keeps a working company working.
-const posturePollBudget = configplane.ReconcileInterval / 8
+// Failing either read is SAFE by construction: an unreadable plane is
+// PostureServe, on the reasoning that the safe answer to "am I behind?" is the
+// one that keeps a working company working, and an unread presence count is an
+// absent `nodes`, which is what "cannot say" already means on the envelope.
+const ProbeReadBudget = configplane.ReconcileInterval / 8
 
 // decide records a posture for the admission gate and returns it.
 //

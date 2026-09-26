@@ -2,7 +2,6 @@ package queries_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,10 +166,9 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// detail.
 		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
 			[]string{"token_series", "viewer"}},
-		{"all of them, plus health", queries.Sources{
+		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
-			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-		}, []string{"agent", "event", "event_series", "events", "phases", "stream",
+		}, []string{"agent", "event", "event_series", "events", "phases",
 			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
@@ -253,19 +251,24 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	}
 }
 
-func TestStreamAnswersHealthUnderItsOwnName(t *testing.T) {
+// THE ENGINE'S HEALTH IS A PUSH AND NEVER A QUERY.
+//
+// It was both: the `health` push carried three fields and a `stream` query
+// answered the rest, polled by five screens at two cadences of their own, so
+// the rail and the panel in front of it could disagree about whether a
+// revision had applied for as long as fifteen seconds. The push carries the
+// whole body now (`api.Health`), and a question that answered a second copy of
+// it would be the second cadence coming back.
+//
+// Mutation: register `stream` again, gated on any seam, and this fails.
+func TestTheEnginesHealthIsAPushAndNeverAQuery(t *testing.T) {
 	t.Parallel()
-	// Deliberately not called health: a query must never share a name with
-	// a push kind, or a reader of the protocol has to know which direction
-	// a frame was travelling to know what it means.
-	r := registryOver(t, queries.Sources{
-		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-	})
-	if got := ask(t, r, "stream", nil); got["status"] != "ok" {
-		t.Errorf("answer = %+v", got)
-	}
-	if _, err := r.Answer(t.Context(), "health", nil, ""); !errors.Is(err, queries.ErrUnknown) {
-		t.Errorf("a push kind is answerable as a query: %v", err)
+	// EVERY SEAM, so the sweep covers every registration this build has.
+	r := registryOver(t, everySeam(t))
+	for _, name := range []string{"stream", "health"} {
+		if _, err := r.Answer(t.Context(), name, nil, ""); !errors.Is(err, queries.ErrUnknown) {
+			t.Errorf("%q is answerable as a query (%v): read the health push", name, err)
+		}
 	}
 }
 

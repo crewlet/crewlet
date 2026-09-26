@@ -187,7 +187,7 @@ describe("a query that may have no parameters", () => {
     // question is always asked with none, and `enabled` is there anyway.
     const optionOnly = conditionalCalls(
       "x.tsx",
-      'const a = useQuery("stream", undefined, { enabled: waiting, pollMs: waiting ? MS : undefined });',
+      'const a = useQuery("fleet", undefined, { enabled: waiting, pollMs: waiting ? MS : undefined });',
     );
     expect(optionOnly).toEqual([]);
   });

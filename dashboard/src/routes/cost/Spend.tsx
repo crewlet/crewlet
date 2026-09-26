@@ -232,7 +232,7 @@ export function Spend() {
   const now = useNow();
   const range = useTimeRange(now, SPEND_OFFER);
   const days = spendDays(range.window);
-  const { data: engine } = useEngineHealth();
+  const engine = useEngineHealth();
 
   // The pushed rollup covers the live window. Any other window is a query,
   // and while it loads the pushed one stays on screen rather than blanking.

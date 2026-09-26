@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -856,4 +857,36 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	// A DIFFERENT name is ordinary. The reservation takes one identifier,
 	// not the idea of an operator-declared URL.
 	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
+}
+
+// THE SEATS WITH TURNS ARE EVERY NON-HUMAN ROLE, AT ANY DEPTH.
+//
+// The live projection's boot seed is keyed by this list, so a seat it misses
+// starts every screen at this process's boot, and a human it includes is a
+// seat with no turn seeded as one. A unit nested two deep is the case a
+// top-level walk would silently drop.
+//
+// Mutation: walk c.Roles alone, or drop the human filter, and this fails.
+func TestAgentRolesAreEveryNonHumanSeatAtAnyDepth(t *testing.T) {
+	t.Parallel()
+	c := &Company{
+		Roles: []Role{{Name: "ceo"}, {Name: "founder", Kind: org.KindHuman}},
+		Units: []Unit{{
+			Name:  "eng",
+			Roles: []Role{{Name: "cto"}},
+			Children: []Unit{{
+				Name:  "platform",
+				Roles: []Role{{Name: "sre"}, {Name: "reviewer", Kind: org.KindHuman}},
+			}},
+		}},
+	}
+	got := c.AgentRoles()
+	slices.Sort(got)
+	if want := []string{"ceo", "cto", "sre"}; !slices.Equal(got, want) {
+		t.Errorf("AgentRoles() = %v, want %v", got, want)
+	}
+	var none *Company
+	if got := none.AgentRoles(); got != nil {
+		t.Errorf("a nil company's AgentRoles() = %v, want nil", got)
+	}
 }

@@ -11,6 +11,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { MAX_EVENTS } from "../contract/wire.ts";
 import { MAX_PHASES, Store } from "./store.ts";
+import { nodeCountLabel } from "../lib/format.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -189,6 +190,36 @@ describe("completed phases", () => {
     store.applyEvent(phaseEvent("p1"));
     expect(phasesWoke).toHaveBeenCalled();
     expect(agentsWoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("the engine's health", () => {
+  // THE PUSH IS THE WHOLE ENVELOPE, and the slice keeps all of it: every
+  // screen reads the applied epoch, the posture and the fleet's size off this
+  // slice rather than asking a query for them.
+  test("a health frame is kept whole", () => {
+    const store = new Store();
+    const frame = {
+      status: "ok",
+      node: "node-a",
+      applied_epoch: 41,
+      posture: "serve",
+      nodes: 3,
+      alarms: { count: 1, worst: "backup_age" },
+    };
+    store.applyHealth(frame);
+    expect(store.state.health).toEqual(frame);
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("3 nodes");
+  });
+
+  // AN OLDER NODE'S FRAME, or one whose presence read failed, carries no
+  // `nodes` at all. The count is then unknown and said so — never 0, which the
+  // node answering could not be, and never a guessed 1.
+  test("a frame without a node count renders the count as unavailable", () => {
+    const store = new Store();
+    store.applyHealth({ status: "ok", applied_epoch: 7, posture: "serve" });
+    expect(store.state.health.nodes).toBeUndefined();
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
   });
 });
 
