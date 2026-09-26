@@ -134,9 +134,14 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 // The record of runs that ended is pruned here to the runs the record still
 // lists, which is what bounds it: an ending that the record has caught up with
 // has nothing left to guard.
-func (s *LiveState) ReconcileSandboxes(records []SandboxRecord, asOf time.Time) Change {
+func (s *LiveState) ReconcileSandboxes(records []SandboxRecord, asOf time.Time) (change Change) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// THE RECORD IS WHAT A SEAT'S RUNS ARE READ FROM, so a reconcile that
+	// moves a run moves its seat's state too — a run that waited on a
+	// question for longer than this process has been up is found here.
+	before := s.states()
+	defer s.noteMoved(before, &change)
 
 	listed := make(map[string]SandboxRecord, len(records))
 	for _, rec := range records {
@@ -178,7 +183,8 @@ func (s *LiveState) ReconcileSandboxes(records []SandboxRecord, asOf time.Time) 
 		_, ok := listed[turnID]
 		return ok
 	})
-	return Change{Sandboxes: moved}
+	change.Sandboxes = moved
+	return change
 }
 
 // covers reports whether this ending is the end of the run a record describes.

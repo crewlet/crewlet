@@ -8,20 +8,14 @@ package livestate
 // belong written out where a reader can see them next to the struct tags they
 // must match.
 func mergeOverlay(row map[string]any, o Overlay) {
-	// STATE ONLY WHEN THE PROJECTION KNOWS ONE. The row it is merged onto
-	// may already carry the roster's answer (a seat this node serves is
-	// idle), and a client merges a pushed row over what it holds, so an
-	// unknown state written as a value would erase a true one.
-	if o.State != "" {
-		row["state"] = o.State
-	}
+	row["activity"] = o.Activity
+	row["stopped_reason"] = o.StoppedReason
 	row["runtime_id"] = o.RuntimeID
 	row["current_phase"] = o.CurrentPhase
 	row["current_iteration"] = o.CurrentIteration
 	row["live_call"] = o.LiveCall
 	row["last_error"] = o.LastError
 	row["budget"] = o.Budget
-	row["afk_reason"] = o.AFKReason
 	row["turn"] = o.Turn
 	row["last_turn"] = o.LastTurn
 	row["paused"] = o.Paused

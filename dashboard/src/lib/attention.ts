@@ -32,7 +32,7 @@ import type {
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { MarkName } from "~/ui/glyph.tsx";
-import { roundLabel, runState, staleness } from "./seats.ts";
+import { roundLabel, runState, staleness, stoppedLine } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -259,7 +259,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
-    const state = runState(agent, sandboxes);
+    const state = runState(agent);
     if (agent.last_error) {
       out.push({
         id: `error-${agent.role}`,
@@ -274,16 +274,17 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       });
       continue;
     }
-    if (state === "afk") {
+    // A STOPPED SEAT, in the engine's word and for the engine's reason. The
+    // budget's stop has its own row above, which names the window and when
+    // it resets, so it is not said twice.
+    if (state === "stopped" && agent.stopped_reason !== "budget") {
       out.push({
-        id: `afk-${agent.role}`,
+        id: `stopped-${agent.role}`,
         severity: "caution",
         subject: "seat",
         icon: "pause",
-        title: `${agent.role} is AFK`,
-        detail: agent.afk_reason
-          ? `The engine paused it: ${agent.afk_reason}.`
-          : "The engine paused this seat.",
+        title: `${agent.role} is stopped`,
+        detail: `The seat cannot take work: ${stoppedLine(agent)}.`,
         path: ["company", "people", String(agent.handle ?? agent.id)],
         who: String(agent.handle ?? agent.role),
       });

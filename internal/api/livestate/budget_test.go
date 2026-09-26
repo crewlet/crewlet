@@ -544,13 +544,15 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	// it. The overlay it creates used to start at "offline" and overwrite
 	// the roster's own state, so the first report after a boot flipped
 	// every capped seat this node serves from idle to offline, on every
-	// open dashboard, until the seat took a turn.
+	// open dashboard, until the seat took a turn. A report whose windows
+	// are not refusing says nothing about the seat's state at all.
 	s := livestate.New()
+	s.SetPlacement(map[string]bool{"Lead": true})
 	s.Apply(env("budget_meters", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
 
-	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead", "state": "idle"}})
-	if got := rows[0]["state"]; got != "idle" {
-		t.Errorf("merged state = %v, want the roster's idle kept", got)
+	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead"}})
+	if got := rows[0]["activity"]; got != livestate.ActivityIdle {
+		t.Errorf("merged activity = %v, want idle: a meter is not a stop", got)
 	}
 	if rows[0]["budget"] == nil {
 		t.Error("the merged row lost the meter the report carried")
@@ -559,16 +561,7 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	if len(pushed) != 1 {
 		t.Fatalf("pushed rows = %v, want the one seat the report moved", pushed)
 	}
-	if got, present := pushed[0]["state"]; present {
-		t.Errorf("the agents push carried state %v, which a client merges over the one it holds", got)
-	}
-	if got := overlayOf(t, s, "Lead").State; got != "" {
-		t.Errorf("overlay state = %q, want none claimed", got)
-	}
-
-	// A spawn is the first thing that says the seat runs.
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
-	if got := overlayOf(t, s, "Lead").State; got != "idle" {
-		t.Errorf("state after a spawn = %q, want idle", got)
+	if got := pushed[0]["activity"]; got != livestate.ActivityIdle {
+		t.Errorf("the agents push carried activity %v, want idle", got)
 	}
 }

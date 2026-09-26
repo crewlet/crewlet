@@ -197,7 +197,7 @@ func (a *App) health(ctx context.Context) Health {
 
 // tickReadBudget bounds a read done for a push tick rather than a request.
 //
-// The dashboard's shared tick and its roster re-send have no request context
+// The dashboard's shared tick and its placement read have no request context
 // to inherit, and what they call reaches the coordination plane. Five seconds
 // is far longer than the read needs and far shorter than the tick's own
 // cadence, so a wedged plane costs one stale push rather than a goroutine per

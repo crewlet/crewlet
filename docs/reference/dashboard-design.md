@@ -46,14 +46,29 @@ nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
 else. A tool the company has not set up keeps its mark, dimmed.
 
-A seat's chrome takes one of four **tones**, from what it is DOING:
+A seat's chrome takes one of four **tones**, from what it is DOING — and what
+it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
+`activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
+`stopped_reason` (`paused`, `unplaced`, `budget` or `provider`), computed once
+by the live projection from the seat's turn, its coding runs' durable record,
+its pause, its placement across the fleet and its budget windows (see
+[Agent States](../concepts/agent-runtime.md#agent-states)). `lib/seats.ts`
+maps the word to a tone and a label and folds nothing in: the dashboard used to
+derive a seat's state three ways on three screens, and a run parked on a
+question past the old twelve-hour age-out dropped out of every one of them. The
+two words are the contract's `SeatActivity` and `StoppedReason`, held to the
+engine's by a gate.
 
-| Tone | When | Drawn as |
+| Tone | `activity` | Drawn as |
 |---|---|---|
-| `working` | mid-turn, or waiting on a detached coding run | an info-blue rail |
-| `needs` | parked on a question only a person can answer | a caution-amber rail |
-| `broken` | the engine stopped it, or it reported an error | a critical-red rail |
-| `quiet` | idle, offline, or a human seat | **nothing** |
+| `working` | `working`: mid-turn, or a coding run it launched is running | an info-blue rail |
+| `needs` | `needs`: a coding run it launched waits on a question only a person can answer | a caution-amber rail |
+| `broken` | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | a critical-red rail |
+| `quiet` | `idle`, no row from the engine yet, or a human seat | **nothing** |
+
+A failed last turn does not colour a seat. The seat takes its next wake like
+any other; its `last_error` is shown where the seat is read about, not as a
+stop.
 
 `quiet` is deliberately untinted. An idle seat used to draw a tinted, glowing
 tile that read as activity, and the fix for that is not a duller hue — it is

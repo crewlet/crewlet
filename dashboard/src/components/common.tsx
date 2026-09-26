@@ -111,14 +111,8 @@ export function SeatChip({
   );
 }
 
-export function StateBadge({
-  agent,
-  sandboxes,
-}: {
-  agent: AgentRow | null | undefined;
-  sandboxes: SandboxEntry[];
-}) {
-  const state = runState(agent, sandboxes);
+export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
+  const state = runState(agent);
   return (
     <Tag variant={uiletTone(toneOf(state))} dot>
       {stateLabel(state)}
@@ -137,7 +131,7 @@ export function SeatCard({
 }) {
   const now = useNow();
   const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
-  const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
+  const tone = seat.kind === "human" ? "quiet" : seatTone(agent);
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
@@ -160,7 +154,7 @@ export function SeatCard({
         {seat.kind === "human" ? (
           <Tag appearance="outline">human</Tag>
         ) : (
-          <StateBadge agent={agent} sandboxes={sandboxes} />
+          <StateBadge agent={agent} />
         )}
       </div>
       <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>

@@ -130,6 +130,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		opts.Sources.NodeID = config.DefaultNodeID
 	}
 	fleet := coordmemory.NewFleet()
+	if opts.Sources.Coord == nil {
+		opts.Sources.Coord = coordmemory.New()
+	}
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
 	}

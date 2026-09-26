@@ -157,13 +157,12 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 	// THE SEAT IS WORKING FROM ITS TURN'S START, not from its first phase:
 	// the prefetch before it is work, and a seat that looked idle through
 	// it looked idle with a wake in hand. On the state machine's own
-	// reorder guard, so a start older than the seat's newest state — an
-	// AFK hold that came after it — moves nothing.
+	// reorder guard, so a start older than the seat's newest state — a
+	// failure hold that came after it — moves nothing.
 	at := newStamp(env.Timestamp)
 	if agent.turn != nil && agent.turn.TurnID == turnID && agent.turn.Stage == StageContext &&
 		(at.empty() || agent.stateTS.empty() || !at.before(agent.stateTS)) {
-		agent.state = "working"
-		agent.afkReason = ""
+		agent.working()
 		if !at.empty() {
 			agent.stateTS = at
 		}
@@ -202,8 +201,7 @@ func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
 // sameTurnOverlay reports whether two overlays agree on everything a turn event
 // can move.
 func sameTurnOverlay(a, b Overlay) bool {
-	return a.State == b.State && a.AFKReason == b.AFKReason &&
-		turnEqual(a.Turn, b.Turn) && lastEqual(a.LastTurn, b.LastTurn)
+	return turnEqual(a.Turn, b.Turn) && lastEqual(a.LastTurn, b.LastTurn)
 }
 
 func turnEqual(a, b *LiveTurn) bool {

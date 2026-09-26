@@ -1,6 +1,6 @@
 /**
- * The socket's own vocabulary: the push kinds a frame can carry, and how much
- * of the activity feed a tab keeps.
+ * The socket's own vocabulary: the push kinds a frame can carry, how much of
+ * the activity feed a tab keeps, and the words a seat's state is served in.
  */
 
 /**
@@ -41,3 +41,22 @@ export type PushKind =
  * where the record actually starts rather than drawing the gap as quiet.
  */
 export const MAX_EVENTS = 400;
+
+/**
+ * What a seat is doing: the ONE seat-state vocabulary, served on every
+ * `agents` row as `activity` and computed by the engine alone
+ * (`internal/api/livestate/activity.go`) from the seat's turn, its coding
+ * runs' durable record, its pause, its placement across the fleet and its
+ * budget windows. A screen maps it to a tone and a label and derives nothing.
+ *
+ * EXACTLY THE ENGINE'S `livestate.Activities`, held both ways by
+ * `internal/api/livestate`'s seat-state gate.
+ */
+export type SeatActivity = "working" | "needs" | "stopped" | "idle";
+
+/**
+ * Why a `stopped` seat cannot take work — `stopped_reason`, null on a seat that
+ * is not stopped. EXACTLY THE ENGINE'S `livestate.StoppedReasons`, held by the
+ * same gate.
+ */
+export type StoppedReason = "paused" | "unplaced" | "budget" | "provider";

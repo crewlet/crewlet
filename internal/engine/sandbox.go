@@ -385,7 +385,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 //
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
-// it the seat renders as whatever it was last doing rather than AFK. The run's
+// it the seat renders as whatever it was last doing rather than its failure. The run's
 // own row names the seat, and the live epoch is preferred where it still does,
 // so a seat renamed since the run detached is addressed as it is now.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
@@ -1298,6 +1298,19 @@ func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sa
 type sandboxRuntime struct {
 	pending     sandbox.PendingStore
 	coordinator *sandbox.Coordinator
+}
+
+// sandboxManager is this node's current sandbox manager, or nil where no
+// runtime has come up — read LIVE through the runtime, because the runtime
+// may arrive by apply and every apply swaps the manager under its coordinator
+// ([sandbox.Coordinator.SetManager]). The live-output reader and server take
+// it as a function for that reason.
+func (e *Engine) sandboxManager() *sandbox.Manager {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return nil
+	}
+	return rt.coordinator.Manager()
 }
 
 // startSandboxFor is [Engine.startSandbox] for the company a node boots on:

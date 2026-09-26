@@ -169,10 +169,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// corrected it: the seat sat rendering as working, with no live call to
 	// show, until the next real round. A round this function is about to
 	// discard must not move the seat either.
-	if agent.state != "working" {
-		agent.state = "working"
-		agent.afkReason = ""
-	}
+	agent.working()
 	s.touchTurn(agent, env, payload, StagePhase)
 	if phase != "" {
 		agent.currentPhase = phase

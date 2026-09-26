@@ -186,13 +186,13 @@ func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "tn-1"},
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 	live, _ := got["live"].(*livestate.Overlay)
-	if live == nil || live.State != "working" {
+	if live == nil || live.Activity != livestate.ActivityWorking {
 		t.Fatalf("answer = %+v", got)
 	}
 }

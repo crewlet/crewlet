@@ -143,11 +143,8 @@ export function LiveNow() {
       index.seats
         .filter((s) => s.kind === "agent")
         .map((seat) => ({ seat, agent: agents.find((a) => a.role === seat.name) }))
-        .filter(({ agent }) => {
-          const state = runState(agent, sandboxes);
-          return state === "working" || state === "awaiting_sandbox";
-        }),
-    [index.seats, agents, sandboxes],
+        .filter(({ agent }) => runState(agent) === "working"),
+    [index.seats, agents],
   );
 
   /**
@@ -194,7 +191,7 @@ export function LiveNow() {
 
   const seatCount = index.seats.filter((s) => s.kind === "agent").length;
   const humanCount = index.seats.length - seatCount;
-  const idle = agents.filter((a) => runState(a, sandboxes) === "idle").length;
+  const idle = agents.filter((a) => runState(a) === "idle").length;
   const orgMeter = budget?.org;
 
   const phaseSpend = useMemo(

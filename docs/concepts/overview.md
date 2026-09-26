@@ -36,7 +36,7 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Config style** | A YAML org chart, versioned in the store and edited live |
 | **Extensibility** | Out of process: MCP servers for anything an agent calls, and the REST API, the `/ws/stream` socket and OTLP for anything built around the engine. The binary loads no plugins |
 
-The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
+The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and the seat's `last_error` on the dashboard — an unreachable provider as the seat state `stopped`/`provider` — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
 
 ---
 

@@ -231,9 +231,16 @@ type WindowMeter = types.BudgetWindow
 
 // Overlay is the live half of an agent row, merged onto its static config row.
 type Overlay struct {
-	// State is empty, and OMITTED on the wire, until an event says whether
-	// the seat is running: see ensureAgent for what claiming one cost.
-	State            string    `json:"state,omitempty"`
+	// Activity is what the seat is doing, in the one vocabulary every
+	// surface reads — see activity.go. ALWAYS PRESENT: every seat has one.
+	Activity Activity `json:"activity"`
+
+	// StoppedReason is why a stopped seat cannot take work, and null on a
+	// seat that is not stopped. ALWAYS PRESENT for the reason Turn is: a
+	// merged overlay with the key omitted would leave a seat that started
+	// again wearing the reason it had stopped for.
+	StoppedReason *StoppedReason `json:"stopped_reason"`
+
 	RuntimeID        string    `json:"runtime_id"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
@@ -250,16 +257,11 @@ type Overlay struct {
 	// would be a claim nobody measured.
 	Budget *BudgetMeter `json:"budget"`
 
-	// AFKReason is ALWAYS present, even when empty. The overlay is merged
-	// into a client's row rather than replacing it, so an omitted key
-	// reads as "unchanged" — which would leave a recovered agent wearing
-	// the reason it was AFK for.
-	AFKReason string `json:"afk_reason"`
-
 	// Turn is the turn the seat is on — running, or parked on a detached
-	// coding run — and null when it is on none. ALWAYS PRESENT for the
-	// reason AFKReason is: a merged overlay with the key omitted would
-	// leave a finished turn on the client's row.
+	// coding run — and null when it is on none. ALWAYS PRESENT: the
+	// overlay is merged into a client's row rather than replacing it, so an
+	// omitted key reads as "unchanged" and would leave a finished turn on
+	// the client's row.
 	Turn *LiveTurn `json:"turn"`
 
 	// LastTurn is the newest turn the seat ENDED, and null while it has

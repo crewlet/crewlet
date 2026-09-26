@@ -20,7 +20,7 @@ import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, stateLabel } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
 // `MarkName` `typeIcon` returns.
 import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
@@ -372,7 +372,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           hint:
             seat.kind === "human"
               ? "human teammate"
-              : `@${seat.handle}${live?.state ? ` · ${live.state}` : ""}`,
+              : `@${seat.handle}${live?.activity ? ` · ${stateLabel(live.activity)}` : ""}`,
           go: () => nav.to(["company", "people", seat.handle]),
         },
         s + 1,

@@ -139,13 +139,14 @@ func TestTheOverlayIsMergedOntoStaticRows(t *testing.T) {
 	if rows[0]["handle"] != "lead" || rows[0]["unit"] != "Eng" {
 		t.Errorf("the static half was lost: %v", rows[0])
 	}
-	if rows[0]["state"] != "working" {
-		t.Errorf("state = %v, want working", rows[0]["state"])
+	if rows[0]["activity"] != livestate.ActivityWorking {
+		t.Errorf("activity = %v, want working", rows[0]["activity"])
 	}
-	// A role with no live entry is returned as-is, which the dashboard
-	// renders offline — and must not gain a half-filled overlay.
-	if _, ok := rows[1]["state"]; ok {
-		t.Errorf("a role with no live entry gained a state: %v", rows[1])
+	// A ROLE WITH NO LIVE ENTRY STILL HAS A STATE: nothing the events said
+	// is needed to know it is waiting for work. A row without one was drawn
+	// as offline, which for a seat a peer was serving was simply false.
+	if rows[1]["activity"] != livestate.ActivityIdle {
+		t.Errorf("a role with no live entry has activity %v, want idle", rows[1]["activity"])
 	}
 }
 
@@ -158,7 +159,7 @@ func TestMergingDoesNotMutateTheCallersRows(t *testing.T) {
 
 	static := map[string]any{"role": "Lead", "handle": "lead"}
 	s.MergeAgents([]map[string]any{static})
-	if _, ok := static["state"]; ok {
+	if _, ok := static["activity"]; ok {
 		t.Error("MergeAgents wrote into the caller's own row")
 	}
 }
@@ -479,12 +480,12 @@ func TestReconcileTakesTheRecordsWordOverAnOlderEvent(t *testing.T) {
 	}
 }
 
-func TestASandboxEventDoesNotCreateASeat(t *testing.T) {
+func TestASandboxEventDoesNotCreateASeatTheCompanyLacks(t *testing.T) {
 	t.Parallel()
-	// The sandbox lifecycle maintains its own set and stops there. Letting
-	// it fall through would mint a seat entry for the run's role — an
-	// offline row for a seat the roster may not even contain, appearing
-	// the moment a coding run started.
+	// A run moves its seat's state, so a run starting pushes that seat — but
+	// only a seat the company HAS. Minting an entry for any role a run names
+	// would put a row on screen for a seat the roster may not contain, the
+	// moment a coding run of a removed seat started.
 	s := sandboxState(t)
 	change := s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
 
@@ -492,10 +493,20 @@ func TestASandboxEventDoesNotCreateASeat(t *testing.T) {
 		t.Error("the sandbox set did not move")
 	}
 	if len(change.Agents) != 0 {
-		t.Errorf("a sandbox event moved seats: %v", change.Agents)
+		t.Errorf("a sandbox event moved seats the company does not have: %v", change.Agents)
 	}
 	if got := s.AgentOverlay("Coder"); got != nil {
 		t.Errorf("a sandbox event created a seat entry: %+v", got)
+	}
+
+	// The company's own seat moves with its run.
+	s.SetPlacement(map[string]bool{"Coder": true})
+	change = s.Apply(env("sandbox_run_completed", sandboxPayload("tn-1"), id("e2")))
+	if _, moved := change.Agents["Coder"]; !moved {
+		t.Errorf("a run ending did not push its seat: %v", change.Agents)
+	}
+	if got := s.AgentOverlay("Coder"); got == nil || got.Activity != livestate.ActivityIdle {
+		t.Errorf("overlay = %+v, want the seat idle once its run ended", got)
 	}
 }
 

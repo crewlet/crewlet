@@ -323,11 +323,11 @@ func TestAProgressRoundWakesASeatThatWasNotWorking(t *testing.T) {
 		streamOnly, at("2026-06-14T12:00:10+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q, want working", got.State)
+	if got.Activity != livestate.ActivityWorking {
+		t.Errorf("activity = %q, want working", got.Activity)
 	}
-	if got.AFKReason != "" {
-		t.Errorf("afk reason = %q, want cleared", got.AFKReason)
+	if got.StoppedReason != nil {
+		t.Errorf("stopped reason = %v, want cleared", *got.StoppedReason)
 	}
 }
 
@@ -418,11 +418,11 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(env("agent_phase_completed", planCall(), at("2026-06-14T12:00:05+00:00")))
-	s.Apply(env("reflection_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "tn-1"},
 		at("2026-06-14T12:00:06+00:00")))
 
-	if got := overlayOf(t, s, "Lead"); got.State != "idle" {
-		t.Fatalf("state = %q before the straggler, want idle", got.State)
+	if got := overlayOf(t, s, "Lead"); got.Activity != livestate.ActivityIdle {
+		t.Fatalf("activity = %q before the straggler, want idle", got.Activity)
 	}
 
 	s.Apply(env("agent_turn_progress",
@@ -430,11 +430,11 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 		streamOnly, at("2026-06-14T12:00:04+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.State == "working" && got.LiveCall == nil {
+	if got.Activity == livestate.ActivityWorking && got.LiveCall == nil {
 		t.Error("a discarded straggler left the seat working with no call to show for it")
 	}
-	if got.State != "idle" {
-		t.Errorf("state = %q, want the seat left as the reflection found it", got.State)
+	if got.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want the seat left as the turn's end found it", got.Activity)
 	}
 }
 
