@@ -99,10 +99,13 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	// THE TASK'S OWN TERM, like every other point read here: a record
 	// this node cannot decode covering this task means the comment rows
 	// it is about to read may already be wrong, and routing a wake from
-	// them would wake the wrong people.
-	_, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: q.Task,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
+	// them would wake the wrong people. Resolved from the rows, because
+	// the task is filed under its project and the query names only the
+	// task.
+	_, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return taskReadScope(ctx, tx, q.Task)
+	}, false), func(tx *sql.Tx) error {
 		if q.ReplyTo != "" {
 			participants, err := threadParticipants(ctx, tx, q.Task, q.ReplyTo)
 			if err != nil {

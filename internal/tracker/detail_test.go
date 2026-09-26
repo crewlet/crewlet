@@ -209,9 +209,15 @@ func (r *roundTrip) relate(from, to string, kind tracker.RelationKind) {
 // record from a newer build looks like on this node.
 func (r *roundTrip) deferRecordOn(taskID, project string) {
 	r.t.Helper()
-	scope := tracker.ScopeTerm{
+	r.deferRecordAt(taskID, tracker.ScopeTerm{
 		Kind: tracker.TermObject, ID: taskID, Container: project,
-	}.Path()
+	}.Path())
+}
+
+// deferRecordAt files one undecodable record about taskID under scope, which
+// is how a newer peer's record looks to this build.
+func (r *roundTrip) deferRecordAt(taskID, scope string) {
+	r.t.Helper()
 	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO tracker_log_deferred
@@ -481,5 +487,68 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 				"which a caller cannot tell from a store it could not reach",
 				id, err)
 		}
+	}
+}
+
+// A THREAD READ REFUSES WHERE ITS TASK IS FILED.
+//
+// A thread read decides who a wake reaches, so a record this node cannot
+// decode covering the task means the comment rows it routes from may already
+// be wrong — and it refuses. It used to form its scope from the task id alone,
+// under the workspace rather than the project the task is filed in, so it
+// probed a path no record is filed under and routed from those rows anyway.
+func TestAThreadReadRefusesWhereItsTaskIsFiled(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	affected := r.createTask("the one a newer build wrote to")
+	other := r.createTask("somebody else's")
+	r.deferRecordOn(affected.ID, affected.Project)
+
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	_, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{Task: affected.ID}, fresh)
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferred {
+		t.Fatalf("a thread read about a task a deferred record covers = %v, "+
+			"want a deferred refusal", err)
+	}
+	if _, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{Task: other.ID}, fresh); err != nil {
+		t.Fatalf("a thread read about an unaffected task = %v, want it served", err)
+	}
+}
+
+// A TASK READ BY KEY ACCOUNTS FOR THE KEY'S OWN ADDRESS.
+//
+// A deferred alias claim or re-key is filed under the key rather than under
+// the task, so a read that names the task BY that key is about it too. The
+// probe used to cover only the task's own path, so a record rewriting what the
+// key points at left the answer complete.
+func TestATaskReadByKeyAccountsForTheKeysOwnAddress(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := r.createTask("named by its key")
+	r.deferRecordAt(task.ID, tracker.ScopeTerm{
+		Kind: tracker.TermKey, Container: task.Project, ID: task.Key,
+	}.Path())
+
+	byKey, err := r.reader.Task(t.Context(), task.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read by key: %v", err)
+	}
+	if byKey.Complete || byKey.Incomplete == nil {
+		t.Fatalf("a read by a key a deferred record is filed under reports "+
+			"complete: %+v", byKey.Incomplete)
+	}
+
+	// THE CONTROL: the same task read by id is not about that address, so
+	// the case above cannot pass on a probe that flags every read.
+	byID, err := r.reader.Task(t.Context(), task.ID, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read by id: %v", err)
+	}
+	if !byID.Complete {
+		t.Fatalf("a read by id was flagged by a deferral on the key's address: %+v",
+			byID.Incomplete)
 	}
 }
