@@ -68,7 +68,7 @@ test("a running seat's phase is a word on the neutral pill, never a hue", () => 
   const neutral = drawnClasses(Tag, { variant: "neutral", children: "x" });
   const drawn = PHASES.map((phase) => {
     const { getByText, unmount } = render(
-      <SeatCard seat={seat()} agent={running(phase)} sandboxes={[]} />,
+      <SeatCard seat={seat()} agent={running(phase)} nameOf={(k) => k} />,
     );
     const pill = getByText(phase).closest(`.${neutral[0]}`)!;
     const classes = [...pill.classList];
@@ -87,12 +87,12 @@ test("the phase is said as its word", () => {
   // The word IS the phase now, so it has to be there. It is lowercased on the
   // way, because the value is a store column and nothing normalises its case
   // on the wire.
-  render(<SeatCard seat={seat()} agent={running("Execute")} sandboxes={[]} />);
+  render(<SeatCard seat={seat()} agent={running("Execute")} nameOf={(k) => k} />);
   expect(screen.getByText("execute")).not.toBeNull();
 });
 
 test("a working seat whose first round has not come back says so", () => {
-  render(<SeatCard seat={seat()} agent={running("execute", -1)} sandboxes={[]} />);
+  render(<SeatCard seat={seat()} agent={running("execute", -1)} nameOf={(k) => k} />);
   expect(screen.getByText("starting")).toBeTruthy();
   expect(screen.getByTitle(/first model round has not come back/)).toBeTruthy();
   expect(screen.getByText("Ada Lovelace").closest("a")?.textContent).not.toContain("—");
@@ -102,18 +102,18 @@ test("a working seat whose first round has not come back says so", () => {
 // satisfied by deleting the field: `round_num` is zero-based and the number a
 // person reads is `round_num + 1`.
 test("a seat two rounds in reads as its third round", () => {
-  render(<SeatCard seat={seat()} agent={running("execute", 2)} sandboxes={[]} />);
+  render(<SeatCard seat={seat()} agent={running("execute", 2)} nameOf={(k) => k} />);
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
 test("a seat the engine reported no handle for still links to its page", () => {
   const { container } = render(
-    <SeatCard seat={seat({ handle: "" })} agent={undefined} sandboxes={[]} />,
+    <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
   );
-  // `#/company/people/` opens nothing. The seat screen resolves a NAME as well
+  // `#/agents/seats/` opens nothing. The seat screen resolves a NAME as well
   // as a handle, which is why `seatPath` exists and why the peek this card sits
   // under has always fallen back; the href had not.
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
-    "#/company/people/Ada%20Lovelace",
+    "#/agents/seats/Ada%20Lovelace",
   );
 });

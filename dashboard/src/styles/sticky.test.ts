@@ -10,8 +10,9 @@ import { expect, test } from "vitest";
  * Several things stick to the top of one scroller at once — a screen's
  * toolbar, a grid's column heads, a grouped list's group heads, an item's side
  * rail, the inbox's detail pane — and only ONE of them owns the top. The
- * toolbar does: it is opaque, it is at `--z-index-sticky`, and `.screen:has(.toolbar)`
- * publishes its height as `--sticky-top` so everything else can start below it.
+ * toolbar does: it is opaque, it is at `--z-index-sticky`, and the kit's
+ * scroller (`.crewlet-app-shell__main:has(.toolbar)`) publishes its height as
+ * `--sticky-top` so everything else can start below it.
  * A band that stops at 0 instead stops UNDERNEATH it and is simply gone, with
  * no error and nothing in the markup to read: the head is in the DOM, it is
  * painted, and an opaque box at a higher stacking level is over it.
@@ -69,18 +70,34 @@ test("the toolbar owns the top of the scroller and publishes where it ends", () 
   const frame = readFileSync(join(STYLES, "frame.css"), "utf8");
   // THE PUBLISHER. Without this rule `--sticky-top` never leaves its `0px`
   // default and every offset below is a no-op that still reads as deliberate.
-  expect(frame).toMatch(/\.screen:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-h\)/);
+  expect(frame).toMatch(
+    /\.crewlet-app-shell__main:has\(\.toolbar\)\s*\{[^}]*--sticky-top:\s*var\(--toolbar-h\)/,
+  );
   // And the toolbar is the one band entitled to stop at 0, because it is what
   // the others are being offset BY.
   expect(stickyTops().get("frame.css .toolbar")).toBe("0");
 });
 
+/**
+ * The bands that stick at 0 on purpose, because they never share a column
+ * with a toolbar: each names why, and each must still stick at 0.
+ */
+const BESIDE: Record<string, string> = {
+  // The Settings column is the first track of `.section-frame` and a screen's
+  // toolbar is inside the SECOND, `.section-body` — so the two never overlap,
+  // and an offset would park the column a toolbar's height down for nothing.
+  "frame.css .section-column": "beside the section body, never under its toolbar",
+};
+
 test("every other sticky band starts below it, never at zero", () => {
   const tops = stickyTops();
   // A gate over an empty roster certifies nothing, and this one is a scan.
   expect(tops.size).toBeGreaterThan(3);
+  for (const where of Object.keys(BESIDE)) {
+    expect(tops.get(where), `${where} is exempt, so it must still stick at 0`).toBe("0");
+  }
   for (const [where, top] of tops) {
-    if (where === "frame.css .toolbar") continue;
+    if (where === "frame.css .toolbar" || where in BESIDE) continue;
     expect(
       top,
       `${where} sticks at ${top}: on a screen that draws a toolbar this band ` +

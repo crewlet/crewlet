@@ -18,10 +18,26 @@ import (
 // MaxInFlightQueries bounds how many queries one socket may have running.
 //
 // Queries run CONCURRENTLY so a store scan cannot stall the live feed, but each
-// can take a connection from a pool the engine shares — so an unbounded fan-out
-// from one tab would starve the engine's own writes. Four covers the most one
-// screen issues at once (the agent page opens with three) and makes a burst
-// queue rather than pile up.
+// takes a connection from the node's READER POOL, which the engine's own reads
+// share (a seat's tool reads, the coverage probes) — so an unbounded fan-out
+// from one tab would starve them.
+//
+// FOUR IS THAT POOL'S SIZE (`store.defaultReaderConns`), and that is the whole
+// of the reasoning: one tab may use every reader connection and no more. A
+// larger cap would not run a fifth query any sooner — it would park it in
+// `database/sql`'s wait for a connection rather than here, holding a goroutine
+// and a connection's worth of queue against the engine's own reads instead of
+// against this socket's.
+//
+// It is NOT sized to a screen's burst, which it used to claim ("the agent page
+// opens with three") and which stopped being true when the one sidebar landed:
+// the shell keeps five reads standing on every page — the viewer, the Inbox
+// count, My work's count, the projects and the pinned views — two asked the
+// moment a tab opens and three the moment the viewer answers. A screen's first
+// reads therefore queue behind them for the length of a tracker read, and
+// after the first paint the five poll on independent 60 s to 5 min timers and
+// rarely coincide. That queue is the design working: a burst waits HERE, per
+// socket, rather than in the pool every reader on the node shares.
 const MaxInFlightQueries = 4
 
 // The error codes a query answer can carry. CODES, not prose: the client

@@ -180,13 +180,21 @@ describe("a screen's tint against the ground it lands on", () => {
   // the package ever moves `Card` onto another value the sentence every
   // surface comment in this tree rests on stops being true and this is what
   // says so.
+  //
+  // THE WINDOW, THE SIDEBAR AND THE SHEET ARE THE KIT'S `AppShell` now, so
+  // they are read from its stylesheet for the same reason `Card` is; what is
+  // OURS is the page header, which stands on the sheet and must paint it.
   test("the sidebar paints the frame, the page the sheet, and a card the card rung", () => {
-    const frame = sheet("frame.css");
-    for (const sidebar of [".app", ".rail", ".workspace-side"]) {
-      expect(token(frame, sidebar, "background"), sidebar).toBe("--color-surface-frame");
+    const shell = kitSheet("AppShell");
+    for (const frame of [".crewlet-app-shell", ".crewlet-app-shell__rail"]) {
+      expect(token(shell, frame, "background"), frame).toBe("--color-surface-frame");
     }
-    expect(token(frame, ".page", "background")).toBe("--color-surface-background");
-    expect(token(frame, ".page-bar", "background")).toBe("--color-surface-background");
+    for (const page of [".crewlet-app-shell__sheet", ".crewlet-app-shell__topbar"]) {
+      expect(token(shell, page, "background"), page).toBe("--color-surface-background");
+    }
+    expect(token(sheet("frame.css"), ".page-head", "background")).toBe(
+      "--color-surface-background",
+    );
     expect(token(kitSheet("Card"), ".crewlet-card", "background-color")).toBe(CARD_GROUND);
   });
 

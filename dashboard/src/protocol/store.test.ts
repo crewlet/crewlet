@@ -194,6 +194,22 @@ describe("completed phases", () => {
   });
 });
 
+// NOTHING SAID IS NOT AN EMPTY COMPANY. `{}` is the projection of a node
+// running none, which is an answer; before the handshake there is no answer,
+// and a screen has to be able to tell — the charter printed "No mission is
+// set" on every cold tab.
+describe("the org chart", () => {
+  test("is null until the engine sends one, and an empty one once it has", () => {
+    const store = new Store();
+    expect(store.state.org).toBeNull();
+    store.applyOrg(null);
+    expect(store.state.org).toEqual({});
+    const fresh = new Store();
+    fresh.applySnapshot({ agents: [] } as never);
+    expect(fresh.state.org).toEqual({});
+  });
+});
+
 describe("the engine's health", () => {
   // THE PUSH IS THE WHOLE ENVELOPE, and the slice keeps all of it: every
   // screen reads the applied epoch, the posture and the fleet's size off this

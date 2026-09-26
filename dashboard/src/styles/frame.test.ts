@@ -1,8 +1,22 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+import { density, size } from "@crewlethq/tokens";
+
+import {
+  CONTENT_PADDING,
+  LIST_FLOOR,
+  PEEK_WIDTH,
+  PHONE_BREAKPOINT,
+  SCROLLBAR_GUTTER,
+  SHELL_BREAKPOINT,
+  densityScale,
+  listReserve,
+  peekColumnMin,
+} from "~/app/layout.ts";
 
 /**
  * The chrome's layout rules that fail SILENTLY and correctly in every other
@@ -20,19 +34,46 @@ import { describe, expect, test } from "vitest";
  */
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
+const require_ = createRequire(import.meta.url);
+
+/** The kit's own stylesheet, comments blanked as [sheet] blanks ours. */
+function kitSheet(): string {
+  return readFileSync(require_.resolve("@crewlethq/ui/styles.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    (c) => c.replace(/[^\n]/g, " "),
+  );
+}
+
+/**
+ * Every `@media` rule's whole body, braces balanced — a rule's selector inside
+ * one is at a width, and a gate about "no width" has to see every one.
+ */
+function mediaBodies(css: string): { prelude: string; body: string }[] {
+  const out: { prelude: string; body: string }[] = [];
+  for (const m of css.matchAll(/@media[^{]*\{/g)) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    for (; i < css.length && depth > 0; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}") depth--;
+    }
+    out.push({ prelude: m[0].slice(0, -1).trim(), body: css.slice(m.index + m[0].length, i - 1) });
+  }
+  return out;
+}
 
 /**
  * One stylesheet, WITH ITS COMMENTS BLANKED.
  *
  * Every case here reads CSS as text, and several of them slice it at a
- * breakpoint — `split("@media (max-width: 860px)")` for the wide half,
- * `indexOf("@container page (max-width:")` for the broken bar. A COMMENT
+ * breakpoint — `split("@media (width < 640px)")` for the wide half,
+ * `indexOf("@container page (width <")` for the broken bar. A COMMENT
  * naming one of those at-rules truncates that slice at the prose instead of
  * at the rule, and this file's comments name at-rules constantly, because
  * explaining why a rule sits at a breakpoint means writing the breakpoint
  * down.
  *
- * It has happened: a note on `.page` mentioning `@media (max-width: 860px)`
+ * It has happened: a note on `.page` mentioning a phone breakpoint's query
  * moved the wide half's end 480 lines up the file, and three cases failed
  * naming `.grid-wrap` and `.rail-label` — selectors nothing in that change
  * had touched. A gate that fails for the wrong reason is a gate somebody
@@ -47,6 +88,26 @@ function sheet(name: string): string {
     c.replace(/[^\n]/g, " "),
   );
 }
+
+/**
+ * Every width a sheet's media queries name, with the query it is in.
+ *
+ * EVERY WIDTH IN THE PRELUDE, not the first: a range is two of them,
+ * `(width >= 640px) and (width < 1024px)`, and a reading that stopped at the
+ * first left the second free to be any number at all.
+ */
+function mediaWidths(css: string): { prelude: string; width: number; written: string }[] {
+  return [...css.matchAll(/@media[^{]*/g)].flatMap((p) =>
+    [...p[0].matchAll(/(\d+(?:\.\d+)?)px/g)].map((w) => ({
+      prelude: p[0].trim(),
+      width: Number(w[1]),
+      written: w[0],
+    })),
+  );
+}
+
+/** The phone breakpoint's query, as every sheet writes it. */
+const PHONE = `@media (width < ${PHONE_BREAKPOINT}px)`;
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function block(css: string, selector: string): string {
@@ -127,12 +188,12 @@ describe("the frame's layout", () => {
   // computes no layout, so the suites that render a grid stay green through
   // every value of this, and a screenshot is the only other witness.
   test("one grid owns the columns and every row adopts them", () => {
-    // THE WIDE LAYOUT ALONE. Below the drawer breakpoint a row is deliberately
+    // THE WIDE LAYOUT ALONE. Below the phone breakpoint a row is deliberately
     // NOT a row — the heads go and each cell draws its own label — so the
     // narrow block unwinds this chain on purpose and would read here as the
     // very drift this case exists to catch. See "a grid becomes labelled
     // cards" above for the other half.
-    const css = sheet("frame.css").split("@media (max-width: 860px)")[0]!;
+    const css = sheet("frame.css").split(PHONE)[0]!;
     expect(block(css, ".grid-wrap")).toMatch(/display:\s*grid/);
     // The track list itself is the component's, per screen — what belongs here
     // is that nothing BELOW the wrap resolves a list of its own.
@@ -160,41 +221,158 @@ describe("the frame's layout", () => {
     );
   });
 
-  test("the peek column exists only above the drawer threshold", () => {
-    // Below it the rail is `position: fixed` — and a fixed grid child does NOT
-    // shrink an explicitly sized track, so an unconditional fourth track
-    // reserved 420px of empty page at exactly the widths the drawer exists to
-    // rescue. The guard is a literal because a custom property cannot be read
-    // in a media query, which is the whole reason this assertion exists: the
-    // two numbers have to move together and nothing else holds them.
+  // THE PEEK'S SHAPE IS ONE ATTRIBUTE WITH TWO VALUES, AND NO WIDTH HERE.
+  //
+  // It was two media queries on one literal — a column at `width >= 1112px`,
+  // a drawer at `width < 1112px` — and the literal was wrong twice over: it
+  // left out the screen's padding and scroller gutter, so the list beside a
+  // peek was 396px at the threshold that promised it 444, and it could not
+  // know that Settings draws a 236px column INSIDE the screen, so a peek at
+  // 1280 left Settings' nodes grid 328px and cut its columns off. A media
+  // query cannot see which screen is on or the reader's density, so the shell
+  // decides (`app/layout.ts`) and writes `data-peek`. What this holds is that
+  // nothing in a stylesheet decides it a second time.
+  test("the peek is a column or a drawer by attribute, and no stylesheet gives it a width", () => {
     const css = sheet("frame.css");
-    const drawerMax = /--peek-drawer-max:\s*(\d+)px/.exec(css);
-    expect(drawerMax, "--peek-drawer-max is not declared").not.toBeNull();
+    // EVERY VALUE THE SHEET ANSWERS is one of the shell's two. `true` was the
+    // last spelling; a rule still keyed on it would match nothing and say so
+    // to nobody.
+    const values = [...css.matchAll(/\[data-peek(?:="([^"]*)")?\]/g)].map((m) => m[1] ?? "");
+    expect(new Set(values)).toEqual(new Set(["column", "drawer"]));
+    // AND NONE OF IT IS BEHIND A WIDTH, in any sheet: a peek rule inside a
+    // media query is a second opinion about where the column fits.
+    for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+      for (const { prelude, body } of mediaBodies(sheet(name))) {
+        expect(body, `${name}: ${prelude} decides the peek's shape`).not.toMatch(
+          /data-peek|\.peek-(?:rail|veil|grip)\b/,
+        );
+      }
+    }
+    // The column side: the sheet becomes a grid whose second track is the
+    // reader's width, CAPPED at what the sheet can give with the list at its
+    // floor — and whose fallback is the resting width the threshold assumes.
+    const grid = block(css, '.app[data-peek="column"] .crewlet-app-shell__sheet');
+    expect(grid).toMatch(/display:\s*grid/);
+    const track =
+      /grid-template-columns:\s*minmax\(0, 1fr\)\s+min\(var\(--peek-w, (\d+)px\), 100% - var\(--peek-reserve\)\)/.exec(
+        grid,
+      );
+    expect(
+      track,
+      "the peek's track is not the reader's width capped by the reserve",
+    ).not.toBeNull();
+    expect(Number(track![1])).toBe(PEEK_WIDTH);
+    for (const part of [".page-head", ".crewlet-app-shell__main", ".peek-rail"]) {
+      expect(block(css, `.app[data-peek="column"] ${part}`), part).toMatch(/grid-row:\s*\d/);
+    }
+    // The drawer side: fixed, over a veil, with no grip to drag.
+    expect(block(css, '.app[data-peek="drawer"] .peek-rail')).toMatch(/position:\s*fixed/);
+    expect(block(css, '.app[data-peek="drawer"] .peek-veil')).toMatch(/display:\s*block/);
+    expect(block(css, '.app[data-peek="drawer"] .peek-grip')).toMatch(/display:\s*none/);
+  });
 
-    const guard = /@media \(min-width:\s*(\d+)px\)\s*\{\s*\.app\[data-peek="true"\]/.exec(css);
-    expect(guard, "the peek tracks are not behind a min-width guard").not.toBeNull();
-    expect(Number(guard![1])).toBe(Number(drawerMax![1]) + 1);
-
-    // AND THE DRAWER SIDE, which is the third number saying the one thing and
-    // was held by nothing. The `min-width` guard above turns the peek into a
-    // COLUMN; this `max-width` block is what makes it a drawer below that, and
-    // the two have to tile exactly — a pixel of daylight is a band of widths
-    // with neither. Moving `--peek-drawer-max` from 1180 to 1197 (the rail
-    // grew from a flat 80px to a composed 97 and the sum was never redone)
-    // moved two of the three, and 1181–1197 would have had no peek column and
-    // no drawer, with every test green.
-    const drawer = /@media \(max-width:\s*(\d+)px\)\s*\{\s*\.peek-veil/.exec(css);
-    expect(drawer, "the peek drawer is not behind a max-width block").not.toBeNull();
-    expect(Number(drawer![1]), "the drawer and the column must tile at the threshold").toBe(
-      Number(drawerMax![1]),
+  // EVERY TERM OF THE THRESHOLD IS HELD AGAINST THE RULE THAT DRAWS IT.
+  //
+  // The arithmetic in `app/layout.ts` is only as good as its list of what
+  // stands between the window's edge and the list, and the list was short by
+  // three terms once. Each term is asserted against the stylesheet — the
+  // kit's or ours — that actually lays it out, so a width that changes there
+  // fails here rather than silently narrowing a list.
+  test("the peek's threshold counts every width in front of the list", () => {
+    const kit = kitSheet();
+    const ours = sheet("frame.css");
+    // The sheet: inset on the right only — the rail is the gap on the left —
+    // and a hairline each side.
+    expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(
+      /margin:\s*var\(--size-shell-inset\) var\(--size-shell-inset\) var\(--size-shell-inset\) 0;/,
+    );
+    expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(/border:\s*1px solid/);
+    // The scroller keeps its gutter whether or not it scrolls, and the gutter
+    // is the width base.css gives the scrollbar.
+    expect(block(kit, ".crewlet-app-shell__main")).toMatch(/scrollbar-gutter:\s*stable/);
+    expect(block(sheet("base.css"), "::-webkit-scrollbar")).toMatch(
+      new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
+    );
+    // The screen's padding: the kit's content column, and the section body
+    // beside Settings' column, which takes the kit's back and gives the same.
+    expect(block(kit, ".crewlet-app-shell__content")).toMatch(
+      /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
+    );
+    expect(block(ours, ".section-body")).toMatch(
+      /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
+    );
+    expect(CONTENT_PADDING).toBe(20);
+    // Settings' column is one rail wide, inside the screen.
+    expect(block(ours, ".section-frame")).toMatch(
+      /grid-template-columns:\s*var\(--size-shell-rail\) minmax\(0, 1fr\)/,
     );
 
-    // And every peek template is inside it: one left outside would out-specify
-    // the narrow two-column reset and keep both empty tracks on its own.
-    const guarded = css.slice(guard!.index, css.indexOf("\n}", guard!.index));
-    expect(guarded.match(/\.app\[data-peek="true"\]/g) ?? []).toHaveLength(
-      (css.match(/\.app\[data-peek="true"\]/g) ?? []).length,
-    );
+    // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
+    // and 236 more beside Settings' column.
+    const normal = densityScale("normal");
+    expect(peekColumnMin({ sectionColumn: false, scale: normal })).toBe(1160);
+    expect(peekColumnMin({ sectionColumn: true, scale: normal })).toBe(1396);
+
+    // AND AT EVERY DENSITY, the list the column leaves at the threshold —
+    // walked term by term here rather than through `listReserve`, so a term
+    // dropped from the module is a list under the floor in this sum — is at
+    // least the floor, and one pixel narrower it would not be.
+    for (const choice of Object.keys(density) as (keyof typeof density)[]) {
+      const scale = densityScale(choice);
+      for (const sectionColumn of [false, true]) {
+        const at = peekColumnMin({ sectionColumn, scale });
+        const list = (window: number) =>
+          window -
+          Number.parseFloat(size.shell.rail) -
+          Number.parseFloat(size.shell.inset) * scale -
+          2 -
+          PEEK_WIDTH -
+          SCROLLBAR_GUTTER -
+          2 * CONTENT_PADDING * scale -
+          (sectionColumn ? Number.parseFloat(size.shell.rail) : 0);
+        const frame = `${choice}${sectionColumn ? ", beside Settings' column" : ""}`;
+        expect(list(at), frame).toBeGreaterThanOrEqual(LIST_FLOOR);
+        expect(list(at - 1), frame).toBeLessThan(LIST_FLOOR);
+        // The cap on the track is exactly the resting width at the threshold,
+        // so a column never opens narrower than the width it was decided at.
+        const sheetInside =
+          at - Number.parseFloat(size.shell.rail) - Number.parseFloat(size.shell.inset) * scale - 2;
+        expect(sheetInside - listReserve({ sectionColumn, scale }), frame).toBeGreaterThanOrEqual(
+          PEEK_WIDTH,
+        );
+      }
+    }
+  });
+
+  // EVERY WIDTH A STYLESHEET WRITES IN A MEDIA QUERY IS ONE `app/layout.ts`
+  // DECLARES. A media query cannot read a custom property, so each is a
+  // literal — and a literal nobody holds is how a drawer comes to open at one
+  // width while the grid folds at another. Measured before this: the frame
+  // folded at 860 and 960 against a kit that switches at 1024 and 640, and the
+  // builder's buttons swapped for its menu at 860 in the sheet and at 640 in
+  // the script.
+  test("every media query's width is a breakpoint app/layout.ts declares", () => {
+    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT]);
+    const stray: string[] = [];
+    for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+      const css = sheet(name);
+      for (const { prelude, width, written } of mediaWidths(css)) {
+        if (!allowed.has(width)) stray.push(`${name}: ${prelude} — ${written}`);
+      }
+      // AND IN ONE SPELLING. `max-width: 639px` and `width < 640px` are the
+      // same range written two ways, and a gate holding the number cannot see
+      // that the second one is off by a pixel.
+      for (const m of css.matchAll(/@media[^{]*(?:min|max)-width[^{]*/g)) {
+        stray.push(`${name}: ${m[0].trim()} — write the range as width < / width >=`);
+      }
+    }
+    expect(stray).toEqual([]);
+  });
+
+  // THE READING ITSELF, on the shape the old pattern missed.
+  test("a media range's second width is read as well as its first", () => {
+    const css = "@media (width >= 640px) and (width < 1000px) { .x { a: b } }";
+    expect(mediaWidths(css).map((w) => w.width)).toEqual([640, 1000]);
   });
 
   test("the grid makes no scrollport, so its sticky heads resolve against the page", () => {
@@ -240,19 +418,6 @@ describe("the frame's layout", () => {
   // The rule this replaced put the request on `.screen-inner`, which was the
   // flex container already — so moving it onto the scroller moved the
   // container with it, and this declaration did not follow.
-  test("a screen that asked for the height is a column that can give it one", () => {
-    const css = sheet("frame.css");
-    const fill = block(css, ".screen[data-fill]");
-    expect(fill).toMatch(/display:\s*flex/);
-    expect(fill).toMatch(/flex-direction:\s*column/);
-    expect(fill).toMatch(/overflow-y:\s*hidden/);
-    // AND THE COLUMN STILL ASKS FOR WHAT IS LEFT. Either half alone is a
-    // scroller that does not scroll and a canvas with nothing to fill.
-    const inner = block(css, ".screen[data-fill] > .screen-inner");
-    expect(inner).toMatch(/flex:\s*1 1 auto/);
-    expect(inner).toMatch(/min-height:\s*0/);
-  });
-
   // A ROW IS A CARD ON A PHONE, BECAUSE A GRID IS COLUMNS AND 390px HAS NONE.
   //
   // The audit's six columns want 808px and the work trash's twelve want more,
@@ -265,9 +430,9 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
-  test("a grid becomes labelled cards below the drawer breakpoint", () => {
+  test("a grid becomes labelled cards below the phone breakpoint", () => {
     const css = sheet("frame.css");
-    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+    const narrow = css.slice(css.indexOf(PHONE));
 
     // THE SUBGRID CHAIN IS UNWOUND. The wide layout is one grid whose head,
     // body, bands and rows adopt its tracks; a card is the opposite shape, so
@@ -372,7 +537,7 @@ describe("the frame's layout", () => {
   // protect — a card is already a stack of six to twelve labelled lines.
   test("a card's value wraps, because the column that justified cutting it is gone", () => {
     const css = sheet("frame.css");
-    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+    const narrow = css.slice(css.indexOf(PHONE));
 
     const cut = block(narrow, ".grid-cell .truncate");
     // ALL THREE, and they only work together: `.truncate` is three
@@ -385,54 +550,6 @@ describe("the frame's layout", () => {
     // AND A VALUE WITH NO SPACE TO BREAK AT — a uuid, a key — still has to
     // break, for the same reason `.clamp` carries this.
     expect(cut).toMatch(/overflow-wrap:\s*anywhere/);
-  });
-
-  // NOTHING IN THE CHROME SITS OUTSIDE A PHONE'S VIEWPORT.
-  //
-  // The page bar is one non-wrapping row whose middle — a screen's own control
-  // group, portalled in — was `flex: 0 0 auto`: 364px on the audit and 478px
-  // on the turns list, inside a 390px viewport, shoving everything after it
-  // off the right edge of a bar whose `overflow` is `visible`. Off the edge
-  // meant UNREACHABLE: the star, Copy link, the viewer chip and the search
-  // trigger — the command palette's only pointer affordance — were all past
-  // x=390 with nothing to scroll. The trail shrank to exactly 0px wide.
-  //
-  // Asserted in the SHEET for the same reason as everything else in this file:
-  // jsdom computes no layout, and a media query is invisible to every suite
-  // that renders the frame.
-  // A CLOSED DRAWER IS OUT OF REACH, NOT MERELY OUT OF SIGHT.
-  //
-  // The workspace sidebar becomes a drawer under 960px and leaves on a
-  // `transform`, which moves pixels and nothing else. Closed, it still held
-  // EIGHT TAB STOPS — the filter box, the four section links and every project
-  // in the tree — so a reader tabbing the page lost focus into a panel 260px
-  // off the left edge with no scroll that could reach it, and a screen reader
-  // read out a whole navigation nobody could see. On twenty of the
-  // twenty-four screens.
-  //
-  // Asserted in the SHEET because that is where the fact lives: jsdom computes
-  // no layout, applies no media query and gives `visibility` no effect on
-  // `document.activeElement`, so a render test would pass either way.
-  test("the drawer that is closed is out of the focus order, not just off-screen", () => {
-    const css = sheet("frame.css");
-    const narrow = css.slice(css.indexOf("@media (max-width: 960px)"));
-    const shut = block(narrow, ".workspace-side");
-    const open = block(narrow, '.workspace-side[data-open="true"]');
-
-    // VISIBILITY IS THE PROPERTY THAT DOES IT. `opacity` and `transform` leave
-    // a subtree focusable; `display` would skip the slide outright.
-    expect(shut).toMatch(/visibility:\s*hidden/);
-    expect(open).toMatch(/visibility:\s*visible/);
-
-    // AND IT IS DELAYED ONE WAY AND NOT THE OTHER, which is the whole reason
-    // it can sit beside a slide: hidden only once the drawer has finished
-    // leaving, visible the moment it starts arriving.
-    expect(shut).toMatch(/visibility 0s linear var\(--motion-duration-base\)/);
-    expect(open).toMatch(/visibility 0s(?!\s+linear)/);
-    // A SHORTHAND STILL CARRIES THE SLIDE. Writing `transition: visibility ...`
-    // alone would replace it and the drawer would jump.
-    expect(shut).toMatch(/transform var\(--motion-duration-base\) var\(--motion-easing-default\)/);
-    expect(open).toMatch(/transform var\(--motion-duration-base\) var\(--motion-easing-default\)/);
   });
 
   // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
@@ -622,82 +739,6 @@ describe("the frame's layout", () => {
     );
   });
 
-  // A LABEL THE RAIL CANNOT HOLD GOES WITH THE REST OF THEM.
-  //
-  // `Shell.tsx` drops the engine's word when the READER collapses the rail,
-  // and that `collapsed` is a React state rather than this breakpoint. The two
-  // are independent: at 960 and below the rail is 48px wide by media query
-  // with `collapsed` still false, leaving the pill 31px — and "connected" laid
-  // out at its own 55.22px inside it, 12.11px past each side of the pill and
-  // past the 48px column itself. Measured at 900px.
-  //
-  // It comes back in the bottom bar, where a row floors at 56px and grows for
-  // its label, and the workspace labels come back too — the pair has to move
-  // together or the rail carries a word beside eight unlabelled glyphs.
-  test("the rail's own labels leave and return together", () => {
-    const css = sheet("frame.css");
-    const at = (px: number): string => {
-      const from = css.indexOf(`@media (max-width: ${px}px)`);
-      expect(from, `the ${px}px breakpoint is gone`).toBeGreaterThan(-1);
-      const next = css.indexOf("@media (", from + 10);
-      return css.slice(from, next === -1 ? undefined : next);
-    };
-    // 48px of column holds neither.
-    expect(block(at(960), ".rail-label")).toMatch(/display:\s*none/);
-    expect(block(at(960), ".rail-engine > .truncate")).toMatch(/display:\s*none/);
-    // A 56px bar row holds the label, and the later rule is what restores it.
-    expect(block(at(860), ".rail-label")).toMatch(/display:\s*block/);
-    // THE ENGINE'S WORD DOES NOT COME BACK on the bottom bar: the foot shares
-    // the bar with eight destinations, and with the word it pushed the active
-    // one under the scroller's edge. The dot is the state there, as at 960.
-    expect(at(860)).not.toMatch(/\.rail-engine\s*>\s*\.truncate/);
-    expect(
-      css.indexOf("@media (max-width: 860px)"),
-      "the bottom bar's block has to come after the 960 one to win the tie",
-    ).toBeGreaterThan(css.indexOf("@media (max-width: 960px)"));
-  });
-
-  // THE BRAND MARK IS BOUNDED, NEVER SIZED.
-  //
-  // `crewlet-icon.svg` is 1467x978 and MEETS its box, so a box whose own ratio
-  // is not 3:2 draws the mark smaller than the box and pads the rest. It has
-  // been given such a box TWICE: a 24px square, which drew 24x16 of mark in a
-  // cell 96px wide; and then `height: var(--size-control-md)` with a `max-width`,
-  // which looks like it preserves the ratio and does not — the clamp shrinks
-  // the width and leaves a height the author stated, so the 48px column got a
-  // 39x32 box at ratio 1.219 and the mark letterboxed inside it again.
-  //
-  // What holds is a MAXIMUM on each axis over the file's own intrinsic size:
-  // whichever binds decides the box and the other derives from the ratio. So
-  // the invariant is not a number, it is the SHAPE of the rule — no definite
-  // width and no definite height, and a maximum on both. A definite size on
-  // either axis is the bug, whatever value it carries.
-  //
-  // Asserted in the SHEET because there is nowhere else: jsdom computes no
-  // layout, so every suite that renders the rail stays green through all of
-  // it, and the ratio is the SVG's own rather than anything the DOM exposes.
-  // Measured in Chromium at 1200px: 48.00x32.00 open and 39.00x26.00 in the
-  // 48px column, against 39.00x32.00 under the clamp.
-  test("the rail's brand mark is bounded on both axes, and sized on neither", () => {
-    const b = block(sheet("frame.css"), ".rail-brand img");
-    // BOTH maxima, or the axis without one is unbounded: no `max-height` and
-    // the mark takes the whole intrinsic 978px of the band; no `max-width` and
-    // the 48px column gets a mark wider than the column.
-    expect(b, "the band no longer bounds the mark's height").toMatch(
-      /max-height:\s*var\(--size-control-md\)/,
-    );
-    expect(b, "the column no longer bounds the mark's width").toMatch(/max-width:\s*calc\(/);
-    // AND NEITHER AXIS IS SIZED. `auto` is the only value that lets the other
-    // maximum transfer through the intrinsic ratio; anything definite is a
-    // used value the clamp on the other axis never revisits.
-    expect(b, "a definite width stops the height deriving from the file").toMatch(
-      /(^|;)\s*width:\s*auto/,
-    );
-    expect(b, "a definite height is what letterboxed the 48px column").toMatch(
-      /(^|;)\s*height:\s*auto/,
-    );
-  });
-
   // A RESET DOES NOT TAKE THE FOCUS RING WITH IT.
   //
   // `all: unset` is how a <button> becomes a plain box, and `all` is every
@@ -709,9 +750,11 @@ describe("the frame's layout", () => {
   //
   // Measured with a tab walk against a running engine: the rail's collapse
   // control took focus with no ring on EVERY screen in the product, and the
-  // sidebar's twist on every screen that has a tree.
+  // sidebar's twist on every screen that has a tree. Both are the kit's now;
+  // what resets itself here is the grid's sort head, its column reset and a
+  // histogram bar.
   //
-  // TWO-SIDED, because the list is the whole mechanism: a sixth `all: unset`
+  // TWO-SIDED, because the list is the whole mechanism: another `all: unset`
   // nobody adds here is a control that silently loses its ring, and a name
   // here whose reset is gone is a rule nobody will notice has died.
   test("every control that resets itself gets its focus ring back", () => {
@@ -723,13 +766,16 @@ describe("the frame's layout", () => {
       if (!/\ball:\s*unset/.test(m[2]!)) continue;
       for (const one of m[1]!.split(",")) reset.add(one.trim());
     }
-    expect(reset.size, "nothing in this sheet resets itself any more").toBeGreaterThan(3);
+    expect(reset.size, "nothing in this sheet resets itself any more").toBeGreaterThan(0);
 
-    // The one rule that hands the ring back, and what it hands back.
+    // The one rule that hands the ring back, and what it hands back: the
+    // BASELINE's ring, outset by 2px. A control that draws an INSET ring of
+    // its own (a sidebar card, whose outset ring the rail's edge would clip)
+    // is not handing anything back, and is not counted here.
     const ring = new Set<string>();
     for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       if (!/outline:\s*2px solid var\(--color-focus\)/.test(m[2]!)) continue;
-      expect(m[2]!, "an offset ring is what the baseline draws").toMatch(/outline-offset:/);
+      if (!/outline-offset:\s*2px/.test(m[2]!)) continue;
       for (const one of m[1]!.split(",")) ring.add(one.trim().replace(/:focus-visible$/, ""));
     }
 
@@ -853,7 +899,7 @@ describe("the frame's layout", () => {
   // asserted rather than just the row.
   test("the one remaining table stacks on a phone", () => {
     const css = sheet("components.css");
-    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+    const narrow = css.slice(css.indexOf(PHONE));
     expect(narrow, "components.css has no phone breakpoint").toContain(".table");
     for (const level of [".table", ".table tbody", ".table tr", ".table td"]) {
       expect(rules(narrow, level).join(" "), `${level} still lays out as a table at 390px`).toMatch(
@@ -896,139 +942,83 @@ describe("the frame's layout", () => {
     ).not.toMatch(/max-width:/);
   });
 
-  test("the page bar shrinks, and breaks only where it was told to", () => {
+  test("the page bar wraps by what it holds, and breaks for good only on a phone", () => {
     const css = sheet("frame.css");
-    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
-    expect(narrow, "the narrow breakpoint is gone").toContain(".page-bar");
+    const atBreak = css.slice(css.indexOf(`@container page (width < ${PHONE_BREAKPOINT}px)`));
+    const base = css.slice(0, css.indexOf("@container page ("));
 
-    // THE BASE BAR DOES NOT WRAP. `flex-wrap: wrap` was on it at every width
-    // and it is the wrong instrument: a flex container assigns items to lines
-    // by their size BEFORE any shrinking, so `wrap` means "never shrink,
-    // always break" — and the break lands in source order, which on a turn
-    // page is after the screen's own controls. Measured on
-    // `#/activity/turns/<id>` at a 1919px window with the rail and the
-    // sidebar open: a 1587px bar, and the viewer chip and the SEARCH TRIGGER
-    // — the command palette's only pointer affordance — alone at the left of
-    // a second line under the trail, with a hundred pixels spare on the
-    // first.
-    //
-    // A FLOOR RATHER THAN A HEIGHT, so the two rows the container query and
-    // the control group's own wrap can create are not clipped, and a bar that
-    // needs neither is exactly the height it always was.
-    const base = css.slice(0, css.indexOf("@media (max-width: 860px)"));
-    const wide = block(base, ".page-bar");
-    expect(wide).toMatch(/flex-wrap:\s*nowrap/);
-    expect(wide).toMatch(/min-height:\s*var\(--page-bar-h\)/);
-    expect(wide).toMatch(/height:\s*auto/);
-    // AND NOT A FIXED HEIGHT ANYWHERE ELSE, which is the declaration that
-    // would silently undo it.
+    // A FLOOR RATHER THAN A HEIGHT, so the second line the bar can create is
+    // not clipped, and a bar that needs none is exactly the kit's height.
+    const bar = block(base, ".app .page-bar");
+    expect(bar).toMatch(/flex-wrap:\s*wrap/);
+    expect(bar).toMatch(/min-height:\s*var\(--page-bar-h\)/);
+    expect(bar).toMatch(/height:\s*auto/);
     expect(
-      rules(css, ".page-bar").join(" "),
-      "a fixed height clips the second row the container query creates",
+      mentioning(css, ".page-bar")
+        .map((r) => r.body)
+        .join(" "),
+      "a fixed height clips the second line the bar creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // THE TRAIL IS THE ONE THING THAT GIVES WAY, and it stops before the way
-    // back out is gone. `flex-grow` is the `.spacer` this replaced; the large
-    // shrink factor is the ordering against the viewer chip and the search
-    // trigger; and the floor is what keeps the trail from being squeezed to
-    // nothing beside a screen's own controls, which at `min-width: 0` rendered
-    // it as "Activit". 20ch is what the NARROWEST line can give — measured at
-    // 178.8px, 20.25ch, at a 310px and a 350px viewport — and not what the
-    // deepest address needs.
+    // IT WRAPS BY WHAT IT HOLDS. A flex container assigns items to lines by
+    // their UNSHRUNK size, so a trail at its content width broke the line as
+    // soon as a long title and the controls exceeded the bar, with free space
+    // left on the first line — and a width threshold measured on the busiest
+    // bar forced the controls down on every screen under it, a sparse one
+    // included. A basis of 0 is what makes the break depend on the trail's
+    // FLOOR beside the controls; the grow factor hands the trail the rest.
     const crumbs = block(base, ".crumbs");
-    expect(crumbs).toMatch(/flex:\s*1 100 auto/);
+    expect(crumbs).toMatch(/flex:\s*1 100 0(?![.\d])/);
+    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: 20ch is what the
+    // narrowest line can give, measured at 178.8px on a 310px viewport.
     expect(crumbs).toMatch(/min-width:\s*20ch/);
-
-    // AND THE INLINE OVERFLOW IS REACHABLE, because no floor covers every
-    // address: `workspaces/crumbs.ts` builds THREE fixed ancestors on three
-    // admin routes, and the widest of them — "Admin / Configuration /
-    // Revisions /" — is 26.53ch, 31.53ch beside the 5ch stub, against a line
-    // that hands the trail 218.8px at a 390px viewport. Under `overflow:
-    // hidden` that was a BOX clip with no ellipsis, because the ancestors are
-    // `flex: 0 0 auto` and there is nothing left to ellipsise once they alone
-    // are too wide: the bar drew "Admin / Configuration / Revisions" with the
-    // last letter shaved and the object's own crumb outside the clip at zero
-    // pixels. `router.test.ts` holds the premise — which trail is deepest —
-    // and this holds what the trail does about it.
+    // PAST ITS FLOOR IT SCROLLS rather than clipping as a box, on the inline
+    // axis only — `overflow-x: auto` alone computes the block axis to `auto`
+    // too, which puts a vertical scrollport on a one-line box.
     expect(crumbs, "the trail clips its overflow again").not.toMatch(/(^|[;\s])overflow:\s*hidden/);
     expect(crumbs).toMatch(/overflow-x:\s*auto/);
-    // THE BLOCK AXIS STILL CLIPS. `overflow-x: auto` alone computes the other
-    // axis from `visible` to `auto`, which puts a vertical scrollport on a
-    // 21px line box inside a 52px bar.
     expect(crumbs).toMatch(/overflow-y:\s*hidden/);
-    // A THUMB ON THE TRAIL MUST NOT DRAG THE PAGE BEHIND IT, the rule the
-    // broken bar's own control group and the phone rail both take.
     expect(crumbs).toMatch(/overscroll-behavior-x:\s*contain/);
-    // AND THE SCROLLBAR IS NOT DRAWN, for `.crewlet-tabs--pill`'s reason: on a
-    // 52px bar it would sit on the baseline the trail is drawn on. Both halves
-    // — the standard property and the WebKit pseudo-element — or the browsers
-    // disagree about a bar in the chrome.
     expect(crumbs).toMatch(/scrollbar-width:\s*none/);
     expect(base, "the trail's scrollbar is hidden in one engine and drawn in the other").toMatch(
       /\.crumbs::-webkit-scrollbar\s*\{[^}]*display:\s*none/,
     );
 
-    // AND THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION. It
-    // wraps, so a shrink does not shave a label, it drops the last control
-    // onto a row of its own — measured at a 1250px bar, a 0.13px share of the
-    // overflow put "Copy link" on a second row while the trail still had
-    // 250px to give. `max-width` is the valve `flex-shrink: 0` would
-    // otherwise remove: a group wider than the whole bar still wraps.
+    // THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION: it wraps, so
+    // a shrink drops its last control onto a row of its own. `max-width` is
+    // the valve for a group wider than the whole bar. And on a line of its
+    // own it keeps to the right-hand edge it holds on the first one.
     const controls = block(base, ".page-controls");
     expect(controls).toMatch(/flex:\s*0 0 auto/);
     expect(controls).toMatch(/max-width:\s*100%/);
     expect(controls).toMatch(/flex-wrap:\s*wrap/);
     expect(controls).toMatch(/justify-content:\s*flex-end/);
+    expect(controls).toMatch(/margin-left:\s*auto/);
 
-    // THE BREAK IS A CONTAINER QUERY, because what overflows is the BAR and
-    // a viewport query cannot see it: the rail and an open workspace sidebar
-    // take 333px (97 + 236), so a 1919px window and a 1443px window with the
-    // sidebar shut give the same bar. `.page` is the container that measures
-    // it.
-    expect(block(base, ".page"), "the page is no longer a container").toMatch(
+    // THE PHONE BREAK IS A CONTAINER QUERY, because what overflows is the
+    // HEADER and a viewport query cannot see a sidebar or a peek beside it.
+    expect(block(base, ".page-head"), "the header is no longer a container").toMatch(
       /container:\s*page \/ inline-size/,
     );
-    const atBreak = css.slice(css.indexOf("@container page (max-width:"));
     expect(atBreak, "the page bar's own break is gone").toContain(".page-controls");
-    // AND THE SECOND ROW IS THE PAGE'S OWN CONTROLS: a full basis is what
-    // breaks the line, an order past the globals is what keeps the viewer
-    // chip and the search trigger on the first one, and the scroll is what
-    // makes a group wider than the bar reachable rather than merely out of
-    // sight.
     const broken = block(atBreak, ".page-controls");
     expect(broken).toMatch(/flex:\s*0 0 100%/);
-    // PAST THE GLOBALS, WHICH IS A COMPARISON AND NOT A SHAPE. `/order:\s*\d/`
-    // matches `order: 0` — the INITIAL value — so the whole content of the
-    // assertion was "is there an order at all", and `order: 0` puts the
-    // controls back exactly where document order already had them: between
-    // the trail and the viewer chip, so the line breaks there and pushes the
-    // chip and the search trigger down with them. That is the failure this
-    // clause names, passing its own gate.
+    // PAST EVERYTHING ELSE ON THE BAR, WHICH IS A COMPARISON AND NOT A SHAPE:
+    // `order: 0` is the initial value and puts the controls back where
+    // document order had them.
     const order = /order:\s*(-?\d+)/.exec(broken);
     expect(order, "the controls carry no order, so they break where they sit").not.toBeNull();
     expect(Number(order![1]), "order 0 is where document order already put them").toBeGreaterThan(
       0,
     );
-    // And nothing else in the broken bar may claim an order of its own, or
-    // "past the globals" stops being true of the value above without this
-    // file changing.
     const others = [...atBreak.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
       (m) => /(^|[\s;])order\s*:/.test(m[2]!) && !/\.page-controls/.test(m[1]!),
     );
-    expect(
-      others.map((m) => m[1]!.trim()),
-      "a second order in the broken bar makes the comparison above meaningless",
-    ).toEqual([]);
+    expect(others.map((m) => m[1]!.trim())).toEqual([]);
+    // AND A LINE OF CONTROLS WIDER THAN A PHONE SCROLLS rather than stacking
+    // rows that push the screen a third of the way down.
     expect(broken).toMatch(/overflow-x:\s*auto/);
-    // …and the bar has to be told to wrap again, since the base rule no
-    // longer does.
-    expect(block(atBreak, ".page-bar")).toMatch(/flex-wrap:\s*wrap/);
-
-    // AND THE BOTTOM BAR IS NAVIGATION. Its foot carried the engine pill, the
-    // theme switch and the density switch — 250px of 390, leaving about two
-    // and a half of eight destinations on screen. Both settings are in the
-    // command palette, and the collapsed rail already drops them.
-    expect(narrow).toContain(".rail-foot > .crewlet-segmented");
+    expect(broken).toMatch(/flex-wrap:\s*nowrap/);
   });
 
   // THE PANEL TITLE'S CAP IS GONE WITH THE PANEL, deliberately and not by
@@ -1061,41 +1051,10 @@ describe("the frame's layout", () => {
     // header on it parks below a strip of scrolling page.
     const shell = sheet("frame.css");
     expect(block(shell, ".toolbar")).toMatch(/min-height:\s*var\(--toolbar-h\)/);
-    expect(block(shell, ".screen:has(.toolbar)")).toMatch(/--sticky-top:\s*var\(--toolbar-h\)/);
+    expect(block(shell, ".crewlet-app-shell__main:has(.toolbar)")).toMatch(
+      /--sticky-top:\s*var\(--toolbar-h\)/,
+    );
     expect(sheet("tokens.css")).toMatch(/--sticky-top:\s*0px/);
-  });
-
-  // THE SEARCH FIELD IS NOT A FLOOR THE BAR OWES.
-  //
-  // The kit's `toolbar` field floors at its 200px resting width above 1024px,
-  // and on `#/activity/turns` at 1440 that floor pushed the keycap past the
-  // bar's right edge (content 1152px in a 1107px bar), because a route's own
-  // controls cannot shrink and the bar does not wrap above its 1100px container
-  // query. What fixes it is a SHAPE, asserted here because jsdom computes no
-  // layout: the wrapper's width can shrink (a basis, not a min-width), the
-  // kit's floor is cancelled inside it, it stops at a control square, and it
-  // sheds the keycap and then the word by its OWN width.
-  test("the page bar's search field gives way down to its glyph", () => {
-    const css = sheet("frame.css");
-    const wrap = block(css, ".page-search");
-    expect(wrap).toMatch(/container:\s*page-search\s*\/\s*inline-size/);
-    expect(wrap).toMatch(/flex:\s*0 1 200px/);
-    expect(wrap).toMatch(/min-width:\s*var\(--size-control-md\)/);
-    const field = block(css, ".page-search > .crewlet-search-trigger--toolbar");
-    expect(field).toMatch(/--crewlet-search-trigger-width:\s*0px/);
-    expect(field).toMatch(/min-width:\s*0/);
-    expect(field).toMatch(/overflow:\s*hidden/);
-    const query = (px: number): string => {
-      const from = css.indexOf(`@container page-search (max-width: ${px}px)`);
-      expect(from, `the ${px}px field query is gone`).toBeGreaterThan(-1);
-      return css.slice(from, css.indexOf("\n}", from));
-    };
-    expect(block(query(176), ".page-search .crewlet-search-trigger__shortcut")).toMatch(
-      /display:\s*none/,
-    );
-    expect(block(query(96), ".page-search .crewlet-search-trigger__label")).toMatch(
-      /display:\s*none/,
-    );
   });
 });
 
@@ -1224,9 +1183,36 @@ test("a grid row with more than one content-sized track declares a gap", () => {
 // also draws an ancestor with no page of its own — "Item", "seats" — and a
 // floor on a part that never shrinks only pads a short word: "Work / Item   /
 // items". Scoped to the last part, which is the only one that gives way.
+// THE ELLIPSIS NEEDS A BOX OF ITS OWN. `.crumb-link` and `.crumb-here` are flex
+// containers, and text directly inside one is an anonymous flex item that
+// `text-overflow` never reaches: the page's h1 was cut mid-word at the bar's
+// edge. `PageHeader.test.tsx` holds that every label is inside `.crumb-text`;
+// this holds that `.crumb-text` is the box that cuts with an ellipsis.
+test("a crumb's words are the box that ellipsises", () => {
+  const css = sheet("frame.css");
+  const text = block(css, ".crumb-text");
+  expect(text).toMatch(/min-width:\s*0\b/);
+  expect(text).toMatch(/overflow:\s*hidden/);
+  expect(text).toMatch(/white-space:\s*nowrap/);
+  expect(text).toMatch(/text-overflow:\s*ellipsis/);
+  expect(text, "a flex or grid box here would be the anonymous item again").not.toMatch(
+    /display:\s*(inline-)?(flex|grid)/,
+  );
+});
+
+// A LINK INSIDE A CLAMPED FACT WRAPS. `.t-link` is `nowrap`, and inside the
+// fact's two-line clamp a linked unit chain was one line cut at the track's
+// edge with no ellipsis.
+test("a linked fact wraps with its clamp", () => {
+  const css = sheet("frame.css");
+  expect(block(css, ".fact-value .t-link")).toMatch(/white-space:\s*normal/);
+});
+
 test("the crumb floor is the last part's alone", () => {
   const css = sheet("frame.css");
-  expect(block(css, ".crumb-here")).not.toMatch(/min-width/);
+  // `min-width: 0` is not a floor — it is what lets the ellipsis happen — so
+  // the rule forbids any OTHER value.
+  expect(block(css, ".crumb-here")).not.toMatch(/min-width:\s*(?!0\b)[^;\s]/);
   expect(block(css, ".crumb-part:last-child > .crumb-here")).toMatch(/min-width:\s*5ch/);
 });
 

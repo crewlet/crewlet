@@ -43,7 +43,7 @@
      offset below it together. */
   --toolbar-h: calc(var(--size-control-md) + var(--spacing-2) * 2);
 
-  /* WHERE A STICKY BAND INSIDE THE PAGE COMES TO REST. `.screen` is the one
+  /* WHERE A STICKY BAND INSIDE THE PAGE COMES TO REST. The shell's `main` is the one
      scroller, and more than one thing wants to stop at the top of it — the
      toolbar, a grid's column heads, a band label. The toolbar is the one that
      owns 0, so everything under it offsets by this; it is 0 here and raised

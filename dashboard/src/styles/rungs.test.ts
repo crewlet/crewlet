@@ -137,21 +137,6 @@ describe("the faint rung is decoration", () => {
         'which carries `title="falls back to"` for the meaning.',
     },
     {
-      selector: ".rail-lock",
-      why: 'A KeyGlyph with `title="needs an operator credential"`. An icon, and the title is the text.',
-    },
-    {
-      selector: ".rail-collapse",
-      why:
-        "An icon-only button — a chevron with an `aria-label`. A UI component " +
-        "takes the 3:1 floor rather than 4.5, it clears it, and `:hover` takes " +
-        "it to `--color-text-primary`.",
-    },
-    {
-      selector: ".side-twist",
-      why: "The sidebar tree's disclosure chevron: the same icon-only control.",
-    },
-    {
       selector: ".crumb-sep",
       why: "The `/` between breadcrumb parts. A separator draws a boundary the layout already has.",
     },

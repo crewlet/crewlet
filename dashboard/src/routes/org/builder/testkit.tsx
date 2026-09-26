@@ -367,7 +367,7 @@ export function mountBuilder({
   engine,
   org = null,
   connected = true,
-  hash = "#/company?lens=builder&view=visualization",
+  hash = "#/agents/edit?view=visualization",
   surfaces = fakeSurfaces,
   storage,
   keys,

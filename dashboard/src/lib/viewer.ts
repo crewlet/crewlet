@@ -29,6 +29,7 @@
  * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
+import { createContext, createElement, useContext, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import type { Viewer } from "~/protocol/index.ts";
 
@@ -48,6 +49,14 @@ export interface ViewerState {
   anonymous: boolean;
   /** Nobody has said yet — no answer has arrived, or the last read failed. */
   loading: boolean;
+  /**
+   * The FIRST read is still out: nothing has answered and nothing has failed.
+   * The narrow half of `loading`, for a surface that would rather wait one
+   * round trip than act on no answer — a guarded section asks nothing it may
+   * be refused until this clears — and must not wait for ever on a read that
+   * failed, which `loading` alone cannot tell it apart from.
+   */
+  asking: boolean;
 }
 
 /**
@@ -57,7 +66,7 @@ export interface ViewerState {
  * token, or an epoch lands that binds a seat to their id — so this is a slow
  * poll rather than a push, and the token dialog's own reconnect re-asks it.
  */
-export function useViewer(): ViewerState {
+function useViewerRead(): ViewerState {
   const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });
   const operatorID = data?.operator_id ?? "";
   const handle = data?.handle ?? "";
@@ -82,7 +91,42 @@ export function useViewer(): ViewerState {
     unbound: operatorID !== "" && handle === "",
     anonymous: !unknown && operatorID === "",
     loading: unknown,
+    asking: loading && data === null && error === null,
   };
+}
+
+const Reading = createContext<ViewerState | null>(null);
+
+/**
+ * Ask who this browser is ONCE, for everything under it.
+ *
+ * `app/Shell.tsx` mounts it around the whole frame, so the sidebar, the page
+ * header and every screen read one answer. Each of them asking for itself was
+ * a standing `viewer` query per caller — three from the frame alone, more
+ * from a screen — each holding one of the socket's four query slots while a
+ * screen's first read waited, and each polling on its own clock, so two
+ * surfaces could disagree about who the reader is for up to five minutes.
+ */
+export function ViewerProvider({ children }: { children: ReactNode }) {
+  return createElement(Reading.Provider, { value: useViewerRead() }, children);
+}
+
+/**
+ * Who the frame read this browser as.
+ *
+ * THROWS OUTSIDE A [ViewerProvider] rather than asking for itself, as the
+ * kit's `useAppShell` throws outside a shell: a fallback read here is the
+ * per-caller read this module exists to remove, back again wherever a caller
+ * is mounted outside the frame — and it would work, so nothing would say so.
+ */
+export function useViewer(): ViewerState {
+  const viewer = useContext(Reading);
+  if (viewer === null) {
+    throw new Error(
+      "useViewer() outside a ViewerProvider: the frame mounts one (FrameReadings, app/Shell.tsx), and a suite that mounts a screen without the frame mounts one around it",
+    );
+  }
+  return viewer;
 }
 
 /** The wire answer, re-exported so a screen types its own reads. */

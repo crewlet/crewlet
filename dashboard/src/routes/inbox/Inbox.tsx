@@ -1,14 +1,11 @@
 /**
- * The Inbox — the landing screen, and the one this product was missing.
+ * The Inbox — the place a person acts on what reached them.
  *
- * # The first fold is the company, not the absence of problems
- *
- * A queue-shaped home renders a healthy company as a blank page, and a reader
- * cannot tell that from a broken one. So the screen opens with the PULSE
- * STRIP — eight facts that are true whatever the queue holds — and the bands
- * sit under it. An empty band then means something: nothing is waiting on you,
- * on a company that is visibly running. See `Pulse.tsx` for the argument in
- * full.
+ * It was the landing screen, opened by a strip of company figures so that a
+ * quiet queue would not read as a broken dashboard. Home is the landing
+ * screen now (`routes/home/Home.tsx`) and carries that strip, so this screen
+ * is the queue itself: what the engine needs decided, and what reached this
+ * person and why.
  *
  * # Two bands on one screen, never two tabs
  *
@@ -76,35 +73,19 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { unfinished } from "~/lib/work.ts";
-import {
-  useAgents,
-  useConnection,
-  useEngineHealth,
-  useOrgBudget,
-  useSandboxes,
-  useTokens,
-} from "~/lib/store-hooks.ts";
-import { attentionQueue, SUBJECTS, WATCHED, type Attention } from "~/lib/attention.ts";
+import { WATCHED, type Attention } from "~/lib/attention.ts";
+import { useAttention } from "~/lib/useAttention.ts";
+import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
-import { runState } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import type {
-  AgentRow,
-  Rollup,
-  WorkInboxAnswer,
-  WorkInboxNotice,
-  WorkProjectRow,
-  WorkloadRow,
-} from "~/protocol/index.ts";
+import type { WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
 import { FacetRail } from "~/ui/FacetRail.tsx";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` commits the option the arrows land on, and this control
 // drives a `useParam` that re-runs `work_inbox` — so arrowing across three
 // scopes is three queries for a reader who wanted one.
 import { Segmented } from "~/ui/primitives.tsx";
-import { Pulse, PULSE_GLYPHS, type PulseFact } from "./Pulse.tsx";
 
 /**
  * The three scopes the notices band can ask for.
@@ -130,25 +111,6 @@ type Selected =
 export function Inbox() {
   const viewer = useViewer();
   const now = useNow();
-  const agents = useAgents();
-  const sandboxes = useSandboxes();
-  const budget = useOrgBudget();
-  const tokens = useTokens();
-  const { connected, authRejected } = useConnection();
-  const engine = useEngineHealth();
-  // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
-  // this queue has by construction — it is waiting for a person — and what the
-  // row says about it is how long its box is still held, which is the pause
-  // window only the durable record carries.
-  // Slow, like the runs board's own poll: a run's lifetime is minutes.
-  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
-  // THE TWO THE PULSE STRIP NEEDS AND NOTHING ELSE ON THIS SCREEN DOES. Both
-  // are slow polls: an open count and a workload are facts about a fortnight,
-  // and asking them at the socket's own cadence would be eight reads a minute
-  // for a strip nobody is watching change.
-  const projects = useQuery("work_projects", undefined, { pollMs: 60_000 });
-  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
-
   // THE STATE IS IN THE URL, like every other screen: which reasons are being
   // looked at, whether read notices are shown, and which row the pane is on.
   const [stateParam, setState] = useParam("state", "unread");
@@ -189,20 +151,8 @@ export function Inbox() {
   // THE ENGINE'S OWN CONDITIONS. An alarm the engine raised is a claim on a
   // person exactly as a notice is, and it used to live in a popover behind a
   // pill in the sidebar's foot.
-  const attention = useMemo(
-    () =>
-      attentionQueue({
-        agents,
-        sandboxes,
-        runs: runs?.runs ?? [],
-        budget,
-        engine: engine ?? null,
-        connected,
-        authRejected,
-        now,
-      }),
-    [agents, sandboxes, runs, budget, engine, connected, authRejected, now],
-  );
+  const attention = useAttention();
+  const waiting = useInboxCounts();
 
   // EVERY REASON THAT IS ACTUALLY ON THE PAGE, so the filter offers what the
   // person has rather than the whole vocabulary of eighteen.
@@ -234,14 +184,6 @@ export function Inbox() {
     return notice ? { band: "notice", item: notice } : null;
   }, [open, attention, notices]);
 
-  const facts = usePulse({
-    agents,
-    attention,
-    projects: projects.data?.projects,
-    workload: workload.data?.rows,
-    tokens,
-  });
-
   return (
     <>
       <PageActions>
@@ -251,8 +193,6 @@ export function Inbox() {
           </a>
         )}
       </PageActions>
-
-      <Pulse facts={facts} />
 
       {/* THREE VIEWER STATES, three different sentences — and only one of them
           is anybody's fault. The engine half of this screen works for all
@@ -283,7 +223,7 @@ export function Inbox() {
                     // THE SCOPE COMES FROM THE QUEUE, never from this file. A
                     // sentence written here names whatever was true the day it
                     // was typed; `WATCHED` names what the queue watches today.
-                    hint: `Checked and clear: ${WATCHED}. The figures above are what the company is doing meanwhile.`,
+                    hint: `Checked and clear: ${WATCHED}. Home has what the company is doing meanwhile.`,
                   }
                 : null
             }
@@ -303,7 +243,18 @@ export function Inbox() {
             <Band
               title="Notices"
               count={inbox.data ? notices.length : null}
-              note="What reached you, and the one reason of eighteen it reached you under."
+              // A PAGE THAT FILLED IS A FLOOR, as the badge that led here draws
+              // it: the head read "Notices 50" while the badge said "50+", and
+              // one of the two looked broken.
+              more={Boolean(inbox.data?.next_cursor)}
+              note={
+                // THE SAME FIGURE THE SIDEBAR'S BADGE DRAWS, from the one
+                // reading of it: a list whose own head disagreed with the
+                // badge that led here would make one of them look broken.
+                waiting.waiting === null
+                  ? "What reached you, and the one reason of eighteen it reached you under."
+                  : `What reached you, and the one reason of eighteen it reached you under. ${inboxFigure(waiting)} unread under a reason you are on the hook for.`
+              }
               controls={
                 /* THREE SCOPES, EXACTLY ONE CHOSEN. As a facet rail this could
                    carry no count on any data — "All" and "Snoozed" are rows this
@@ -506,6 +457,7 @@ export function noticeQuiet(input: {
 function Band({
   title,
   count,
+  more = false,
   note,
   controls,
   filters,
@@ -518,6 +470,8 @@ function Band({
    *  a false one for as long as the read is in flight, which is the rule the
    *  pulse strip's own figures follow one component up. */
   count: number | null;
+  /** More rows lie past this page, so `count` is a floor and draws as "50+". */
+  more?: boolean;
   note: string;
   controls?: React.ReactNode;
   /** Controls over this band's OWN rows, drawn above the list and drawn
@@ -540,7 +494,13 @@ function Band({
             changes on every poll, and inside the heading it would resize the
             heading and shift whatever sits beside it. */}
         <span className="inbox-band-count">
-          {count ?? <EmptyValue label="Not counted: this read did not answer" />}
+          {count === null ? (
+            <EmptyValue label="Not counted: this read did not answer" />
+          ) : more ? (
+            `${count}+`
+          ) : (
+            count
+          )}
         </span>
         <span className="spacer" />
         {controls}
@@ -734,112 +694,4 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
       </p>
     </div>
   );
-}
-
-/**
- * The eight facts, assembled.
- *
- * SEPARATED FROM THE SCREEN because every one of them is a small honest
- * decision about what a number covers, and those are worth reading in one
- * place: which seat states count as working, that `open` is over the projects
- * this answer returned rather than over the company, and that a window the
- * engine chose is never labelled "today".
- */
-function usePulse(input: {
-  agents: AgentRow[];
-  attention: Attention[];
-  projects?: WorkProjectRow[];
-  workload?: WorkloadRow[];
-  tokens: Rollup | null;
-}): PulseFact[] {
-  const { agents, attention, projects, workload, tokens } = input;
-  return useMemo(() => {
-    // THE ENGINE'S WORD: a seat whose coding run is running is already
-    // `working` there, so nothing is folded in here.
-    const working = agents.filter((a) => runState(a) === "working").length;
-    // A RUN WAITING FOR A PERSON, which the attention queue already derived
-    // from the DURABLE rows: counting it a second way here would let the
-    // headline and the queue beneath it disagree about who is waiting.
-    // THE SUBJECT, NOT THE ID'S SPELLING. This matched `id.startsWith("sandbox-")`,
-    // so renaming that id would have taken a headline figure silently to zero —
-    // the same drift one layer down from the sentence below it.
-    const parked = attention.filter((a) => a.subject === "run").length;
-    const open = projects ? projects.reduce((n, p) => n + unfinished(p.task_counts), 0) : null;
-    const overdue = workload ? workload.reduce((n, r) => n + r.overdue, 0) : null;
-    const blocked = workload ? workload.reduce((n, r) => n + r.blocked, 0) : null;
-    const critical = attention.filter((a) => a.severity === "critical").length;
-    const facts: PulseFact[] = [
-      {
-        key: "seats",
-        icon: PULSE_GLYPHS.seats,
-        value: working,
-        label: "working",
-        title: "Agent seats running a turn or a coding run, as the engine reports them.",
-        path: ["company", "people"],
-      },
-      {
-        key: "parked",
-        icon: PULSE_GLYPHS.parked,
-        value: parked,
-        label: "parked",
-        title:
-          "Coding runs stopped on a question, from the durable rows rather than the live push.",
-        path: ["activity", "runs"],
-        tone: parked > 0 ? "caution" : undefined,
-      },
-      {
-        key: "open",
-        icon: PULSE_GLYPHS.open,
-        value: open,
-        label: "open",
-        title: "Open work items, summed over the projects this answer returned.",
-        path: ["work"],
-      },
-      {
-        key: "overdue",
-        icon: PULSE_GLYPHS.overdue,
-        value: overdue,
-        label: "overdue",
-        title: "Open items past their due date, summed over every person with a workload.",
-        path: ["work"],
-        query: { due: "overdue" },
-        tone: overdue ? "caution" : undefined,
-      },
-      {
-        key: "blocked",
-        icon: PULSE_GLYPHS.blocked,
-        value: blocked,
-        label: "blocked",
-        title: "Open items waiting on another item, summed over every person with a workload.",
-        path: ["work"],
-        query: { blocked: "1" },
-        tone: blocked ? "caution" : undefined,
-      },
-      {
-        key: "tokens",
-        icon: PULSE_GLYPHS.tokens,
-        value: tokens ? tokens.totals.total_tokens : null,
-        label: tokens?.totals.total_tokens === 1 ? "token" : "tokens",
-        // NOT "today". The window is the engine's and this screen was not
-        // given one, so the strip names the figure and puts the window it
-        // actually covers where a reader can read it.
-        title: tokens
-          ? `Tokens over the pushed window, ${fmtDateTime(tokens.since)} to ${fmtDateTime(tokens.until)}.`
-          : "Spend has not been pushed yet.",
-        path: ["cost"],
-      },
-      {
-        key: "alarms",
-        icon: PULSE_GLYPHS.alarms,
-        value: critical,
-        // COUNTED, so it agrees with its figure: "1 alarms" is a strip that
-        // was written for one number and shown another.
-        label: critical === 1 ? "alarm" : "alarms",
-        title: "Conditions the engine raised at critical severity. They are the first band below.",
-        path: ["inbox"],
-        tone: critical > 0 ? "critical" : undefined,
-      },
-    ];
-    return facts;
-  }, [agents, attention, projects, workload, tokens]);
 }

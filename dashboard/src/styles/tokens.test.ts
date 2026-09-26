@@ -31,10 +31,33 @@ import { describe, expect, test } from "vitest";
  * with the default written at the point of use. A two-argument `var()` is
  * therefore exempt — it cannot fail silently, because the fallback IS the
  * value when nothing sets it.
+ *
+ * # And a property only a script can declare
+ *
+ * Some values have no honest default. `--peek-reserve` is what the peek's
+ * track leaves the list, and it differs by the screen (Settings draws a
+ * column inside it) and by the density: any literal fallback is right for
+ * one frame and wrong for another, which is the bug it exists to prevent. So
+ * the shell publishes it on the same element, in the same render, as the
+ * attribute that makes it read ([SCRIPT_DECLARED]), and it counts as declared
+ * only while that script still spells it — a rename on either side fails
+ * here as it would for a sheet.
  */
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 const require_ = createRequire(import.meta.url);
+
+/**
+ * The custom properties a SCRIPT declares, each with the one module that
+ * writes it — see "a property only a script can declare" above.
+ */
+const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
+  {
+    name: "--peek-reserve",
+    by: "app/Shell.tsx",
+    why: "listReserve() for the frame on screen, set on .app with data-peek=column",
+  },
+];
 
 /** Every stylesheet under `dashboard/src`, wherever a screen keeps one. */
 function ours(): { name: string; text: string }[] {
@@ -73,6 +96,11 @@ function sheets(): { name: string; text: string }[] {
   return [...ours(), ...theirs];
 }
 
+/** The names [SCRIPT_DECLARED] covers. */
+function scriptDeclared(): string[] {
+  return SCRIPT_DECLARED.map((d) => d.name);
+}
+
 /**
  * Every colour or shadow a stylesheet of OURS declares.
  *
@@ -107,8 +135,11 @@ export function declaresPalette(all: { name: string; text: string }[]): string[]
  * possible break in it. One function is what makes the second test evidence
  * about the first.
  */
-export function undeclared(all: { name: string; text: string }[]): string[] {
-  const declared = new Set<string>();
+export function undeclared(
+  all: { name: string; text: string }[],
+  scripted: string[] = [],
+): string[] {
+  const declared = new Set<string>(scripted);
   for (const { text } of all) {
     for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
   }
@@ -128,7 +159,17 @@ export function undeclared(all: { name: string; text: string }[]): string[] {
 
 describe("the token namespace", () => {
   test("every var() with no fallback names a property something declares", () => {
-    expect(undeclared(sheets())).toEqual([]);
+    expect(undeclared(sheets(), scriptDeclared())).toEqual([]);
+  });
+
+  // A SCRIPT'S DECLARATION IS A CLAIM ABOUT THE SCRIPT, so it is read there:
+  // an entry whose module no longer writes the name would excuse a read of a
+  // property nothing sets, which is the one failure this file is for.
+  test("a property a script declares is still written by that script", () => {
+    for (const { name, by } of SCRIPT_DECLARED) {
+      const source = readFileSync(join(SRC, by), "utf8");
+      expect(source, `${by} no longer writes ${name}`).toContain(`"${name}"`);
+    }
   });
 
   test("no stylesheet of ours declares a colour or a shadow", () => {
@@ -160,6 +201,14 @@ describe("the token namespace", () => {
     expect(all.length).toBeGreaterThan(ours().length + 4);
     expect(all.some((s) => /^\s*--color-text-primary\s*:/m.test(s.text))).toBe(true);
     expect(ours().some((s) => /var\(--color-text-primary\)/.test(s.text))).toBe(true);
+  });
+
+  test("it can tell — a script's declaration covers its own name and no other", () => {
+    const missing = undeclared(
+      [{ name: "fake.css", text: ".a { width: var(--by-script); height: var(--by-nobody); }" }],
+      ["--by-script"],
+    );
+    expect(missing).toEqual(["fake.css:1 reads --by-nobody, which nothing declares"]);
   });
 
   test("it can tell — a property nobody declares is caught, a fallback is not", () => {

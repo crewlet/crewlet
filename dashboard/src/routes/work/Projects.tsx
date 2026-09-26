@@ -47,6 +47,7 @@
  */
 
 import { useMemo } from "react";
+import { usePanelAlign } from "~/lib/media.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -170,6 +171,9 @@ function activeEmpty(archived: number, href: string) {
 }
 
 export function Projects() {
+  // See [usePanelAlign]: the Columns panel is end-aligned under the bar's
+  // right edge, and start-aligned on a phone.
+  const columnsAlign = usePanelAlign("end");
   const org = useOrg();
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE, from one lookup: the lead's badge
   // draws the dashed ring off the KIND, and the last change prints the NAME.
@@ -521,7 +525,7 @@ export function Projects() {
         <Popover
           role="dialog"
           label="Columns"
-          align="end"
+          align={columnsAlign}
           trigger={(open, toggle) => (
             <Button
               size="small"

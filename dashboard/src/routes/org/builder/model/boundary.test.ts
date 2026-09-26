@@ -10,9 +10,11 @@
  * notices. So the rule is read off the source text, in the idiom of
  * `ui/boundary.test.ts`:
  *
- * - runtime imports name a file in this directory or `~/lib/format.ts` (pure
- *   formatting); `~/protocol` is imported for TYPES only, because its runtime
- *   half is the socket and `fetch`;
+ * - runtime imports name a file in this directory, `~/lib/format.ts` (pure
+ *   formatting) or `~/lib/storage.ts` (the table of storage KEYS, which is
+ *   constants and imports nothing — the storage itself is still injected);
+ *   `~/protocol` is imported for TYPES only, because its runtime half is the
+ *   socket and `fetch`;
  * - no module names a browser or time global.
  */
 
@@ -91,6 +93,7 @@ describe("the builder core", () => {
         const allowed =
           spec.startsWith("./") ||
           spec === "~/lib/format.ts" ||
+          spec === "~/lib/storage.ts" ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }

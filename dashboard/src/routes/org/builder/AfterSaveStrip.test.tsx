@@ -1,7 +1,7 @@
 /**
  * After a save, the builder follows the revision until every node has applied
- * it, or says which node refused it, and the read lenses admit that they
- * still draw the revision before it.
+ * it, or says which node refused it, and the org chart admits that it still
+ * draws the revision before it.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
-import { CompanyScreen } from "~/routes/company/Company.tsx";
+import { OrgChart } from "~/routes/agents/Company.tsx";
 import { applyState } from "./AfterSaveStrip.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
@@ -171,7 +171,7 @@ describe("in the builder", () => {
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
-      "#/admin/config?lens=diff&revision=r-saved&against=r1",
+      "#/settings/config?lens=diff&revision=r-saved&against=r1",
     );
     act(() => store.applyHealth({ status: "ok", applied_epoch: 2 }));
     expect(await screen.findByText("Applied.")).toBeDefined();
@@ -212,10 +212,10 @@ describe("in the builder", () => {
   });
 });
 
-describe("the read lenses", () => {
+describe("the org chart", () => {
   function mountCompany(appliedEpoch: number) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/company";
+    location.hash = "#/agents";
     const store = new Store();
     // The health push, which is where this node's applied epoch comes from.
     store.applyHealth({ status: "ok", applied_epoch: appliedEpoch });
@@ -226,7 +226,7 @@ describe("the read lenses", () => {
     return render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>
-          <CompanyScreen />
+          <OrgChart />
         </Router>
       </ClientContext.Provider>,
     );

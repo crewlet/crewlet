@@ -411,15 +411,16 @@
 .seat-card:hover {
   border-color: var(--color-border-strong);
 }
-/* The tone is what the seat is DOING, never who it is. `quiet` takes no tint
-   at all: an idle seat used to draw a glowing tile that read as activity. */
-.seat-card[data-tone="working"] {
+/* The tone is what the seat is DOING, never who it is — `lib/seats.ts`'s
+   `ringOf`, so the card's edge and the badge's ring are one reading. An idle
+   seat takes no tint at all: a glowing tile read as activity. */
+.seat-card[data-tone="info"] {
   box-shadow: inset 2px 0 0 var(--color-feedback-info);
 }
-.seat-card[data-tone="needs"] {
+.seat-card[data-tone="warning"] {
   box-shadow: inset 2px 0 0 var(--color-feedback-warning);
 }
-.seat-card[data-tone="broken"] {
+.seat-card[data-tone="danger"] {
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .seat-line {
@@ -499,10 +500,10 @@
   background: var(--color-surface-hover);
 }
 
-/* ---- Org builder: the lens ----------------------------------------------
-   The company screen's third lens (`routes/org/builder/`), which is the one
-   that WRITES. Its recipes live here beside the chart's because they are one
-   screen: `#/company` with `lens=builder`.
+/* ---- Org builder --------------------------------------------------------
+   Agents › Edit org (`routes/org/builder/`, at `#/agents/edit`), the one
+   screen that WRITES the org. Its recipes live here beside the chart's
+   because it draws the same chart, and the two must read as one.
 
    Read `routes/org/builder/builderStyles.test.ts` before changing anything
    below — it reads these rules as text and states what each one buys. */
@@ -564,11 +565,13 @@
 }
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
-   the drawer breakpoint; the check status and Review and save stay. */
+   the phone breakpoint — the same one `Builder.tsx`'s NARROW_QUERY reads off
+   `app/layout.ts`, so the menu and the buttons it replaces swap at one width;
+   the check status and Review and save stay. */
 .org-builder-narrow {
   display: none;
 }
-@media (max-width: 860px) {
+@media (width < 640px) {
   .org-builder-wide {
     display: none;
   }
@@ -834,7 +837,11 @@
 .run-count {
   color: var(--color-text-primary);
 }
-@media (max-width: 700px) {
+/* MEASURED FROM THE PAGE COLUMN, not the window: the row's tail and actor
+   take their own tracks while the column can hold them beside the sentence,
+   and a phone's width is the kit's (`app/layout.ts`). A viewport number here
+   was a guess at the sidebar's width on the day it was written. */
+@container page (width < 640px) {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
   }
@@ -854,7 +861,7 @@
   gap: var(--spacing-4);
   align-items: start;
 }
-@media (max-width: 860px) {
+@media (width < 640px) {
   .split {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1996,8 +2003,8 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The bar, the chips and the two menus ------------------------------- */
 
 /* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
-   `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. `.screen:has(
-   .toolbar)` publishes `--sticky-top`, so every other thing that sticks in the
+   `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. The scroller's
+   `:has(.toolbar)` publishes `--sticky-top`, so every other thing that sticks in the
    scroller offsets itself by it; a copy of the toolbar's declarations under
    another class name is what left the grid's column heads parked underneath an
    opaque band.
@@ -2222,7 +2229,7 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The body ------------------------------------------------------------
    ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
    second column of this grid, sized here, flipped to a drawer by a media
-   query of its own — and the frame took it over: `.app` carries a fourth
+   query of its own — and the frame took it over: the shell's sheet carries a
    track for `--peek-w` and every screen in the product can open one. The
    rules that sized it here matched `[data-peek="true"]` on THIS element,
    which nothing has ever set: the attribute lives on the shell's root. So
@@ -2231,11 +2238,11 @@ details > summary.int-summary::-webkit-details-marker {
    governed anything. CSS that matches nothing is indistinguishable from CSS
    whose selector somebody broke.
 
-   WHERE THE THRESHOLD LIVES NOW is `--peek-drawer-max` in frame.css, with
-   its arithmetic written at the definition. */
+   WHERE THE THRESHOLD LIVES NOW is `peekColumnMin` in `app/layout.ts`,
+   with its arithmetic written at the definition. */
 
-/* ONE COLUMN. The peek is the FRAME's — a fourth track of `.app` while the
-   rail is open, a drawer under `--peek-drawer-max` (frame.css) — so nothing
+/* ONE COLUMN. The peek is the FRAME's — a track of the shell's sheet while
+   it is open, a drawer under `peekColumnMin` (`app/layout.ts`) — so nothing
    here sizes a column for it. A `[data-peek]` rule used to, keyed on an
    attribute nothing set on this element, with a 1500px step of its own under
    it: dead CSS whose comment measured a threshold the running product never
@@ -2681,7 +2688,7 @@ details > summary.int-summary::-webkit-details-marker {
      over the first row of its own group, which was in the DOM, drawn, and
      covered. Measured on a grouped list at 1400px — the "To do" band at y=137
      over a first row at y=126, with the 89-126 strip empty. The scroller is
-     `.screen`, which is what a sticky band holds against. The grid's own head
+     the shell's `main`, which is what a sticky band holds against. The grid's own head
      `frame.css` sticks the same way and for the same reason. */
   overflow: clip;
   min-width: 0;
@@ -3113,8 +3120,8 @@ a.work-cal-chip {
 
 /* ---- Responsive ---------------------------------------------------------
    THE PEEK'S OWN STEP IS NOT HERE ANY MORE, and there is nothing left for
-   this file to say about it: the peek is a column of the shell's grid, and
-   `--peek-drawer-max` in frame.css is where it stops being one, with its
+   this file to say about it: the peek is a column of the shell's sheet, and
+   `peekColumnMin` in `app/layout.ts` is where it stops being one, with its
    arithmetic at the definition. What stood here was a `@media (max-width:
    1500px)` over `.work-body[data-peek="true"]` — a threshold measured from
    the board, for a peek this screen used to own and no longer does, on a
@@ -3122,21 +3129,22 @@ a.work-cal-chip {
 
    WHAT IS LEFT IS MEASURED FROM THE BOX, NOT THE WINDOW. The item page's own
    step turns on how wide the PAGE COLUMN is, and that is the window less the
-   rail, less the workspace sidebar, less an open peek — every one of them a
-   thing the reader moves. A viewport number is a guess at their sum on the
-   day it was written, and it was wrong the moment a peek could open over any
+   sidebar, less an open peek — each of them a thing the reader moves. A
+   viewport number is a guess at their sum on the day it was written, and it
+   was wrong the moment a peek could open over any
    screen: at 1280 with one open the item page kept a 300px rail beside a
    171px body, which is the arrangement the threshold exists to prevent, at
    twenty widths of window. `page` is the shell's own named container. */
 
 /* THE ITEM PAGE'S RAIL SITS BESIDE ITS BODY while both are readable, and the
    body's floor is the one already measured for the list: 444px is under what
-   a work row needs for a key, a title and an assignee (see
-   `--peek-drawer-max` in frame.css), and an item page draws that row for
+   a work row needs for a key, a title and an assignee (`LIST_FLOOR` in
+   `app/layout.ts`), and an item page draws that row for
    every subtask. Beside it the rail is 300, the gap is `--spacing-4` and the
    page's own inset is `--spacing-5` twice — 56px at normal density and 63.84 at
    comfortable — so 444 + 300 + 64 = 808, and the WIDEST density is what the
-   one number has to clear, exactly as the peek's own threshold argues. */
+   one number has to clear, because a container query can no more read the
+   density than a media query can. */
 @container page (max-width: 808px) {
   .work-item {
     grid-template-columns: minmax(0, 1fr);
@@ -3168,7 +3176,7 @@ a.work-cal-chip {
   }
 }
 
-@media (max-width: 860px) {
+@media (width < 640px) {
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
   /* FOUR COLUMNS ON A PHONE: priority, key, status, title. The tracks are
@@ -3886,10 +3894,43 @@ a.work-cal-chip {
   user-select: all;
 }
 
+/* ---- Home --------------------------------------------------------------- */
+
+/* THE GREETING: the company's day, whose morning it is, and one sentence of
+   the engine's — the design's display step over the body's secondary ink.
+   A heading at level 2, because the page bar's last crumb is the page's `h1`. */
+.home-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.home-greeting {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-tight);
+  line-height: var(--font-line-height-snug);
+  color: var(--color-text-primary);
+}
+
+.home-status {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+  max-width: var(--size-measure);
+}
+
+/* THE QUIET BAND ON HOME sits on the card's own inset rather than the
+   Inbox's list inset. */
+.home-quiet {
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
 /* ---- The Inbox ---------------------------------------------------------- */
 
 /* THE PULSE STRIP. The first fold of the landing screen, and the reason a
-   healthy company does not render as a blank page — see `routes/inbox/Pulse.tsx`
+   healthy company does not render as a blank page — see `routes/home/Pulse.tsx`
    for the argument. It is a row that WRAPS rather than a grid: these are eight
    facts read left to right, and a grid would change their reading order with
    the viewport. */
@@ -3982,7 +4023,7 @@ a.work-cal-chip {
 /* ONE PANE UNDER THE PLAN'S PHONE WIDTH. A human teammate answering an ask
    from their phone is this product's second named reader, and this is the one
    screen drawn for them: the list first, the detail under it. */
-@media (max-width: 860px) {
+@media (width < 640px) {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
   }

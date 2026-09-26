@@ -130,7 +130,7 @@ test("the table's assignee is the resolved name, linking to the seat", () => {
   mount("table", [row({ assignee: "ada" })]);
   const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
   expect(link).toBeTruthy();
-  expect(link.getAttribute("href")).toBe("#/company/people/ada");
+  expect(link.getAttribute("href")).toBe("#/agents/seats/ada");
   // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
   // types into a filter, so resolving the name must not destroy it.
   expect(link.getAttribute("title")).toBe("@ada");
@@ -265,4 +265,19 @@ test("a human removal is drawn as a person in the trash column", () => {
   const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
   const { container } = mount("table", [row({})], removals);
   expect(outline(container)).toBe("human");
+});
+
+// BESIDE A PEEK AT 1280 THE LIST IS ABOUT 450PX, and with every column kept
+// the title was 70px of "Which regi…". The title takes a floor in both sets;
+// what gives way instead is the grid's to decide (`DataGrid.test.tsx`).
+test("the title keeps a floor and the status is drawn whole, in both sets", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row()]);
+    const template =
+      container.querySelector<HTMLElement>(".grid-wrap")?.style.gridTemplateColumns ?? "";
+    expect(template, shape).toMatch(/minmax\(16rem, 1fr\)/);
+    // And the status word is never cut to fit.
+    expect(template, shape).toContain("max-content");
+    cleanup();
+  }
 });

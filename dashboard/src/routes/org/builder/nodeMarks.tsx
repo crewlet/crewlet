@@ -28,13 +28,10 @@
 import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
-import { runState, stateLabel, toneOf } from "~/lib/seats.ts";
-// THROUGH THE ONE TRANSLATION. `toneOf` answers in the ENGINE's tone
-// vocabulary and uilet spells three of those six differently; a wrong
-// variant renders the neutral dot rather than failing, so a critical seat
-// would draw as "nothing in particular" with nothing to say so. See
-// [uiletTone].
-import { uiletTone } from "~/ui/primitives.tsx";
+import { activityOf, activityWord, toneOf } from "~/lib/seats.ts";
+// `toneOf` answers in the KIT's tone vocabulary directly — the ring a seat's
+// state takes, neutral for idle — so there is no translation left to get
+// wrong between the library and the dot.
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
@@ -189,11 +186,11 @@ export function LiveState({
     (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
     api.agents.find((a) => a.role === name);
   if (compact) {
-    const state = runState(agent);
-    const said = stateLabel(state);
+    const state = activityOf(agent);
+    const said = activityWord(state);
     return (
       <span className="bnode-state" title={said}>
-        <StatusDot tone={uiletTone(toneOf(state))} />
+        <StatusDot tone={toneOf(state)} />
         <VisuallyHidden>{said}</VisuallyHidden>
       </span>
     );

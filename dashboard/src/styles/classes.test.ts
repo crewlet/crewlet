@@ -538,8 +538,33 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-app-shell__main",
+    why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__content",
+    why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__sheet",
+    why: "uilet's AppShell writes it on the floating sheet. styles/frame.css makes it a two-column grid while a peek is open and the frame has room for one (data-peek=\"column\", which the shell decides from app/layout.ts's peekColumnMin), so the detail rail is a column of the sheet rather than of whichever screen opened it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-app-shell__rail-foot",
+    why: "uilet's AppShell writes it on the sidebar's foot. styles/frame.css takes the gutter off the Settings navigation inside it, which the foot already stands on. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-sidebar-nav",
+    why: "uilet's SidebarNav writes it. styles/frame.css takes its gutter off inside the sidebar's foot, where the foot's own gutter would otherwise be doubled. See crewlet-app-shell__rail-foot.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "is-positive",
-    why: "routes/company/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
+    why: "routes/agents/People.tsx builds the workload bar's tone as cx(\"wl-bar\", `is-${tone}`) over lib/workload.ts's LoadTone. The stem is a bare `is-`, which is deliberately not honoured by the collector: half a dozen unrelated components write is-open, is-add, is-remove, is-destructive and is-active literally, and a prefix here would hide the next one of those to die.",
   },
   {
     name: "is-caution",
@@ -557,26 +582,6 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-card--flush",
     why: "uilet's Card writes it for `padding=\"none\"` content that reaches the card's edges. styles/screens.css turns its `overflow: hidden` into `clip`, which is what the recipe's own comment asks for — `hidden` also makes the card a scroll container, and a sticky box confined to a scrollport that can never scroll never has `top` applied, so every DataGrid inside a flush card had a dead column head. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-segmented",
-    why: "uilet's SegmentedControl writes it. styles/frame.css hides the two in the rail's foot — theme and density — once the rail is a bottom bar, where they took 250px of a 390px phone and left 140px for eight destinations. Both settings are in the command palette's `>` scope, and the collapsed rail already drops them for the same reason. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-search-trigger--toolbar",
-    why: "uilet's SearchTrigger writes it for `variant=\"toolbar\"`, whose 200px resting width is a FLOOR above 1024px. styles/frame.css cancels the floor inside `.page-search` so the page bar's field shrinks after the trail rather than pushing the keycap past the bar's edge — measured on #/activity/turns at 1440, content 1152px in a 1107px bar. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-search-trigger__shortcut",
-    why: "uilet's SearchTrigger writes it around the keycap. styles/frame.css hides it when `.page-search` is narrower than the word and the keycap together, the same end state the kit reaches under 1024px, reached by the field's own width. See crewlet-search-trigger--toolbar.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-search-trigger__label",
-    why: "uilet's SearchTrigger writes it around the word. styles/frame.css hides it once `.page-search` is down to its glyph. See crewlet-search-trigger--toolbar.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -804,8 +809,9 @@ describe("every class the dashboard names", () => {
 
   // THE TAB PANEL CARRIES A COLUMN, and nothing else in the suite can see it.
   //
-  // A screen's switched sections used to be direct children of `.screen-inner`
-  // — a flex column with a gap — and took their vertical rhythm from it.
+  // A screen's switched sections used to be direct children of the page's
+  // content column — a flex column with a gap — and took their vertical
+  // rhythm from it.
   // Giving the tab widget a real `role="tabpanel"` put one plain element
   // between the column and them, so without these three declarations every
   // panel on the Seat screen renders with its cards butted together.
@@ -828,17 +834,16 @@ describe("every class the dashboard names", () => {
     // assertion stays green, which is the butted-together failure the rule
     // exists to prevent, just less obviously.
     //
-    // So it is read off `.screen-inner` — the column these panels were lifted
-    // out of — rather than written here as a literal. Self-maintaining in both
-    // directions: change the page column's rhythm and the panel must follow,
-    // which is exactly and only what this test says.
-    // Anchored at the start of its own rule: `.screen[data-fill] > .screen-inner`
-    // is declared first and carries no gap, so an unanchored match reads the
-    // wrong box.
-    const column = /(?:^|\n)\.screen-inner\s*\{([^}]*)\}/.exec(stylesheets());
-    expect(column, ".screen-inner is not declared at all").not.toBeNull();
+    // So it is read off the page column these panels were lifted out of —
+    // the kit's `.crewlet-app-shell__content` now — rather than written here
+    // as a literal. Self-maintaining in both directions: a kit bump that moves
+    // the column's rhythm fails here until the panel follows, which is exactly
+    // and only what this test says.
+    const kit = readFileSync(require_.resolve("@crewlethq/ui/styles.css"), "utf8");
+    const column = /(?:^|\n|\})\s*\.crewlet-app-shell__content\s*\{([^}]*)\}/.exec(kit);
+    expect(column, "the kit's content column is not declared at all").not.toBeNull();
     const rhythm = /gap:\s*(var\(--spacing-\d+\))/.exec(column![1]!);
-    expect(rhythm, ".screen-inner declares no gap to inherit the rhythm from").not.toBeNull();
+    expect(rhythm, "the kit's content column declares no gap to inherit").not.toBeNull();
     expect(body, "the panel's rhythm must be the column's").toMatch(
       new RegExp(`gap:\\s*${rhythm![1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
     );

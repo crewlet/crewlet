@@ -23,6 +23,7 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkActivityRecord } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -83,9 +84,11 @@ function record(over: Partial<WorkActivityRecord> = {}): WorkActivityRecord {
 
 const mount = () =>
   render(
-    <Router>
-      <History />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <History />
+      </Router>
+    </ViewerProvider>,
   );
 
 /** What `work_activity` was actually asked. */
@@ -336,9 +339,11 @@ test("the lens draws its own coverage and publishes none", async () => {
   // would pass on a screen that had simply loaded no project.
   serving({ work_activity: behind([record({ project: "ENG" })]) });
   const { container } = render(
-    <Router>
-      <HistoryView container="project:ENG" embedded />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <HistoryView container="project:ENG" embedded />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("ENG-1")).toBeTruthy());
   expect(vi.mocked(usePageCoverage)).not.toHaveBeenCalled();

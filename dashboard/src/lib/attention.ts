@@ -22,17 +22,11 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type {
-  AgentRow,
-  BudgetWindow,
-  OrgBudget,
-  SandboxEntry,
-  SandboxRun,
-} from "~/protocol/index.ts";
+import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { roundLabel, runState, staleness, stoppedLine } from "./seats.ts";
+import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -99,22 +93,19 @@ export interface Attention {
 }
 
 export interface AttentionInput {
-  agents: AgentRow[];
   /**
-   * The live projection, which is what a seat is doing NOW.
-   *
-   * Nothing in it ages out: the engine reconciles this set against the
-   * durable run record every `ReconcileInterval` (thirty seconds), so a run
-   * parked on a question stays here for as long as it waits. It is read for a
-   * seat's run state, which is what it is current to the moment for.
+   * Every seat's row, carrying the ENGINE's word for what it is doing
+   * (`activity`). The live sandbox projection used to be an input too, read
+   * for a seat's run state — a second derivation of the one word the engine
+   * now serves — and nothing here reads it any more.
    */
-  sandboxes: SandboxEntry[];
+  agents: AgentRow[];
   /**
    * The DURABLE coding-run rows, which is what is still waiting.
    *
-   * A SECOND INPUT BECAUSE THE WAITING ROW NEEDS THE RECORD, not the live
-   * entry: how long a person has left to answer is the run's pause window
-   * (`pause_ttl_seconds`) counted from `paused_at`, and only the durable row
+   * THE WAITING ROW NEEDS THE RECORD, not the live entry: how long a person
+   * has left to answer is the run's pause window (`pause_ttl_seconds`)
+   * counted from `paused_at`, and only the durable row
    * carries the window. The live entry says a run is waiting; the record says
    * for how much longer its box is held.
    */
@@ -124,13 +115,15 @@ export interface AttentionInput {
   connected: boolean;
   authRejected: boolean;
   now: number;
+  /** A person's name by their handle, off the chart: who paused a seat is said by name. */
+  nameOf: NameOf;
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
-  const { agents, sandboxes, runs, budget, engine, connected, authRejected, now } = input;
+  const { agents, runs, budget, engine, connected, authRejected, now, nameOf } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -167,7 +160,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
-      path: ["admin", "config"],
+      path: ["settings", "config"],
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
@@ -181,7 +174,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         engine.posture === "shed"
           ? "It has released its seats because it could not reach the configuration it is supposed to run."
           : "It cannot converge on the fleet's active configuration.",
-      path: ["admin", "fleet"],
+      path: ["settings", "nodes"],
     });
   }
   if (engine?.shutting_down) {
@@ -192,7 +185,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "power",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
-      path: ["admin", "fleet"],
+      path: ["settings", "nodes"],
     });
   }
 
@@ -216,7 +209,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
       detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
-      path: ["cost"],
+      path: ["spend"],
       at: orgRefusing.refused_at,
     });
   } else if (orgNear) {
@@ -227,7 +220,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
       detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
-      path: ["cost"],
+      path: ["spend"],
     });
   }
 
@@ -246,9 +239,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/activity/runs?run=`, which the runs
+      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
       // screen stopped reading when a run became an object with an address.
-      path: ["activity", "runs", run.turn_id],
+      path: ["live", "runs", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.
@@ -259,7 +252,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
-    const state = runState(agent);
+    const state = activityOf(agent);
     if (agent.last_error) {
       out.push({
         id: `error-${agent.role}`,
@@ -268,7 +261,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "triangle-alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["company", "people", String(agent.handle ?? agent.id)],
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
         at: agent.last_error.at,
         who: String(agent.handle ?? agent.role),
       });
@@ -284,8 +277,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "seat",
         icon: "pause",
         title: `${agent.role} is stopped`,
-        detail: `The seat cannot take work: ${stoppedLine(agent)}.`,
-        path: ["company", "people", String(agent.handle ?? agent.id)],
+        detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
         who: String(agent.handle ?? agent.role),
       });
       continue;
@@ -293,7 +286,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // A live call that has not moved is the condition a spinning row hides.
     const call = agent.live_call;
     if (call?.in_progress) {
-      const how = staleness(call.updated_at, now);
+      const how = staleness(call.updated_at, now, agent.turn?.stage);
       if (how) {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
@@ -310,7 +303,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // opening frame — which is the case this row exists for: a first
           // model round that never came back.
           detail: `${call.phase} · ${roundLabel(call.round_num).text} — no update since ${call.updated_at}.`,
-          path: ["company", "people", String(agent.handle ?? agent.id)],
+          path: ["agents", "seats", String(agent.handle ?? agent.id)],
           query: { tab: "model" },
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
@@ -330,7 +323,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
         detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
-        path: ["company", "people", String(agent.handle ?? agent.id)],
+        path: ["agents", "seats", String(agent.handle ?? agent.id)],
         query: { tab: "cost" },
         at: refusing.refused_at,
       });

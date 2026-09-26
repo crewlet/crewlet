@@ -17,6 +17,7 @@ import { PageView } from "./Pages.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -32,7 +33,7 @@ afterEach(() => {
 
 /** One socket answering each question with a fixture. */
 function serving(answers: Partial<Record<QueryName, unknown>>) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  const query = vi.fn(async (what: string, _params?: unknown) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
@@ -52,9 +53,11 @@ const page = {
 
 function mount() {
   return render(
-    <Router>
-      <PageView container="LEAD" title="Test Sample Page" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <PageView id="p-1" />
+      </Router>
+    </ViewerProvider>,
   );
 }
 
@@ -98,4 +101,15 @@ test("a page under an ancestor draws the path, because the fact cannot", async (
   // Two now, and they are not a duplicate: one opens the container, the other
   // is the first step of a path that continues past it.
   expect(containerLinks()).toHaveLength(2);
+});
+
+// A PAGE IS ADDRESSED BY ITS ID. The address used to be the container and the
+// title, which a rename breaks: every link to the page led to Not Found the
+// moment somebody fixed a typo in its heading.
+test("the page is read by its id, which a rename does not move", async () => {
+  const query = serving({ page: { page, history: [], ancestors: [], children: [] } });
+  mount();
+  await waitFor(() => expect(query).toHaveBeenCalled());
+  const asked = query.mock.calls.find(([what]) => what === "page");
+  expect(asked?.[1]).toEqual({ id: "p-1" });
 });

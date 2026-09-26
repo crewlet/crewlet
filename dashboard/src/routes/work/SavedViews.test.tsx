@@ -14,6 +14,7 @@ import { SavedViews } from "./SavedViews.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -50,9 +51,11 @@ const view = (over: Record<string, unknown> = {}) => ({
 
 const mount = (id?: string) =>
   render(
-    <Router>
-      <SavedViews id={id} />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <SavedViews id={id} />
+      </Router>
+    </ViewerProvider>,
   );
 
 // AN OWNER IS A PERSON, and the chart is what turns their handle into the name

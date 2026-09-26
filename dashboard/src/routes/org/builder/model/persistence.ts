@@ -58,9 +58,10 @@ import {
 import type { Log } from "./history.ts";
 import type { BuilderMode } from "./transport.ts";
 import { isWriteId } from "./writes.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 /** The storage key. */
-export const DRAFT_STORAGE_KEY = "crewlet_org_draft";
+export const DRAFT_STORAGE_KEY = STORAGE_KEYS.orgDraft;
 
 /**
  * The most operations (applied and undone together) a kept draft may hold.

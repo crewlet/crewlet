@@ -25,23 +25,25 @@ import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
 // at once - the same call `app/frame/cells.tsx` makes for the same reason.
 import { Mark } from "~/ui/glyph.tsx";
-import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
+  activityOf,
+  activityWord,
+  handleLabel,
+  ringOf,
   roundLabel,
-  runState,
   seatPath,
-  seatTone,
-  stateLabel,
-  statusLine,
+  stateLine,
   toneOf,
+  type NameOf,
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, FeedRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { Attention } from "~/lib/attention.ts";
 
@@ -97,7 +99,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["company", "people", target])}
+      href={href(["agents", "seats", target])}
     >
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
           agent as a squircle, and that is the one cue telling them apart. A
@@ -111,11 +113,15 @@ export function SeatChip({
   );
 }
 
+/**
+ * A seat's state as a pill: the engine's word and its ring's tone. An idle
+ * seat is the neutral pill — a green one read as activity.
+ */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
-  const state = runState(agent);
+  const state = activityOf(agent);
   return (
-    <Tag variant={uiletTone(toneOf(state))} dot>
-      {stateLabel(state)}
+    <Tag variant={toneOf(state)} dot>
+      {activityWord(state)}
     </Tag>
   );
 }
@@ -123,22 +129,24 @@ export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
 export function SeatCard({
   seat,
   agent,
-  sandboxes,
+  nameOf,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  sandboxes: SandboxEntry[];
+  /** A person's name by their handle, off the chart the caller holds — see `NameOf`. */
+  nameOf: NameOf;
 }) {
   const now = useNow();
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
-  const tone = seat.kind === "human" ? "quiet" : seatTone(agent);
+  // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
+  // seat draws no edge, for the reason `ringOf` gives.
+  const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
   const round = call ? roundLabel(call.round_num) : null;
   return (
     // `seatPath`, not a handle spelled out again: a seat the engine reported no
-    // handle for is addressed by NAME, and `#/company/people/` opens nothing.
+    // handle for is addressed by NAME, and `#/agents/seats/` opens nothing.
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
         <SeatAvatar
@@ -149,7 +157,9 @@ export function SeatCard({
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
           <strong className="truncate t-body">{seat.name}</strong>
-          <span className="truncate t-caption mono">@{seat.handle}</span>
+          {seat.handle && (
+            <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
+          )}
         </div>
         {seat.kind === "human" ? (
           // THE CIRCLE SAYS IT. A tag reading "human" beside a person's
@@ -160,7 +170,7 @@ export function SeatCard({
           <StateBadge agent={agent} />
         )}
       </div>
-      <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
+      <div className="seat-line truncate">{stateLine(agent, { now, seat, nameOf })}</div>
       {call?.in_progress && (
         <div className="row gap-1">
           {/* THE PHASE IN THE PHASE'S OWN HUE, drawn by the one component that
@@ -175,8 +185,8 @@ export function SeatCard({
               way out) and names an absent phase, where this drew a coloured gap.
               The note it replaces called the miss deliberate because `PhaseTag`
               was somebody else's file during the uilet port; it is a `~/ui`
-              primitive this module already imports for `uiletTone`, so there was
-              never a second spelling to avoid — only a second colour. */}
+              primitive this module already imports, so there was never a
+              second spelling to avoid — only a second colour. */}
           <PhaseTag phase={call.phase} />
           {/* NOT A BARE DASH. "round —" on a seat that is plainly working reads
               as a field the engine failed to report; the engine reported it
@@ -261,7 +271,7 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
       >
         {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
             in the title; which DAY a row belongs to is a heading between days
-            (`routes/activity/Activity.tsx`), because a date is a property of
+            (`routes/live/Activity.tsx`), because a date is a property of
             the rows under it rather than of the first of them — and rendered
             here it put `fmtDateTime` in a 62px column and wrapped one row per
             day to three lines. */}
@@ -286,7 +296,7 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
   return (
     <a
       className={cx("feed-row", event.failed && "failed")}
-      href={href(["activity", "events", event.id])}
+      href={href(["live", "events", event.id])}
       onClick={onOpen}
     >
       {body}
@@ -433,7 +443,7 @@ export function QueryState({
    * on a node whose store could not be read are the same headline and
    * completely different problems, and only the second sentence separates
    * them. It was optional while one caller in the tree had no second sentence
-   * (`routes/cost/Spend.tsx`); that one now says what to do about it, so the
+   * (`routes/spend/Spend.tsx`); that one now says what to do about it, so the
    * type says what the component always meant.
    */
   empty?: { title: ReactNode; hint: ReactNode };

@@ -8,8 +8,18 @@
 
 // jsdom implements neither. Both are read at module scope by layout-aware
 // components, so their absence is a throw rather than a wrong answer.
-if (!("matchMedia" in globalThis)) {
+//
+// A TYPE TEST, NOT A KEY TEST, for `matchMedia`: the environment copies
+// jsdom's window onto the global with the key PRESENT and the value
+// `undefined`, so `"matchMedia" in globalThis` was true, this stub was never
+// installed, and every caller met `undefined` — which the ones that spelled
+// `matchMedia?.()` survived and the rest never ran under test at all.
+if (typeof globalThis.matchMedia !== "function") {
   Object.defineProperty(globalThis, "matchMedia", {
+    // CONFIGURABLE, so a suite can stand at a width (`installWindow` in
+    // `testing.tsx`) and put this back afterwards: a non-configurable property
+    // refuses to be redefined, and the suite dies before its first assertion.
+    configurable: true,
     writable: true,
     value: (query: string) => ({
       matches: false,

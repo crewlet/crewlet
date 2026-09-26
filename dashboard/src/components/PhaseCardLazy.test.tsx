@@ -87,6 +87,7 @@ function record() {
     startedAt: "2026-09-02T10:00:00Z",
     durationMs: 0,
     eventId: "ev-1",
+    stage: "",
   };
 }
 

@@ -21,7 +21,16 @@
 // at once. The constant rather than the component, because this module has
 // no React in it and must not acquire any.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC, plural } from "./format.ts";
+import {
+  civilAt,
+  civilKey,
+  fmtDate,
+  fmtDateTime,
+  humanize,
+  parseUTC,
+  plural,
+  readerDay,
+} from "./format.ts";
 // THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
 // rule above: `plainText` is a pure string→string function that happens to live
 // beside the grammar it has to agree with. A private stripper here instead would
@@ -69,15 +78,32 @@ export const STATUSES: { value: WorkStatus; label: string; group: string }[] = [
   { value: "closed", label: "Closed", group: "closed" },
 ];
 
-/** A status is a STATE, which is the one thing colour is spent on here. */
-export const STATUS_TONE: Record<string, Tone> = {
-  todo: "neutral",
-  in_progress: "info",
-  in_review: "caution",
+/**
+ * A status's tone, decided by its GROUP rather than status by status.
+ *
+ * A status is a STATE, which is the one thing colour is spent on here, and the
+ * states a reader scans for are the groups: somebody is on it (`active` —
+ * in progress AND in review, blue: work is moving), it is finished (`done`,
+ * green), or nothing is happening to it (`not_started`, `closed`, no hue).
+ * `in_review` was amber, which is the hue reserved for NEEDS YOU across the
+ * whole product — a seat parked on a question, a decision waiting — so every
+ * task in review read as a task waiting on the reader. `cancelled` is in the
+ * done group and finished without being delivered, so it keeps the quiet
+ * pill rather than claiming a delivery.
+ */
+const GROUP_TONE: Record<string, Tone> = {
+  not_started: "neutral",
+  active: "info",
   done: "positive",
-  cancelled: "neutral",
   closed: "neutral",
 };
+
+export const STATUS_TONE: Record<string, Tone> = Object.fromEntries(
+  STATUSES.map((s) => [
+    s.value,
+    s.value === "cancelled" ? "neutral" : (GROUP_TONE[s.group] ?? "neutral"),
+  ]),
+);
 
 /**
  * What a status is called, preferring the PROJECT's own label.
@@ -1793,30 +1819,35 @@ export function seededScope(view: Record<string, string> | undefined): Scope {
 // ---------------------------------------------------------------------------
 
 export interface CalendarCell {
-  /** The local `YYYY-MM-DD` this cell is, which is also its row key. */
+  /** The civil `YYYY-MM-DD` this cell is, which is also its row key. */
   key: string;
   day: number;
   inMonth: boolean;
   today: boolean;
 }
 
-/** The month an instant falls in, locally, as `YYYY-MM`. */
+/** The month an instant falls in, in the reader's zone, as `YYYY-MM`. */
 export function monthOf(now: number): string {
-  return browserDay(new Date(now)).slice(0, 7);
+  return readerDay(now).slice(0, 7);
 }
 
 export function shiftMonth(month: string, by: number): string {
   const [y, m] = month.split("-").map(Number);
-  const at = new Date(y ?? 1970, (m ?? 1) - 1 + by, 1);
-  return browserDay(at).slice(0, 7);
+  return civilKey(Date.UTC(y ?? 1970, (m ?? 1) - 1 + by, 1)).slice(0, 7);
+}
+
+/**
+ * A civil date spelled in the reader's language. FORMATTED IN UTC because
+ * the value is a UTC midnight standing for a date, not an instant: spelled in
+ * any zone west of Greenwich it would name the day before.
+ */
+function civilLabel(at: number, opts: Intl.DateTimeFormatOptions): string {
+  return new Date(at).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
 }
 
 export function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, 1).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  return civilLabel(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1), { month: "long", year: "numeric" });
 }
 
 /**
@@ -1829,14 +1860,13 @@ export function monthLabel(month: string): string {
  * so `1` and `4` each appear twice — which is the case a label has to separate
  * and a tint cannot.
  *
- * Built with `new Date(y, m - 1, d)` like [calendarWeeks] rather than through
- * [fmtDate], which parses an INSTANT: `2031-03-31` read as UTC midnight and
- * rendered west of Greenwich is the 30th, so the spoken label would name a
- * different day from the numeral beside it.
+ * Spelled as a CIVIL date like [calendarWeeks] rather than through
+ * [fmtDate], which draws an INSTANT in the reader's zone: `2031-03-31` read as
+ * UTC midnight and rendered west of Greenwich is the 30th, so the spoken label
+ * would name a different day from the numeral beside it.
  */
 export function dayLabel(key: string): string {
-  const [y, m, d] = key.split("-").map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString(undefined, {
+  return civilLabel(civilAt(key) ?? 0, {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -1863,20 +1893,22 @@ export function calendarWeeks(month: string, todayKey: string): CalendarCell[][]
   const [y, m] = month.split("-").map(Number);
   const year = y ?? 1970;
   const index = (m ?? 1) - 1;
-  const first = new Date(year, index, 1);
-  const lead = (first.getDay() + 6) % 7;
-  const days = new Date(year, index + 1, 0).getDate();
+  // CIVIL ARITHMETIC, at UTC midnight: which weekday the 1st is and how many
+  // days the month has are facts about the calendar, not about any zone —
+  // see `lib/format.ts`'s [civilAt].
+  const lead = (new Date(Date.UTC(year, index, 1)).getUTCDay() + 6) % 7;
+  const days = new Date(Date.UTC(year, index + 1, 0)).getUTCDate();
   const cells = Math.ceil((lead + days) / 7) * 7;
 
   const weeks: CalendarCell[][] = [];
   for (let i = 0; i < cells; i++) {
-    const at = new Date(year, index, 1 - lead + i);
-    const key = browserDay(at);
+    const at = new Date(Date.UTC(year, index, 1 - lead + i));
+    const key = civilKey(at.getTime());
     if (i % 7 === 0) weeks.push([]);
     weeks[weeks.length - 1]?.push({
       key,
-      day: at.getDate(),
-      inMonth: at.getMonth() === index,
+      day: at.getUTCDate(),
+      inMonth: at.getUTCMonth() === index,
       today: key === todayKey,
     });
   }
@@ -1897,15 +1929,14 @@ export function gridRange(weeks: CalendarCell[][]): { from: string; to: string }
   const first = weeks[0]?.[0]?.key ?? "";
   const lastRow = weeks[weeks.length - 1];
   const last = lastRow?.[lastRow.length - 1]?.key ?? "";
-  const after = new Date(`${last}T00:00:00`);
-  after.setDate(after.getDate() + 1);
-  return { from: first, to: browserDay(after) };
+  const after = civilAt(last);
+  return { from: first, to: after === null ? "" : civilKey(after + 86_400_000) };
 }
 
-/** The local `YYYY-MM-DD` an instant falls on, or empty when it is unreadable. */
+/** The reader's `YYYY-MM-DD` an instant falls on, or empty when it is unreadable. */
 export function dayKey(ts: string | undefined): string {
   const at = parseUTC(ts);
-  return at ? browserDay(at) : "";
+  return at ? readerDay(at) : "";
 }
 
 /**

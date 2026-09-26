@@ -27,7 +27,7 @@ So colour is spent in exactly three places:
 | | What it means | How many |
 |---|---|---|
 | **State** | *what a piece of work is doing* — info is working, warning needs a person, danger is stopped, success is done | 4, fixed |
-| **Accent** | *where the reader is, and what to do* — the primary action, the focus ring, the attention count, the on filter, the reader's own badge (a ring) | 1 |
+| **Accent** | *what to do* — the primary action, the focus ring, the Inbox's count of what is waiting, the on filter | 1 |
 | **Data** | a chart series, inside a figure that names it (a legend, or the label of a one-series figure such as a meter) | 4 + a neutral residual |
 
 Everything else — a seat, a unit, a **phase**, an event category, an
@@ -56,34 +56,51 @@ nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
 else. A tool the company has not set up keeps its mark, dimmed.
 
-A seat's chrome takes one of four **tones**, from what it is DOING — and what
-it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
+A seat's chrome takes one of three **rings**, or none, from what it is DOING —
+and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
 `stopped_reason` (`paused`, `unplaced`, `budget` or `provider`), computed once
 by the live projection from the seat's turn, its coding runs' durable record,
 its pause, its placement across the fleet and its budget windows (see
 [Agent States](../concepts/agent-runtime.md#agent-states)). `lib/seats.ts`
-maps the word to a tone and a label and folds nothing in: the dashboard used to
-derive a seat's state three ways on three screens, and a run parked on a
-question past the old twelve-hour age-out dropped out of every one of them. The
-two words are the contract's `SeatActivity` and `StoppedReason`, held to the
-engine's by a gate.
+maps the word to a ring, a label and a state line and folds nothing in: the
+dashboard used to derive a seat's state three ways on three screens, and a run
+parked on a question past the old twelve-hour age-out dropped out of every one
+of them. A source gate in `seats.test.ts` refuses any other module turning a
+live call's or a run's fields into one of the state words. The two words are
+the contract's `SeatActivity` and `StoppedReason`, held to the engine's by a
+gate.
 
-| Tone | `activity` | Drawn as |
+| Ring (kit tone) | `activity` | Label |
 |---|---|---|
-| `working` | `working`: mid-turn, or a coding run it launched is running | an info-blue rail |
-| `needs` | `needs`: a coding run it launched waits on a question only a person can answer | a caution-amber rail |
-| `broken` | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | a critical-red rail |
-| `quiet` | `idle`, no row from the engine yet, or a human seat | **nothing** |
+| `info` | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
+| `warning` | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
+| `danger` | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
+| **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
+
+A handle is written `@pm`, and a seat the engine reported no handle for gets
+nothing rather than a bare `@`. A live round that has not moved in two minutes
+is called stale, in ten stalled — except while the turn is **parked** on a
+detached coding run, which is silent by design for as long as the run takes:
+the executor's phase card then reads "parked on its coding run", because the
+stage travels with the live call off the seat's own turn.
 
 A failed last turn does not colour a seat. The seat takes its next wake like
 any other; its `last_error` is shown where the seat is read about, not as a
 stop.
 
-`quiet` is deliberately untinted. An idle seat used to draw a tinted, glowing
-tile that read as activity, and the fix for that is not a duller hue — it is
-none. `needs` and `broken` are separate because a seat parked on a question and
-a seat that fell over have both stopped, and only one of them is a failure.
+**Where a seat runs is which node holds it** — the seat's "Held by" fact:
+"this node · node-a", "another node", or "no node — not placed", read off this
+node's own health push (the seats it holds) and the engine's `unplaced`. It was
+the agent instance id, which exists only mid-turn, so an idle seat this very
+node held read "not running on this node". Which peer holds one held elsewhere
+is Settings › Nodes' to say: asking the fleet to label one seat would make
+opening a peek a company-wide read.
+
+An idle seat is deliberately untinted. It used to draw a tinted, glowing tile
+that read as activity, and the fix for that is not a duller hue — it is none.
+`warning` and `danger` are separate because a seat parked on a question and a
+seat that fell over have both stopped, and only one of them is a failure.
 
 ---
 
@@ -181,8 +198,7 @@ had nothing to separate itself from. A near-neutral ground with one saturated
 accent is what makes the accent mean "here".
 
 **Four opaque rungs, and each is painted by what it names.** `--color-surface-
-frame` is the window and its navigation — the rail and the workspace sidebar
-stand on it; `--color-surface-background` is the SHEET, the page column
+frame` is the window and its navigation — the sidebar stands on it; `--color-surface-background` is the SHEET, the page column
 everything is read on, and a bar inside the page (the page bar) stands on it
 too; `--color-surface-subtle` is a card, which is what the kit's `Card` paints;
 and `--color-surface-elevated` is the one step a card can show — a block inside
@@ -193,15 +209,15 @@ flat on purpose, and a page of cards each lifted by a large step is a relief
 map.
 
 The ramp was once four numbered names over three values, and the collision
-was at the bottom, where the chrome lives: the rail, the sidebar, every card
-and every grid painted the page's own colour and were told apart from it by a
+was at the bottom, where the chrome lives: the sidebar, every card and every
+grid painted the page's own colour and were told apart from it by a
 1px border — twenty-two declarations, none of which drew anything — and at the
 top, the calendar's out-of-month cells painted the card's own colour. A
 numbered ramp cannot state which rung a thing stands on, so nothing about
 either rule looked wrong in the file. `styles/surfaces.test.ts` measures the
 rungs against the installed palette — all four a different colour from every
-other in every state, the frame under the rail and the sidebar, the sheet under
-the page, the card rung under the kit's `Card` — and refuses an interaction
+other in every state, the frame under the one sidebar, the sheet under the
+page, the card rung under the kit's `Card` — and refuses an interaction
 state (`:hover`, `:focus`, `:active`) that paints a structural rung rather than
 an overlay.
 
@@ -234,19 +250,20 @@ width as it counts makes the column beside it jitter.
 A 4px base scale, with the package's `--density` multiplying every spacing and
 size token — rows, controls, gaps — so compact mode is a real change to every
 surface. A row is `--size-row-md` (36px), a control `--size-control-md` (30px),
-and the rail's rows `--size-nav-row` (30px), all the kit's own steps rather
+and the sidebar's rows `--size-nav-row` (30px), all the kit's own steps rather
 than literals written to line up with them. Four radii and a pill (the previous
 system had ten literal radii across 44 declarations). **The card is flat:** it
 is found by its rung and its hairline, and a shadow is spent only on what
 stands OVER the page — a popover, a dialog, the command palette. The focus
 ring is the package's `--shadow-focus`.
 
-The sidebar's inset is the one place that scale is split in two, because a rail
-row has two edges that want different things. `--size-nav-gutter` insets the
-rail, and it is where a row's own background, hover and active tint begin, so
-it decides how much of the rail's width the click target covers.
+The sidebar's inset is the one place that scale is split in two, because a
+sidebar row has two edges that want different things. `--size-nav-gutter`
+insets the sidebar, and it is where a row's own background, hover and active
+tint begin, so it decides how much of the sidebar's width the click target
+covers.
 `--size-nav-row-pad` insets
-the content inside that row. Every glyph in the rail therefore lands on the sum
+the content inside that row. Every glyph in the sidebar therefore lands on the sum
 of the two, and anything with no row of its own — the brand lockup, the group
 labels — adds them rather than carrying a literal. That is what lets the rows
 be widened without moving one glyph: shrink the gutter, grow the pad by the
@@ -257,35 +274,46 @@ share does not move.
 
 ## Information architecture
 
-**Two levels, because this product has six unrelated trees.** A **workspace**
-is a noun with a tree of its own — Work has projects, Company has units,
-Knowledge has containers, Activity has kinds of run, Cost has scopes, Admin has
-estates. The 80 px **rail** shows the workspaces and nothing else; the 236 px
-**workspace sidebar** shows one workspace's tree and nothing else.
+**One sidebar, and three nouns that keep it one.** The sidebar lists where a
+reader can go — nine **workspaces** — and the few objects they keep coming back
+to: the company's projects, the views they pinned, the pages they starred. A
+workspace's own **sections** are paths drawn as tabs in its page header
+(Settings draws its eight, and a cross-link to Budgets, as a grouped column),
+and its objects — a unit, a
+container, a node — are rows on the section that lists them.
 
-A single sidebar works when there is one tree. With six it either hides every
-tree behind disclosure — three clicks to a project — or grows to sixty rows and
-stops being scannable. The tracker had already grown a second rail inside its
-own screen, which is the same conclusion reached one screen at a time.
+It replaced two columns of navigation: an 80 px rail of workspaces, and beside
+it a 236 px sidebar holding the open workspace's own tree. Every workspace had a
+different second column, the reader's place moved between two columns on every
+navigation, and the rail spent 97 px of every screen on eight icons. The trees
+were never the sidebar's to hold: a unit list is a section of Agents, a node
+list a section of Settings.
 
 ### The grammar, stated once and asserted
 
-- A **rail row** is a workspace.
-- A **sidebar row** is a destination with its **own path**.
-- A **tab** is a `tab=`, `view=` or `lens=` query on the path you are
-  already on — three spellings of one thing, each named for what it
-  switches: an object's tabs, a list's views, a screen's whole lens.
+- A **sidebar row** is a workspace, or a live shortcut to a project, a pinned
+  view or a starred page.
+- A **section** is a **path segment** inside a workspace, drawn by one
+  renderer — `tabs` in the page header, or `column` for Settings.
+- An **object tab** is a `tab=` query on an object's own page (a seat's
+  Overview, Work, Turns…), bound to 1–9.
 
-Nothing is two of those. A tab never appears as a sidebar row, a sidebar row
-never appears as a tab, and a filter — a reason, a scope, a status — lives in
-the page's own filter bar rather than in the sidebar. This is the boundary
-every tool of this shape loses first, and it is lost one pull request at a time:
-"just one more row under a project" is what turns two levels into three.
+Nothing is two of those. A section is never a sidebar row and never a query; an
+object tab is never a path. A filter — a reason, a scope, a status — is none of
+the three and lives in the page's own filter bar. `view=` and `lens=` remain
+where a screen switches how ONE object is read (a list's saved view, the
+configuration's active / history / diff), which is an object tab by another
+name.
 
-`router.test.ts` holds it against the definitions rather than against this
-paragraph: every destination has a path of its own, no two share one, each
-resolves to the workspace it declares, no two workspaces own a first segment,
-and no reserved segment has the shape of a key the engine mints.
+`app/nav.ts` holds the one table, `WORKSPACES`, with each workspace's sections;
+`DESTINATIONS` (the palette's "Go to") is derived from it. `app/routes.ts`'s
+`resolve(path)` is the one route table: the screen dispatch, the breadcrumb,
+the stars and recents a reader keeps and the tests all ask it, and a stored
+path that stops resolving is dropped when it is read. `router.test.ts` holds
+the grammar against the definitions — every destination resolves to the
+workspace it declares, chords are unique, no reserved segment has the shape of
+a key the engine mints — and holds the table below against the resolver in
+both directions.
 
 ### A filter is a chip; an arrangement is a menu
 
@@ -443,146 +471,189 @@ each the answer to one thing that went missing at one item:
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
 uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
-resolve before any answer arrives.
+resolve before any answer arrives. The resolver recognises a key by that shape
+rather than by elimination: the engine uppercases every container key it
+keeps, so a segment under Knowledge holding a lowercase letter is a section or
+Not Found, never a container — `#/knowledge/skills` does not open a container
+called `skills` before the screen that section names exists.
 
 The set itself is `RESERVED_SEGMENTS` in `app/nav.ts` and is deliberately NOT
 copied out here: a prose list of twenty-one strings is a list that goes stale,
 and this one had drifted to fifteen while two of the entries it did name were
 reserving route space nothing routed. `router.test.ts` holds the routes named
-in the table above against that list and against `RAIL`, so the table and the
-code cannot disagree about which addresses exist.
+in the table above against that list and against `WORKSPACES`, so the table
+and the code cannot disagree about which addresses exist.
 
-### The rail
+### The sidebar
 
-The order is the product's story: you, the work, the people, what they know,
-what they did, what it cost, the machine.
+The order is the product's story: you first — what needs you, what reached
+you, what is yours — then the company's work, its agents, what is running,
+what it knows and what it spent, and the machine last.
 
-| Row | Route prefix | Badge |
+| Row | Route | Figure |
 |---|---|---|
-| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a comment you were cc'd on landed), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
-| **My work** | `#/me` | — |
+| **Home** | `#/home` | — |
+| **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+") |
+| **My work** | `#/me` | questions asked of you, the engine's own total — counted in full, never the length of the page it drew, and written as a floor ("200+") where the count stopped at the engine's ceiling; nothing asked draws no figure |
 | **Work** | `#/work` | — |
-| **Company** | `#/company` | — |
+| **Agents** | `#/agents` | agents working now, beside the working mark |
+| **Live** | `#/live` | — |
 | **Knowledge** | `#/knowledge` | — |
-| **Activity** | `#/activity` | seats working now, neutral |
-| **Cost** | `#/cost` | — |
-| **Admin** | `#/admin` | a lock when no operator credential is presented |
+| **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
+| **Settings** | `#/settings` | a key mark when no operator credential is presented |
 
-**Admin's row is never hidden.** A section that vanishes without a credential is
+Under the workspaces: **Projects** (every project with its key chip and its
+open work — the engine's maintained `task_counts`, waiting plus started),
+**Pinned** (the views this reader pinned, asked for WITH the viewer — a pin is a
+person's, and the shared strip has none — each with the total it selects), and
+**Starred** (drawn only when there is one). At the foot, Settings, the
+**health card** and the **user block**.
+
+**Settings is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
-browser would conclude the product has no configuration screen.
+browser would conclude the product has no configuration screen. General — the
+charter — and Tools — the registry every reader is pushed — are readable by
+anybody; the key mark says the rest needs an operator. It is a KEY rather than
+a padlock because the kit's glyph set carries no padlock, and a key names what
+is missing: a credential.
 
-**A number beside a workspace row says what it counts.** `SidebarRow.count` is
-one field holding a value AND the sentence naming its question, because the two
-used to be a number and an optional sibling and the optional half is the one
-that went missing. A unit carried three unqualified figures across the product:
-its whole subtree in this rail, its own members on the org chart's block, its
-on-screen rows in the roster's group head. All three now come off
-`lib/seats.ts`'s `unitTally`, which answers both questions at once —
-`unitSeatsLabel` says the subtree first and names the direct count only where
-the two differ, and `unitDirectLabel` is what a roster group says, because a
-seat sits in exactly one group and nothing under a unit is in it. A filter
-outranks both: with one on, every count on the screen is over what matched.
+**A guarded section says so and nothing else.** Opened by a reader the engine
+has SAID holds no operator credential, a guarded section is replaced by one
+refusal — "Nodes needs an operator credential", and a button to set a token —
+drawn by the frame, before the screen mounts. A screen that mounted anyway was
+refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
+and "No nodes are reporting", under a banner calling the refusal the last
+reading that succeeded, while the Settings column beside it counted one node.
+The section waits for the frame's FIRST answer about the reader — one round
+trip, behind a placeholder — so it asks nothing it may be refused; a cold load
+of Secrets used to send its guarded reads, be refused, and draw the refusal a
+frame before the frame knew to. A viewer read that FAILED is no answer and
+does not hold the section — treating it as "no credential" would lock an
+operator out until the next poll — so the screen mounts, and the guarded
+screens draw no figure from a read that never succeeded. Edit org is
+the one guarded section that answers its own refusal, because its draft is
+forgotten on a token change only a mounted builder hears.
 
-**A row's mark has a column whether or not the row has a mark.** The workspace
-sidebar draws three kinds of row — one with an icon, one with a status dot, one
-with neither — and while the mark was rendered conditionally it took layout
-only when it existed, so a list holding all three started its text at three
-different x positions. Measured in Admin, where Infrastructure expands to the
-fleet's nodes above the state log's domains: the node's label sat at 120px, a
-domain's at 134 and the icon-bearing parent's at 128. Activity's seat list does
-it over time rather than down the list — a seat that is working carries a dot
-and an idle one does not, so the column combs in and out as the company works.
-`.side-mark` is a 16px slot on every row, which is the same rule
-`--size-nav-gutter` plus `--size-nav-row-pad` already states for the rail beside it: every
-row at one depth starts its text on ONE vertical line.
+**A figure beside a row says what it counts.** The kit's `NavItem` takes a
+figure only with the words that name it, and two kinds of figure are two
+props: a **badge** is how many things are waiting on the reader, and a
+**count** is how many of something the destination holds. A figure the engine
+did not answer is absent, never a zero.
 
-**The rail is as wide as its foot, not as its longest label.** `--rail-w` is
-composed — `--rail-foot-w` plus the foot's inset plus the rail's own border —
-rather than picked. It was a flat 80px, which holds "Knowledge" at `--font-size-2xs`
-comfortably and does not hold the theme and density switches under it: a pill
-row is three hit targets at `--size-target-min`, which is 24px because WCAG 2.2
-says a pointer target may not stand smaller, plus two 2px gaps and the row's own
-2px padding — 80px with nothing negotiable in it. After the foot's inset the row
-had 71px, so the third option of each control was drawn OUTSIDE its own pill:
-"dark" and "comfortable" hung over the rail's edge with no ground under them, on
-every screen. Both settings are also in the command palette's `>` scope, which
-is where the collapsed rail and the phone's bottom bar send a reader — they are
-kept in the chrome because a theme switch you can SEE is the reason either is
-there, and what was wrong was a rail too narrow to draw what it was drawing.
+**Who the reader is, and how much is waiting on them, are read ONCE.** The
+frame asks both — the `viewer` and the Inbox count — and the sidebar, Home's
+status line and the Inbox's own band all draw that one answer. Each of them
+asking for itself was a standing query per surface: several of the socket's
+four query slots held before a screen's first read could run, and the badge
+and the sentence beside it polled on separate minutes and could name two
+numbers. A surface mounted outside the frame is refused rather than handed a
+read of its own, because that fallback would bring the per-surface reads back
+without a sound.
 
-**The brand mark is bounded, never sized.** `crewlet-icon.svg` is 1467×978 —
-a 3:2 mark — and it *meets* its box rather than filling it, so any box whose
-own ratio is not 3:2 draws the mark smaller than the box and pads the rest. It
-was given a 24px SQUARE, which drew 24px of mark across 16px of art and
-letterboxed the other 8: a cell 96px wide held a 24×16 speck. Neither axis is
-given a size now. Both are given a MAXIMUM over the file's intrinsic size —
-`max-height` at `--size-control-md`, the step every control in the same
-`--page-bar-h` band takes, and `max-width` at the column less the inset
-`.rail-rows` already takes — so whichever binds decides the box and the other
-derives from the ratio. Open, the height binds and the mark is 48×32; in the
-48px column the width binds and it is 39×26.
+**The health card** says the one state that decides what a reader should do,
+in precedence order: the token was refused (the card is then the button that
+asks for another), reconnecting, draining, no configuration, a posture that
+diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
+("Waiting for the engine" — nothing reported is not healthy), and serving —
+"3 nodes · config epoch 42", or "node count unavailable" where the presence
+read failed. The dot and the title are the POSTURE and nothing else: a
+serving node is "Engine healthy" with a success dot whatever its alarms say.
+The alarm line beneath is a second fact with its own tone and glyph — the
+health push's `alarms`, a count and the alarm that has stood longest ("5
+alarms · oldest: backup age") in warning ink beside a warning triangle, never
+the rows, because the push is public; a push with no alarm table says "Alarms
+not evaluated yet" in plain text, because an unevaluated table is neither an
+empty one nor a fault. Recolouring the dot for an alarm drew "Engine healthy"
+beside an amber dot, and retitling the posture to match only repeated the
+alarm line. Everything comes off the one health push; nothing polls.
 
-A maximum on *both* axes rather than a size on one and a clamp on the other,
-because a clamp does not carry through a definite size: `height:
-var(--size-control-md)` with a `max-width` gave a 39×32 box at ratio 1.219 in the
-narrow column and letterboxed the mark inside it exactly as the square had.
-CSS 2.1 § 10.4's table rescales the other axis only where that axis was itself
-derived; a height the author stated is a used value the clamp never revisits.
-And a maximum rather than a rule keyed on the collapsed rail, because the 48px
-column is React state AND a breakpoint — under 960 the grid hands the rail
-`--rail-w-collapsed` with `collapsed` still false, which is how
-`.rail-engine > .truncate` once rendered 61px of word inside 48px of column.
-`styles/frame.test.ts` holds the shape: no definite width, no definite height,
-a maximum on both.
+**The user block** is who this browser is — a person (bound: their name and
+seat, linking to it), a token no seat claims (unbound: the token's id, and what
+would bind it), or nobody (anonymous) — beside the theme flip and the
+**preferences**: theme (light, dark, match the system), density, the zone
+timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the runtime's
+canonical list omits, or the browser's own), how a date is written, and the
+token. All of them are per browser and none is the company's: every key the
+dashboard keeps in browser storage is declared in one table
+(`lib/storage.ts`), and a key no build reads any more is listed there as
+retired and removed at boot, so a stale value does not sit in a reader's
+profile for ever. The zone is the one every timestamp is drawn in AND the one a day is
+filed in — a calendar cell and a timeline column are the chosen zone's date, so
+a task stamped "Sep 23" is never in the cell for the 22nd — while a day's
+arithmetic (the grid, the span between two dates) is civil and moves with no
+zone. There is no company switcher: one engine runs one company.
 
-`g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
-`g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
-because every single-modifier combination worth having is already the browser's.
+**The lockup is the company**, beside the product's mark: "Nimbus", on one
+line, and the way home. The product's name stands in only while no company has
+been sent. The kit's own default puts the product first and the company under
+it; on this screen the company is the subject, and the product is in the mark
+and the tab.
+
+`g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
+`g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
+single-modifier combination worth having is already the browser's.
 
 ### The routes
 
-| Route | Page | Tabs / views |
+Only a route a screen draws is written here, and `router.test.ts` holds this
+table against `routes.ts`'s resolver both ways: every address below resolves to
+a screen, and every workspace and section the code declares is below.
+
+| Route | Page | Params |
 |---|---|---|
-| `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
-| `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) · on the Assigned tab, `shape=`, `cols.list=` / `cols.table=` and the filter grammar, with the assignee LOCKED and `view=` absent — the screen's own tabs are its strip |
-| `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
-| `#/work/projects` | **Projects** — the directory: every project, its lead, its target date, its four counts — waiting (`todo`), started (`active`), done and closed — and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company. **Unit is the one OPTIONAL column**: the engine mints a project the moment a unit declares its `project` key and names it after the unit, so on a chart-owned company Unit and Project are the same word on every row — two of nine columns spending their width on one fact. It is a column rather than a deletion because the two genuinely differ where a project is a root-level SEAT's, and `sort=unit` stays an ordering the engine takes whether or not the column is drawn — so the directory carries a **Columns** menu beside its segment, which is the same `ColumnChooser` the work list's Display menu draws over its own columns. Optional with no chooser is a column nobody can reach and an ordering no head on the screen offers, which is what this shipped as for one commit | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, with a leading `-` for descending · `cols=` (the bare key: this is the screen's only grid), which carries the order as well as the selection, so it names the whole set |
+| `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
+| `#/inbox` | **Inbox** — what the engine needs decided, and what reached you and why | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
+| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it | `order=due\|priorities` · `handle=` (an operator reading somebody else's day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
+| `#/work` | **Work › Tasks** — every task, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
+| `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
-| `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/{KEY}` | **Project** — the header says what the container is, its lede says what it is for, and **Items** carries the open count | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
-| `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
-| `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
-| `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
-| `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
-| `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
+| `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` |
+| `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside | `unit=` · `seat=` |
+| `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
+| `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
+| `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
+| `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(operator)* | `view=visualization\|table` · `chart=` · `unit=` · `seat=` |
+| `#/agents/seats/{handle}` | **Seat** — agent or human. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|conversations\|memory\|cost\|access\|schedules`; human: overview · work · access · `conversation=` |
+| `#/live` | **Live › Now running** — what the company is doing at this moment | `window=15m\|1h\|6h` |
+| `#/live/turns` · `#/live/turns/{id}` | **Turns** — every turn, round by round; one turn | |
+| `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable | |
+| `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** | |
+| `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
+| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
+| `#/knowledge` | **Knowledge** — live search over the backend, and the containers | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
-| `#/knowledge/{CONTAINER}/{Title}` | **Page** | |
-| `#/activity` | **Live now** — what the company is doing at this moment | `window=15m\|1h\|6h` |
-| `#/activity/turns` · `#/activity/turns/{id}` | **Turns** — every phase, round by round | |
-| `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
-| `#/activity/schedules` | **Schedules** | |
-| `#/activity/a2a` | **Agent-to-agent** | |
-| `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
-| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
-| `#/cost` | **Spend** — over time, then by phase, model, seat, and the costliest turns. The live 24 hours come from the projection; 7, 30 and 90 days are whole company days from the replicated usage domain, the same on every node (see [Budgets and spend](../guides/budgets-and-spend.md)) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
-| `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
-| `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
-| `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
-| `#/admin/tools` · `#/admin/tools/{tool}` · `#/admin/tools/servers/{name}` | **Tools** *(operator)* | `q=` · `origin=` |
-| `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
-| `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
-| `#/admin/audit` | **Audit** — every write a person or a token made, across all four subsystems that record one: the tracker, the knowledge base, the configuration history and the credential store *(operator)*. NO DETAIL ROUTE — every row already has a page of its own somewhere else | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
+| `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change | |
+| `#/spend` | **Spend › Overview** — tokens over time, then by phase, model, seat, and the costliest turns (tokens only) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
+| `#/spend/budgets` | **Budgets** — each window's ceiling and what it is refusing. ONE address: Settings lists it as a cross-link | |
+| `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
+| `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
+| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
+| `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
+| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases, duties and config rollout *(operator)* | |
+| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
+| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
+| `#/settings/audit` | **Audit log** — every write a person or a token made *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route
 somewhere else, permanently, with the address bar agreeing with them — which is
 strictly worse than the dead link it exists to avoid, because a dead link is
 visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
-has ever shipped a route from this tree, so there is nobody holding an old link;
-`NotFound` names the screen and offers the palette.
+has ever shipped a route from this tree, so there is nobody holding an old link:
+an address from before the one-sidebar rebuild (`#/company/…`, `#/activity/…`,
+`#/cost/…`, `#/admin/…`) is Not Found, which names what was asked for, says
+where the product knows why there is nothing there, and offers the way home.
+
+**An object's segment is decided by its shape, never by a lookup**, so every
+address resolves before any answer arrives. A project or container key is
+uppercase, a task is `KEY-n` or its uuid, and a page is its uuid — so a word in
+one of those positions (`#/work/tasks`, `#/knowledge/pages/runbook`) is Not
+Found rather than an object the engine never minted, which would draw its
+refusal under a trail naming a page that does not exist.
 
 **Three of those surfaces are the engine answering a question it has always
 been able to answer.** Search is the ranking a seat gets from `search_work_items` —
@@ -605,9 +676,20 @@ disagreed about how long an hour was, and a link from one to another carried no
 range at all.
 
 There is now **one key and one control**. The value is a duration from a closed
-set — `15m` `1h` `6h` `1d` `7d` `30d` `90d` — or an explicit interval written as
-ISO 8601's own `<from>/<to>`, so a custom window is still one value a reader can
-copy out of the address bar.
+set — `15m` `1h` `6h` `1d` `7d` `30d` `90d` — or `today`, or an explicit
+interval written as ISO 8601's own `<from>/<to>`, so a custom window is still
+one value a reader can copy out of the address bar.
+
+**`today` is the company's day so far**, cut at the first instant of the date on
+the company's clock (`org.timezone`, the calendar `internal/period` keeps) —
+not the browser's midnight and not "the last 24 hours". The first instant, not
+00:00: in a zone that moves its clock across midnight the day starts at 01:00
+(Santiago) or at the first of two midnights (Amman), and a "Today" that
+disagreed with the engine's day by an hour would count a turn the engine
+charged to yesterday. It moves with the clock like a duration, is charted in
+hours from its first, and its "previous" window is the same span before
+midnight. A screen offers it like any other window; the control draws it
+first.
 
 **The offered set is the screen's, not the vocabulary's.** A spend chart has
 nothing useful to say about fifteen minutes; a strip folded from the events the
@@ -642,7 +724,7 @@ element means rather than a list of objects.
 column sets.** They were two components over one answer, and the cost was
 exactly what two renderers of one row always costs: the list had none of the
 rules this section states — one track list for the whole grid, the cap on a
-shrink column, the card a row becomes below 860px, the cursor `j` and `k`
+shrink column, the card a row becomes below 640px, the cursor `j` and `k`
 walk — and the table had none of the list's, so it drew an EMPTY band per
 group the moment a second axis was asked for, because sub-groups replace a
 group's rows and it read only `rows`. The shape now picks a **column set** and
@@ -666,6 +748,25 @@ the same way whatever draws it — so both shapes share one `sort=`.
 **The sort is in the URL**, which is the rule the component exists for: a
 sorted ops table that cannot be sent to anybody, does not survive a reload and
 comes back unsorted from Back is sorted for one person for one minute.
+
+**A grid too narrow for its columns gives some up, and says which.** The wrap
+clips (it is what keeps the sticky head working), so columns that overrun it
+were cut off at the edge with nothing to scroll — or, with every flexible
+track floored at zero, the one column that is the point of the list was
+squeezed to nothing: the work list beside a peek at 1280 drew its titles 70px
+wide. So a column may declare a `floor` (the work title's is `16rem`), and the
+columns that can go declare the order they go in (`drop`, lowest first): when
+the tracks overrun the box — or a content-sized column is squeezed below its
+fifth of the grid and cuts a value short ("T…" for a status), the quieter
+failure — the next goes, until they fit or nothing droppable is left; when the
+box grows, every column gets another chance. The foot says
+"Hidden to fit: Updated and Due", because a column that vanished without a
+word is a value the reader cannot tell was ever there. The work sets give up
+what a task's own page answers one click away — when it last moved, then the
+dates and sizes a reader switched on, then the due date, then the marks — and
+never the key, the status, the title or who holds it — and the status word is
+drawn whole rather than cut to a column's share. None of it happens on a
+phone, where a row is a card that shows every value.
 
 **A band may hold bands.** A second grouping is a heading under a heading,
 which is what a second axis means where every row is a line, and a band
@@ -1060,7 +1161,7 @@ selected one reads zero and the rail is a dead end.
 | `peek={kind}:{id}` | section | the detail rail is open on that object |
 | `tab=` | section | the object page's tab |
 | `view=` | section | a list container's view |
-| `lens=` | section | which whole reading of a screen is drawn — the Company screen's chart, charter and builder, the Configuration screen's active, history and diff |
+| `lens=` | section | which whole reading of an object is drawn — a project's items, overview and history, the Configuration screen's active, history and diff |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
 | `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page — and `cols.<shape>=` alone on the work screen, whose one grid has a column set per shape while both share its `sort=` |
 
@@ -1101,34 +1202,84 @@ sorted, filtered and paged as they left it — and a rail that stepped through
 anything else would be walking a different set from the one on screen. A
 screen that publishes nothing gets a rail with no stepper, which is honest.
 
-The id is split on its FIRST colon only, so `page:ENG/Deploy runbook`
-survives being carried in a query value.
+The id is split on its FIRST colon only, so an id that carries a colon of its
+own survives being carried in a query value.
 
 ### The frame
 
-`dashboard/src/app/frame/` owns everything a screen wears, and a screen renders
-none of it:
+The frame is the kit's `AppShell`: the sidebar stands on the frame rung and
+the screen floats beside it on a sheet, inset by `--size-shell-inset` and
+rounded, with ONE scroller inside it. Below the kit's `breakpoint.shell`
+(1024 px) the sheet is the whole window and the sidebar is a modal drawer that
+takes Escape, traps Tab, hands focus back to its toggle and closes on a
+navigation — opened from the bar's toggle or with `Mod+\` (`⌘\` on a Mac,
+`Ctrl+\` elsewhere), a chord that does nothing above the breakpoint, where the
+sidebar is always on screen; the skip link precedes everything and lands on
+the scroller. None of that is written in this repository, because a second
+copy of it is how the two drift. What `dashboard/src/app/` owns:
 
 | Piece | What it is |
 |---|---|
-| `AppRail` | the workspaces, the badges, the engine pill, theme and density. The engine pill reads only the health slice (`useEngineHealth()`, the `health` push kept whole) and the connection — never a query of its own — and names the fleet's size in its title from `health.nodes`, or "node count unavailable" when the engine could not count (`nodeCountLabel`). `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for. On the bar the eight rows scroll sideways and the ACTIVE row is scrolled into view on every change of workspace (`revealInline`, the strip alone, never the page behind it); the engine pill is its dot there, as at 960, because with its word the foot pushed the current destination under the scroller's edge. The pill's accessible name carries the word at every width |
-| `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
-| `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
+| `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), the screen's own controls (portalled in by `PageActions`), who is working now, the star and Copy link; then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
+| `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
+| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
-| `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
-| `DetailRail` | the peek's chrome — resizable, a drawer under 1200 px |
-| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
-| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 860 |
+| `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
+| `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation |
 
+**Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
+sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
+pane: a `DataGrid`'s rows become labelled cards, the Settings column stacks
+above its section, and the page bar's controls take a line of their own and
+scroll. Both are the kit's numbers, written as media-query literals that
+`frame.test.ts` holds against `app/layout.ts`, which reads them from the kit.
+
+And the peek is a column of the sheet wherever the list beside it keeps its
+444 px floor, which is arithmetic over EVERY width in front of the list:
+
+| Term | Width |
+|---|---|
+| the sidebar (`size.shell.rail`) | 236 |
+| the sheet's inset (`size.shell.inset`) | 8 × density |
+| the sheet's two hairlines | 2 |
+| the peek, at rest | 420 |
+| the scroller's reserved gutter (`scrollbar-gutter: stable`, drawn 10 px wide) | 10 |
+| the screen's padding (`spacing.5`, each side) | 40 × density |
+| Settings' section column, on a screen that draws one | 236 |
+| the list | 444 |
+
+— **1160 px** on a screen and **1396 px** beside Settings' column at the normal
+density (1152 and 1388 compact, 1167 and 1403 comfortable). Below that the peek
+is a drawer over the screen. The first cut of this counted only the sidebar,
+the inset, the hairlines, the peek and the list, and put the threshold at
+1112: the Work list beside a peek there was 396 px, and at 1280 a peek on
+Settings › Nodes left the nodes grid 328 px with its columns cut off.
+
+It is **the shell, not a media query**, that applies it, because two of those
+terms are not the window's: the section column belongs to the screen, and the
+inset and padding scale with the reader's density — a media query can see
+neither. `app/layout.ts` (`peekColumnMin`) does the arithmetic, the shell asks
+`matchMedia` for the one width right for the frame on screen, and it writes one
+attribute, `data-peek="column"` or `"drawer"`, so there is no width with both
+or neither. And the column's track is the reader's dragged width CAPPED at what
+the sheet can give with the list at its floor (`--peek-reserve`, from
+`listReserve`), because a width dragged to 640 on a wide window outlives it.
+
 **A screen publishes what the chrome needs and renders none of it.** The labels
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
-from (`usePageCoverage`), and its own controls. Twenty screens each drawing
-their own header is how five of them came to drop the coverage badge.
+from (`usePageCoverage`), a section's figure for its tab (`useSectionCounts` —
+a string the screen already wrote, "12" or "20+", because only the screen knows
+whether a number is a total or a floor), and its own controls. Twenty screens
+each drawing their own header is how five of them came to drop the coverage
+badge.
 
 **And only a SCREEN publishes — a body rendered inside one never does.** The
 frame holds one coverage slot with one setter, so a reusable body that published
@@ -1143,12 +1294,12 @@ serving as both takes that as a prop rather than guessing.
 
 **Every object screen publishes the name it draws, and it is the same string.**
 A route addresses an object by its identifier — a turn or a trace or an event
-by its id, a seat by its handle, a revision by its ULID — and the frame has
-nowhere else to learn what that object is called. So the one name a screen
-resolves for its `ObjectHeader` is the one it publishes, and it reaches three
-places at once: the last crumb, the browser tab (`Shell` titles it from the
-trail) and the palette's recents. Written a second time for any of them, the
-three drift, and a reader is offered a string the page never showed.
+by its id, a seat by its handle, a revision by its ULID, a page by its id — and
+the frame has nowhere else to learn what that object is called. So the one name
+a screen resolves for its `ObjectHeader` is the one it publishes, and it
+reaches three places at once: the last crumb, the browser tab (`Shell` titles
+it from the trail) and the palette's recents. Written a second time for any of
+them, the three drift, and a reader is offered a string the page never showed.
 
 **A screen with no name publishes none, and the id stands.** Every object here
 has an unnamed case — a turn still running, a trace whose spans fell out of the
@@ -1160,71 +1311,50 @@ two ids they replaced. The crumb draws an unlabelled segment in the mono face
 for the same reason it draws a handle in it — an identifier has to look like
 one.
 
-### The page bar shrinks, and breaks on its own width
+### The page bar wraps by what it holds
 
-The bar holds four things: the trail, the screen's own controls (portalled in
-by `PageActions`), the viewer chip and the search trigger. On a busy screen
-they do not all fit, and what it used to do about that was `flex-wrap: wrap`
-at every width.
+The bar holds the trail, the screen's own controls (portalled in by
+`PageActions`), who is working now, the star and Copy link. On a busy screen
+they do not all fit on one line.
 
-**A wrapping flex container does not shrink, it breaks.** Items are assigned to
-lines by their size BEFORE any shrinking, and shrinking only happens within a
-line that is already drawn — so `wrap` meant "never ellipsise the trail, always
-break", and every ellipsis rule the breadcrumb carries was unreachable at the
-width it was written for. The break then lands in source order, which put it
-after the screen's controls: on `#/activity/turns/<id>` at a 1919 px window
-with the rail and the sidebar open, the viewer chip and the search trigger —
-the command palette's only pointer affordance — sat alone at the left of a
-second line under the breadcrumb, with a hundred pixels spare on the first.
+**A wrapping flex container assigns lines BEFORE it shrinks**, so a trail at its
+content width broke the line as soon as a long title and the controls exceeded
+the bar, with free space left on the first line. The trail's flex BASIS is
+therefore 0, clamped by its 20ch floor: a line holds the floor plus the
+controls, the break comes only when even the floor cannot sit beside them, and
+the grow factor hands the trail everything the line has left. A threshold
+measured on the busiest bar would push the controls onto their own line on
+every screen under it, a sparse one included.
 
-So the bar does not wrap, and three rules make that safe:
-
-- **The trail is what gives way**, and it takes the free space too, which
-  retired the `.spacer` that used to sit between it and the controls. It stops
-  at a floor of 20ch, and then it SCROLLS. The floor is what the narrowest line
-  the trail ever sits on can give it — 178.8 px, 20.25ch, so 21ch is already
-  over it, measured at a 310 px and a 350 px viewport where the trail shares a
-  line with the drawer toggle, the viewer chip and the search trigger — which
-  is a different number from what the deepest address needs, and deliberately
-  the smaller of the two: a floor a line cannot honour does not widen the
-  trail, it pushes the search trigger onto a row of its own. So the floor is
-  not the guarantee, and past it the overflow is reachable rather than lost.
-  Under `overflow: hidden` the cut was a BOX — no ellipsis, because the clip is
-  outside the text, and the ancestors do not shrink, so once they alone are too
-  wide there is nothing left to ellipsise. `crumbs.ts` builds three fixed
-  ancestors on three admin routes, the widest being `Admin / Configuration /
-  Revisions /` at 26.53ch — 31.53ch beside the 5ch stub the last crumb floors
-  at — against a line that hands the trail 218.8 px at a 390 px viewport, where
-  it drew "Admin / Configuration / Revisions" with the last letter shaved, no
-  separator after it, and the object's own crumb laid out past the edge at zero
-  visible pixels. `overflow-x: auto` is what `.page-controls` already takes one
-  breakpoint down, for the same reason: past the edge is unreachable, out of
-  sight is not. The scrollbar is not drawn — on a 52 px bar it would sit on the
-  baseline the trail is drawn on — and the block axis still clips.
+- **The trail is what gives way**, and past its floor it SCROLLS rather than
+  clipping as a box: the ancestors do not shrink, so once they alone are too
+  wide there is nothing left to ellipsise. The scrollbar is not drawn — on a
+  52 px bar it would sit on the baseline the trail is drawn on — and while it
+  overflows the trail is a tab stop, which is how a keyboard reaches what is
+  past its edge. Only then: a trail that fits has nowhere for the arrow keys
+  to go, and a stop on every page that did nothing was a wasted Tab press.
+- **Each crumb's words are their own box**, and that box is what ellipsises.
+  A crumb is a flex row (a glyph and a label), and text straight inside a flex
+  container is an anonymous item no `text-overflow` reaches — so the page's
+  `h1` was cut mid-word at the bar's edge rather than ending in "…".
 - **The control group may not shrink at all.** It wraps, so a shrink does not
   shave a label off a button, it drops the last control onto a row of its own —
-  and a flex container distributes shrinkage proportionally in one pass, with
-  no way to say "empty that one first", so at a 1250 px bar the group's 0.13 px
-  share of the overflow put "Copy link" on a second row while the trail still
-  had 250 px to give. A `max-width` is the valve that keeps a group wider than
-  the whole bar wrapping rather than running past the edge.
-- **The one break is a container query**, because what overflows is the BAR and
-  a viewport query cannot see it. The rail and an open workspace sidebar take
-  330 px, so a 1919 px window and a 1440 px window with the sidebar shut give
-  the same bar — which is why `@media (max-width: 860px)` was still the only
-  place the controls were allowed their own line while the bar was breaking at
-  1587. `.page` is the container; below the width at which a floored trail
-  cannot sit beside the controls, they take the row under it and scroll. The
-  phone block keeps its own tightening and nothing else.
-- **The search field gives way after the trail, down to its glyph.** The kit's
-  `toolbar` field rests at 200 px and floors there above 1024 px, and a
-  route's own controls may not shrink — so on `#/activity/turns` at 1440 the
-  floor pushed the keycap past the bar's right edge (1152 px of content in a
-  1107 px bar), above the width where the bar breaks a line. `.page-search`
-  makes the width a flex basis rather than a floor, shrinking after the trail
-  to a control square, and a container query on the field's OWN width drops
-  the keycap and then the word — the kit's own phone state, reached whenever
-  the bar needs the room. Its accessible name is on the button throughout.
+  and a flex container distributes shrinkage proportionally in one pass, so any
+  factor above zero pushes "Copy link" onto a second row by a fraction of a
+  pixel. A `max-width` is the valve that keeps a group wider than the whole bar
+  wrapping rather than running past the edge.
+- **On a phone's width the controls take a line of their own and scroll** — a
+  container query on the header, because what overflows is the header and a
+  viewport query cannot see a sidebar or a peek. Rows of controls stacked under
+  the trail would push the screen a third of the way down a phone. The edge
+  with more past it FADES (so does the section tabs'): with the scrollbar
+  hidden, a control cut at the edge read as a broken label rather than as more
+  to swipe to. A row that fits carries no fade.
+- **The star is on every page that is one.** A workspace's own page is already
+  a sidebar row, so the star there cannot keep it — but it is drawn,
+  unavailable and saying "Already in the sidebar", rather than left out: left
+  out, it appeared on every section of a workspace but the first, and moving
+  between two tabs moved the header's controls.
 
 ### Moving, and going back
 
@@ -1252,24 +1382,34 @@ the moment the reader touches the page.
 
 Both of these shipped wrong once, and neither is visible in a URL.
 
-### The Inbox is the landing screen
+### Home is the landing screen
 
-A dashboard's home used to be a summary of the company. What a person opening
-this actually wants to know is whether anything is waiting on them — but a home
-that is ONLY that queue has a failure mode that arrives on the first day: a
-company where nothing is wrong renders as a blank page, and a reader cannot
-tell that from a dashboard that is broken.
+`#/` and `#/home` are Home. What a person opening this wants to know first is
+whether anything needs them — but a home that is ONLY that queue has a failure
+mode that arrives on the first day: a company where nothing is wrong renders as
+a blank page, and a reader cannot tell that from a dashboard that is broken.
 
-**So the first fold is the company, and the queue is under it.** The pulse
-strip is seven facts on one line — seats working, runs parked, open, overdue,
-blocked, tokens, alarms — each a link into the workspace that owns it, each carrying the scope of its own
-claim in its title. Every one of them is true whatever the queue holds, so an
-empty band below then MEANS something: nothing is waiting on you, on a company
-that is visibly running. A figure whose query has not answered draws an em
-dash, never a `0`: "your company has no open work" is a claim, and it is a
-false one for as long as the read is in flight. `tokens` is deliberately not
-labelled "today" — the window is the engine's and the screen was not given one,
-so the strip names the figure and puts the window it covers on hover.
+**So the first fold is the company, and what needs a decision is under it.**
+The greeting is the company's day (on `org.timezone`, the one clock every due
+date and budget window is cut on) and the reader's morning, and one sentence of
+the engine's: "Nimbus is running on 3 nodes. 2 conditions need a decision, and
+4 agents are working right now" — which an engine condition takes over (a
+refused token, a lost connection, no configuration) rather than sitting beside.
+Under it the pulse strip is seven facts on one line — seats working, runs
+parked, open, overdue, blocked, tokens, alarms — each a link into the workspace
+that owns it, each carrying the scope of its own claim in its title. Every one
+of them is true whatever the queue holds, so an empty band below then MEANS
+something: nothing needs a decision, on a company that is visibly running. A
+figure whose query has not answered draws an em dash, never a `0`. `tokens` is
+deliberately not labelled "today" — the window is the engine's and the screen
+was not given one, so the strip names the figure and puts the window it covers
+on hover. Then the engine's conditions, the first few, each a way into the
+Inbox row that holds it.
+
+### The Inbox is where you act
+
+The Inbox is the place a person acts on what reached them: the queue itself,
+with no company summary above it — Home carries that, one click away.
 
 **Two bands, stacked on one screen, never two tabs.** **Needs a decision** is
 what the engine derived, over the four subjects `lib/attention.ts` declares: the
@@ -1279,11 +1419,13 @@ what reached them, and why. They are never interleaved, because one fused list
 ordered by time would eventually rank a backup-age alarm above the CEO seat
 asking whether to hold a release. And they are never a toggle: a tab hides the
 engine's state behind a control the reader has to press, which is exactly what
-the landing screen cannot afford — the founder's first glance is the whole of
-what this screen is for. A band with nothing in it still draws its own heading
+the place a founder comes to act cannot afford — what is waiting on them has to
+be on screen the moment they arrive. A band with nothing in it still draws its own heading
 and says why it is quiet, because a band that disappears takes its name with it
 and a reader cannot then tell "nothing is waiting on you" from "this product
-does not have that".
+does not have that". A band's head counts the rows it drew, and a page with
+more behind it is counted as a floor ("50+"), the way the sidebar badge that
+led there draws it.
 
 The sentence it draws is DERIVED FROM THE ANSWER, never from the row count. Zero
 rows is six different facts — nothing has answered yet, the answer was a
@@ -1327,7 +1469,7 @@ chip a reader is reaching for moves between the decision to press it and the
 press.
 
 `work_inbox` still reports the `primary_reasons` that were APPLIED — defaulted
-from the person's own record — and the rail badge counts those, so a company
+from the person's own record — and the sidebar's badge counts those, so a company
 that has re-decided what counts as primary gets its own badge without the
 client knowing anything about it.
 
@@ -1346,7 +1488,7 @@ configuration, so the screen names the id to bind rather than reporting a fault.
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
 (`#/org?unit=Backend`, with a router-level reveal hook); this tree gives a unit
-its own page instead — `#/company/units/{id}` — so it can be linked to, opened
+its own page instead — `#/agents/teams/{unit}` — so it can be linked to, opened
 in a peek, and carry its own state. There is no reveal-on-arrival hook here.
 Where a selection genuinely belongs in the URL rather than in the path it stays
 a filter: the Builder lens reads `unit=` and `seat=` to name the selected node
@@ -1495,26 +1637,26 @@ The scopes are named in the palette's footer with the one in use marked: a
 sigil nobody is told about is a feature that does not exist.
 
 An empty palette offers **recents** — the last few objects this reader opened,
-most recently visited first, per browser. Objects only: anything the rail or a
-sidebar already lists is left out, because a recents list repeating the
+most recently visited first, per browser. Objects only: anything the sidebar
+already lists is left out, because a recents list repeating the
 navigation beside it costs a reader a scan and tells them nothing. The label
 stored is the one the **screen** resolved, which lands a render after the route
 — so a recents row says what a turn did, what a trace began at, what a coding
 run was asked for, and falls back to the id only where nothing has named the
 object yet. See [A screen publishes what the chrome needs](#the-frame).
 
-**The same places, in two orders, and the surface decides which.** The palette
-is opened fresh, ranks what it offers and closes, so it has a re-sort boundary
-and takes VISIT order: "where I just was" is what an empty query should put
-first. The workspace sidebar's Recent section is DRAWN, navigated by position
-and read while it is being used, so it takes ARRIVAL order — a place the reader
-has not been enters at the top, and going back to one already there moves
-nothing. Stored as one list either way; only the read is sorted, because
-storing the ranking is what made the rail jump. The cap is per workspace for
-the same reason it exists at all — eight is a claim about the DRAWN list, and
-since the rail grew its section the drawn list is one workspace's share, so a
-morning in Work could empty the Activity rail while the number said eight.
-A route no workspace owns is not remembered: nothing could ever draw it.
+**One reader, so one order: most recently visited first.** The palette is
+opened fresh, ranks what it offers and closes, so it has a re-sort boundary and
+"where I just was" is what an empty query should put first; the list is stored
+that way, and at its cap of eight the bottom row — the place nobody has opened
+in longest — leaves. The sidebar keeps no recents: a place a reader keeps on
+purpose is a star, and a sidebar that also carried what was merely opened is
+the tree the one sidebar replaced. (While a workspace sidebar did draw a Recent
+section, the list was stored in arrival order so a drawn row would not move
+under the pointer, and the cap was counted per workspace — which let an empty
+palette open on up to eight rows for each of nine workspaces once that section
+was gone.) A route no workspace owns is not remembered, and a stored row whose
+route this build no longer has is dropped when the list is read.
 
 **And a name is never replaced by an identifier.** Every screen publishes its
 object's name a render after the route, so the first write of every navigation
@@ -1526,15 +1668,7 @@ back. `remember` takes whether a screen supplied the label, asked once of the
 published labels rather than as a flag each crumb branch would have to set —
 fourteen places to keep in step, of which the four nobody updated would go on
 downgrading in silence. A place nothing has EVER named still stores its id,
-because an object with no name has that and nothing else. Pressing the third Recent row
-used to send it to the first and slide the two above it down, under the
-pointer, at the instant it was hit — and nothing can soften that, because the
-row's React key is its path, so the browser moves the existing node rather than
-crossfading anything. No launcher re-sorts a drawn list on use; a rail
-navigated by position is only faster than searching for as long as it holds
-still. The cap evicts by last visit for the same reason: the entry to lose is
-the one nobody has opened in longest, never whichever sits at the bottom of a
-list that no longer moves.
+because an object with no name has that and nothing else.
 
 A `>` command that would change nothing is not offered: the list omits the
 theme and the density already in use, because a control that says "switch to
@@ -2484,8 +2618,8 @@ IS.** The turn page had it the other way round for five of its marks — the
 seat, the phase count, the attempt, the problem count and "nothing went wrong"
 were all portalled into `PageActions`, beside Copy turn and Download turn. It
 cost three things at once. The bar reached ten items and broke onto a second
-line on a laptop (see [The page bar
-shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width)). The reader's eye
+line on a laptop (see [The page bar wraps by what it
+holds](#the-page-bar-wraps-by-what-it-holds)). The reader's eye
 had to travel to the far right corner and back for a fact about the object
 named forty pixels below. And two of the five were the fact line repeated:
 `Agent CEO` and `7 phases` sat directly above `SEAT Agent CEO` and `PHASES 7`
@@ -2650,7 +2784,7 @@ not.** The paragraph above was true as a decision and false as a description:
 dropping the repeat left `a { text-decoration: none }` against the baseline's
 `a:hover { text-decoration: underline }` — (0,0,1) against (0,1,1) — so the
 package won the only state a reader can see it in, and every link in the
-dashboard underlined under the pointer, the app rail's own rows included.
+dashboard underlined under the pointer, the sidebar's own rows included.
 Nothing failed: an outranked declaration is not an error, not a warning and not
 a build failure, and an unhovered screenshot looks exactly right. So the reset
 is written at `a:hover` as well, and `styles/baseline.test.ts` holds it against
@@ -2756,15 +2890,14 @@ began as a flat filter row over a plain table beside a "board" that was three
 company does its work. What replaced it is a WORKSPACE, and every part of it
 is one of the rules on this page applied to a tracker.
 
-- **A project is a LEAF of the workspace, not a shape of it.** The Work
-  sidebar is the company's own tree — every project with its lead and its
-  maintained open count, then the saved views — and a project is where that
-  tree stops. Its list, its board and its calendar are ways of drawing the
-  project you are already on, so a sidebar row for each would turn two levels
-  into three and make "Engineering ▸ Board" a destination competing with
-  Engineering. The counts are the engine's maintained columns rather than an
-  aggregate per poll, which is what lets the tree carry a number at all: see
-  [the rail](#the-rail) for what a workspace sidebar is.
+- **A project is a LEAF, not a shape of it.** The sidebar's Projects are the
+  company's own projects, each with its key and its maintained open count, and
+  a project is where that list stops. Its list, its board and its calendar are
+  ways of drawing the project you are already on, so a sidebar row for each
+  would make "Engineering ▸ Board" a destination competing with Engineering.
+  The counts are the engine's maintained columns rather than an aggregate per
+  poll, which is what lets the sidebar carry a number at all: see
+  [the sidebar](#the-sidebar).
 - **A SHAPE is a drawing, a VIEW is a query, and only the query was saved by
   anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-is-a-menu)
   states the general rule; what is the tracker's own is where the line falls.
@@ -2945,12 +3078,13 @@ is one of the rules on this page applied to a tracker.
   peek is the FRAME's — mounted by the shell, addressed by `peek=`, and the
   list only publishes the order `[` and `]` walk, because a list that published
   nothing would otherwise get a rail stepping through somebody else's rows.
-  Below `--peek-drawer-max` — 1200px, measured, and its arithmetic is at the
-  definition in `frame.css` — it becomes a DRAWER over the content rather than
-  a column beside it. That threshold is the FRAME's and governs every screen's
-  peek, so the quantity it turns on is the one common to all of them: a LIST
-  too narrow to read, whose floor is 444px, plus the chrome in front of it at
-  the widest density. The board once had a number of its own — three panes are
+  Below the frame's threshold — 1160 px on a screen like this one at the
+  normal density, with its arithmetic at `peekColumnMin` in `app/layout.ts` —
+  it becomes a DRAWER over the content rather than a column beside it. That
+  threshold is the FRAME's and governs every screen's peek, so the quantity it
+  turns on is the one common to all of them: a LIST too narrow to read, whose
+  floor is 444px, plus everything in front of it at the reader's density. The
+  board once had a number of its own — three panes are
   the rail, the sidebar and the peek, a lane is 292px, and at 1280 exactly one
   lane was left beside a detail panel, "which is not a board", so the peek
   should overlay below about 1500. That measured a peek the tracker's own
@@ -3221,8 +3355,8 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/ui/                   the component library and the chart kit
   src/components/           the pieces more than one screen draws, composed
                             out of the design system
-  src/routes/<workspace>/   one directory per workspace — inbox, me, work,
-                            company, knowledge, activity, cost, admin — and
+  src/routes/<workspace>/   one directory per workspace — home, inbox, me,
+                            work, agents, live, knowledge, spend, settings — and
                             one file per screen inside it. Two things sit
                             outside that shape: NotFound, which belongs to no
                             workspace and is what the dispatch falls through
@@ -3460,24 +3594,24 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
   measurement, its stacked form, and the phase ramp. `src/components/` above
   it is COMPOSITION, each piece built out of the package and each one about
   this engine's own domain — a seat, a phase, a turn, a configuration field.
-- **The shell is this application's own**, drawn with the package's primitives
-  rather than taken whole from it. Two levels of navigation, a page bar, a
-  state bar and a peek rail are what this product's six trees need, and they
-  are not a shape a design system shared with a console and a documentation
-  site can supply — [The frame](#the-frame) is the whole of it. The narrow
-  layout opens the WORKSPACE SIDEBAR as a drawer, never the rail, because the
-  rail is eight rows that already fit. A screen's own half is its labels, its
-  coverage and its controls, portalled into the bar; every list it draws is
+- **The shell is the package's `AppShell`, and what sits in it is ours.** The
+  window, the one sidebar, the floating sheet, the 52px bar and the drawer
+  below the shell breakpoint are the kit's geometry, taken whole; the page
+  header's two rows, the state bar, the peek as a column of the sheet and the
+  Settings column are this product's — [The frame](#the-frame) is the whole of
+  it. A screen's own half is its labels, its coverage and its controls,
+  portalled into the bar; every list it draws is
   [one grid](#every-list-is-one-grid).
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the
   shell's own token dialog, its command palette and the narrow layout's
   sidebar drawer: no modal hand-rolls its veil or listens for Escape beside
-  the stack. That drawer is the workspace sidebar itself, a dialog only while
-  it is open; closed, the stylesheet hides it rather than only sliding it
-  away, so its links leave the tab order, and it closes on a route change and
-  when a resize takes the layout past the breakpoint. Only the topmost
+  the stack. That drawer is the sidebar itself below the kit's shell
+  breakpoint (1024px) — the kit's `AppShell` owns it — a dialog only while it
+  is open; closed, it is out of the tab order rather than only slid away, and
+  it closes on a route change (the shell hands the route to the kit as its
+  `navigationKey`). Only the topmost
   surface handles Escape or a press outside, so a prompt over the node editor
   closes on its own Escape and leaves the editor open, a token dialog raised
   by a refused request over that editor does the same, and an open menu
@@ -3896,15 +4030,16 @@ to.
     land, so a failed state holds until the next click while a successful one
     settles back.
 14. **Per-subject state is keyed on its subject.** A hash change re-renders
-    the route switch rather than remounting it, so `#/activity/turns/A` →
-    `#/activity/turns/B`
+    the route switch rather than remounting it, so `#/live/turns/A` →
+    `#/live/turns/B`
     reconciles and anything the screen remembers about A — a held refusal, an
     open disclosure, a selected tab — describes B until something clears it.
     Every id-bearing route carries `key={id}`.
 15. **A screen head's controls wrap.** A button does not break its own label,
     so a head carrying several of them overflows a phone's line instead of
-    taking a second one. `PageBar` and `ObjectHeader` take their badges and
-    their actions as slots that wrap, and any row built beside one wraps too.
+    taking a second one. The page header and `ObjectHeader` take their badges
+    and their actions as slots that wrap, and any row built beside one wraps
+    too.
 16. **A link reads as a link at every size, and a rule under the words is not
     how.** A text-register class on an `<a>` that overrides its colour makes a
     navigation into decoration; `.t-link` is the caption-sized register that

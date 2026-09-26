@@ -292,39 +292,51 @@ export function elapsedMs(from?: string | null, to?: string | null): number | nu
 // ---------------------------------------------------------------------------
 
 /**
- * A `Date` as the `YYYY-MM-DD` it falls on IN THE BROWSER'S OWN CALENDAR.
+ * The `YYYY-MM-DD` an instant falls on IN THE READER'S ZONE — the one
+ * [zone] names, which is the browser's until the reader picks another.
  *
- * ONE DEFINITION. It was written out twice, byte for byte, in `lib/work.ts`
- * and `lib/timeline.ts` — the calendar's cell keys and the timeline axis's —
- * which is the shape this repository keeps paying for (`textcut`, `whsec`,
+ * ONE DEFINITION. The calendar's cell keys (`lib/work.ts`) and the timeline
+ * axis's (`lib/timeline.ts`) both come from here, which is the shape this
+ * repository keeps paying for when it is not (`textcut`, `whsec`,
  * `httpjson`): two copies of one rule, agreeing today, and nothing that
  * notices the day one of them changes. A bar and a calendar cell disagreeing
  * about which day a task is due is a silent wrong answer, not a broken screen.
  *
- * BROWSER-LOCAL ON PURPOSE, and it is the one thing in this file that does not
- * go through [zone]. This is a BUCKETING key, not a spelling: `calendarWeeks`
- * builds its cells with `new Date(y, m, d)` and `timeline`'s axis steps days
- * with `setDate`, both of which are the browser's calendar, and a key derived
- * in a different one from the cells it is matched against puts a task in a
- * cell whose own label disagrees with it. `lib/work.ts`'s `gridRange` says the
- * same thing from the other end — the engine resolves a bare date in the
- * COMPANY's zone and these cells bucket in the reader's, which the grid's
- * bounds absorb.
- *
- * It is not a second timezone today: nothing in the product calls `setZone`,
- * there is no settings route and `crewlet_timezone` is written nowhere, so
- * [zone] IS the browser's zone for every reader who can exist. THE DAY A ZONE
- * PICKER SHIPS that stops being true, and the fix is not this function alone —
- * the cell arithmetic has to move into the chosen zone with it, in one change:
- * `calendarWeeks`, `gridRange`, `dayKey`, and `dayOf`/`shiftDay`/`daysBetween`
- * on the timeline. The machinery is already here, in [fromWall]'s two-pass
- * offset resolution.
+ * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the browser's own
+ * calendar (`getFullYear`/`getDate`) while every spelling went through
+ * [zone], which was harmless only while nothing could set a zone: once the
+ * preference had a control, a reader in Berlin who chose `Asia/Tokyo` saw a
+ * task stamped "Sep 23" filed in the cell for the 22nd.
  */
-export function browserDay(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+export function readerDay(at: Date | number): string {
+  const p = wallParts(typeof at === "number" ? at : at.getTime(), zone());
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/*
+ * A DAY KEY IS A CIVIL DATE, and arithmetic over one is zone-free. Only the
+ * step from an INSTANT to a key needs a zone ([readerDay]); stepping a key by
+ * days, counting days between two, or laying a month out on a grid is
+ * calendar arithmetic, done here at UTC midnight where no day is 23 or 25
+ * hours long and no reader's zone can move a cell. The browser's own `Date`
+ * setters would bring the browser's DST back into it.
+ */
+
+/** A `YYYY-MM-DD` key as the UTC midnight that starts it, or null. */
+export function civilAt(key: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return null;
+  const at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(at) ? null : at;
+}
+
+/** The civil `YYYY-MM-DD` of a UTC-midnight instant — [civilAt]'s inverse. */
+export function civilKey(at: number): string {
+  const d = new Date(at);
+  const y = String(d.getUTCFullYear()).padStart(4, "0");
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 // ---------------------------------------------------------------------------

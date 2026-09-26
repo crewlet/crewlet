@@ -17,7 +17,11 @@ import {
   windowParam,
   barsOver,
   MAX_BARS,
+  TODAY,
+  companyMidnight,
+  todayWindow,
 } from "./range.ts";
+import { spendDays } from "./spend.ts";
 import type { Offer } from "./range.ts";
 
 /** A screen that offers everything, so a case can isolate one rule. */
@@ -29,7 +33,7 @@ describe("the window a URL asked for", () => {
   });
 
   it("falls back for anything outside the vocabulary", () => {
-    // `#/cost?window=` is produced by a route transition for one render, and
+    // `#/spend?window=` is produced by a route transition for one render, and
     // read as a number it is 0 — a window whose two edges are the same
     // instant, which is half-open and names no rows at all.
     for (const bad of ["", "0", "3", "-7", "all", "NaN", "7", "3h"]) {
@@ -412,5 +416,76 @@ describe("bars over a window this client holds", () => {
   it("a window that is not one draws no bars", () => {
     expect(barsOver([], "2026-03-10T02:00:00Z", "2026-03-10T01:00:00Z", "hour")).toEqual([]);
     expect(barsOver([], "not a date", "2026-03-10T01:00:00Z", "hour")).toEqual([]);
+  });
+});
+
+/**
+ * TODAY IS THE COMPANY'S DAY, cut where its clock says the day began.
+ *
+ * Not the browser's midnight and not "the last 24 hours": a turn at 23:50 in
+ * Tokyo is the company's yesterday for a reader in Berlin, and a "Today" that
+ * disagreed with the engine's own day (`internal/period`, ADR-0018) would
+ * count a turn the engine charged to yesterday.
+ */
+describe("today", () => {
+  const TODAY_OFFER: Offer = { ranges: ["7d", "30d"], custom: false, fallback: "7d", today: true };
+
+  it("cuts at midnight on the company's clock, not the browser's", () => {
+    // 2026-09-22 20:00 UTC is already the 23rd in Tokyo.
+    const now = Date.parse("2026-09-22T20:00:00Z");
+    expect(new Date(companyMidnight(now, "Asia/Tokyo")).toISOString()).toBe(
+      "2026-09-22T15:00:00.000Z",
+    );
+    expect(new Date(companyMidnight(now, "America/New_York")).toISOString()).toBe(
+      "2026-09-22T04:00:00.000Z",
+    );
+    expect(new Date(companyMidnight(now, "UTC")).toISOString()).toBe("2026-09-22T00:00:00.000Z");
+  });
+
+  it("finds the day's first instant where midnight does not exist or happens twice", () => {
+    // Santiago springs forward at midnight on 2026-09-06: 00:00 does not
+    // exist, and the day begins at 01:00 local (04:00 UTC).
+    const santiago = companyMidnight(Date.parse("2026-09-06T15:00:00Z"), "America/Santiago");
+    expect(new Date(santiago).toISOString()).toBe("2026-09-06T04:00:00.000Z");
+    // The instant before is the previous date, which is what "first" means.
+    const day = (at: number) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago" }).format(at);
+    expect(day(santiago - 1)).toBe("2026-09-05");
+    expect(day(santiago)).toBe("2026-09-06");
+  });
+
+  it("a zone the runtime cannot read is cut in UTC rather than throwing", () => {
+    const now = Date.parse("2026-09-22T20:00:00Z");
+    expect(companyMidnight(now, "Not/A_Zone")).toBe(Date.parse("2026-09-22T00:00:00Z"));
+    expect(companyMidnight(now, undefined)).toBe(Date.parse("2026-09-22T00:00:00Z"));
+  });
+
+  it("is a window only where the screen offers it, and says its own name", () => {
+    const now = Date.parse("2026-09-22T20:00:00Z");
+    expect(parseWindow(TODAY, ANY, now)).toBe("7d");
+    const w = parseWindow(TODAY, { ...TODAY_OFFER, zone: "Asia/Tokyo" }, now);
+    expect(w).toEqual({ from: Date.parse("2026-09-22T15:00:00Z"), to: now, today: true });
+    expect(windowParam(w)).toBe(TODAY);
+    expect(windowLabel(w)).toBe("Today");
+    expect(isRange(w)).toBe(false);
+  });
+
+  it("moves with the clock, and the day before it is the same span", () => {
+    const now = Date.parse("2026-09-22T06:00:00Z");
+    const w = todayWindow(now, "UTC");
+    const later = windowEdges(w, now + 3_600_000);
+    expect(later.since).toBe("2026-09-22T00:00:00.000Z");
+    expect(later.until).toBe("2026-09-22T07:00:00.000Z");
+    expect(later.previous).toEqual({
+      since: "2026-09-21T17:00:00.000Z",
+      until: "2026-09-22T00:00:00.000Z",
+    });
+  });
+
+  it("is charted in hours from its first, and asks the engine for one day", () => {
+    const early = todayWindow(Date.parse("2026-09-22T00:20:00Z"), "UTC");
+    expect(bucketFor(early)).toBe("hour");
+    expect(spanOf(early)).toBe(20 * 60_000);
+    expect(spendDays(early)).toBe(1);
   });
 });

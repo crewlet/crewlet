@@ -1180,7 +1180,7 @@ work sits in projects that unit owns.
 node's own copy, and every answer says how far behind that copy is. It is four
 screens rather than one:
 
-- **All work** (`#/work`) is the list, and it opens as one: a container nobody
+- **Tasks** (`#/work`) is the list, and it opens as one: a container nobody
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
@@ -1661,25 +1661,27 @@ that changes what you should do next. An empty list means *you have not said*,
 never *nothing is primary* — the other reading gives a fresh company an inbox
 whose primary half is blank.
 
-**A person reads theirs at `#/inbox`**, which is the dashboard's landing
-screen: the notices `work_inbox` returns, each labelled with the one reason of
+**A person reads theirs at `#/inbox`**, one click from the landing screen:
+the notices `work_inbox` returns, each labelled with the one reason of
 eighteen that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
-alphabetically first seat's — and `#/me` is that same person's own work: seven
-tabs, one per claim on their attention, each carrying its count on the strip so
-an unanswered question is visible without opening it. Above the strip a band
-says whose day is on screen, links to that person's seat, and carries the one
-thing here that asks to be answered — a queue somebody *else* put in order,
-with a mark on the tab it is about. See
+alphabetically first seat's — and `#/me` is that same person's own work: one
+section per claim on their attention (the Queue, Asked of me, Unblocked,
+Collaborating, Watching, Checklist), each carrying the engine's own total on
+its tab so an unanswered question is visible without opening it. The Queue is
+read by due date or in the order somebody put it (`order=due|priorities`).
+Above the list a band says whose day is on screen, links to that person's
+seat, and carries the one thing here that asks to be answered — a queue
+somebody *else* put in order, with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
-**The Assigned tab is the work list, narrowed to one person.** It is the same
+**The Queue is the work list, narrowed to one person.** It is the same
 screen `#/work` is — the Filter menu, the Display menu, the Open/Closed/All
 switch, the five shapes, the columns, the count line — with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
-what the tab *is* rather than something you narrowed it to. Whose day it is
+what the section *is* rather than something you narrowed it to. Whose day it is
 stays `handle=`.
 
 It **opens** grouped by [`due:bucket`](#what-a-board-groups-on), soonest first,
@@ -1713,7 +1715,7 @@ is chosen by the writer is not an audit trail. So the item you file through
 your assistant records `founder` as its reporter, while the watch that create
 puts on it is your **seat's** — a reporter is attribution and a watcher is an
 address. Your colleagues assign work to `jane-founder`, and every personal
-question matches **both**: My work's seven tabs, the inbox, and your own
+question matches **both**: every section of My work, the inbox, and your own
 record. You are one party with two names, and the answer always comes back
 under your seat's.
 

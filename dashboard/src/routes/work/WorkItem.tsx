@@ -369,7 +369,15 @@ export function WorkItem({ id }: { id: string }) {
   // title, `ENG-42` is an address a person can read and paste, and the title
   // is on the header immediately below it. A crumb spends itself on a name
   // only where the address is a uuid nobody can read.
-  usePageLabels(item ? { [id]: item.key } : {});
+  //
+  // THE PROJECT'S CRUMB IS ITS NAME, as it is on the project's own page: the
+  // project read above answers it, and a trail reading `Work › ENG › ENG-1`
+  // here and `Work › Core` one click up named one project two ways. The key
+  // stays the crumb until the name has arrived.
+  const projectName = project.data?.name ?? "";
+  usePageLabels(
+    item ? { [id]: item.key, ...(projectName ? { [item.project]: projectName } : {}) } : {},
+  );
 
   return (
     <>
@@ -950,7 +958,7 @@ function History({
                 construction. */}
             {entry.quiet && <span className="muted">quiet</span>}
             {entry.turn_id && (
-              <a className="t-link" href={href(["activity", "turns", entry.turn_id])}>
+              <a className="t-link" href={href(["live", "turns", entry.turn_id])}>
                 turn →
               </a>
             )}
@@ -1621,17 +1629,16 @@ export function ItemLinks({
                   spelled here. This read `["pages", …]` — a screen the
                   application does not have — so every task→page link landed on
                   NotFound. `pathOf` is the one definition of where each kind
-                  lives, and for a page it is `#/knowledge/{CONTAINER}/{Title}`.
-                  `key` IS that address when the other end was resolved; a page
-                  edge that came back with only its id still lands in the
-                  knowledge base, which answers honestly that it holds no such
-                  container — where the old head answered with no screen at
-                  all. */}
+                  lives, and for a page it is `#/knowledge/pages/{id}`. A page
+                  edge's `other` IS that id: the tracker resolves the far end
+                  of an edge against its own tasks only, so on a page edge
+                  `key` and `title` are always empty and `other` is the one
+                  field that names the page. */}
               <a
                 className="mono t-link"
                 href={href(
                   link.kind === "page"
-                    ? pathOf({ kind: "page", id: link.key || link.other })
+                    ? pathOf({ kind: "page", id: link.other })
                     : ["work", link.key || link.other],
                 )}
               >

@@ -11,15 +11,15 @@ html {
   text-size-adjust: 100%;
 }
 
-/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
-   may: the sidebar is a fixed rail beside a scrolling pane, and a page that
+/* THE DOCUMENT DOES NOT SCROLL. The shell's `main` does, and it is the only
+   thing that may: the sidebar is a fixed column beside a scrolling sheet, and a page that
    can also scroll as a whole moves that rail off the top of the window and
    leaves the reader looking at background below the app.
    `min-height` only asked the body to be at least a viewport tall — it still
    PERMITTED it to grow, so the shell's invariant held by nobody ever
    exceeding it rather than by anything enforcing it. A fixed height plus
    hidden overflow makes it unreachable instead of merely unused, and costs
-   nothing: `.app` is already exactly 100dvh. */
+   nothing: the kit's `AppShell` is already exactly 100dvh. */
 body {
   margin: 0;
   height: 100dvh;
@@ -64,9 +64,9 @@ p {
    rules across four sheets, each undoing the same inherited declaration, which
    is the shape a default takes when it is wrong: the exceptions outnumber it.
 
-   So the frame's own hover vocabulary carries it instead. `.rail-row`,
-   `.side-link`, `.rail-engine` and `.crumb-link` already answer a pointer by
-   moving to `--color-text-primary`, and a link does the same: in dark the accent ink
+   So the frame's own hover vocabulary carries it instead. The sidebar's rows,
+   `.section-tab` and `.crumb-link` already answer a pointer by moving to
+   `--color-text-primary`, and a link does the same: in dark the accent ink
    (#8b9ff5) brightens toward near-white, in light the indigo (#3e50b8) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
    rather than merely different. Both ends are measured text rungs, which is
@@ -108,8 +108,8 @@ a:hover {
    it composites the 4–5% row wash onto its own Canvas as nothing. Measured in
    Chromium with `forced-colors: active`: after the reset, `.crumb-link`,
    `.t-link`, `.cell-seat`, `.work-col-foot a` and every prose register render
-   pixel-identical hovered and unhovered. Only `.rail-row` and `.side-link`
-   still answer, and only because their wash happens to survive.
+   pixel-identical hovered and unhovered. Only a row that paints a wash on
+   hover still answers, and only because its wash happens to survive.
 
    `text-decoration` is the one property the mode leaves to the author, which
    is exactly why the baseline's default is right THERE and wrong everywhere
@@ -317,13 +317,11 @@ img {
 
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
-.rail-row,
-.rail-engine,
-.rail-collapse,
-.side-link,
-.side-twist,
 .crumb-link,
-.viewer-chip,
+.section-tab,
+.health-card,
+.user-block-who,
+.working-now,
 .peek-grip,
 .grid-row,
 .grid-th:not(.plain),

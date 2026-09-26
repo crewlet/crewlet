@@ -14,7 +14,6 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
@@ -23,13 +22,7 @@ import { BoardCard, PriorityMark, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
-import type {
-  QueryName,
-  WorkGroup,
-  WorkProjectDetail,
-  WorkProjectRow,
-  WorkSummary,
-} from "~/protocol/index.ts";
+import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =

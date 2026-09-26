@@ -1,5 +1,6 @@
 /**
- * One person's day — the seven claims on their attention, as tabs.
+ * One person's day — the claims on their attention, as the sections of My
+ * work.
  *
  * # Seven claims, and each is a different one
  *
@@ -9,7 +10,7 @@
  * the work they were brought onto without owning, what moved on what they
  * follow, and what became workable while they were not looking.
  *
- * # Why they are tabs now, and what keeps the old promise
+ * # Why they are sections now, and what keeps the old promise
  *
  * They were seven stacked cards under four stat tiles that restated the counts
  * of the cards below them, and each card was ABSENT when empty — so the page's
@@ -18,15 +19,18 @@
  * asks.
  *
  * The promise the stacking was making — that no block can crowd out another —
- * is kept by the STRIP rather than by the page: every tab carries its count,
- * always, so an unanswered question is visible as a number on a tab nobody has
- * opened. A tab with nothing in it is drawn and says so, which stacking could
- * not do without seven "nothing here" panels burying the one that had
- * something.
+ * is kept by the page header's SECTION TABS rather than by the page: every
+ * section carries its count, always, so an unanswered question is visible as a
+ * number on a section nobody has opened. A section with nothing in it is drawn
+ * and says so, which stacking could not do without seven "nothing here" panels
+ * burying the one that had something. Each is a PATH (`#/me/asked-of-me`),
+ * because a place a reader goes is an address rather than a `tab=` on another
+ * one; the queue and the order somebody put it in are one section, `#/me`,
+ * read `order=due` or `order=priorities`.
  *
  * # A sparse day is still somebody's day
  *
- * THE STRIP DRAWS SEVEN TABS AND SEVEN COUNTS WHATEVER THE DAY HOLDS, zeros
+ * THE HEADER DRAWS EVERY SECTION AND ITS COUNT WHATEVER THE DAY HOLDS, zeros
  * included, and that does not change on a company's first week. A tab that
  * vanished when it was empty is what this screen was rebuilt to stop, and the
  * Inbox settles the same question the same way one workspace up: its pulse
@@ -47,7 +51,7 @@
  * # The Inbox is not one of them
  *
  * What REACHED somebody is a different question from what is ON them, and it
- * is the landing screen of this product (`#/inbox`). The card that drew it
+ * has a workspace of its own (`#/inbox`). The card that drew it
  * here was the inbox in a narrower column with a smaller bound.
  *
  * # Assigned is the work list, narrowed to one person
@@ -87,10 +91,10 @@
 
 import { useMemo, type ReactNode } from "react";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { href, useParam } from "~/app/router.tsx";
-import { useTab } from "~/app/frame/tabs.ts";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import {
   Callout,
@@ -98,11 +102,11 @@ import {
   InlineCode,
   Select,
   Skeleton,
-  Tabs,
   Tag,
   type SelectOption,
 } from "@crewlethq/ui";
-import { FlagGlyph, KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
@@ -149,23 +153,28 @@ const ASSIGNED_SCOPE = "not_started,active";
  */
 const ASSIGNED_OPENS: Record<string, string> = { group_by: "due:bucket", sort: "due" };
 
-/** The tabs, in the order the strip draws them; the first is the default. */
-const TABS = [
-  "assigned",
-  "priorities",
-  "asks",
-  "unblocked",
-  "collaborating",
-  "watching",
-  "checklist",
-] as const;
-type Tab = (typeof TABS)[number];
+/**
+ * What the Queue section draws: the assignments banded by when they are due,
+ * or the order somebody put them in. A SECTION switch (`order=` pushes), so
+ * Back walks out through it like any other place the reader called.
+ */
+const ORDERS = ["due", "priorities"] as const;
+type Order = (typeof ORDERS)[number];
 
-export function MyWork() {
+/** Which panel is drawn: a section of My work, with the queue split by order. */
+type Tab = "assigned" | "priorities" | Exclude<MeSection, "queue">;
+
+export function MyWork({ section }: { section: MeSection }) {
   const org = useOrg();
   const now = useNow();
+  const nav = useNavigator();
   const [handle, setHandle] = useParam("handle", "");
-  const [tab, setTab] = useTab("tab", TABS);
+  const [orderParam, setOrder] = useParam("order", "due", "section");
+  const order: Order = (ORDERS as readonly string[]).includes(orderParam)
+    ? (orderParam as Order)
+    : "due";
+  const tab: Tab =
+    section === "queue" ? (order === "priorities" ? "priorities" : "assigned") : section;
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be reached
   // with nobody chosen and still offer somebody.
   const index = useMemo(() => indexOrg(org), [org]);
@@ -196,7 +205,7 @@ export function MyWork() {
   // viewer answers this reader is indistinguishable from one who gets a
   // picker — and delaying the counts for everybody to spare that one read is
   // the wrong trade. 60s is the interval both other readers of this question
-  // already take (`routes/inbox/Inbox.tsx`, `routes/company/People.tsx`): a
+  // already take (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a
   // load is read, not watched.
   const workload = useQuery("work_workload", undefined, {
     enabled: !viewer.anonymous,
@@ -266,6 +275,34 @@ export function MyWork() {
     [whose, they],
   );
 
+  // EVERY COUNT, ALWAYS, on the section tabs the page header draws — which is
+  // what replaces the stacking: a section nobody has opened still says how
+  // much is on it. A count is a STRING, because a count the engine stopped at
+  // its ceiling is a floor — `pageCount` writes it with a `+`, which a bare
+  // number would report as a fact about somebody's day — and it is absent,
+  // never "0", while its read is in flight.
+  const assignedTotal: WorkClaimTotal | undefined = assigned.data
+    ? { total: assigned.data.total_hint, capped: assigned.data.total_capped }
+    : undefined;
+  useSectionCounts(
+    mine
+      ? figures({
+          queue: countFor("assigned", mine, assignedTotal),
+          "asked-of-me": countFor("asked-of-me", mine, assignedTotal),
+          unblocked: countFor("unblocked", mine, assignedTotal),
+          collaborating: countFor("collaborating", mine, assignedTotal),
+          watching: countFor("watching", mine, assignedTotal),
+          checklist: countFor("checklist", mine, assignedTotal),
+        })
+      : {},
+  );
+
+  // THE PRIORITIES ARE THE QUEUE, READ IN SOMEBODY'S ORDER, so the way to them
+  // from any section is the queue with that order — whose day it is travels
+  // with it, since it is the one thing on this page that is not the section's.
+  const showPriorities = () =>
+    nav.to(["me"], { order: "priorities", ...(handle ? { handle } : {}) });
+
   return (
     <>
       {/* THE BAR HOLDS WHAT YOU CAN DO. Whose day this is is what the object
@@ -292,8 +329,33 @@ export function MyWork() {
             onChange={(value) => setHandle(String(value))}
             ariaLabel="Whose day"
             placeholder="Pick somebody"
-            active={whose !== ""}
+            // THE ACCENT SAYS A FILTER IS ON, and reading your own day is the
+            // page's default rather than a filter: it was violet at rest, so
+            // the page always looked narrowed. Somebody else's day is.
+            active={handle !== "" && handle !== viewer.handle}
             options={whoseDayOptions(index, viewer.handle, workload.data)}
+          />
+        )}
+        {/* THE QUEUE'S TWO READINGS. A section switch rather than a filter:
+            the priorities are a different panel, the order a lead put the
+            queue in, and the flag on it is the one mark on this page that
+            asks to be seen — somebody else ordered this queue. */}
+        {section === "queue" && (
+          <Segmented<Order>
+            ariaLabel="Order the queue by"
+            value={order}
+            onChange={setOrder}
+            options={[
+              { value: "due", label: "Due", icon: "calendar" },
+              {
+                value: "priorities",
+                label: "Priorities",
+                icon: person.data?.priorities_set_by ? "flag" : "list",
+                title: person.data?.priorities_set_by
+                  ? `Ordered by ${person.data.priorities_set_by}`
+                  : undefined,
+              },
+            ]}
           />
         )}
         <a className="t-link" href={href(["inbox"])}>
@@ -344,7 +406,7 @@ export function MyWork() {
           ownDay={ownDay}
           they={they}
           stamp={person.data ?? undefined}
-          onPriorities={tab === "priorities" ? undefined : () => setTab("priorities")}
+          onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
           now={now}
           chrome={chrome}
         />
@@ -355,46 +417,11 @@ export function MyWork() {
           {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
           {mine && (
             <>
-              <Tabs
-                ariaLabel="Which claim"
-                value={tab}
-                onValueChange={(value) => setTab(value as Tab)}
-                items={TABS.map((key) => ({
-                  value: key,
-                  // EVERY COUNT, ALWAYS, which is what replaces the stacking:
-                  // a tab nobody has opened still says how much is on it. The
-                  // count rides in the LABEL rather than in the strip's own
-                  // `count` slot because that slot is `number | null`, and a
-                  // count the engine stopped at its ceiling is a floor —
-                  // `pageCount` writes it with a `+`, which a bare number
-                  // would report as a fact about somebody's day.
-                  label: countedTab(
-                    key,
-                    mine,
-                    assigned.data
-                      ? {
-                          total: assigned.data.total_hint,
-                          capped: assigned.data.total_capped,
-                        }
-                      : undefined,
-                  ),
-                  // AND THE ONE MARK ON THE STRIP is the queue somebody else
-                  // ordered — see [WhoseDay]. It is a FLAG rather than a
-                  // warning glyph: a lead putting an order on your list is not
-                  // a fault, it is a decision somebody made that you have not
-                  // seen yet.
-                  icon:
-                    key === "priorities" && person.data?.priorities_set_by ? (
-                      <FlagGlyph size="sm" />
-                    ) : undefined,
-                }))}
-              />
-
               {/* AND `work_my_work`'S OWN COVERAGE, beside what it drew. The
-                  strip above and six of the seven panels below come off this
-                  one answer, so its honesty belongs here rather than in the
-                  state bar, which carries the person's own record. The list on
-                  the Assigned tab states its own inside itself. */}
+                  section counts and six of the seven panels come off this one
+                  answer, so its honesty belongs here rather than in the state
+                  bar, which carries the person's own record. The list on the
+                  Queue states its own inside itself. */}
               <Coverage answer={mine} />
 
               {/* THE WORK LIST, NARROWED TO ONE PERSON — not a second
@@ -406,7 +433,7 @@ export function MyWork() {
               {tab === "priorities" && (
                 <Priorities mine={mine} now={now} chrome={chrome} they={they} />
               )}
-              {tab === "asks" && (
+              {tab === "asked-of-me" && (
                 <Asks
                   rows={mine.asked_of_me}
                   now={now}
@@ -645,40 +672,29 @@ export function whoseDayOptions(
   return out;
 }
 
-/** What each tab is called. */
-const TAB_LABEL: Record<Tab, string> = {
-  assigned: "Assigned",
-  priorities: "Priorities",
-  asks: "Asks",
-  unblocked: "Unblocked",
-  collaborating: "Collaborating",
-  watching: "Watching",
-  checklist: "Checklist",
-};
-
 /**
- * What a tab's count says, and what it is a count OF.
+ * What a section's count says, and what it is a count OF.
  *
  * THE BLOCKS ARE PAGES AND THE COUNTS ARE NOT. Each block comes back capped at
  * the engine's `tracker.MyWorkRows`, so a bare length is the CEILING on anybody
  * busy; the engine counts every block in full beside its page (`totals`), by
  * the predicate that drew it, and that is the number a tab carries. `pageCount`
  * writes a `+` only where the engine's own count stopped at its ceiling.
- * Assigned asks the tracker, whose `total_hint` is the count over the list the
- * tab opens onto and whose `total_capped` is the same ceiling; while that read
- * is in flight there is no number to draw and the tab carries none rather than
- * a zero, which would read as an empty day.
+ * The queue asks the tracker, whose `total_hint` is the count over the list
+ * the section opens onto and whose `total_capped` is the same ceiling; while
+ * that read is in flight there is no number to draw and the tab carries none
+ * rather than a zero, which would read as an empty day.
  */
-function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
-  const count = countFor(tab, mine, assignedTotal);
-  // NO TRAILING SPACE ON A TAB WITH NO COUNT. The accessible name is the
-  // label, and "Assigned " is a name with a word nobody wrote at the end of
-  // it — which is what a reader of the strip hears while the read is in
-  // flight.
-  return count ? `${TAB_LABEL[tab]} ${count}` : TAB_LABEL[tab];
+/**
+ * The sections that have a figure, and no others: a section whose count has
+ * not answered is ABSENT from what the header is handed, never an empty string
+ * it has to know to skip.
+ */
+function figures(all: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(all).filter(([, figure]) => figure !== ""));
 }
 
-/** How many things are behind one tab, as the strip spells it. */
+/** How many things are behind one section, as its tab spells it. */
 function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
   // `totals` is optional on the wire: a node from before the engine counted
   // the blocks answers without it, and a tab with no count is honest where a
@@ -689,7 +705,7 @@ function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | un
       ? assignedTotal
       : tab === "priorities"
         ? totals?.priorities
-        : tab === "asks"
+        : tab === "asked-of-me"
           ? totals?.asked_of_me
           : tab === "unblocked"
             ? totals?.unblocked_recent

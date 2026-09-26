@@ -16,11 +16,11 @@ import { Input, Kbd, useBodyScrollLock, useLayerContainer, useModalLayer } from 
 import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
+import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
-import { indexOrg, stateLabel } from "~/lib/seats.ts";
+import { activityWord, handleLabel, indexOrg } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
 // `GlyphName` `typeIcon` returns.
 import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
@@ -121,12 +121,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const agents = useAgents();
   const org = useOrg();
   const tools = useTools();
-  // VISIT ORDER HERE, ARRIVAL ORDER IN THE RAIL. The palette is opened fresh
-  // and closes, so its re-sort is invisible and "where you just were" is what
-  // an empty query should rank first; the sidebar's Recent section is drawn
-  // and navigated by position, so it may not re-sort under the pointer. See
-  // `lib/recents.ts`.
-  const recents = useRecentsByVisit();
+  // Most recently visited first — "where you just were" is what an empty
+  // query should rank first. See `lib/recents.ts`.
+  const recents = useRecents();
   const prefs = useViewerPrefs();
   const route = useRoute();
   const [q, setQ] = useState("");
@@ -303,7 +300,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "file-text",
           label: query,
           hint: "as an event",
-          go: () => nav.to(["activity", "events", query]),
+          go: () => nav.to(["live", "events", query]),
         },
         -3,
       );
@@ -317,10 +314,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           // THE TRACE PAGE, which is the only screen that assembles one: it
           // reads every event carrying the id and draws the span tree they
           // form. This pointed at the event log with `?trace=` instead, a
-          // parameter `routes/activity/Activity.tsx` reads nowhere — so the
+          // parameter `routes/live/Activity.tsx` reads nowhere — so the
           // reader landed on the UNFILTERED log, which reads as a trace that
           // touched everything.
-          go: () => nav.to(["activity", "traces", query]),
+          go: () => nav.to(["live", "traces", query]),
         },
         -2,
       );
@@ -331,7 +328,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "layers",
           label: query,
           hint: "as a turn",
-          go: () => nav.to(["activity", "turns", query]),
+          go: () => nav.to(["live", "turns", query]),
         },
         -1,
       );
@@ -373,8 +370,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           hint:
             seat.kind === "human"
               ? "human teammate"
-              : `@${seat.handle}${live?.activity ? ` · ${stateLabel(live.activity)}` : ""}`,
-          go: () => nav.to(["company", "people", seat.handle]),
+              : [handleLabel(seat.handle), live?.activity ? activityWord(live.activity) : ""]
+                  .filter(Boolean)
+                  .join(" · "),
+          go: () => nav.to(["agents", "seats", seat.handle]),
         },
         s + 1,
       );
@@ -399,7 +398,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           // BY NAME. A unit's stable `id:` is part of the guarded
           // configuration rather than the anonymous org projection, so no
           // link this palette can build carries one.
-          go: () => nav.to(["company", "units", unit.name]),
+          go: () => nav.to(["agents", "teams", unit.name]),
         },
         s + 2,
       );
@@ -416,7 +415,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             icon: "wrench",
             label: tool.name,
             hint: tool.source,
-            go: () => nav.to(["admin", "tools"], { q: tool.name }),
+            go: () => nav.to(["settings", "tools"], { q: tool.name }),
           },
           s + 3,
         );
@@ -428,7 +427,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "chart-no-axes-gantt",
           label: `Events mentioning “${q.trim()}”`,
           hint: "the event log, filtered",
-          go: () => nav.to(["activity", "events"], { q: q.trim() }),
+          go: () => nav.to(["live", "events"], { q: q.trim() }),
         },
         900,
       );

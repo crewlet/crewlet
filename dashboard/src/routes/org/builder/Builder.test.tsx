@@ -265,7 +265,7 @@ describe("the views the lens hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/company?lens=builder&view=table" });
+    mountBuilder({ engine: new Engine(company()), hash: "#/agents/edit?view=table" });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
@@ -441,6 +441,36 @@ describe("checking the draft", () => {
   });
 });
 
+// ONE CHECK PER DRAFT AND BASE. On a cold open the draft is read from
+// `/config` while the socket's snapshot delivers the company, and the snapshot
+// is the configuration the read already returned rather than an apply: checked
+// again, the lens sent the same dry run twice on every such open and aborted
+// the first. A push that REPLACES an org the tab already held is an apply.
+describe("what an org push re-checks", () => {
+  test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    expect(engine.checks()).toHaveLength(1);
+    act(() => store.applySnapshot({ org: named }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(engine.checks()).toHaveLength(1);
+
+    act(() => store.applyOrg({ ...named }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(engine.checks()[1]!.body).toEqual(engine.checks()[0]!.body);
+  });
+
+  test("an org the tab held when the lens opened is re-checked when it is replaced", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine, org: named });
+    await screen.findByText("No problems");
+    expect(engine.checks()).toHaveLength(1);
+    act(() => store.applyOrg({ ...named }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+  });
+});
+
 // NO PROVIDER, NO TURN. The dashboard writes none, so the lens says where one
 // comes from rather than leaving agents whose work waits with nothing to say
 // why.
@@ -501,7 +531,7 @@ describe("the selection in the URL", () => {
 
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&seat=ceo" });
+    mountBuilder({ engine, hash: "#/agents/edit?view=visualization&seat=ceo" });
     await screen.findByText("No problems");
     const actions = await screen.findByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
@@ -589,7 +619,7 @@ describe("a revision saved by somebody else", () => {
   // comes with it, are for a draft that holds work.
   test("an untouched draft is stood on the newer revision the org push reports", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: named });
     await screen.findByText("No problems");
     const next = company();
     next.roles![1]!.goal = "Design things";
@@ -605,7 +635,7 @@ describe("a revision saved by somebody else", () => {
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: named });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
@@ -719,7 +749,7 @@ describe("the lens that fills the window", () => {
   }
 
   test("the chart lens asks the frame for the window's height", async () => {
-    const calls = asked("#/company?lens=builder&view=visualization");
+    const calls = asked("#/agents/edit?view=visualization");
     // Not before the engine has answered: until then the lens draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -727,7 +757,7 @@ describe("the lens that fills the window", () => {
   });
 
   test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/company?lens=builder&view=table");
+    const calls = asked("#/agents/edit?view=table");
     // The toolbar is what both lenses draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });

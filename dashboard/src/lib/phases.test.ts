@@ -75,6 +75,30 @@ function phaseEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:0
   };
 }
 
+// THE STAGE A CARD DRAWS STALENESS FROM IS THE TURN'S, and only this call's
+// turn: a seat that has already started another turn says nothing about the
+// call a screen still holds from the last one.
+describe("a live call carries its turn's stage", () => {
+  const turn = (turn_id: string, stage: "context" | "phase" | "parked") => ({
+    turn_id,
+    stage,
+    started_at: "2026-09-02T10:00:00Z",
+  });
+
+  test("the seat's own turn, when it is this call's", () => {
+    expect(fromLiveCall(liveCall(), "PM", turn("t1", "parked")).stage).toBe("parked");
+  });
+
+  test("nothing from a turn the seat moved on to", () => {
+    expect(fromLiveCall(liveCall(), "PM", turn("t2", "parked")).stage).toBe("");
+    expect(fromLiveCall(liveCall(), "PM").stage).toBe("");
+  });
+
+  test("and nothing on a finished record", () => {
+    expect(fromPhaseEvent(phaseEvent())?.stage).toBe("");
+  });
+});
+
 describe("identity", () => {
   test("a live phase and its finished record share ONE key", () => {
     // THE fix for the row that jumped. They used to differ — the live row was

@@ -217,7 +217,7 @@ export function TurnCard({
               size="small"
               variant="secondary"
               leadingIcon={<LayersGlyph />}
-              onClick={() => nav.to(["activity", "turns", group.turnId])}
+              onClick={() => nav.to(["live", "turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >
               Open the whole turn

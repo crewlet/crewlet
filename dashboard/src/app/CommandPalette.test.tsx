@@ -68,7 +68,7 @@ afterEach(() => {
 
 describe("an id pasted out of a log", () => {
   // THE TRACE PAGE IS THE ONLY SCREEN THAT ASSEMBLES A TRACE. This hit pointed
-  // at `#/activity/events?trace=<id>` instead, and the event log reads no
+  // at `#/live/events?trace=<id>` instead, and the event log reads no
   // `trace` parameter — so the reader landed on the WHOLE log, unfiltered,
   // which reads as a trace that touched everything.
   test("the trace hit opens the trace, not the whole event log", () => {
@@ -76,7 +76,7 @@ describe("an id pasted out of a log", () => {
     const { type, row } = open();
     type(id);
     fireEvent.click(row("as a trace — every event that carries it")!);
-    expect(location.hash).toBe(`#/activity/traces/${id}`);
+    expect(location.hash).toBe(`#/live/traces/${id}`);
   });
 
   test("and the event and turn hits still open their own screens", () => {
@@ -84,7 +84,7 @@ describe("an id pasted out of a log", () => {
     const { type, row } = open();
     type(id);
     fireEvent.click(row("as an event")!);
-    expect(location.hash).toBe(`#/activity/events/${id}`);
+    expect(location.hash).toBe(`#/live/events/${id}`);
   });
 });
 

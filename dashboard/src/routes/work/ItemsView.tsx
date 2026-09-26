@@ -105,7 +105,7 @@ import {
   type TrackerFilters,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
-import type { WorkProjectDetail, WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
+import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
 
 /**
  * Every custom-field narrowing on the address, as the grammar spells them.
@@ -207,18 +207,18 @@ export function ItemsView({
 
   // AND THE FILTERS, which replace: four ticked chips are ONE screen.
   const [q, setQ] = useParam("q", "");
-  const [status, setStatus] = useParam("status", "");
-  const [type, setType] = useParam("type", "");
-  const [priority, setPriority] = useParam("priority", "");
+  const [status] = useParam("status", "");
+  const [type] = useParam("type", "");
+  const [priority] = useParam("priority", "");
   // THE LOCKED KEY IS READ AND THEN DROPPED, which is the only shape a hook
   // allows: a conditional `useParam` would change the hook order the first
   // time a host arrived. On a hosted list `assignee=` is not part of the
   // grammar — nothing on the screen writes it, no chip draws it and the lock
   // overwrites it on the way to the wire — so one left on the address by hand
   // is inert rather than a second, silent narrowing under the person's name.
-  const [assigneeKey, setAssignee] = useParam("assignee", "");
+  const [assigneeKey] = useParam("assignee", "");
   const assignee = host ? "" : assigneeKey;
-  const [tag, setTag] = useParam("tag", "");
+  const [tag] = useParam("tag", "");
   // THE TEAM, which arrives from an item's own "Filed into" line rather than
   // from a control — see [TrackerFilters.unit]. An ordinary filter key from
   // here on: it narrows the query, it carries a chip, and the chip takes it
@@ -235,9 +235,9 @@ export function ItemsView({
   // [TrackerFilters.group].
   const [, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
-  const [blocked, setBlocked] = useParam("blocked", "");
-  const [due, setDue] = useParam("due", "");
-  const [removed, setRemoved] = useParam("removed", "");
+  const [blocked] = useParam("blocked", "");
+  const [due] = useParam("due", "");
+  const [removed] = useParam("removed", "");
   // THE COLUMN SET IS THE SHAPE'S, so there is a key per grid shape rather
   // than one `cols=` read against whichever set happens to be on. Both are
   // read unconditionally — a hook's key is an argument and this is one
@@ -641,7 +641,7 @@ export function ItemsView({
         </div>
       )}
 
-      {/* `toolbar` FIRST, and it is not decoration: `.screen:has(.toolbar)` is
+      {/* `toolbar` FIRST, and it is not decoration: the scroller's `:has(.toolbar)` is
           what publishes `--sticky-top`, and every other thing that sticks in
           this scroller — the grid's column heads, a band head, the peek —
           offsets itself by it. */}

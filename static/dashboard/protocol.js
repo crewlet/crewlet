@@ -15,7 +15,7 @@ function emptyState() {
 		events: [],
 		phases: [],
 		sandboxes: [],
-		org: {},
+		org: null,
 		tools: [],
 		health: { status: "unknown" },
 		tokens: null,
@@ -221,7 +221,26 @@ var Store = class {
 * `window.prompt`, which meant a request for a credential arrived in a
 * chrome-drawn box that could not say who was asking or why.
 */
-var TOKEN_KEY = "crewlet_api_token";
+var TOKEN_KEY = {
+	/** The API token this browser presents (`protocol/authToken.ts`). */
+	apiToken: "crewlet_api_token",
+	/** Light, dark or the system's (`lib/prefs.ts`). */
+	theme: "crewlet_theme",
+	/** Compact, normal or comfortable (`lib/prefs.ts`). */
+	density: "crewlet_density",
+	/** The zone timestamps are drawn in; empty is the browser's (`lib/prefs.ts`). */
+	timezone: "crewlet_timezone",
+	/** How a date is written (`lib/prefs.ts`). */
+	dateFormat: "crewlet_date_format",
+	/** Objects this reader opened, for the palette (`lib/recents.ts`). */
+	recents: "crewlet_recents",
+	/** Pages this reader starred, for the sidebar (`lib/starred.ts`). */
+	starred: "crewlet_starred",
+	/** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
+	peekWidth: "crewlet.peek.width",
+	/** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
+	orgDraft: "crewlet_org_draft"
+}.apiToken;
 /** The stored token, or "". Never throws. */
 function apiToken() {
 	try {

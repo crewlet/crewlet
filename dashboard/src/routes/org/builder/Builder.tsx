@@ -1,5 +1,5 @@
 /**
- * The Builder lens of the Org chart screen (`#/company?lens=builder`): editing the
+ * The Builder lens of the Org chart screen (`#/agents/edit`): editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
@@ -27,7 +27,7 @@
  * all of it through `BuilderContext`, so none of them starts a request.
  *
  * THE LAYOUT FILLS THE SCREEN in the canvas view: the lens is a flex column
- * whose canvas takes the height left under the toolbar, so `.screen` has
+ * whose canvas takes the height left under the toolbar, so the scroller has
  * nothing to scroll and a wheel over the page never lands in a canvas that is
  * half off screen. Fullscreen takes the whole builder container (toolbar,
  * view, dialogs, its own toast outlet and live region), because a fullscreen
@@ -104,6 +104,7 @@ import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { screenPath } from "./dialogParts.tsx";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
   type GlyphProps,
   NetworkGlyph,
@@ -459,11 +460,12 @@ function useLiveRegion(): { text: string; announce: (message: string) => void } 
 // ---------------------------------------------------------------------------
 
 /**
- * Below this width the drawer takes the whole window and
- * a visualization has no room beside it, so a lens opened with no `view`
- * starts on the table.
+ * Below the kit's phone step a visualization has no room to be read, so a
+ * builder opened with no `view` starts on the table. It was 860, the width at
+ * which the old rail became a bottom bar; the frame has no such width any
+ * more, and the one it has for "a phone" is `breakpoint.phone`.
  */
-const NARROW_QUERY = "(max-width: 860px)";
+const NARROW_QUERY = `(width < ${PHONE_BREAKPOINT}px)`;
 
 /** Undo and redo, as the keyboard handler below accepts them. */
 const UNDO_KEYS = ["Mod", "z"] as const;
@@ -678,11 +680,23 @@ function Lens({
   // draft has no configuration to move, and hears only of one appearing: a
   // push that names a company is exactly that, and its check is the refusal
   // that says so.
+  //
+  // THE FIRST ORG THIS TAB HEARS OF IS NOT AN APPLY. The slice is `null` until
+  // the socket's snapshot delivers the company as the engine held it when the
+  // socket subscribed, and on a cold open of this lens the draft is read from
+  // `/config` at that same moment, so the two describe one configuration.
+  // Re-checking on it sent the same dry run twice on every such open, the
+  // second aborting the first. The one apply that could land between them is
+  // still caught: the save's `If-Match` names the base the draft was read at,
+  // and the engine's 409 is the same conflict a check reports. A socket that
+  // reconnects replaces an org the tab already holds, and that IS re-checked,
+  // since the socket may have missed an apply while it was down.
   const lastOrg = useRef(org);
   useEffect(() => {
-    if (lastOrg.current === org) return;
+    const was = lastOrg.current;
+    if (was === org) return;
     lastOrg.current = org;
-    if (!loaded) return;
+    if (!loaded || was === null) return;
     if (stateRef.current.mode === "edit" || orgName !== "") reset();
   }, [org, orgName, loaded, reset]);
 

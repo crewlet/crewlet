@@ -22,7 +22,7 @@ import { Router } from "~/app/router.tsx";
 
 beforeEach(() => {
   localStorage.clear();
-  location.hash = "#/company/people?peek=seat:ceo";
+  location.hash = "#/agents/roster?peek=seat:ceo";
 });
 
 afterEach(() => {
@@ -59,11 +59,16 @@ test("the rail publishes its width where the grid track can read it", () => {
 test("a drag moves the value the grid track resolves", () => {
   const { container } = rail();
   const grip = container.querySelector<HTMLElement>(".peek-grip");
+  const aside = container.querySelector<HTMLElement>("aside.peek-rail");
   expect(grip).not.toBeNull();
+  // THE RAIL'S OWN RIGHT EDGE is what a width is measured from, not the
+  // window's: the sheet sits 8px inside the window, so `innerWidth - clientX`
+  // made the panel 8px wider than the pointer asked for. jsdom lays nothing
+  // out, so the edge is given here — 1016, a 1024 window less the inset.
+  aside!.getBoundingClientRect = () => ({ right: 1016 }) as DOMRect;
   fireEvent.mouseDown(grip!);
-  // jsdom's window is 1024 wide, so a pointer at 524 asks for a 500px rail —
-  // inside the 360..640 the drag clamps to.
-  fireEvent.mouseMove(window, { clientX: 524 });
+  // A pointer at 516 asks for a 500px rail — inside the 360..640 it clamps to.
+  fireEvent.mouseMove(window, { clientX: 516 });
   expect(published()).toBe("500px");
   fireEvent.mouseUp(window);
   expect(localStorage.getItem("crewlet.peek.width")).toBe("500");

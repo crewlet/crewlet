@@ -111,14 +111,11 @@ import {
   type OpenScreen,
 } from "./nodeActions.tsx";
 import {
-  LiveState,
   NodeGlyph,
-  ProblemCount,
   ReportingMarks,
   SeatMarks,
   UnitMarks,
   handleLabel,
-  nodeGlyphKind,
   seatKindLabel,
   unitTypeLabel,
 } from "./nodeMarks.tsx";
@@ -788,11 +785,6 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
       <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
     </>
   );
-}
-
-/** What a reporting chart node is called, for the branch control below it. */
-function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: string): string {
-  return id === CYCLE_GROUP ? "the reporting cycles" : (chart.items.get(id)?.name ?? "");
 }
 
 /**

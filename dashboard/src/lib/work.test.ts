@@ -15,6 +15,7 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   SCOPES,
   STATUSES,
+  STATUS_TONE,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -52,7 +53,6 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
-  type Scope,
   type Shape,
   countedLabel,
   dayLabel,
@@ -1634,4 +1634,20 @@ test("a target day is drawn as that calendar day", () => {
   );
   // A VALUE THAT IS NOT A DAY IS SHOWN AS SENT, rather than as the epoch.
   expect(targetLabel("soon")).toBe("soon");
+});
+
+// A STATUS'S HUE IS ITS GROUP'S. Amber is the product's word for NEEDS YOU —
+// a seat parked on a question, a decision waiting — and `in_review` drew it,
+// so every task in review read as a task waiting on the reader.
+test("a status is coloured by its group, and review is work moving", () => {
+  expect(STATUS_TONE.in_progress).toBe("info");
+  expect(STATUS_TONE.in_review).toBe(STATUS_TONE.in_progress);
+  expect(STATUS_TONE.done).toBe("positive");
+  // Finished without being delivered claims no delivery.
+  expect(STATUS_TONE.cancelled).toBe("neutral");
+  expect(STATUS_TONE.todo).toBe("neutral");
+  expect(STATUS_TONE.closed).toBe("neutral");
+  // And no status the tracker ships is drawn in the NEEDS-YOU hue.
+  expect(Object.values(STATUS_TONE)).not.toContain("caution");
+  expect(Object.keys(STATUS_TONE)).toHaveLength(STATUSES.length);
 });

@@ -49,7 +49,7 @@ import type {
   DerivedUnit,
   SandboxEntry,
 } from "~/protocol/index.ts";
-import { runState } from "~/lib/seats.ts";
+import { activityOf } from "~/lib/seats.ts";
 import { keyOfHandle } from "./chartModel.ts";
 import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
@@ -395,7 +395,7 @@ export function isWorking(
   if (sandboxes.some((run) => run.agent_handle === handle)) return true;
   const agent = agents.find((row) => row.handle === handle);
   if (!agent) return false;
-  const state = runState(agent);
+  const state = activityOf(agent);
   return state === "working" || state === "needs";
 }
 

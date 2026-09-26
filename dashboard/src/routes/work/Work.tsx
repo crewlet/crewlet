@@ -27,8 +27,6 @@
  * on, by filing the duplicate.
  */
 
-import { href } from "~/app/router.tsx";
-import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -69,18 +67,6 @@ export function Work() {
 
   return (
     <>
-      <PageActions>
-        {/* REAL ANCHORS rather than buttons that navigate: these leave the
-            list, so they are middle-clickable like every other way out of a
-            screen, and they go through the router's own history rules instead
-            of around them. */}
-        <a className="t-link" href={href(["work", "projects"])}>
-          Projects →
-        </a>
-        <a className="t-link" href={href(["work", "history"])}>
-          History →
-        </a>
-      </PageActions>
       <PageNote>
         The company&rsquo;s own work — every project, in one list. Read-only here: work is filed and
         moved by the seats themselves, so every change is attributed to somebody.

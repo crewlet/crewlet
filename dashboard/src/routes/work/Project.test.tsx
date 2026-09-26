@@ -17,6 +17,7 @@ import { Project, ProjectPeek } from "./Project.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectDetail } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -66,9 +67,11 @@ const detail = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
 
 const mount = (key = "ENG") =>
   render(
-    <Router>
-      <Project projectKey={key} />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <Project projectKey={key} />
+      </Router>
+    </ViewerProvider>,
   );
 
 /** What `work_items` was actually asked, which is what a lens's claim rests on. */
@@ -330,9 +333,11 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
     work_activity: { records: [], complete: true },
   });
   const { container } = render(
-    <Router>
-      <ProjectPeek projectKey="ENG" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ProjectPeek projectKey="ENG" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
@@ -353,9 +358,11 @@ test("the rail says an empty project is empty, where the page's list does", asyn
     work_activity: { records: [], complete: true },
   });
   const { container } = render(
-    <Router>
-      <ProjectPeek projectKey="ENG" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ProjectPeek projectKey="ENG" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("No work has been filed here yet.")).toBeTruthy());
   expect(container.querySelector(".work-census")).toBeNull();

@@ -29,7 +29,8 @@
 
 import { expect, test } from "vitest";
 
-import { DESTINATIONS, RAIL } from "~/app/nav.ts";
+import { DESTINATIONS } from "~/app/nav.ts";
+import { resolves } from "~/app/routes.ts";
 import { modules } from "~/test/source.ts";
 import { SCREENS, screenPath, type ScreenName } from "./dialogParts.tsx";
 
@@ -46,22 +47,24 @@ function sources(): { path: string; text: string }[] {
 const names = Object.keys(SCREENS) as ScreenName[];
 
 /*
- * THE FIRST SEGMENT IS WHAT ROUTE DISPATCH SWITCHES ON, which is the check
- * `app/source.test.ts` makes over every other link in the tree — held here
- * against the same `RAIL` so the two cannot come to disagree about what a
- * live workspace is.
+ * THE ROUTE TABLE'S OWN RESOLVER IS WHAT DISPATCH SWITCHES ON, and it is the
+ * check `app/source.test.ts` makes over every other link in the tree — held
+ * here against the same `resolves` so the two cannot come to disagree about
+ * what a screen is.
  */
-test("every destination names a segment a workspace owns", () => {
-  const owned = new Set(RAIL.flatMap((r) => r.owns));
-  const dead = names.filter((name) => !owned.has(screenPath(name)[0] ?? ""));
-  expect(dead, "these builder links go to a workspace that does not exist").toEqual([]);
+test("every destination resolves to a screen", () => {
+  const dead = names.filter((name) => !resolves(screenPath(name)));
+  expect(
+    dead.map((name) => `${name} — #/${screenPath(name).join("/")}`),
+    "these builder links go to a screen that does not exist",
+  ).toEqual([]);
 });
 
 /*
- * AND THE WHOLE PATH, not just its head: `["admin", "integrations"]` and
- * `["admin", "integration"]` have the same first segment and only one of them
+ * AND THE WHOLE PATH, not just its head: `["settings", "integrations"]` and
+ * `["settings", "integration"]` have the same first segment and only one of them
  * is a screen. `nav.ts` is where a destination is declared, so a builder
- * destination has to BE one — which is also what makes the rail and this lens
+ * destination has to BE one — which is also what makes the sidebar and this lens
  * agree about where Integrations is when it next moves.
  */
 test("every destination is a destination this application declares", () => {
@@ -105,12 +108,14 @@ test("every destination is linked to by something in the lens", () => {
  * lens shipped with — has to come back red from both directions.
  */
 test("the check can tell: a flat route is caught, head and whole", () => {
-  const owned = new Set(RAIL.flatMap((r) => r.owns));
   const declared = new Set(DESTINATIONS.map((d) => d.path.join("/")));
-  expect(owned.has("integrations")).toBe(false);
+  expect(resolves(["integrations"])).toBe(false);
   expect(declared.has("integrations")).toBe(false);
   // And a path whose head is live but whose tail is not.
-  expect(owned.has("admin")).toBe(true);
-  expect(declared.has("admin/integration")).toBe(false);
-  expect(declared.has("admin/integrations")).toBe(true);
+  expect(resolves(["settings"])).toBe(true);
+  expect(resolves(["settings", "integration"])).toBe(false);
+  expect(declared.has("settings/integration")).toBe(false);
+  expect(declared.has("settings/integrations")).toBe(true);
+  // And the address this lens's destinations lived at before this tree.
+  expect(resolves(["admin", "integrations"])).toBe(false);
 });

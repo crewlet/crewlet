@@ -41,20 +41,24 @@
  * row, which on a 200-seat company was roughly 80,000 array scans per push.
  */
 
-import { plural } from "./format.ts";
-import type { SeatActivity } from "~/contract/wire.ts";
+import { useMemo } from "react";
+import { parseUTC, plural } from "./format.ts";
+import { useQuery } from "./useQuery.ts";
+import { useOrg } from "./store-hooks.ts";
+import { apiToken } from "~/protocol/index.ts";
+import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type {
   AgentRow,
   CompanyDocument,
   ConfigRole,
   ConfigUnit,
   Derived,
+  LiveCall,
   OrgProjection,
   OrgSeat,
   OrgUnit,
   PhaseLLM,
   ProviderKeys,
-  SandboxEntry,
   ScheduleSpec,
 } from "~/protocol/index.ts";
 
@@ -198,7 +202,7 @@ export interface OrgIndex {
  * handle, so such a seat still has a page a link can reach.
  */
 export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
-  return ["company", "people", seat.handle || seat.name];
+  return ["agents", "seats", seat.handle || seat.name];
 }
 
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -665,6 +669,59 @@ export function seatReading(
   return { state: "absent" };
 }
 
+/**
+ * The guarded half of one seat, for any screen that draws it: the company
+ * document's entry for the seat and the four-state reading of it.
+ *
+ * ONE READ, ONE ORDER. The document is behind an operator token, and every
+ * screen that read it on its own either forgot the refusal-first order
+ * [seatReading] exists for — and printed a revoked reader's model beside a
+ * banner saying the answer needs a token — or collapsed "absent", "refused"
+ * and "not read yet" into one sentence. The seat is resolved by handle, or by
+ * name for a seat the engine reported no handle for, which is how
+ * [seatPath] addresses one.
+ *
+ * A reader with no credential is never asked for: see the query below.
+ */
+export function useSeatSetup(handle: string): {
+  seat: Seat | undefined;
+  settings: SeatSettings | null;
+  reading: SeatReading;
+  /** The raw answer, for a panel that states its own read: the document
+   *  (never beside a refusal), whether it is in flight, and the refusal. */
+  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
+} {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
+  // NOT ASKED WITHOUT A CREDENTIAL. The document is guarded, so a browser
+  // presenting no token is refused on every ask — the answer is known before
+  // the question, and asking only puts a refusal on the wire and a
+  // `refused` banner over a page that never had a chance. Such a reader stays
+  // `unread`, which claims nothing; the screen names the credential instead.
+  // Read from the stored token rather than the `viewer` answer, which arrives
+  // a round trip later and would put the one refused request back.
+  const config = useQuery("config", undefined, { enabled: !!seat && apiToken() !== "" });
+  // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL: `useQuery` keeps its last good
+  // answer through a failed ask, which suits a poll and is wrong for a guarded
+  // read.
+  const settings = useMemo<SeatSettings | null>(
+    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
+    [seat, config.data, config.error],
+  );
+  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  return {
+    seat,
+    settings,
+    reading,
+    config: {
+      doc: config.error ? null : (config.data ?? null),
+      loading: config.loading,
+      error: config.error,
+    },
+  };
+}
+
 /** Every unit in a company document, depth first, parents before children. */
 export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {
   const out: ConfigUnit[] = [];
@@ -930,100 +987,106 @@ export function kindWithAuthors(
   return (handle) => seatKind(handle) ?? authors.get(handle);
 }
 
+// ---------------------------------------------------------------------------
+// What a seat is doing: the engine's word, mapped and never derived
+// ---------------------------------------------------------------------------
+//
+// THE ENGINE COMPUTES ONE WORD PER SEAT (`activity`: working, needs, stopped,
+// idle) from its turn, its coding runs' durable record, its pause, its
+// placement across the fleet and its budget windows, and serves it on every
+// `agents` row with the reason beside it (`stopped_reason`, `paused`,
+// `last_turn`). This client used to compute three words of its own from a
+// fraction of those — the sidebar off an old `state`, the live screen and this
+// library each folding the running-runs panel a different way — and a run
+// parked past a twelve-hour age-out dropped out of every ring at once.
+//
+// So everything below is a MAPPER: the engine's word to a ring tone, a label
+// and a line of prose. Nothing here, and nothing anywhere else, reads a live
+// call's state to decide whether a seat is working — `seats.test.ts` holds
+// that as a source gate over the whole tree.
+
 /**
- * What a seat is doing, as a screen draws it: the ENGINE'S word
- * ({@link SeatActivity}, served on every `agents` row as `activity`), plus
- * `offline` for a seat no row is held for yet and `human` for a seat the engine
- * does not run.
- *
- * NOTHING HERE DERIVES IT. The engine computes one word per seat from its turn,
- * its coding runs' durable record, its pause, its placement across the fleet
- * and its budget windows; this client used to compute three words of its own
- * from a fraction of those — the sidebar off the projection's old `state`, the
- * live screen and the seat library each folding the running-runs panel in a
- * different way — and a run parked past the old twelve-hour age-out dropped out
- * of every ring at once.
+ * What a screen draws for a seat: the engine's word, or `offline` for a seat
+ * no row is held for yet (a seat just added, a node that has not pushed).
  */
-export type RunState = SeatActivity | "offline" | "human";
+export type SeatState = SeatActivity | "offline";
+
+/** The engine's word for a seat, or `offline` while no row is held for it. */
+export function activityOf(row: AgentRow | null | undefined): SeatState {
+  return row?.activity ?? "offline";
+}
 
 /**
  * Whether a detached coding run is waiting on a person.
  *
- * THE ENGINE'S OWN TWO WORDS. Six call sites compared against
- * `awaiting_input`, which `sandbox.PendingRun` cannot write — its statuses are
- * `launching`, `running`, `awaiting_clarification`, `resumed`, `done`,
- * `failed` and `reseed` (`internal/sandbox/pending.go`) — so every one of them
- * was permanently false and the state this product most needs to surface
- * reached no screen through any of them. `reseed` counts because
- * `sandbox.Awaiting` counts it: the box was reaped past its pause TTL, so the
- * work is gone and only the question survives.
- *
- * One predicate rather than six comparisons, because six copies of a
- * vocabulary is how five of them come to be wrong at once. It classifies a RUN
- * for the runs panel; what a SEAT is doing is `activity`.
+ * THE ENGINE'S OWN TWO WORDS: `awaiting_clarification`, and `reseed` — the box
+ * was reaped past its pause TTL, so the work is gone and only the question
+ * survives (`sandbox.Awaiting` counts it too). It classifies a RUN for the
+ * runs panel; what a SEAT is doing is `activity`.
  */
 export function awaitingPerson(status: string | undefined): boolean {
   return status === "awaiting_clarification" || status === "reseed";
 }
 
-/** The engine's word for a seat, or `offline` while no row is held for it. */
-export function runState(agent: AgentRow | null | undefined): RunState {
-  return agent?.activity ?? "offline";
-}
+/** The ring round a seat's badge: the one place a seat's state has a hue. */
+export type SeatRing = "info" | "warning" | "danger";
 
 /**
- * The four tones a seat's chrome may take, and NONE of them is its identity.
+ * The ring for a state, and NONE for idle.
  *
- * `quiet` is deliberately not a hue. An idle seat used to draw a tinted,
- * glowing tile that read as activity — reported as "when agent is idle it has
- * this blob lighting which feels like it is working" — and the fix for that is
- * not a duller hue, it is none.
- *
- * `needs` and `broken` are separate on purpose: a seat parked on a question and
- * a seat that cannot take work have both stopped, and only one of them is a
- * failure. Red is reserved for a stop. A FAILED LAST TURN IS NOT ONE — the seat
- * takes its next wake like any other — so `last_error` does not colour the
- * seat; the engine's `activity` alone does.
+ * WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and an idle seat
+ * draws no ring at all. An idle seat drawn as a green pill read as activity —
+ * the product's own complaint was "when agent is idle it has this blob
+ * lighting which feels like it is working" — and the fix for that is not a
+ * duller hue, it is none. Amber is reserved for the one state that asks for a
+ * person.
  */
-export type SeatTone = "working" | "needs" | "broken" | "quiet";
-
-export function seatTone(agent: AgentRow | null | undefined): SeatTone {
-  switch (agent?.activity) {
-    case "working":
-      return "working";
-    case "needs":
-      return "needs";
-    case "stopped":
-      return "broken";
-    default:
-      return "quiet";
-  }
-}
-
-export function toneOf(state: RunState): "positive" | "caution" | "critical" | "info" | "neutral" {
+export function ringOf(state: SeatState | undefined): SeatRing | undefined {
   switch (state) {
     case "working":
       return "info";
     case "needs":
-      return "caution";
-    case "idle":
-      return "positive";
+      return "warning";
     case "stopped":
-      return "critical";
+      return "danger";
     default:
-      return "neutral";
+      return undefined;
   }
 }
 
-export function stateLabel(state: RunState): string {
+/** The kit tone a state's pill takes: its ring's, or neutral where it has none. */
+export function toneOf(state: SeatState | undefined): SeatRing | "neutral" {
+  return ringOf(state) ?? "neutral";
+}
+
+/** The state in one lowercase word or two, for a pill. */
+export function activityWord(state: SeatState): string {
   return state === "needs" ? "needs you" : state;
 }
 
+/**
+ * Who a seat's pauser is, by the name a reader knows them by.
+ *
+ * `paused.by` is the person's SEAT HANDLE (the seat their token is bound to)
+ * or, for a token nobody bound, the token's own name — an address either
+ * way, and "Paused by jane-founder" names an address where a person is meant.
+ * A screen passes the chart's lookup; a key the chart does not hold (a token's
+ * name, a seat since removed) is drawn as it came.
+ */
+export type NameOf = (key: string) => string;
+
+const AS_WRITTEN: NameOf = (key) => key;
+
+/** The chart's [NameOf]: a seat handle's name, and any other key as written. */
+export function nameOfIn(index: OrgIndex): NameOf {
+  return (key) => index.byHandle.get(key)?.name ?? key;
+}
+
 /** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
-export function stoppedLine(agent: AgentRow | null | undefined): string {
-  switch (agent?.stopped_reason) {
+export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = AS_WRITTEN): string {
+  switch (row?.stopped_reason) {
     case "paused":
-      return agent.paused?.by ? `paused by ${agent.paused.by}` : "paused";
+      return row.paused?.by ? `paused by ${nameOf(row.paused.by)}` : "paused";
     case "unplaced":
       return "not placed on any node";
     case "budget":
@@ -1035,36 +1098,149 @@ export function stoppedLine(agent: AgentRow | null | undefined): string {
   }
 }
 
-const PHASE_DOING: Record<string, string> = {
-  onboarding: "reading the team's onboarding pages",
-  execute: "working on the task",
-  review: "reviewing its own work",
+/**
+ * A seat's state as its LABEL: "Working", "Needs you · run parked", "Paused by
+ * Jane · 12m", "Stopped · budget", "Not placed on any node", "Idle".
+ *
+ * Every word is the engine's: the reason is `stopped_reason`, the pauser is
+ * `paused.by`, the age is `paused.at` against the reader's clock. A reason
+ * this build does not know draws "Stopped" rather than a guess.
+ */
+export function labelOf(
+  row: AgentRow | null | undefined,
+  now: number,
+  nameOf: NameOf = AS_WRITTEN,
+): string {
+  switch (activityOf(row)) {
+    case "working":
+      return "Working";
+    case "needs":
+      return row?.turn?.stage === "parked" ? "Needs you · run parked" : "Needs you";
+    case "idle":
+      return "Idle";
+    case "offline":
+      return "No state from the engine yet";
+    case "stopped":
+      switch (row?.stopped_reason) {
+        case "paused": {
+          const by = row.paused?.by ? `Paused by ${nameOf(row.paused.by)}` : "Paused";
+          const since = row.paused?.at ? ago(row.paused.at, now) : "";
+          return since ? `${by} · ${since}` : by;
+        }
+        case "unplaced":
+          return "Not placed on any node";
+        case "budget":
+          return "Stopped · budget";
+        case "provider":
+          return "Stopped · provider";
+        default:
+          return "Stopped";
+      }
+  }
+}
+
+/**
+ * What a phase is doing, for the state line: the words alone, and the words
+ * before the item the turn is on.
+ */
+const PHASE_DOING: Record<string, { alone: string; on: string }> = {
+  context: { alone: "Reading context", on: "Reading context for" },
+  onboarding: { alone: "Onboarding", on: "Onboarding on" },
+  execute: { alone: "Executing", on: "Executing" },
+  review: { alone: "Reviewing", on: "Reviewing" },
 };
 
-/** What this seat is doing, in a sentence: the engine's word, put in words. */
-export function statusLine(
-  agent: AgentRow | null | undefined,
-  opts: { sandbox?: SandboxEntry | null; seat?: Seat | null } = {},
+/**
+ * How many workers a seat's call in flight is running: the tasks of the
+ * `delegate` call it is waiting on, or 0 when its running call is anything
+ * else, or none.
+ *
+ * OFF THE CALL'S OWN ARGUMENTS, because that is the one record that exists
+ * WHILE the workers run: each worker's phase record lands when it finishes and
+ * the batch's summary when the last one does, so both describe a fan-out that
+ * is over. Arguments that do not read as the tool's schema count nothing
+ * rather than a guess.
+ */
+export function delegatedWorkers(call: LiveCall | null | undefined): number {
+  const running = call?.running_call;
+  if (!running || running.name !== DELEGATE_TOOL) return 0;
+  try {
+    const args: unknown = JSON.parse(running.arguments);
+    const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
+    return Array.isArray(tasks) ? tasks.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * What a seat is doing, in one line under its name: "Executing ENG-412",
+ * "3 workers on ENG-405", "Coding run on ENG-9", "Idle · last turn 24m ago".
+ *
+ * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
+ * engine charges the turn to — and never a `work_key` a prompt happened to
+ * mention. The workers are the ones the call in flight is running
+ * ([delegatedWorkers]), off the same row, so every surface that draws this
+ * line says the same thing about a fan-out. A human seat is not run by the
+ * engine and says so.
+ */
+export function stateLine(
+  row: AgentRow | null | undefined,
+  opts: { now: number; seat?: Seat | null; nameOf?: NameOf },
 ): string {
-  const { sandbox, seat } = opts;
+  const { now, seat, nameOf = AS_WRITTEN } = opts;
   if (seat?.kind === "human") {
-    return seat.availability || "human teammate — not run by the engine";
+    return seat.availability || "Human teammate — not run by the engine";
   }
-  switch (runState(agent)) {
-    case "needs":
-      return "waiting on an answer to keep coding";
-    case "stopped":
-      return stoppedLine(agent);
-    case "working":
-      if (sandbox && !awaitingPerson(sandbox.status) && !agent?.current_phase) {
-        return `writing code in a sandbox (${sandbox.coding_agent || "coding agent"})`;
+  const state = activityOf(row);
+  const item = row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+  switch (state) {
+    case "working": {
+      // A DETACHED CODING RUN parks the turn while the box works: the seat is
+      // working and no model call is in flight, so the phase says nothing.
+      if (row?.turn?.stage === "parked") {
+        return item ? `Coding run on ${item}` : "Coding run in progress";
       }
-      return PHASE_DOING[agent?.current_phase ?? ""] ?? "working on a task";
-    case "idle":
-      return "idle — nothing in the inbox";
+      const workers = delegatedWorkers(row?.live_call);
+      if (workers > 0) {
+        const who = plural(workers, "worker");
+        return item ? `${who} on ${item}` : `${who} running`;
+      }
+      const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
+        alone: "Working",
+        on: "Working on",
+      };
+      return item ? `${doing.on} ${item}` : doing.alone;
+    }
+    case "idle": {
+      const last = row?.last_turn?.ended_at;
+      return last ? `Idle · last turn ${ago(last, now)} ago` : "Idle";
+    }
     default:
-      return "no state from the engine yet";
+      return labelOf(row, now, nameOf);
   }
+}
+
+/**
+ * A handle as a reader sees it: `@pm`, and NOTHING for a seat the engine
+ * reported no handle for. A bare `@` printed beside a name read as a handle
+ * that is empty, which is a claim about the seat rather than about what this
+ * client was told.
+ */
+export function handleLabel(handle: string | null | undefined): string {
+  const h = (handle ?? "").trim();
+  return h ? `@${h}` : "";
+}
+
+/** "12m", "3h", "2d" — the age of an instant against the reader's clock. */
+function ago(at: string, now: number): string {
+  const then = parseUTC(at)?.getTime() ?? Number.NaN;
+  if (!Number.isFinite(then)) return "";
+  const minutes = Math.max(0, Math.round((now - then) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,7 +1262,17 @@ export const STALE_MS = 120_000;
 /** And this long means it is not coming back — long past any provider timeout. */
 export const STALLED_MS = 600_000;
 
-export function staleness(updatedAt: string | undefined, now: number): "" | "stale" | "stalled" {
+export function staleness(
+  updatedAt: string | undefined,
+  now: number,
+  stage?: string | null,
+): "" | "stale" | "stalled" {
+  // A PARKED TURN IS SILENT ON PURPOSE. A detached coding run suspends the
+  // loop and the round stops moving by design — for as long as the run takes,
+  // and for as long as a question waits on a person — so "no update for ten
+  // minutes" is its normal state, and an alarm keyed on it fired on every
+  // legitimately silent run.
+  if (stage === "parked") return "";
   if (!updatedAt) return "";
   const age = now - new Date(updatedAt.endsWith("Z") ? updatedAt : `${updatedAt}Z`).getTime();
   if (!Number.isFinite(age)) return "";

@@ -161,11 +161,7 @@ export function SeatCell({
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
-    <a
-      className="cell-seat"
-      href={href(["company", "people", handle])}
-      title={title ?? `@${handle}`}
-    >
+    <a className="cell-seat" href={href(["agents", "seats", handle])} title={title ?? `@${handle}`}>
       <SeatAvatar
         name={name || handle}
         size="xs"

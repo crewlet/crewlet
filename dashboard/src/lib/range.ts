@@ -65,7 +65,16 @@ export const RANGE_LABEL: Record<Range, string> = {
 export interface Interval {
   from: number;
   to: number;
+  /**
+   * The COMPANY'S DAY SO FAR, from its first instant to now — named rather
+   * than two instants, so the URL says `window=today` and the window moves
+   * with the clock the way a named duration does. Set only by [todayWindow].
+   */
+  today?: true;
 }
+
+/** `window=` for the company's day so far. See [Interval.today]. */
+export const TODAY = "today";
 
 /** What `window=` means: one of the closed set, or an interval a reader named. */
 export type Window = Range | Interval;
@@ -90,6 +99,18 @@ export interface Offer {
   fallback: Range;
   /** Which bucket widths this screen's own question accepts. See [bucketFor]. */
   buckets?: readonly Bucket[];
+  /**
+   * Whether `today` is one of this screen's windows — the company's day so
+   * far, cut at midnight on [zone].
+   */
+  today?: boolean;
+  /**
+   * The company's zone (`org.timezone`), which is where its day begins. A
+   * screen that offers `today` passes it; before the org arrives the day is
+   * cut in UTC, which is a label on one screen for one render rather than a
+   * reason to draw nothing.
+   */
+  zone?: string;
 }
 
 /**
@@ -103,9 +124,10 @@ export interface Offer {
  * was: the engine's windows are half-open, so `to <= from` names no rows at
  * all and the screen would render the engine's refusal rather than its data.
  */
-export function parseWindow(raw: string, offer: Offer): Window {
+export function parseWindow(raw: string, offer: Offer, now: number = Date.now()): Window {
   const value = raw.trim();
   if ((offer.ranges as readonly string[]).includes(value)) return value as Range;
+  if (offer.today && value === TODAY) return todayWindow(now, offer.zone);
   if (offer.custom) {
     const cut = value.indexOf("/");
     if (cut > 0) {
@@ -122,12 +144,14 @@ export function parseWindow(raw: string, offer: Offer): Window {
 /** A window back as the URL spells it. */
 export function windowParam(w: Window): string {
   if (isRange(w)) return w;
+  if (w.today) return TODAY;
   return `${new Date(w.from).toISOString()}/${new Date(w.to).toISOString()}`;
 }
 
 /** What to call a window in a heading. */
 export function windowLabel(w: Window): string {
   if (isRange(w)) return RANGE_LABEL[w];
+  if (w.today) return "Today";
   // TO THE MINUTE, because that is the resolution the picker has: the seconds
   // are always `:00` and are fourteen characters of noise in a label that has
   // to sit in a page bar beside everything else.
@@ -208,7 +232,17 @@ export const BUCKET_MS: Record<Bucket, number> = {
  */
 export function bucketFor(w: Window, offer: readonly Bucket[] = BUCKETS): Bucket {
   const span = spanOf(w);
-  const want: Bucket = span <= RANGE_MS["1h"] ? "minute" : span <= RANGE_MS["1d"] ? "hour" : "day";
+  // TODAY IS A DAY HOWEVER MUCH OF IT HAS PASSED: its chart draws hours from
+  // the first one, rather than minutes until one o'clock and hours after —
+  // a bucket that changed under the reader mid-morning.
+  const want: Bucket =
+    !isRange(w) && w.today
+      ? "hour"
+      : span <= RANGE_MS["1h"]
+        ? "minute"
+        : span <= RANGE_MS["1d"]
+          ? "hour"
+          : "day";
   const from = BUCKETS.indexOf(want);
   // The first offered bucket at or after the one the window wants, and the
   // coarsest offered otherwise — never finer than the question accepts,
@@ -307,8 +341,13 @@ export function windowEdges(
   now: number,
   step = 0,
 ): Pick<TimeRange, "since" | "until" | "previous"> {
-  const span = spanOf(w);
-  const edge = isRange(w) ? (step > 0 ? Math.ceil(now / step) * step : now) : w.to;
+  // A NAMED WINDOW MOVES WITH THE CLOCK — a duration, and today — and an
+  // interval a reader typed does not.
+  const moving = isRange(w) || w.today === true;
+  const edge = moving ? (step > 0 ? Math.ceil(now / step) * step : now) : w.to;
+  // TODAY STARTS WHERE THE COMPANY'S DAY DID, whatever the clock says now, so
+  // its span is measured from that edge rather than carried in the value.
+  const span = !isRange(w) && w.today ? edge - w.from : spanOf(w);
   const since = new Date(edge - span);
   const before = new Date(edge - span * 2);
   return {
@@ -327,15 +366,15 @@ export function windowEdges(
  */
 export function useTimeRange(now: number, offer: Offer, align = true): TimeRange {
   const [raw, setRaw] = useParam("window", offer.fallback, "section");
-  const { ranges, custom, fallback, buckets } = offer;
+  const { ranges, custom, fallback, buckets, today, zone } = offer;
   // Rebuilt from the fields rather than held by identity: every caller writes
   // its offer inline, so a new object arrives on every render and an offer in
   // the dependency list would rebuild the window on every one of them.
   const settled = useMemo(
-    () => ({ ranges, custom, fallback, buckets }),
-    [ranges, custom, fallback, buckets],
+    () => ({ ranges, custom, fallback, buckets, today, zone }),
+    [ranges, custom, fallback, buckets, today, zone],
   );
-  const window = parseWindow(raw, settled);
+  const window = parseWindow(raw, settled, now);
   const bucket = bucketFor(window, buckets);
   const step = align ? stepOf(bucket) : 0;
   // THE WINDOW AS A STRING is what the memo holds, because `parseWindow`
@@ -347,9 +386,9 @@ export function useTimeRange(now: number, offer: Offer, align = true): TimeRange
   // advances every other clock on the screen must not give this one a new
   // identity — which is what makes a custom window stable to link to and to
   // hold a query open on.
-  const anchor = isRange(window) ? now : 0;
+  const anchor = isRange(window) || window.today ? now : 0;
   return useMemo(() => {
-    const w = parseWindow(key, settled);
+    const w = parseWindow(key, settled, anchor);
     return {
       window: w,
       ...windowEdges(w, anchor, step),
@@ -433,3 +472,64 @@ export function barsOver(
  * can place.
  */
 export const MAX_BARS = 90;
+
+/**
+ * The first instant of the company's day that `now` falls in, on the
+ * company's own clock (`org.timezone`, ADR-0018).
+ *
+ * THE FIRST INSTANT OF THE DATE, found rather than assumed to be local
+ * midnight: in a zone that moves its clock across midnight the day does not
+ * begin at 00:00 — Santiago springs from 00:00 straight to 01:00, so 00:00
+ * does not exist, and Amman falls back from 01:00 to 00:00, so it exists
+ * twice and the day began at the first. `time.Date` gets both wrong in the
+ * engine's own calendar for the same reason (`internal/period`), and a
+ * "Today" that disagreed with the engine's day by an hour would count a
+ * turn the engine charged to yesterday.
+ *
+ * So the date `now` falls on is read in the zone, and the earliest instant
+ * that reads as the same date is searched for across the day before it: the
+ * date an instant falls on only moves forward as the instant does, which is
+ * what a binary search needs. A zone this runtime cannot format in falls back
+ * to UTC rather than throwing on a screen that only wanted a label.
+ */
+export function companyMidnight(now: number, zone: string | undefined): number {
+  const day = dateIn(zone);
+  const target = day(now);
+  // A DAY IS AT MOST 25 HOURS on any clock, so its start is inside the 26
+  // hours before `now`.
+  let lo = now - 26 * 3_600_000;
+  let hi = now;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (day(mid) < target) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/** Today on the company's clock, from its first instant to `now`. */
+export function todayWindow(now: number, zone: string | undefined): Interval {
+  return { from: companyMidnight(now, zone), to: now, today: true };
+}
+
+/** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */
+function dateIn(zone: string | undefined): (at: number) => string {
+  let format: Intl.DateTimeFormat;
+  try {
+    format = new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch {
+    format = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  }
+  // `en-CA` writes a date as `YYYY-MM-DD`, which sorts as the date does.
+  return (at) => format.format(at);
+}

@@ -29,7 +29,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { rest, RestError, type FleetAnswer } from "~/protocol/index.ts";
 import type { EngineHealth } from "~/contract/health.ts";
-import { useRecheck } from "~/routes/admin/recheck.ts";
+import { useRecheck } from "~/routes/settings/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
 import { screenPath } from "./dialogParts.tsx";
@@ -220,7 +220,7 @@ export function AfterSaveStrip({
               Copy as YAML
             </Button>
             {state.showFleet && (
-              <ButtonLink size="small" variant="ghost" href={href(screenPath("fleet"))}>
+              <ButtonLink size="small" variant="ghost" href={href(screenPath("nodes"))}>
                 Open the fleet
               </ButtonLink>
             )}
@@ -237,10 +237,10 @@ export function AfterSaveStrip({
 }
 
 /**
- * What a read lens says while this node is still applying the revision this
- * tab saved: the org projection it draws from is the previous one.
+ * What a read section says while this node is still applying the revision
+ * this tab saved: the org projection it draws from is the previous one.
  *
- * On the Org screen's read lenses rather than in the Builder, because that is
+ * On Agents' org chart and teams rather than in the Builder, because that is
  * where an operator goes to look at what they just changed, and the chart
  * that has not moved yet is exactly what would otherwise read as a save that
  * did nothing.

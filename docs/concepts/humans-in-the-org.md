@@ -79,7 +79,7 @@ an agent reads says so explicitly rather than telling it to @-mention somebody
 it cannot — a message addressed to a handle that resolves to nobody reads to
 everyone else as work handed over.
 
-**The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
+**The queue is `#/inbox`**, one click from the landing screen (Home). Opening it
 with an API token resolves that token's id against every seat's
 `crewlet_operator_id` and shows the person it names: their notices, the one
 reason of eighteen that routed each one, and what is waiting on a decision. A
@@ -118,7 +118,7 @@ server to act as a seat. So the item records `sarah` as its reporter, while her
 colleagues assign work to `sarah-chen`.
 
 Both of those are **her**. Every question that answers "mine" — My work's
-seven tabs, the inbox, her own record — matches the seat handle *or* the
+sections, the inbox, her own record — matches the seat handle *or* the
 operator id bound to it, and reports the answer under the seat.
 
 Everything that asks who the caller *is* rather than who wrote it resolves to
@@ -147,7 +147,7 @@ person.
 
 Keyed on the credential, as it was, a bound founder accumulated a second record
 called `founder`: everything their assistant marked was invisible on `#/inbox`,
-which asks under the seat, and `#/me`'s queue tab came back empty. An **unbound
+which asks under the seat, and `#/me`'s queue came back empty. An **unbound
 token is unchanged** — it writes its own record under its own id, which is the
 ordinary state of an operator outside the chart — and records written before a
 company bound its token are still read, the seat's being preferred and the

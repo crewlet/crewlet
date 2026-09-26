@@ -42,10 +42,11 @@
  */
 
 import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { usePanelAlign } from "~/lib/media.ts";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
-import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import type { NodeKey } from "./model/keys.ts";
 import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
@@ -71,7 +72,6 @@ import {
   OrgTableAdd,
   OrgTableName,
   Tag,
-  type MenuEntry,
   type TreeGridColumn,
   type TreeGridContext,
   type TreeItemAction,
@@ -345,6 +345,9 @@ function RowControls({
   reorder: Reorder;
   view: NodeView;
 }) {
+  // See [usePanelAlign]: a row's menu hangs from its right edge, and starts
+  // at its trigger on a phone.
+  const menuAlign = usePanelAlign("end");
   const name = view.name || "the company";
   const menu = rowMenu(api, view, open, reorder);
   return (
@@ -384,7 +387,7 @@ function RowControls({
                on. */
             label={`Actions for ${name}`}
             icon={<EllipsisVerticalGlyph />}
-            align="end"
+            align={menuAlign}
             open={grid.menuOpen(view.key)}
             onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
             items={menu}

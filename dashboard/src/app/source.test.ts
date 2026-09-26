@@ -22,7 +22,8 @@ import {
   stringValue,
   walk,
 } from "../test/source.ts";
-import { RAIL } from "./nav.ts";
+import { WORKSPACES } from "./nav.ts";
+import { resolves } from "./routes.ts";
 
 /** Every source file of the given extensions, excluding the suites. */
 function sources(exts: string[] = [".tsx"]): { path: string; text: string }[] {
@@ -128,9 +129,36 @@ test("no JSX guard is a bare number", () => {
 
 /** Whether a `path:` on this line points into the company document, not at a screen. */
 const documentPointer = (line: string) => /\bvalue:|\bcredential:/.test(line);
-test("every link names a segment a workspace owns", () => {
-  const owned = new Set(RAIL.flatMap((r) => r.owns));
-  const literal = /(?:href\(|nav\.to\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
+
+/**
+ * A route written as a literal array, in every spelling one is written in.
+ *
+ * `href(` and `nav.to(` MAKE a link; a bare `path:` hands one to a component
+ * that will; and `useIsCurrent(` and `samePath(` COMPARE against one — which
+ * is the spelling that stayed behind when the event log moved under Live: a
+ * phase card's "am I on my own event's page" guard kept asking about
+ * `["events", id]`, never matched, and drew "event →" to the page it was on.
+ * A comparison against an address nothing resolves is a dead link turned
+ * inside out, and it hides the same way: no error, no warning, no type
+ * failure. `samePath` takes the literal in either position.
+ */
+const LINK_LITERAL =
+  /(?:href\(|nav\.to\(|useIsCurrent\(|samePath\((?:[\w.?!]+\s*,\s*)?|\bpath:\s*)\[\s*"([a-z0-9_-]+)"([^\]]*)\]/g;
+
+test("the link pattern reads every spelling a route literal is written in", () => {
+  const heads = (line: string) => [...line.matchAll(LINK_LITERAL)].map((m) => m[1]);
+  expect(heads('<a href={href(["live", "turns"])}>')).toEqual(["live"]);
+  expect(heads('nav.to(["agents", "roster"])')).toEqual(["agents"]);
+  expect(heads('  path: ["settings", "config"],')).toEqual(["settings"]);
+  expect(heads('const here = useIsCurrent(["events", record.eventId]);')).toEqual(["events"]);
+  expect(heads('samePath(route.path, ["events", id])')).toEqual(["events"]);
+  expect(heads('samePath(["events", id], route.path)')).toEqual(["events"]);
+});
+
+test("every link names a segment a workspace owns, and a whole literal path resolves", () => {
+  const owned = new Set(WORKSPACES.map((w) => w.path[0]));
+  const literal = LINK_LITERAL;
+  const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
   const dead: string[] = [];
   for (const { path, text } of sources([".tsx", ".ts"])) {
     const lines = text.split("\n");
@@ -138,15 +166,122 @@ test("every link names a segment a workspace owns", () => {
       literal.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = literal.exec(line))) {
-        const head = m[1];
+        const head = m[1]!;
+        const tail = m[2] ?? "";
         // `href(` and `nav.to(` are unambiguous; only the bare `path:`
         // spelling collides with the document pointer.
         if (m[0].startsWith("path") && documentPointer(line)) continue;
-        if (head && !owned.has(head)) dead.push(`${path}:${i + 1} — #/${head}`);
+        if (!owned.has(head)) {
+          dead.push(`${path}:${i + 1} — #/${head}`);
+          continue;
+        }
+        // A PATH WRITTEN WHOLLY IN LITERALS is checked against the resolver
+        // itself, because a known head is not a known route: `["live",
+        // "traces"]` has one and drew the turns list under a traces title.
+        if (whole.test(tail)) {
+          const segs = [head, ...[...tail.matchAll(/"([^"]*)"/g)].map((x) => x[1]!)];
+          if (!resolves(segs)) dead.push(`${path}:${i + 1} — #/${segs.join("/")}`);
+        }
       }
     });
   }
   expect(dead, "these links go to a screen that does not exist").toEqual([]);
+});
+
+/**
+ * A LINK'S FILTERS ARE READ BY THE SCREEN IT OPENS.
+ *
+ * A link that names a live route and carries a query the screen there never
+ * reads resolves, renders, and silently drops what it was for. Four did after
+ * the event log moved from `#/activity` to `#/live/events`: "Its events" on a
+ * seat, "In the log" on a trace, "Read this channel's events" on an
+ * agent-to-agent channel and Live's own "Event log" button were rewritten to
+ * the workspace's head, `#/live` — which is Live's landing screen, not the log
+ * — so each opened the running seats with its `actor=`, `q=` and `category=`
+ * thrown away.
+ *
+ * Held for the screens whose every parameter is read in ONE module, which is
+ * what makes "reads" exact rather than a guess over an import graph: the table
+ * names the module, and the parameters are its own `useParam("…")` literals.
+ */
+const READS_ITS_PARAMS: { path: string[]; module: string }[] = [
+  { path: ["live"], module: "routes/live/LiveNow.tsx" },
+  { path: ["live", "events"], module: "routes/live/Activity.tsx" },
+];
+
+/** Every link written as a literal path with a literal query, in one module. */
+function linksWithQuery(
+  text: string,
+  lang: Lang,
+): { path: string[]; keys: string[]; at: number }[] {
+  const out: { path: string[]; keys: string[]; at: number }[] = [];
+  walk(parse(text, lang), (n) => {
+    if (n.type !== "CallExpression") return;
+    const callee = n.callee as Node;
+    const named =
+      (callee.type === "Identifier" && callee.name === "href") ||
+      (memberName(callee) === "to" && (callee.object as Node).type === "Identifier");
+    if (!named) return;
+    const [first, second] = n.arguments as Node[];
+    if (first?.type !== "ArrayExpression") return;
+    const path = (first.elements as Node[]).map((e) => stringValue(e));
+    if (path.some((seg) => seg === null)) return;
+    const keys =
+      second?.type === "ObjectExpression"
+        ? (second.properties as Node[]).flatMap((prop) => {
+            if (prop.type !== "Property") return [];
+            const key = prop.key as Node;
+            return key.type === "Identifier" ? [String(key.name)] : [stringValue(key) ?? ""];
+          })
+        : [];
+    out.push({ path: path as string[], keys, at: n.start });
+  });
+  return out;
+}
+
+test("a link's query names only what the screen it opens reads", () => {
+  const byPath = new Map(
+    READS_ITS_PARAMS.map((row) => {
+      const mod = modules().find((m) => m.path === row.module);
+      expect(mod, `${row.module} is not in the tree — this row is asserting nothing`).toBeDefined();
+      const read = [...(mod?.text ?? "").matchAll(/useParam\(\s*"([^"]+)"/g)].map((m) => m[1]!);
+      return [row.path.join("/"), new Set(read)] as const;
+    }),
+  );
+  const dropped: string[] = [];
+  let held = 0;
+  for (const mod of modules()) {
+    if (mod.lang === "dts") continue;
+    const line = lineOf(mod.text);
+    for (const link of linksWithQuery(mod.text, mod.lang)) {
+      const reads = byPath.get(link.path.join("/"));
+      if (!reads) continue;
+      held++;
+      for (const key of link.keys) {
+        if (!reads.has(key)) {
+          dropped.push(
+            `${mod.path}:${line(link.at)} — #/${link.path.join("/")} never reads ${key}=`,
+          );
+        }
+      }
+    }
+  }
+  expect(dropped, "these links carry a filter the screen they open throws away").toEqual([]);
+  // NOT VACUOUS: the table's screens are linked to with a query somewhere.
+  expect(held).toBeGreaterThan(0);
+});
+
+test("the query reading sees both link spellings", () => {
+  const read = (text: string) => linksWithQuery(text, "tsx").map((l) => [l.path, l.keys]);
+  expect(read('const a = href(["live"], { actor: who });')).toEqual([[["live"], ["actor"]]]);
+  expect(read('nav.to(["live", "events"], { q: id, "category": "a2a" });')).toEqual([
+    [
+      ["live", "events"],
+      ["q", "category"],
+    ],
+  ]);
+  // A path that is not wholly literal is not read, rather than guessed at.
+  expect(read("href(pathOf(ref), { actor: who });")).toEqual([]);
 });
 
 /*
@@ -160,10 +295,10 @@ test("the document-pointer exemption fires, and spares no real link", () => {
   expect(documentPointer('  { path: ["llm"], credential: false },')).toBe(true);
   expect(documentPointer('    set: [{ path: ["goal"], value: "Ship" }],')).toBe(true);
   // The shapes a nav destination is written in, across all four tables.
-  expect(documentPointer('      path: ["admin", "config"],')).toBe(false);
+  expect(documentPointer('      path: ["settings", "config"],')).toBe(false);
   expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
-  expect(documentPointer('    path: ["activity", "turns"],')).toBe(false);
-  expect(documentPointer('      href(["company", "people", handle])')).toBe(false);
+  expect(documentPointer('    path: ["live", "turns"],')).toBe(false);
+  expect(documentPointer('      href(["agents", "seats", handle])')).toBe(false);
 });
 
 test("something in the tree is actually exempted, so the rule is not dead weight", () => {

@@ -24,8 +24,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
-import { OrgNodeLabel, Tag } from "@crewlethq/ui";
-import { isDrawnAs } from "~/testing.tsx";
+import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { NODE_TONES } from "./nodeTone.ts";
@@ -174,11 +173,11 @@ const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tool
 describe("which chart", () => {
   test("the chart the lens hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/company?lens=builder&view=visualization&chart=reporting";
+    location.hash = "#/agents/edit?view=visualization&chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/company?lens=builder&view=visualization&chart=structure";
+    location.hash = "#/agents/edit?view=visualization&chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });

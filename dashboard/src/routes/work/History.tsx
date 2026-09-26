@@ -179,7 +179,7 @@ export function HistoryView({
   const [pageError, setPageError] = useState<string | null>(null);
 
   // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
-  // with it — the rule the event log states at length (`routes/activity`). Kept
+  // with it — the rule the event log states at length (`routes/live`). Kept
   // they would break three ways at once: rows fetched under the previous kind
   // would stay in a list the server would never have answered, the cursor would
   // go on walking the old query's history, and the frozen head would hold a
@@ -542,7 +542,7 @@ function HistoryRow({
           </Tag>
         )}
         {record.turn_id && (
-          <a className="t-link" href={href(["activity", "turns", record.turn_id])}>
+          <a className="t-link" href={href(["live", "turns", record.turn_id])}>
             turn →
           </a>
         )}

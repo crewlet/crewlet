@@ -32,7 +32,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { documentUnits, indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
+import { documentUnits, handleLabel, indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useMemo } from "react";
@@ -48,7 +48,7 @@ import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
 // the reader just opened and one of the three forgets the middle button.
-import { pageAddress, PageLink } from "./Pages.tsx";
+import { PageLink } from "./Pages.tsx";
 
 export function Knowledge() {
   const org = useOrg();
@@ -77,7 +77,7 @@ export function Knowledge() {
       () =>
         (data?.hits ?? [])
           .filter((hit) => !hit.url && hit.container)
-          .map((hit) => ({ kind: "page" as const, id: pageAddress(hit) })),
+          .map((hit) => ({ kind: "page" as const, id: hit.id })),
       [data],
     ),
   );
@@ -253,10 +253,8 @@ export function Knowledge() {
                     // ⌘-click and the middle button open the page as before.
                     <a
                       className="hit-title"
-                      href={peekHref({ kind: "page", id: pageAddress(hit) })}
-                      onClick={rowPeekHandler(() =>
-                        openPeek({ kind: "page", id: pageAddress(hit) }),
-                      )}
+                      href={peekHref({ kind: "page", id: hit.id })}
+                      onClick={rowPeekHandler(() => openPeek({ kind: "page", id: hit.id }))}
                     >
                       {hit.title}
                     </a>
@@ -307,7 +305,7 @@ export function Knowledge() {
                 <a
                   key={seat.handle}
                   className="seat-card"
-                  href={href(["company", "people", seat.handle], { tab: "memory" })}
+                  href={href(["agents", "seats", seat.handle], { tab: "memory" })}
                 >
                   <div className="row">
                     {/* THE SEAT'S OWN BADGE, as every other surface draws a
@@ -317,7 +315,9 @@ export function Knowledge() {
                     <SeatAvatar name={seat.name} kind="agent" size="md" decorative />
                     <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                       <strong className="truncate t-cell">{seat.name}</strong>
-                      <span className="truncate t-caption mono">@{seat.handle}</span>
+                      {seat.handle && (
+                        <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
+                      )}
                     </span>
                     <ArrowRightGlyph size="sm" />
                   </div>
@@ -434,7 +434,7 @@ function containerFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units?.length === 1 && lead ? ["company", "units", lead.name] : undefined,
+      path: units?.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];

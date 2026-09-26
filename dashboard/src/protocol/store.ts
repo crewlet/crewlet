@@ -76,7 +76,15 @@ export interface StoreState {
    */
   phases: EventEnvelope[];
   sandboxes: SandboxEntry[];
-  org: OrgProjection;
+  /**
+   * The org chart the engine pushed, or NULL until the first one arrives.
+   *
+   * Null rather than `{}`, because `{}` is an ANSWER — the projection of a
+   * node running no company — and a screen has to tell that from "nothing has
+   * been said yet": the charter drew "No mission is set" and a policy count
+   * of 0 on every cold tab, before the handshake had said anything at all.
+   */
+  org: OrgProjection | null;
   tools: ToolRow[];
   /**
    * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
@@ -121,7 +129,7 @@ function emptyState(): StoreState {
     events: [],
     phases: [],
     sandboxes: [],
-    org: {},
+    org: null,
     tools: [],
     health: { status: "unknown" },
     tokens: null,

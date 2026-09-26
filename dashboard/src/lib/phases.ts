@@ -27,9 +27,11 @@
 import type {
   EventRecord,
   LiveCall,
+  LiveTurn,
   PartialRound,
   PromptMessage,
   ToolExecution,
+  TurnStage,
 } from "~/protocol/index.ts";
 import { tsKey } from "./format.ts";
 import type { Tone } from "~/ui/primitives.tsx";
@@ -205,6 +207,17 @@ export interface PhaseRecord {
   durationMs: number;
   /** The event id, when this came from the store — for a deep link. */
   eventId: string;
+  /**
+   * Where the TURN this live call belongs to is, when the seat's own turn is
+   * that turn — `parked` while a detached coding run holds it — and "" on a
+   * finished record or a call whose turn the seat has moved past.
+   *
+   * ON THE RECORD because the card that draws a live call's staleness has no
+   * seat to ask: a parked executor's call stops moving BY DESIGN for as long
+   * as the run takes, and a card that read only its own `at` called every
+   * legitimately silent run stalled.
+   */
+  stage: TurnStage | "";
 }
 
 function str(v: unknown): string {
@@ -369,8 +382,11 @@ export function phaseKey(
   return discriminator ? `${base}|${discriminator}` : base;
 }
 
-/** A phase still running, from a seat's live overlay. */
-export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
+/**
+ * A phase still running, from a seat's live overlay — and the seat's own turn,
+ * which is where the stage is kept.
+ */
+export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | null): PhaseRecord {
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
@@ -426,6 +442,9 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     // engine's final measurement and does not exist until it lands.
     durationMs: 0,
     eventId: "",
+    // THE SEAT'S TURN ONLY WHEN IT IS THIS CALL'S TURN: a stage read off a
+    // turn the seat has since started would describe some other call.
+    stage: turn && turn.turn_id === call.turn_id ? turn.stage : "",
   };
 }
 
@@ -500,6 +519,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     startedAt: ev.timestamp,
     durationMs: num(p.duration_ms),
     eventId: ev.id,
+    stage: "",
   };
 }
 
@@ -852,7 +872,7 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
  * clamp cuts, and the `title` that carries what the clamp cut. Spelled at each
  * site, a tooltip can come to claim something its own card does not say.
  *
- * `activity/Turn.tsx` deliberately does NOT read this: its chain has a third
+ * `live/Turn.tsx` deliberately does NOT read this: its chain has a third
  * source between the two (the turn record's own `summary`) and ends at "" rather
  * than at a word, because that screen has a heading to fall back on and a card
  * does not.

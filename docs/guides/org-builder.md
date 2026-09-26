@@ -1,7 +1,7 @@
 # The Org Builder
 
-The dashboard's Company screen has a **Builder** lens
-(`#/company?lens=builder`) for editing the organization of a running company, and
+The dashboard's Agents workspace has an **Edit org** section
+(`#/agents/edit`, the button on the org chart) for editing the organization of a running company, and
 for creating the company on an engine that has none. It edits the same
 company document `GET /config` serves and `PATCH /config` writes, so every
 change it makes is an ordinary configuration revision: stored, activated,
@@ -89,7 +89,7 @@ commands for it.
 
 The toolbar switches between the **Canvas**, a chart of the organization with
 a **Structure** and a **Reporting** arrangement, and the **Outline**, the same
-structure as rows and columns. Below 860 pixels wide the lens opens on the
+structure as rows and columns. Below 640 pixels wide the builder opens on the
 outline. The view, the chart and the selected unit or seat are in the URL, so
 a link opens the builder where it was.
 
@@ -249,7 +249,7 @@ own form until you press **Apply**, which adds them to the draft as **one
 step**: one Undo takes the whole edit back. Closing an editor that holds
 changes (Cancel, Close, Escape or a click outside it) asks before discarding
 them, and so does anything that would leave the builder under it: one of its
-links, the browser's Back or Forward to another screen or lens, or a reload.
+links, the browser's Back or Forward to another screen, or a reload.
 **Keep editing** leaves you where you were, form and all. Moving between the
 builder's own views (Back from the outline to the canvas, say) keeps the
 editor open with your changes, so it asks nothing.
@@ -529,8 +529,8 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the Chart and Charter lenses still draw the previous
-organization, and say so.
+applied it, the org chart, Teams and Settings › General still draw the
+previous organization, and say so.
 
 The strip under the toolbar follows the revision:
 
@@ -581,8 +581,8 @@ opens and finds a kept draft:
 
 - **Made against the revision that is still active:** a banner offers **Keep
   the draft** or **Discard it**, and nothing can be edited until you choose.
-  Coming back to the lens from another lens of the same page restores the
-  draft without asking.
+  Coming back to Edit org from another section of Agents restores the draft
+  without asking.
 - **Made against an older revision:** the draft is restored through the same
   update described below, and **Discard the kept draft** removes it instead.
 - **Made for creating a company, where a company now exists** (or the other

@@ -51,29 +51,24 @@ const ACCENT: Site[] = [
     why: "THE TRANSLATION, not a call site: our `accent` said in uilet's spelling. The one place the two vocabularies meet.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}`,
     why: "Which node is answering this reader. Literally where the reader is.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{n.id === data?.this_node && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, as a row of the fleet table.",
   },
   {
-    file: "routes/admin/Fleet.tsx",
+    file: "routes/settings/Fleet.tsx",
     line: `{here && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact again, in the node's own rail.",
   },
   {
-    file: "routes/admin/Retention.tsx",
+    file: "routes/settings/Retention.tsx",
     line: `{n.node_id === thisNode && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, in the retention table's node column.",
-  },
-  {
-    file: "app/Shell.tsx",
-    line: `ring="brand"`,
-    why: "THE badge that IS the reader — the rail's own account row. The kit's `ring=\"brand\"` is the accent drawn as a RING round the neutral badge and means selected, which is what the reader's own badge is; a badge FILLED with the accent is gone from the kit because that was identity drawn in the colour that means act here.",
   },
   {
     file: "routes/work/SavedViews.tsx",

@@ -87,6 +87,7 @@ import { indentJSON } from "~/lib/jsontext.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
+import { pathOf } from "~/app/frame/objects.ts";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 
@@ -381,9 +382,19 @@ export function PhaseCard({
   // the report the run wrote back, and it carries an activity log instead.
   const codingRun = record.phase === "sandbox";
   const streaming = ledger.some((r) => r.streaming);
-  const stale = record.live ? staleness(record.at, now) : "";
+  // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor suspended into a
+  // detached coding run and its round will not move until the run comes
+  // back, so the stage is passed and the alarm stays down for as long as the
+  // run takes.
+  const parked = record.live && record.stage === "parked";
+  const stale = record.live ? staleness(record.at, now, record.stage) : "";
   const took = phaseDuration(record);
-  const onOwnEventPage = useIsCurrent(["events", record.eventId]);
+  // THE EVENT'S ADDRESS, FROM THE ONE MAP, for the link and for the guard
+  // alike. The guard spelled the address itself and kept the old one when the
+  // event log moved under Live — so it never matched, and the card drew
+  // "event →" to the page it was already on.
+  const eventPath = pathOf({ kind: "event", id: record.eventId });
+  const onOwnEventPage = useIsCurrent(eventPath);
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
@@ -474,7 +485,13 @@ export function PhaseCard({
         {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
-            {stale === "stalled" ? "no update in 10m" : stale ? "no update in 2m" : "running"}
+            {parked
+              ? "parked on its coding run"
+              : stale === "stalled"
+                ? "no update in 10m"
+                : stale
+                  ? "no update in 2m"
+                  : "running"}
           </Tag>
         )}
 
@@ -744,7 +761,7 @@ export function PhaseCard({
             {record.eventId && !onOwnEventPage && (
               <a
                 className="t-link"
-                href={href(["activity", "events", record.eventId])}
+                href={href(eventPath)}
                 title="this phase's own event, in the log"
               >
                 event →

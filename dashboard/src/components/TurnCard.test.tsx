@@ -72,6 +72,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     startedAt: "2026-09-13T10:00:00Z",
     durationMs: 180_000,
     eventId: "ev-1",
+    stage: "",
     ...over,
   };
 }

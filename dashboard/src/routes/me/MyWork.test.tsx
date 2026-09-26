@@ -12,14 +12,15 @@
  * ALPHABETICALLY FIRST SEAT, so a page titled "My work" showed every reader a
  * stranger's day with no indication that it had guessed.
  *
- * # What a tab promises
+ * # What a section promises
  *
  * The seven claims were stacked cards, each ABSENT when empty, so the page's
  * shape changed with the day and a person with two hundred assignments never
  * saw their asks. The promise that no claim can crowd out another is kept by
- * the STRIP now — every tab carries its count, always — so these cases are
- * about the counts being there, being honest about what they count, and a tab
- * with nothing in it still saying its own name.
+ * the SECTION TABS in the page header now — every section carries its count,
+ * always — so these cases are about the counts the screen publishes, being
+ * honest about what they count, and a section with nothing in it still saying
+ * its own name.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -27,15 +28,20 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
 import { Router } from "~/app/router.tsx";
-import { usePageCoverage } from "~/app/Shell.tsx";
+import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
+import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
 // nothing at all on a healthy answer, by design, so the published fact is the
 // only thing a test can hold.
-vi.mock("~/app/Shell.tsx", () => ({ usePageCoverage: vi.fn() }));
+//
+// AND ITS SECTION FIGURES, for the same reason: the tabs that draw them are
+// the page header's, so what the screen hands the frame is what it claims.
+vi.mock("~/app/Shell.tsx", () => ({ usePageCoverage: vi.fn(), useSectionCounts: vi.fn() }));
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -46,6 +52,7 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 afterEach(() => {
   cleanup();
   vi.mocked(usePageCoverage).mockClear();
+  vi.mocked(useSectionCounts).mockClear();
   vi.restoreAllMocks();
   location.hash = "#/";
 });
@@ -147,17 +154,28 @@ function task(over: Partial<WorkSummary> = {}): WorkSummary {
   } as WorkSummary;
 }
 
-function mount() {
+/** Mount one section, the way the router's resolver hands it over. */
+function mount(section: MeSection = "queue") {
   return render(
-    <Router>
-      <MyWork />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <MyWork section={section} />
+      </Router>
+    </ViewerProvider>,
   );
 }
 
-/** One tab's own label, as the strip draws it. */
-function tabNamed(word: string): HTMLElement | undefined {
-  return screen.getAllByRole("tab").find((el) => (el.textContent ?? "").startsWith(word));
+/** The figures the screen last handed the page header, once it has any. */
+async function counts(): Promise<Record<string, string>> {
+  return await waitFor(() => {
+    const last = vi
+      .mocked(useSectionCounts)
+      .mock.calls.map((c) => c[0])
+      .filter((m) => Object.keys(m).length > 0)
+      .at(-1);
+    if (!last) throw new Error("no figures published yet");
+    return last;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +273,7 @@ test("the banner names whose day it is and links to their seat", async () => {
   });
   mount();
   const chip = await screen.findByRole("link", { name: /Rui Santos/ });
-  expect(chip.getAttribute("href")).toBe("#/company/people/rui");
+  expect(chip.getAttribute("href")).toBe("#/agents/seats/rui");
   expect(screen.getByText("rui")).toBeTruthy();
   expect(screen.getByText("their day")).toBeTruthy();
 });
@@ -264,10 +282,12 @@ test("the banner names whose day it is and links to their seat", async () => {
 // The strip
 // ---------------------------------------------------------------------------
 
-// EVERY CLAIM IS A TAB AND EVERY TAB CARRIES ITS COUNT. This is what replaces
-// the stacking: an unanswered question is visible as a number on a tab nobody
-// has opened, where a card that vanished when empty took its own name with it.
-test("every claim is a tab, and its count is on the strip unopened", async () => {
+// EVERY CLAIM IS A SECTION AND EVERY SECTION CARRIES ITS COUNT. This is what
+// replaces the stacking: an unanswered question is visible as a number on a
+// section nobody has opened, where a card that vanished when empty took its
+// own name with it. The priorities are the queue in somebody's order, so they
+// are the queue's figure rather than a section of their own.
+test("every claim is a section, and its count is published unopened", async () => {
   serving({
     viewer: ada,
     work_items: { ...noWork, total_hint: 7 },
@@ -294,17 +314,15 @@ test("every claim is a tab, and its count is on the strip unopened", async () =>
     },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
-  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
-  expect(tabs).toEqual([
-    "Assigned 7",
-    "Priorities 0",
-    "Asks 1",
-    "Unblocked 0",
-    "Collaborating 0",
-    "Watching 2",
-    "Checklist 0",
-  ]);
+  await waitFor(async () => expect((await counts()).queue).toBe("7"));
+  expect(await counts()).toEqual({
+    queue: "7",
+    "asked-of-me": "1",
+    unblocked: "0",
+    collaborating: "0",
+    watching: "2",
+    checklist: "0",
+  });
 });
 
 // A BLOCK'S COUNT IS THE ENGINE'S TOTAL, NOT ITS PAGE. `work_my_work` answers
@@ -322,8 +340,7 @@ test("a claim's count is the engine's total, not the length of its page", async 
     },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Collaborating")).toBeTruthy());
-  expect(tabNamed("Collaborating")?.textContent).toBe("Collaborating 130");
+  expect((await counts()).collaborating).toBe("130");
 });
 
 // AND A `+` ONLY WHERE THE ENGINE'S OWN COUNT STOPPED: a capped total is a
@@ -338,8 +355,7 @@ test("a capped claim total says it is a floor", async () => {
     },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Watching")).toBeTruthy());
-  expect(tabNamed("Watching")?.textContent).toBe(`Watching ${(10000).toLocaleString()}+`);
+  expect((await counts()).watching).toBe(`${(10000).toLocaleString()}+`);
 });
 
 // AND ASSIGNED ESCAPES IT, by asking the tracker's own question: `total_hint`
@@ -352,8 +368,7 @@ test("the assignments are the tracker's count, not a block's page", async () => 
     work_items: { ...noWork, items: [task()], total_hint: 137 },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
-  expect(tabNamed("Assigned")?.textContent).toBe("Assigned 137");
+  await waitFor(async () => expect((await counts()).queue).toBe("137"));
 });
 
 // AND THE TRACKER'S CEILING READS THE SAME WAY: a `total_capped` count is a
@@ -365,14 +380,13 @@ test("a capped assignment count says it is a floor", async () => {
     work_items: { ...noWork, items: [task()], total_hint: 10000, total_capped: true },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
-  expect(tabNamed("Assigned")?.textContent).toBe(`Assigned ${(10000).toLocaleString()}+`);
+  await waitFor(async () => expect((await counts()).queue).toBe(`${(10000).toLocaleString()}+`));
 });
 
-// NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the tab a reader
-// lands on is "your day is empty", which is a claim — and it is a false one for
-// as long as the answer has not arrived.
-test("the assigned tab claims no count until the tracker answers", async () => {
+// NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the section a
+// reader lands on is "your day is empty", which is a claim — and it is a false
+// one for as long as the answer has not arrived.
+test("the queue claims no count until the tracker answers", async () => {
   const query = vi.fn(async (what: string) =>
     what === "work_items"
       ? new Promise(() => {})
@@ -389,10 +403,11 @@ test("the assigned tab claims no count until the tracker answers", async () => {
     roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "human" }],
   } as never);
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
-  // AND NO TRAILING SPACE EITHER: the label IS the accessible name, so
-  // "Assigned " is a name with a word nobody wrote at the end of it.
-  expect(tabNamed("Assigned")?.textContent).toBe("Assigned");
+  // ABSENT, not an empty string the header has to know to skip: the other
+  // sections answered, and the queue is simply not among them.
+  const figures = await counts();
+  expect(figures.watching).toBe("0");
+  expect(figures).not.toHaveProperty("queue");
 });
 
 // ---------------------------------------------------------------------------
@@ -419,7 +434,6 @@ test("the assigned tab draws the work list's own toolbar", async () => {
 test("the assigned tab opens on the engine's due bands, soonest first", async () => {
   const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
   const asked = await waitFor(() => {
     const call = query.mock.calls.find(
       (c) => c[0] === "work_items" && (c[1] as Record<string, unknown>)?.group_by,
@@ -462,39 +476,39 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
 
 // AND THE WORKSPACE'S SAVED VIEWS ARE NOT THIS PERSON'S CLAIMS. The strip's
 // first tab reads "All work", which over one person's list is false, and the
-// screen's own seven tabs already name the page inside its content column.
+// page header's own sections already name the page.
 test("the hosted list draws no saved-view strip and asks for none", async () => {
   const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  await counts();
   expect(screen.queryByText("All work")).toBeNull();
   expect(screen.queryByText("All views →")).toBeNull();
   expect(query.mock.calls.map((c) => c[0])).not.toContain("work_views");
 });
 
-// A TAB WITH NOTHING IN IT STILL SAYS ITS OWN NAME. A card that vanished took
-// its name with it, so a reader could not tell "nothing here" from "this
-// product does not have that" — which a strip cannot do, because the tab is
-// still on it.
+// A SECTION WITH NOTHING IN IT STILL SAYS ITS OWN NAME. A card that vanished
+// took its name with it, so a reader could not tell "nothing here" from "this
+// product does not have that" — which a section cannot do, because its tab is
+// still in the header.
 test("an empty claim says what would be in it", async () => {
-  location.hash = "#/me?tab=unblocked";
+  location.hash = "#/me/unblocked";
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
-  mount();
+  mount("unblocked");
   await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
   expect(screen.getByText(/has become workable for you/)).toBeTruthy();
 });
 
 // THE QUESTIONS PUT TO SOMEBODY ELSE ARE NOT WRITTEN AS THE READER'S. This is
-// the one tab where somebody else is blocked on this person rather than the
-// other way round, and it is read on a report's day as often as on your own.
+// the one section where somebody else is blocked on this person rather than
+// the other way round, and it is read on a report's day as often as on your own.
 test("questions put to somebody else are not addressed to the reader", async () => {
-  location.hash = "#/me?handle=rui&tab=asks";
+  location.hash = "#/me/asked-of-me?handle=rui";
   serving({
     viewer: ada,
     work_items: noWork,
     work_my_work: { ...emptyDay, handle: "rui" },
   });
-  mount();
+  mount("asked-of-me");
   await waitFor(() => expect(screen.getByText("Nothing is waiting on them")).toBeTruthy());
   expect(screen.queryByText("Nothing is waiting on you")).toBeNull();
 });
@@ -504,7 +518,7 @@ test("questions put to somebody else are not addressed to the reader", async () 
 // on their behalf — and a model handed a comment id still has to compose the
 // call, where every one it composes differently is a round spent being refused.
 test("an ask carries the call that answers it", async () => {
-  location.hash = "#/me?tab=asks";
+  location.hash = "#/me/asked-of-me";
   serving({
     viewer: ada,
     work_items: noWork,
@@ -524,7 +538,7 @@ test("an ask carries the call that answers it", async () => {
       ],
     },
   });
-  mount();
+  mount("asked-of-me");
   await waitFor(() => expect(screen.getByText("Which reader?")).toBeTruthy());
   expect(screen.getByText(/answer_work_question\(task: "ENG-9"/)).toBeTruthy();
 });
@@ -548,30 +562,34 @@ const orderedByRui = {
 // this screen that asks for an acknowledgement: a person who starts the day on
 // work they did not choose can see who chose it.
 //
-// ON THE TAB THEY LANDED ON, which is the half that was missing. The stamp
+// ON THE READING THEY LANDED ON, which is the half that was missing. The stamp
 // lived inside the Priorities panel, so it reached only a reader who had
-// already acknowledged it by opening that tab — while their own next change to
-// the queue cleared it for good, which makes the miss unrecoverable rather
+// already acknowledged it by opening that panel — while their own next change
+// to the queue cleared it for good, which makes the miss unrecoverable rather
 // than merely late.
-test("a queue a lead ordered is announced on the tab nobody opened", async () => {
+test("a queue a lead ordered is announced on the reading nobody opened", async () => {
   serving(orderedByRui);
   mount();
   await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
   expect(screen.getByText(/Rui Santos/)).toBeTruthy();
-  // The default tab is Assigned, so the banner is what carried it.
-  expect(tabNamed("Assigned")?.getAttribute("aria-selected")).toBe("true");
-  // And the way to the tab it is about is offered from here.
+  // The queue opens ordered by due date, so the banner is what carried it.
+  expect(screen.getByRole("radio", { name: /Due/ }).getAttribute("aria-checked")).toBe("true");
+  // And the way to the reading it is about is offered from here.
   expect(screen.getByRole("button", { name: "Priorities →" })).toBeTruthy();
 });
 
-// AND THE TAB ITSELF IS MARKED, because a banner is read once and a strip is
-// scanned: the mark is what a reader who scrolled past the banner still sees.
-test("the priorities tab carries a mark while somebody else's order stands", async () => {
+/** The queue's Priorities reading, in the page bar's order switch. */
+function prioritiesOption(): HTMLElement {
+  return screen.getByRole("radio", { name: /Priorities/ });
+}
+
+// AND THE SWITCH ITSELF IS MARKED, because a banner is read once and a bar is
+// scanned: the flag and its title are what a reader who scrolled past the
+// banner still sees.
+test("the priorities reading carries a mark while somebody else's order stands", async () => {
   serving(orderedByRui);
   mount();
-  await waitFor(() => expect(tabNamed("Priorities")).toBeTruthy());
-  expect(tabNamed("Priorities")?.querySelector("svg")).toBeTruthy();
-  expect(tabNamed("Watching")?.querySelector("svg")).toBeNull();
+  await waitFor(() => expect(prioritiesOption().getAttribute("title")).toBe("Ordered by rui"));
 });
 
 // A QUEUE SOMEBODY ORDERED THEMSELVES IS NOT NEWS. The engine clears the stamp
@@ -585,16 +603,16 @@ test("a queue nobody else ordered carries neither banner nor mark", async () => 
     work_person: { handle: "ada", version: 1, held: true, complete: true },
   });
   mount();
-  await waitFor(() => expect(tabNamed("Priorities")).toBeTruthy());
+  await counts();
   expect(screen.queryByText(/put this order in place/)).toBeNull();
-  expect(tabNamed("Priorities")?.querySelector("svg")).toBeNull();
+  expect(prioritiesOption().getAttribute("title")).toBeNull();
 });
 
-// AND A LINK TO THE PAGE YOU ARE ON IS A LIE. Opened, the Priorities tab is
-// where the control would send the reader, so the banner keeps its sentence
-// and drops the control.
-test("the banner offers no way to the tab that is already open", async () => {
-  location.hash = "#/me?tab=priorities";
+// AND A LINK TO THE PAGE YOU ARE ON IS A LIE. Opened, the Priorities reading
+// is where the control would send the reader, so the banner keeps its
+// sentence and drops the control.
+test("the banner offers no way to the reading that is already open", async () => {
+  location.hash = "#/me?order=priorities";
   serving(orderedByRui);
   mount();
   await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
@@ -779,12 +797,12 @@ test("an anonymous reader gets the credential sentence, not a menu of refusals",
   expect(asked).toBe(1);
 });
 
-// THE ORDER IS THE CONTENT, so it is DRAWN. Every other tab on this screen is
+// THE ORDER IS THE CONTENT, so it is DRAWN. Every other panel on this screen is
 // a set somebody has a claim on; Priorities is a sequence somebody decided,
 // and as an ordinary run of rows it reads exactly like the Watching list
 // beside it — the one thing the tab is about, invisible.
 test("the priorities are numbered in the order they were stored", async () => {
-  location.hash = "#/me?tab=priorities";
+  location.hash = "#/me?order=priorities";
   serving({
     viewer: ada,
     work_items: noWork,
@@ -812,26 +830,26 @@ test("the priorities are numbered in the order they were stored", async () => {
 // AND NO OTHER CLAIM IS NUMBERED. A place on a list that nobody arranged is a
 // rank the engine never stored, read as one somebody did.
 test("a claim that is a set rather than a sequence draws no places", async () => {
-  location.hash = "#/me?tab=watching";
+  location.hash = "#/me/watching";
   serving({
     viewer: ada,
     work_items: noWork,
     work_my_work: { ...emptyDay, watching_recent: [task({ key: "ENG-3" })] },
   });
-  const { container } = mount();
+  const { container } = mount("watching");
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
   expect(container.querySelector(".work-cell-ord")).toBeNull();
 });
 
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different
-// question from what is ON them, and it is the landing screen of this product:
+// question from what is ON them, and it has a workspace of its own:
 // the card that drew it here was the inbox in a narrower column with a smaller
 // bound, so a reader met the same notices twice and neither copy was the one
 // with the reason facets.
 test("what reached somebody is the Inbox, and is not drawn here", async () => {
   const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount();
-  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  await counts();
   expect(screen.queryByText("Reached you")).toBeNull();
   expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
   // And the way to it is a link rather than a copy.

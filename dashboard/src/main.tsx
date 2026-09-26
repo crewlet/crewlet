@@ -30,6 +30,7 @@ import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
+import { forgetRetiredKeys } from "./lib/storage.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
 
 // OURS, AFTER ALL OF THEIRS. There is no alias layer between the two: every
@@ -44,6 +45,10 @@ import "./styles/screens.css";
 // Before the first paint, so a reader whose machine is set to light never sees
 // a dark flash on the way to their own preference.
 bootTheme();
+
+// A key no module reads any more leaves the reader's profile here, once per
+// boot — see `lib/storage.ts`.
+forgetRetiredKeys(() => localStorage);
 
 const store = new Store();
 const socket = new LiveSocket(store);

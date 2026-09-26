@@ -14,8 +14,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
+import { Router } from "~/app/router.tsx";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  location.hash = "#/";
+});
 
 function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
   return {
@@ -64,6 +68,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     startedAt: "2026-09-02T10:00:00Z",
     durationMs: 0,
     eventId: "ev-1",
+    stage: "",
     ...over,
   };
 }
@@ -476,5 +481,57 @@ describe("a coding run's card", () => {
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
+  });
+});
+
+// "event →" IS A WAY OUT, and on the event's own page it is a way back to the
+// same page. The guard spelled the event's address itself and kept the one
+// from before the log moved under Live, so it never matched and the card drew
+// a link to the page it was on.
+describe("the link to the phase's own event", () => {
+  const links = () =>
+    screen.queryAllByRole("link", { name: /event/ }).map((a) => a.getAttribute("href"));
+
+  test("is not drawn on that event's own page", () => {
+    location.hash = "#/live/events/ev-1";
+    render(
+      <Router>
+        <PhaseCard record={phase()} defaultOpen />
+      </Router>,
+    );
+    expect(links()).toEqual([]);
+  });
+
+  test("is drawn everywhere else, at the event log's address", () => {
+    location.hash = "#/live/turns/turn-1";
+    render(
+      <Router>
+        <PhaseCard record={phase()} defaultOpen />
+      </Router>,
+    );
+    expect(links()).toEqual(["#/live/events/ev-1"]);
+  });
+});
+
+// A PARKED TURN'S CALL IS SILENT ON PURPOSE. The executor suspended into a
+// detached coding run, and its round does not move until the run comes back —
+// which can be hours, or days while a question waits on a person. The card
+// used to read only its own `at`, so every legitimately silent run was drawn
+// stalled.
+describe("a live call's staleness", () => {
+  const OLD = { live: true, at: "2020-01-01T00:00:00Z", startedAt: "2020-01-01T00:00:00Z" };
+
+  test("a call that stopped moving on a running turn is called stalled", () => {
+    render(<PhaseCard record={phase({ ...OLD, stage: "phase" })} />);
+    expect(screen.getByText("no update in 10m")).toBeDefined();
+  });
+
+  test("a call on a turn parked on its coding run is not", () => {
+    render(<PhaseCard record={phase({ ...OLD, stage: "parked" })} />);
+    expect(screen.queryByText(/no update in/)).toBeNull();
+    const tag = screen.getByText("parked on its coding run").closest(".crewlet-tag");
+    // Drawn as the work in progress it is — never the stalled danger, nor the
+    // amber that is kept for a seat that needs a person.
+    expect(tag?.className).toContain("crewlet-tag--info");
   });
 });

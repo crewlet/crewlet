@@ -11,7 +11,11 @@
  * chrome-drawn box that could not say who was asking or why.
  */
 
-const TOKEN_KEY = "crewlet_api_token";
+// RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
+// where the alias does not exist. `lib/storage.ts` imports nothing.
+import { STORAGE_KEYS } from "../lib/storage.ts";
+
+const TOKEN_KEY = STORAGE_KEYS.apiToken;
 
 /** The stored token, or "". Never throws. */
 export function apiToken(): string {

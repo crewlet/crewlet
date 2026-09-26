@@ -66,25 +66,6 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "n
 };
 
 /**
- * A page's address, which is what the frame carries and what the engine reads.
- *
- * `CONTAINER/Title`, in one place: the `page` query takes exactly this string,
- * `KINDS.page` splits it back into a route on the first slash, and the title
- * is matched the way the fleet CLAIMED it — case-insensitively, whitespace
- * collapsed. Written at each call site it would be spelled with a uuid
- * somewhere, which resolves for the query and gives the rail a `peek=` token
- * no reader can recognise and no grid row can be found by.
- *
- * EXPORTED for the Knowledge screen, whose ranked hits address the same pages
- * and had the interpolation written out three times in one component — which
- * is how the browse and the search come to open two different rails for one
- * page the day either of them learns about a uuid.
- */
-export function pageAddress(page: { container: string; title: string }): string {
-  return `${page.container}/${page.title}`;
-}
-
-/**
  * The five facts a page is read by, in one order, on its page and in the rail.
  *
  * ONE FUNCTION rather than two lists that happen to agree today — the same
@@ -214,7 +195,7 @@ function pageFlags(page: Page): React.ReactNode {
  */
 export function PageLink({ page }: { page: PageSummary }) {
   const { open } = usePeekControls();
-  const ref = { kind: "page" as const, id: pageAddress(page) };
+  const ref = { kind: "page" as const, id: page.id };
   return (
     <a className="t-link truncate" href={peekHref(ref)} onClick={rowPeekHandler(() => open(ref))}>
       {page.title}
@@ -267,9 +248,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // can read back, so a reader who re-sorts steps in updated order instead:
   // one order both halves agree on beats a stepper that claims to follow a
   // sequence it cannot see.
-  usePeekNeighbours(
-    useMemo(() => rows.map((r) => ({ kind: "page" as const, id: pageAddress(r) })), [rows]),
-  );
+  usePeekNeighbours(useMemo(() => rows.map((r) => ({ kind: "page" as const, id: r.id })), [rows]));
 
   return (
     <>
@@ -305,7 +284,10 @@ export function Pages({ container: fromPath }: { container?: string }) {
           value={container}
           onChange={(value) => setContainer(String(value))}
           ariaLabel="Container"
-          active={container !== ""}
+          // NEVER "ACTIVE". The container is this page's own address, so the
+          // picker navigates between objects rather than narrowing one — and
+          // the accent on it, at rest on every container page, said a filter
+          // was on that nobody had set.
           options={[
             { value: "", label: "Every container" },
             ...containerKeys.map((key) => ({ value: key, label: key })),
@@ -388,10 +370,8 @@ export function Pages({ container: fromPath }: { container?: string }) {
             // copy of the route: the rail's `Open ↗` is built from the same
             // reference, so a row and the panel it opens can never name
             // different pages.
-            rowHref={(r) => peekHref({ kind: "page", id: pageAddress(r) })}
-            onRowActivate={peekRow<PageSummary>((r) =>
-              openPeek({ kind: "page", id: pageAddress(r) }),
-            )}
+            rowHref={(r) => peekHref({ kind: "page", id: r.id })}
+            onRowActivate={peekRow<PageSummary>((r) => openPeek({ kind: "page", id: r.id }))}
             columns={[
               {
                 key: "title",
@@ -495,28 +475,22 @@ export function Pages({ container: fromPath }: { container?: string }) {
   );
 }
 
-/** One page: its body, where it sits, and everything that changed it. */
 /**
- * One page.
+ * One page: its body, where it sits, and everything that changed it.
  *
- * ADDRESSED BY CONTAINER AND TITLE, which is what a person was given: the
- * engine's own `Get` takes `CONTAINER/Title` and matches the title the way the
- * fleet CLAIMED it — case-insensitively, with runs of whitespace collapsed —
- * so `ENG/deploy runbook` reaches a page called "Deploy  Runbook". A uuid
- * still resolves, because every internal link carries one.
+ * ADDRESSED BY ITS ID, `#/knowledge/pages/{id}`, and by nothing else. It was
+ * addressed by container and title, and a title changes on rename — so every
+ * link anybody had copied broke the day somebody fixed a heading. The id is
+ * what every internal link and every search hit already carries, and it is
+ * what the `page` read is asked with here.
  */
-export function PageView({ container, title }: { container: string; title: string }) {
+export function PageView({ id }: { id: string }) {
   const org = useOrg();
   const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
-  const id = `${container}/${title}`;
-  const { data, loading, error } = useQuery(
-    "page",
-    { id },
-    { enabled: id !== "/", pollMs: 20_000 },
-  );
-  usePageLabels(data?.page ? { [container]: container, [title]: data.page.title } : {});
+  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
+  usePageLabels(data?.page ? { [id]: data.page.title } : {});
 
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE. The prose lines below want the
   // NAME; a watcher's and a commenter's chip also draws the dashed ring off
@@ -570,7 +544,7 @@ export function PageView({ container, title }: { container: string; title: strin
             {(data.ancestors ?? []).map((a) => (
               <span key={a.id}>
                 {" / "}
-                <a href={href(["knowledge", page.container, a.title])}>{a.title}</a>
+                <a href={href(["knowledge", "pages", a.id])}>{a.title}</a>
               </span>
             ))}
           </span>
@@ -599,10 +573,10 @@ export function PageView({ container, title }: { container: string; title: strin
             <ObjectHeader
               kind="Page"
               icon="file-text"
-              // NO IDENTIFIER BESIDE THE TITLE. A page is addressed by its
-              // container and its title — both are already here, one as the
-              // first fact and one as the title itself — and the only other
-              // id it has is the uuid nobody types.
+              // NO IDENTIFIER BESIDE THE TITLE. A page is ADDRESSED by its id,
+              // which the address bar already carries, but a reader finds it
+              // by its container and its title — both already here, one as the
+              // first fact and one as the title itself.
               title={page.title}
               status={pageFlags(page)}
               facts={pageFacts({ page, history, now, seatName })}
@@ -624,7 +598,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 <ul className="list">
                   {data.children.map((child) => (
                     <li key={child.id}>
-                      <a href={href(["knowledge", page.container, child.title])}>{child.title}</a>
+                      <a href={href(["knowledge", "pages", child.id])}>{child.title}</a>
                     </li>
                   ))}
                 </ul>
@@ -767,7 +741,7 @@ export function PagePeek({ id }: { id: string }) {
         size="compact"
         icon={<FileTextGlyph size="xl" />}
         title={`No page at “${id}”`}
-        description="A page is addressed by its container and its title. It may have been renamed, moved to another container, or trashed — or this node's copy of the knowledge base has not caught up with it yet."
+        description="A link to a page carries its id, which a rename does not change. It may have been trashed or purged — or this node's copy of the knowledge base has not caught up with it yet."
       />
     );
   }
@@ -1151,10 +1125,7 @@ function PageChanges({
                 )}
                 <span className="spacer" />
                 {change.turn_id && (
-                  <a
-                    className="t-link t-caption"
-                    href={href(["activity", "turns", change.turn_id])}
-                  >
+                  <a className="t-link t-caption" href={href(["live", "turns", change.turn_id])}>
                     turn →
                   </a>
                 )}

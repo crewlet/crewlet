@@ -491,6 +491,65 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
 }
 
 /**
+ * WHAT GIVES WAY FIRST when a set does not fit its box — `GridColumn.drop`,
+ * lowest first. Beside a peek at 1280 the list is about 450px wide, and with
+ * every column kept the title was 70px of "Which regi…".
+ *
+ * NEVER THE TITLE, AND NEVER WHAT OPENS OR OWNS A ROW: the key (the address),
+ * the status (the one fact a queue is scanned for) and who holds it. What goes
+ * first is what the task's own page answers one click away — when it last
+ * moved, then the dates and sizes a reader switched on, then the due date,
+ * then the marks — and the grid says which it hid.
+ */
+const LIST_GIVES_WAY: Record<string, number> = {
+  updated: 1,
+  start: 2,
+  points: 3,
+  estimate: 4,
+  project: 5,
+  due: 6,
+  type: 7,
+  priority: 8,
+};
+
+/** The table's order: its assignee is a NAME, which is what that set is for. */
+const TABLE_GIVES_WAY: Record<string, number> = {
+  updated: 1,
+  start: 2,
+  points: 3,
+  estimate: 4,
+  project: 5,
+  due: 6,
+  priority: 7,
+  type: 8,
+};
+
+/**
+ * THE TITLE'S FLOOR: the narrowest it is still a title at. Sixteen ems carries
+ * about thirty-five characters — a task title's first five or six words, which
+ * is what tells two tasks apart down a list. Below it the columns above give
+ * way instead: beside a peek at 1280 that is when it moved, its due date and
+ * its type mark, and the title keeps the rest. Ten ems, tried first, kept every
+ * mark and cut every title to its first three words.
+ */
+const TITLE_FLOOR = "16rem";
+
+function givingWay(
+  columns: GridColumn<WorkSummary>[],
+  order: Record<string, number>,
+): GridColumn<WorkSummary>[] {
+  return columns.map((c) => {
+    if (c.key === "title") return { ...c, floor: TITLE_FLOOR };
+    // THE STATUS IS DRAWN WHOLE. It is the one fact a queue is scanned for,
+    // and at a content column's fifth of a list beside a peek it read
+    // "In progr…". A company's status words are short by nature, and what
+    // gives way when they do not fit is the columns above, not the word.
+    if (c.key === "status") return { ...c, width: "max-content" };
+    return order[c.key] !== undefined ? { ...c, drop: order[c.key] } : c;
+  });
+}
+
+/**
  * Every column one shape can draw, in the order it draws them.
  *
  * ONE ENTRY POINT, so the Display menu offers exactly what the grid draws.
@@ -500,7 +559,10 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
  * looking exactly like a correct one.
  */
 function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const out = shape === "table" ? tableColumns(ctx) : listColumns(ctx);
+  const out =
+    shape === "table"
+      ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
+      : givingWay(listColumns(ctx), LIST_GIVES_WAY);
   if (!ctx.removals) return out;
   return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
 }

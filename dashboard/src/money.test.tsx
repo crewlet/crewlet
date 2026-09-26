@@ -30,12 +30,13 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { Rollup } from "~/protocol/index.ts";
-import { TurnScreen } from "~/routes/activity/Turn.tsx";
-import { SeatScreen } from "~/routes/company/Seat.tsx";
-import { Spend } from "~/routes/cost/Spend.tsx";
-import { Inbox } from "~/routes/inbox/Inbox.tsx";
+import { TurnScreen } from "~/routes/live/Turn.tsx";
+import { SeatScreen } from "~/routes/agents/Seat.tsx";
+import { Spend } from "~/routes/spend/Spend.tsx";
+import { Home } from "~/routes/home/Home.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
+import { FrameReadings } from "~/app/Shell.tsx";
 
 // ---------------------------------------------------------------------------
 // 1. The source
@@ -477,7 +478,9 @@ function mount(hash: string, view: ReactElement, answers: Record<string, unknown
     Promise.resolve(answers[what] ?? {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>{view}</Router>
+      <FrameReadings>
+        <Router>{view}</Router>
+      </FrameReadings>
     </ClientContext.Provider>,
   );
 }
@@ -507,8 +510,8 @@ describe("the screens", () => {
   // Each case waits for the fixture's TOKEN count first: a screen that never
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
-    ["the landing screen", "#/inbox", <Inbox />, {}],
-    ["spend", "#/cost", <Spend />, { token_series: series() }],
+    ["the landing screen", "#/home", <Home />, {}],
+    ["spend", "#/spend", <Spend />, { token_series: series() }],
     [
       "the task page",
       "#/work/ENG-42",
@@ -532,13 +535,13 @@ describe("the screens", () => {
     ],
     [
       "the profile",
-      "#/company/people/ceo?tab=cost",
+      "#/agents/seats/ceo?tab=cost",
       <SeatScreen handle="ceo" />,
       { tokens: rollup() },
     ],
     [
       "the trace",
-      "#/activity/turns/t-1",
+      "#/live/turns/t-1",
       <TurnScreen turnId="t-1" />,
       {
         turn: {

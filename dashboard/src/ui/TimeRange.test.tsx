@@ -91,3 +91,30 @@ test("a window that holds something is applied", () => {
   const picked = set.mock.calls[0]?.[0] as { from: number; to: number };
   expect(picked.to).toBeGreaterThan(picked.from);
 });
+
+// TODAY IS A WINDOW OF ITS OWN where a screen offers it, first on the strip,
+// and pressing it names the company's day rather than twenty-four hours.
+test("today leads the strip where it is offered, and sets the company's day", () => {
+  const set = vi.fn();
+  const range = picker(set);
+  range.offer = { ...range.offer, today: true, zone: "UTC" };
+  render(
+    <LayerHost>
+      <TimeRangePicker range={range} />
+    </LayerHost>,
+  );
+  const radios = screen.getAllByRole("radio");
+  expect(radios[0]!.textContent).toBe("Today");
+  fireEvent.click(radios[0]!);
+  const chosen = set.mock.calls[0]![0] as Window;
+  expect(typeof chosen === "object" && chosen.today).toBe(true);
+});
+
+test("a screen that does not offer today does not draw it", () => {
+  render(
+    <LayerHost>
+      <TimeRangePicker range={picker()} />
+    </LayerHost>,
+  );
+  expect(screen.queryByText("Today")).toBeNull();
+});

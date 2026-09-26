@@ -50,6 +50,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { SORTS, groupAxisOptions, secondAxisOptions, type Shape } from "~/lib/work.ts";
 import { GROUP_AXES } from "~/contract/work.ts";
+import { usePanelAlign } from "~/lib/media.ts";
 import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 
@@ -112,13 +113,16 @@ export interface DisplayMenuProps {
 }
 
 export function DisplayMenu(props: DisplayMenuProps) {
+  // END-ALIGNED under a toolbar's right edge, START on a phone, where the
+  // toolbar wraps this trigger to the left edge — see [usePanelAlign].
+  const align = usePanelAlign("end");
   const shapeName = SHAPES.find((s) => s.value === props.shape)?.label ?? "List";
   const axisName = GROUP_AXES.find((a) => a.value === props.axis)?.label;
   return (
     <Popover
       role="dialog"
       label="Display"
-      align="end"
+      align={align}
       trigger={(open, toggle) => (
         <Button
           size="small"

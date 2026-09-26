@@ -85,13 +85,13 @@ export function EditorSection({
  * points nowhere.
  */
 export const SCREENS = {
-  integrations: ["admin", "integrations"],
-  schedules: ["activity", "schedules"],
-  /** The company's credentials. The screen is "Credentials"; the engine's
-   *  word, and this lens's, is secrets — see `/secrets`. */
-  secrets: ["admin", "credentials"],
-  config: ["admin", "config"],
-  fleet: ["admin", "fleet"],
+  integrations: ["settings", "integrations"],
+  schedules: ["agents", "schedules"],
+  /** The company's credentials: Settings › Secrets, the engine's own word
+   *  (`/secrets`). */
+  secrets: ["settings", "secrets"],
+  config: ["settings", "config"],
+  nodes: ["settings", "nodes"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 /** A screen the builder can send a reader to. */

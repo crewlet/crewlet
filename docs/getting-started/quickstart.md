@@ -470,8 +470,8 @@ curl -X PUT http://localhost:8000/config \
   --data-binary @company.yaml
 ```
 
-Or create the company from the dashboard: open **Company** and its
-**Builder** lens (`#/company?lens=builder`). With no configuration active it opens
+Or create the company from the dashboard: open **Agents** and its **Edit
+org** button (`#/agents/edit`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The

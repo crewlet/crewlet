@@ -27,6 +27,7 @@ import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -216,9 +217,7 @@ test("a task carrying no priority at all still dashes", () => {
 // person calls it and the key is what everything is addressed by, so the row
 // carries both.
 test("the rail names the project and its key, and links to its board", () => {
-  const { container } = render(
-    <ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />,
-  );
+  render(<ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />);
   const value = screen.getByText("Project").nextElementSibling!;
   expect(value.textContent).toContain("Engineering");
   expect(value.textContent).toContain("ENG");
@@ -429,8 +428,8 @@ test("a pending mirror and a permanent one-sided edge read differently", () => {
   expect(screen.getByText("one-sided")).toBeTruthy();
 });
 
-// A PAGE LINK LEAVES THE TRACKER, and it has to go to the knowledge base
-// rather than to a task key that does not exist.
+// A PAGE LINK LEAVES THE TRACKER, and it has to go to the page's one address,
+// `#/knowledge/pages/{id}`.
 //
 // ASSERTED THROUGH `pathOf`, never against a hand-typed literal. This case
 // used to re-compute the component's own string — `#/pages/p-1` — and so
@@ -438,34 +437,32 @@ test("a pending mirror and a permanent one-sided edge read differently", () => {
 // on NotFound while the suite reported a pass. The frame's map is the one
 // definition of where a page lives, and a link that does not agree with it is
 // a link to nothing.
-test("a linked page points at the page rather than at a task", () => {
-  const { container } = render(
-    <ItemLinks
-      detail={detail({
-        links: [{ kind: "page", other: "p-1", key: "ENG/The runbook", title: "The runbook" }],
-      })}
-      chrome={{}}
-    />,
-  );
-  expect(screen.getByText("Pages")).toBeTruthy();
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
-    href(pathOf({ kind: "page", id: "ENG/The runbook" })),
-  );
-});
-
-// AND AN EDGE THAT CARRIES ONLY AN ID STILL LANDS IN THE KNOWLEDGE BASE. The
-// tracker's `readLinks` resolves the other end against the TASK rows, so a
-// page edge comes back with no `key` and no `title` and the row is a bare
-// uuid — a screen that answers that address honestly is the knowledge base
-// saying it holds no such container, never a screen that does not exist.
-test("a page edge with no address resolved still leaves the tracker", () => {
+//
+// BY ITS ID, WHICH IS `other`. The tracker's `readLinks` resolves the far end
+// of an edge against its own TASK rows, so on a page edge `key` and `title`
+// are always empty — and the page used to be addressed by `key` first, a
+// container-and-title form the route table no longer has.
+test("a linked page points at the page, by its id", () => {
   const { container } = render(
     <ItemLinks detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} />,
   );
+  expect(screen.getByText("Pages")).toBeTruthy();
   expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
     href(pathOf({ kind: "page", id: "p-1" })),
   );
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toContain("#/knowledge/");
+  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe("#/knowledge/pages/p-1");
+});
+
+// AND A KEY ON A PAGE EDGE ADDRESSES NOTHING: were one ever sent, it would be
+// the task column's, and the page is still its id.
+test("a page edge is addressed by its id whatever else it carries", () => {
+  const { container } = render(
+    <ItemLinks
+      detail={detail({ links: [{ kind: "page", other: "p-1", key: "ENG/The runbook" }] })}
+      chrome={{}}
+    />,
+  );
+  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe("#/knowledge/pages/p-1");
 });
 
 // NO LINKS IS NO PANEL. A panel headed "Links" over nothing reads as a task
@@ -609,9 +606,11 @@ test("the way out to the board names the project and opens the task", async () =
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
   const { container } = render(
-    <Router>
-      <WorkItemPage id="ENG-42" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <WorkItemPage id="ENG-42" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("Open on the board →")).toBeTruthy());
   const out = [...container.querySelectorAll("a")].find(
@@ -650,9 +649,11 @@ test("the rail names a person, exactly as the page does", async () => {
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
   const { container } = render(
-    <Router>
-      <ItemPeek itemKey="ENG-42" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ItemPeek itemKey="ENG-42" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
   expect(screen.queryByText("ada")).toBeNull();
@@ -689,9 +690,11 @@ test("an operator reporter is drawn with a person's circle", async () => {
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
   const { container } = render(
-    <Router>
-      <ItemPeek itemKey="ENG-42" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ItemPeek itemKey="ENG-42" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getAllByText("founder").length).toBeGreaterThan(0));
   const chip = [...container.querySelectorAll("a.seat-chip")].find(
@@ -721,11 +724,13 @@ test("moving the rail to another task mounts a new body", async () => {
   });
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
   const { container } = render(
-    <Router>
-      <PeekNeighbours>
-        <PeekHost />
-      </PeekNeighbours>
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <PeekNeighbours>
+          <PeekHost />
+        </PeekNeighbours>
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy());
   const before = container.querySelector(".object-head");
@@ -745,9 +750,11 @@ test("the peek states each property once", async () => {
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
   const { container } = render(
-    <Router>
-      <ItemPeek itemKey="ENG-42" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ItemPeek itemKey="ENG-42" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(screen.getByText("Fix the login race")).toBeTruthy());
   expect(container.querySelector(".fact-line")).toBeNull();
@@ -769,9 +776,11 @@ test("the page heads itself with the facts the peek leaves to the rail", async (
     work_project: { key: "ENG", name: "Engineering", complete: true },
   });
   const { container } = render(
-    <Router>
-      <WorkItemPage id="ENG-42" />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <WorkItemPage id="ENG-42" />
+      </Router>
+    </ViewerProvider>,
   );
   await waitFor(() => expect(container.querySelector(".fact-line")).not.toBeNull());
   const line = container.querySelector(".fact-line")!;
@@ -790,13 +799,15 @@ test("the page heads itself with the facts the peek leaves to the rail", async (
 test("the description keeps its own DOM across a clock tick", async () => {
   serving({ work_items: { items: [], complete: true } });
   const body = (now: number) => (
-    <Router>
-      <ItemBody
-        detail={detail({ task: task({ body: "the runbook is **here**" }) })}
-        chrome={{}}
-        now={now}
-      />
-    </Router>
+    <ViewerProvider>
+      <Router>
+        <ItemBody
+          detail={detail({ task: task({ body: "the runbook is **here**" }) })}
+          chrome={{}}
+          now={now}
+        />
+      </Router>
+    </ViewerProvider>
   );
   const { container, rerender } = render(body(NOW));
   await waitFor(() => expect(container.querySelector(".prose")).toBeTruthy());
@@ -902,39 +913,41 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", () => {
 test("the history draws a mark per kind and never reprints the thread", async () => {
   serving({ work_items: { items: [], complete: true } });
   const { container } = render(
-    <Router>
-      <ItemBody
-        detail={detail({
-          history: [
-            {
-              id: "h1",
-              kind: "comment",
-              at: NOW_ISO,
-              log_seq: 1,
-              excerpt: "the login race is a double-submit",
-            },
-            {
-              id: "h2",
-              kind: "status",
-              at: NOW_ISO,
-              log_seq: 2,
-              fields: { status: { from: "todo", to: "done" } },
-            },
-            { id: "h3", kind: "watchers", at: NOW_ISO, log_seq: 3 },
-            {
-              id: "h4",
-              kind: "assignee",
-              at: NOW_ISO,
-              log_seq: 4,
-              turn_id: "turn-7",
-              fields: { assignee: { from: "", to: "ada" } },
-            },
-          ],
-        })}
-        chrome={{}}
-        now={NOW}
-      />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ItemBody
+          detail={detail({
+            history: [
+              {
+                id: "h1",
+                kind: "comment",
+                at: NOW_ISO,
+                log_seq: 1,
+                excerpt: "the login race is a double-submit",
+              },
+              {
+                id: "h2",
+                kind: "status",
+                at: NOW_ISO,
+                log_seq: 2,
+                fields: { status: { from: "todo", to: "done" } },
+              },
+              { id: "h3", kind: "watchers", at: NOW_ISO, log_seq: 3 },
+              {
+                id: "h4",
+                kind: "assignee",
+                at: NOW_ISO,
+                log_seq: 4,
+                turn_id: "turn-7",
+                fields: { assignee: { from: "", to: "ada" } },
+              },
+            ],
+          })}
+          chrome={{}}
+          now={NOW}
+        />
+      </Router>
+    </ViewerProvider>,
   );
   fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
 
@@ -969,34 +982,36 @@ test("the history draws a mark per kind and never reprints the thread", async ()
 test("a re-parent names the parent, and an unresolved id stays an id", async () => {
   serving({ work_items: { items: [], complete: true } });
   render(
-    <Router>
-      <ItemBody
-        detail={detail({
-          keys: { "t-parent": "ENG-1" },
-          history: [
-            {
-              id: "h1",
-              kind: "reparented",
-              at: NOW_ISO,
-              log_seq: 1,
-              fields: { parent: { from: "", to: "t-parent" } },
-            },
-            // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID — past the
-            // map's cap, or a counterparty this node has not applied. A blank
-            // there would read as a task with no name.
-            {
-              id: "h2",
-              kind: "relations",
-              at: NOW_ISO,
-              log_seq: 2,
-              fields: { waiting_on: { from: "", to: "t-unapplied" } },
-            },
-          ],
-        })}
-        chrome={{}}
-        now={NOW}
-      />
-    </Router>,
+    <ViewerProvider>
+      <Router>
+        <ItemBody
+          detail={detail({
+            keys: { "t-parent": "ENG-1" },
+            history: [
+              {
+                id: "h1",
+                kind: "reparented",
+                at: NOW_ISO,
+                log_seq: 1,
+                fields: { parent: { from: "", to: "t-parent" } },
+              },
+              // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID — past the
+              // map's cap, or a counterparty this node has not applied. A blank
+              // there would read as a task with no name.
+              {
+                id: "h2",
+                kind: "relations",
+                at: NOW_ISO,
+                log_seq: 2,
+                fields: { waiting_on: { from: "", to: "t-unapplied" } },
+              },
+            ],
+          })}
+          chrome={{}}
+          now={NOW}
+        />
+      </Router>
+    </ViewerProvider>,
   );
   fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
 

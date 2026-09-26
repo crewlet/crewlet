@@ -28,6 +28,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from "react";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 export type ThemeChoice = "system" | "light" | "dark";
 export type Density = "compact" | "normal" | "comfortable";
@@ -84,10 +85,10 @@ export function zoneExists(zone: string): boolean {
   }
 }
 
-const THEME_KEY = "crewlet_theme";
-const DENSITY_KEY = "crewlet_density";
-const ZONE_KEY = "crewlet_timezone";
-const DATE_KEY = "crewlet_date_format";
+const THEME_KEY = STORAGE_KEYS.theme;
+const DENSITY_KEY = STORAGE_KEYS.density;
+const ZONE_KEY = STORAGE_KEYS.timezone;
+const DATE_KEY = STORAGE_KEYS.dateFormat;
 
 function read(key: string, fallback: string, allowed: readonly string[]): string {
   try {

@@ -1933,7 +1933,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
+| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per socket, which is the size of the node's reader pool: one tab may use every reader connection and no more, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
 **Queries** (`what`), each answered by the *same* function the matching
 REST route calls, so the two surfaces cannot diverge:

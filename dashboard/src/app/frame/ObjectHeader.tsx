@@ -106,7 +106,7 @@ export function SetByLine({
               so the arrow landed on a line of its own at EVERY width. A
               `white-space` cannot suppress that — `.t-link` already carries
               one — and only a formatting context of the anchor's own can. */}
-          <a className="t-link setby-turn" href={href(["activity", "turns", setBy.turnId])}>
+          <a className="t-link setby-turn" href={href(["live", "turns", setBy.turnId])}>
             turn <ArrowUpRightGlyph size="xs" />
           </a>
         </>
@@ -210,7 +210,7 @@ export function ObjectHeader({
    * for now: a turn is running, or a retry, or carrying failures, or read to
    * the store's cap, and any two of those can be true at once. They used to
    * be a screen's `PageActions`, in a slot whose subject is what the reader
-   * can DO — see `routes/activity/Turn.tsx`'s `turnStatus`.
+   * can DO — see `routes/live/Turn.tsx`'s `turnStatus`.
    */
   status?: ReactNode;
   facts?: Fact[];
@@ -237,7 +237,7 @@ export function ObjectHeader({
       <div className="row wrap">
         {/* TWO LINES, AND THAT IS THE CEILING. Every other object in the
             product heads itself with a NAME — a seat, a work key, a node id, a
-            page title — and a turn has none, so `routes/activity/Turn.tsx`
+            page title — and a turn has none, so `routes/live/Turn.tsx`
             heads it with the lead sentence of the reviewer's own prose.
             `lead` bounds the ordinary case; this bounds the one it
             deliberately does not, a summary written as a single unpunctuated
@@ -249,7 +249,12 @@ export function ObjectHeader({
             which run a little over, and two hold them and catch only the
             paragraph. Two is the clamp's own default, so nothing here sets a
             count. */}
-        <h1 className="object-title clamp">{title}</h1>
+        {/* A LEVEL-TWO HEADING, in every frame. On a page the last crumb
+            of the page header is the `h1` and names this same object, so an
+            `h1` here was a second page title reading the same words; in a
+            peek or a hover card it was an `h1` inside a page that already
+            has one. The size is `.object-title`'s, not the element's. */}
+        <h2 className="object-title clamp">{title}</h2>
         {/* ONE GROUP, so the marks travel together when the row above wraps
             and never split a running turn's pill from its problem count. */}
         {status && <div className="row gap-1 wrap object-status">{status}</div>}

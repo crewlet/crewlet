@@ -19,13 +19,13 @@ const now = Date.parse("2026-01-01T12:00:00Z");
 function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
-    sandboxes: [],
     runs: [],
     budget: {},
     engine: { status: "ok", configured: true },
     connected: true,
     authRejected: false,
     now,
+    nameOf: (key) => key,
     ...over,
   };
 }
@@ -107,9 +107,9 @@ describe("what it surfaces", () => {
   test("a run paused on a question carries the question", () => {
     const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    // THE RUN'S OWN ADDRESS. It was `#/activity/runs?run=`, a query key the
+    // THE RUN'S OWN ADDRESS. It was `#/live/runs?run=`, a query key the
     // runs screen stopped reading when a run became an object.
-    expect(items[0]?.path).toEqual(["activity", "runs", "t1"]);
+    expect(items[0]?.path).toEqual(["live", "runs", "t1"]);
   });
 
   // WHEN IT PARKED, never when it started: this row is about how long
@@ -167,31 +167,6 @@ describe("what it surfaces", () => {
   // above could be `status !== "running"` and still pass every case here.
   test("a running run is not in the queue", () => {
     expect(attentionQueue(input({ runs: [parked("running")] }))).toEqual([]);
-  });
-
-  // THE PROJECTION IS NOT A SOURCE FOR THIS. A parked entry on the live push
-  // and nothing on the durable rows means the sweep already dropped it — and
-  // the queue must read the rows, so this produces nothing.
-  test("a parked entry on the live push alone raises nothing", () => {
-    const items = attentionQueue(
-      input({
-        sandboxes: [
-          {
-            turn_id: "t1",
-            role: "Dev A",
-            agent_handle: "dev-a",
-            agent_id: "",
-            coding_agent: "claude-code",
-            sandbox_id: "s1",
-            task: "",
-            status: "awaiting_clarification",
-            started_at: "2026-01-01T11:00:00Z",
-            question: "Which branch should I target?",
-          },
-        ],
-      }),
-    );
-    expect(items.filter((i) => i.subject === "run")).toEqual([]);
   });
 
   test("a live round that stopped moving is surfaced, and escalates", () => {
@@ -334,7 +309,7 @@ describe("what it surfaces", () => {
   // WHAT THE QUIET BAND DRAWS IS TWO-SIDED, and only one side is a type error.
   //
   // TypeScript refuses a condition that names no subject. Nothing but this
-  // refuses a SUBJECT no condition can raise — a phrase on the landing screen
+  // refuses a SUBJECT no condition can raise — a phrase on the Inbox and Home
   // claiming something is checked when nothing checks it, which is the exact
   // shape of the sentence it replaced: "No seat is stopped, no run is parked on
   // a question, and no budget is refusing", three of the twelve conditions
@@ -422,5 +397,31 @@ describe("ordering", () => {
       expect(item.title.length, item.id).toBeGreaterThan(8);
       expect(item.detail.length, item.id).toBeGreaterThan(20);
     }
+  });
+});
+
+// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser by the seat
+// handle their token is bound to, and the row read "paused by jane-founder" on
+// Home and in the Inbox — an address where a person is meant.
+describe("a stopped seat's row", () => {
+  test("names the person who paused it, off the chart", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "devrel",
+            role: "Agent DevRel",
+            handle: "agent-devrel",
+            activity: "stopped",
+            stopped_reason: "paused",
+            paused: { by: "jane-founder", at: "2026-01-01T11:00:00Z", stop_running: false },
+          },
+        ],
+        nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
+      }),
+    );
+    expect(items.find((i) => i.id === "stopped-Agent DevRel")?.detail).toBe(
+      "The seat cannot take work: paused by Jane Founder.",
+    );
   });
 });

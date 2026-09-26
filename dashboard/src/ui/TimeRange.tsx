@@ -20,7 +20,7 @@
  */
 
 import { useState, type CSSProperties } from "react";
-import { RANGES, RANGE_LABEL, isRange, windowLabel } from "~/lib/range.ts";
+import { RANGES, RANGE_LABEL, TODAY, isRange, todayWindow, windowLabel } from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
 import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
@@ -35,6 +35,8 @@ import { Segmented } from "~/ui/primitives.tsx";
 /** The custom option's value in the segmented group — not a [Range]. */
 const CUSTOM = "custom";
 
+type Choice = Range | typeof TODAY | typeof CUSTOM;
+
 export function TimeRangePicker({
   range,
   ariaLabel = "Time range",
@@ -45,9 +47,19 @@ export function TimeRangePicker({
   const [editing, setEditing] = useState(false);
   const { window, offer, since, until, set } = range;
 
-  const options: { value: Range | typeof CUSTOM; label: string; title: string }[] = RANGES.filter(
-    (r) => offer.ranges.includes(r),
-  ).map((r) => ({ value: r, label: r, title: RANGE_LABEL[r] }));
+  const options: { value: Choice; label: string; title: string }[] = [];
+  // TODAY LEADS, because it is the shortest window a screen offering it has
+  // and the vocabulary's order is shortest first.
+  if (offer.today) {
+    options.push({ value: TODAY, label: "Today", title: "Since midnight on the company's clock" });
+  }
+  options.push(
+    ...RANGES.filter((r) => offer.ranges.includes(r)).map((r) => ({
+      value: r,
+      label: r,
+      title: RANGE_LABEL[r],
+    })),
+  );
   if (offer.custom) {
     options.push({
       value: CUSTOM,
@@ -56,16 +68,21 @@ export function TimeRangePicker({
       // timestamps do not fit in a segment, and a segment whose width
       // changes with its value reflows the control beside it every time a
       // reader picks a different window.
-      title: isRange(window) ? "Name two instants of your own" : windowLabel(window),
+      title:
+        isRange(window) || window.today ? "Name two instants of your own" : windowLabel(window),
     });
   }
 
   return (
     <>
-      <Segmented<Range | typeof CUSTOM>
+      <Segmented<Choice>
         ariaLabel={ariaLabel}
-        value={isRange(window) ? window : CUSTOM}
-        onChange={(next) => (next === CUSTOM ? setEditing(true) : set(next))}
+        value={isRange(window) ? window : window.today ? TODAY : CUSTOM}
+        onChange={(next) =>
+          next === CUSTOM
+            ? setEditing(true)
+            : set(next === TODAY ? todayWindow(Date.now(), offer.zone) : next)
+        }
         options={options}
       />
       {editing && (

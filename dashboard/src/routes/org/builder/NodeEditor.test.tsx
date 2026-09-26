@@ -341,39 +341,39 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/company?lens=builder");
+    history.replaceState(null, "", "#/agents/edit");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
     const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
     fireEvent.click(link());
-    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
-      location.hash = "#/company?lens=builder";
+      location.hash = "#/agents/edit";
     });
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
 
     type("Goal", "Ship");
     fireEvent.click(link());
     const asked = await prompt();
     expect(asked.textContent).toContain("you are leaving the builder");
     // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
     expect(view.onClose).not.toHaveBeenCalled();
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
     // The move the reader asked for is made: back past the entry they were on.
-    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
     cleanup();
     history.replaceState(null, "", "#/");
   });
@@ -387,13 +387,13 @@ describe("the unsaved-changes prompt", () => {
    * predicate naming the wrong screen produces for EVERY move.
    */
   test("a move within the lens is not a departure, and asks nothing", async () => {
-    history.replaceState(null, "", "#/company?lens=builder&view=visualization");
+    history.replaceState(null, "", "#/agents/edit?view=visualization");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
-      "#/company?lens=builder&view=table",
-      "#/company?lens=builder&view=visualization&chart=reporting",
-      "#/company?lens=builder&view=visualization&chart=reporting&seat=ceo",
+      "#/agents/edit?view=table",
+      "#/agents/edit?view=visualization&chart=reporting",
+      "#/agents/edit?view=visualization&chart=reporting&seat=ceo",
     ]) {
       act(() => {
         location.hash = hash;
@@ -604,7 +604,7 @@ describe("seat fields", () => {
     expect(screen.getByText("review: smart, then fast")).toBeDefined();
     expect(
       screen.getByRole("link", { name: "Edit in the configuration document" }).getAttribute("href"),
-    ).toBe("#/admin/config");
+    ).toBe("#/settings/config");
   });
 
   // Read only, the banner is the reason Apply is unavailable; a caption asking
@@ -696,7 +696,7 @@ describe("seat fields", () => {
       within(section).getByText("5 settings the builder shows and does not edit."),
     ).toBeDefined();
     for (const label of ["Models per phase", "Sandbox", "Workers", "Learning"]) {
-      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/admin/config");
+      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/settings/config");
     }
     expect(section.innerHTML).not.toContain("__redacted__");
   });
@@ -728,7 +728,7 @@ describe("integrations", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     for (const tool of ["GitHub", "Slack", "Mattermost", "Jira", "Confluence"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
-      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/admin/integrations");
+      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
     expect(screen.queryByLabelText(labelled("Jira project"))).toBeNull();
@@ -940,7 +940,7 @@ describe("problems", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
-      "#/activity/schedules",
+      "#/agents/schedules",
     );
   });
 
@@ -1059,7 +1059,7 @@ describe("a unit", () => {
     ).toBeDefined();
     expect(screen.getByText("units[0].mcp_env.tracker.TOKEN")).toBeDefined();
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
-      "#/admin/credentials",
+      "#/settings/secrets",
     );
     expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
   });

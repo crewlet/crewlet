@@ -1,24 +1,21 @@
 /**
- * What the landing screen says on the day nothing is wrong.
+ * The Inbox: where a person acts on what reached them.
  *
- * This is the first screen anybody sees, and its failure mode is not a crash:
- * it is a queue-shaped home rendering a healthy company as a blank page, which
- * a reader cannot tell from a dashboard that is broken. Three claims below are
- * about exactly that, and each one was a real defect:
+ * It was the landing screen, opened by the pulse strip; the strip is Home's
+ * now (`routes/home/Home.test.tsx` holds it), and what is left here is the
+ * place a person acts. Two claims below were real defects:
  *
- *  1. The first fold is the COMPANY. A quiet queue leaves the pulse strip and
- *     two named bands, not an empty box.
- *  2. Both bands are drawn at once. They were a segmented toggle, so the
+ *  1. Both bands are drawn at once. They were a segmented toggle, so the
  *     engine's own conditions sat behind a control the founder had to press to
  *     discover they existed.
- *  3. The controls do not move under the pointer. The reason chips were
+ *  2. The controls do not move under the pointer. The reason chips were
  *     ordered by count — so a poll reordered them — and picking one narrowed
  *     the answer the chips were derived FROM, which unmounted the whole rail:
  *     the chip a reader had just pressed vanished and there was no way back to
  *     the others without hunting for a clear button somewhere else.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 
@@ -27,6 +24,7 @@ import { SUBJECTS } from "~/lib/attention.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { FrameReadings } from "~/app/Shell.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -125,9 +123,11 @@ function mount(answers: Record<string, unknown> = {}) {
   };
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Inbox />
-      </Router>
+      <FrameReadings>
+        <Router>
+          <Inbox />
+        </Router>
+      </FrameReadings>
     </ClientContext.Provider>,
   );
   return { store, socket };
@@ -141,40 +141,16 @@ async function settle() {
   });
 }
 
-// A HEALTHY COMPANY IS NOT A BLANK PAGE.
-//
-// Nothing is waiting, nothing is alarming, and the screen still has to say what
-// the company IS — otherwise the reader's first contact with the product is an
-// empty box, and an empty box is what a broken dashboard looks like too.
-test("a company with nothing waiting still renders its own state", async () => {
+// A QUIET INBOX SAYS WHAT ITS BANDS ARE, rather than disappearing with their
+// rows — an empty box is what a broken dashboard looks like too.
+test("an inbox with nothing waiting still names both bands", async () => {
   mount();
   await settle();
-
-  // The pulse strip, with its figures — the fold that is true whatever the
-  // queue holds.
-  expect(screen.getByRole("group", { name: "The company right now" })).toBeTruthy();
-  expect(screen.getByText("open")).toBeTruthy();
-  expect(screen.getByText("tokens")).toBeTruthy();
-  expect(screen.getByText("alarms")).toBeTruthy();
-
-  // And both bands say what they are rather than disappearing with their rows.
   expect(screen.getByText("Needs a decision")).toBeTruthy();
   expect(screen.getByText("Notices")).toBeTruthy();
   expect(screen.getByText("Nothing needs a decision")).toBeTruthy();
-});
-
-// THE STRIP'S WORD AGREES WITH ITS FIGURE. "1 alarms" is a label written for
-// one number and shown another; a single critical condition is one alarm.
-test("one alarm is counted as one alarm", async () => {
-  const { store } = mount();
-  await act(async () => {
-    // An engine with no active revision is exactly one critical condition.
-    store.applyHealth({ status: "healthy", configured: false });
-  });
-  await settle();
-  const strip = screen.getByRole("group", { name: "The company right now" });
-  expect(within(strip).getByText("alarm")).toBeTruthy();
-  expect(within(strip).queryByText("alarms")).toBeNull();
+  // The strip is Home's; it is not drawn twice.
+  expect(screen.queryByRole("group", { name: "The company right now" })).toBeNull();
 });
 
 // BOTH BANDS AT ONCE, WITHOUT PRESSING ANYTHING.
@@ -267,37 +243,6 @@ test("the detail pane holds its column before a row is picked", async () => {
 // The strip renders before its two slow polls land. A `0` there tells a founder
 // their company has no open work, which is a false statement that corrects
 // itself a second later — and on a slow link, not for several.
-test("a figure whose query has not answered draws a dash, never a zero", async () => {
-  const store = new Store();
-  const socket = new LiveSocket(store);
-  (
-    socket as unknown as {
-      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
-    }
-  ).query = (what: string) => {
-    if (what === "viewer") {
-      return Promise.resolve({ operator_id: "U0FOUNDER", operator: true, handle: "", name: "" });
-    }
-    // The two the strip reads never answer.
-    if (what === "work_projects" || what === "work_workload") return new Promise(() => {});
-    if (what === "sandbox_runs") return Promise.resolve({ runs: [] });
-    return Promise.resolve({});
-  };
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Inbox />
-      </Router>
-    </ClientContext.Provider>,
-  );
-  await settle();
-
-  const strip = screen.getByRole("group", { name: "The company right now" });
-  const openFact = [...strip.querySelectorAll("a")].find((a) => a.textContent?.includes("open"));
-  expect(openFact?.textContent).toContain(EMPTY_VALUE);
-  expect(openFact?.textContent).not.toContain("0");
-});
-
 // AN INBOX NOBODY HAS EVER WRITTEN CLAIMS NO READ HISTORY.
 //
 // Zero rows is six facts, and the band branched on the FACET: a person the
@@ -486,7 +431,11 @@ test("the Snoozed tab asks for only snoozed notices, and the default hides them"
   location.hash = "#/inbox?state=snoozed";
   mount();
   await settle();
-  const snoozed = asked.filter((q) => q.what === "work_inbox").at(-1);
+  // THE LIST'S OWN READ, told from the sidebar badge's count by the scope it
+  // names — the badge asks the engine's default, which already hides a snooze.
+  const listed = () =>
+    asked.filter((q) => q.what === "work_inbox" && "snoozed" in (q.params ?? {}));
+  const snoozed = listed().at(-1);
   expect(snoozed?.params).toMatchObject({ snoozed: "only", unread: false });
   expect(snoozed?.params).not.toHaveProperty("include_snoozed");
 
@@ -495,7 +444,7 @@ test("the Snoozed tab asks for only snoozed notices, and the default hides them"
   location.hash = "#/inbox";
   mount();
   await settle();
-  const unread = asked.filter((q) => q.what === "work_inbox").at(-1);
+  const unread = listed().at(-1);
   expect(unread?.params).toMatchObject({ snoozed: "exclude", unread: true });
 });
 
@@ -525,4 +474,23 @@ test("the detail pane names the person behind an operator's token", async () => 
   await settle();
   expect(screen.getByText(/jane-founder ·/)).toBeTruthy();
   expect(screen.queryByText(/founder-token ·/)).toBeNull();
+});
+
+// A PAGE THAT FILLED IS A FLOOR. The band head read "Notices 50" while the
+// sidebar badge beside it said "50+": the head counted the rows it drew, and a
+// page with more behind it is not all of them.
+test("a notices page with more behind it counts itself as a floor", async () => {
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [notice("assignee", 1), notice("watcher", 2)],
+      primary_reasons: ["assignee"],
+      unread: 2,
+      primary: 1,
+      next_cursor: "c-2",
+    },
+  });
+  await settle();
+  const head = screen.getByText("Notices").closest("header");
+  expect(head?.querySelector(".inbox-band-count")?.textContent).toBe("2+");
 });

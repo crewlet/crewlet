@@ -117,8 +117,8 @@
    cleared five columns at the 5.5rem `.num-col` then had — about 570px — by
    38px. `.num-col` went to 7rem so APPROX. TOKENS would stop wrapping, which
    moved five columns by 120px, and nobody re-derived 608. The ceiling stopped
-   being a ceiling and became the layout: at a 1570px viewport, where the rail
-   and the workspace sidebar leave the card 1163px of room, the weights block
+   being a ceiling and became the layout: at a 1570px viewport, where the
+   navigation of the day left the card 1163px of room, the weights block
    clamped to 608 and scrolled 138px of itself out of sight, cutting the very
    heading the 7rem was bought for down to `APPR…` — and the prefetch block
    did the same, 104px of it, on every turn whose thread was handed over
@@ -144,8 +144,8 @@
    above, because `overflow-x: auto` only ever scrolls a box narrower than its
    own content: measured with the ceiling removed outright, on a 390px phone
    the weights block draws 746px out of a card whose content box is 332px,
-   from x=29 to x=775. Nothing scrolls it — `.app` and `.screen` are both
-   `overflow-x: hidden` (frame.css), so the page does not take the
+   from x=29 to x=775. Nothing scrolls it — the shell and its `main` are both
+   `overflow-x: hidden` (the kit's `AppShell`), so the page does not take the
    overflow either — and three of the five figure columns, APPROX. TOKENS
    among them, sit past x=390 with no way to reach them at all. The same box
    with wrappable content does clamp, which is exactly why deleting this line
@@ -352,7 +352,7 @@ a.seat-chip:hover {
    children's display unless the table itself stops being one: leaving `.table`
    as a table and blocking only the rows leaves the anonymous table box in
    place, and the columns come back. */
-@media (max-width: 860px) {
+@media (width < 640px) {
   .table,
   .table tbody,
   .table tr,
@@ -556,7 +556,7 @@ a.seat-chip:hover {
 
    THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
    Before the tab relationship existed, a screen's switched sections were
-   direct children of `.screen-inner` — a flex column with a gap — and they
+   direct children of the shell's content column — a flex column with a gap — and they
    took their vertical rhythm from it. Wrapping them in one panel element puts
    a plain block between the column and them, so without this every panel on
    the Seat screen renders with its cards butted together. Nothing in the test
