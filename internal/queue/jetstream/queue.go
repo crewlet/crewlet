@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -108,8 +109,40 @@ type Config struct {
 	// port: "nats-1.internal:6222", "203.0.113.9".
 	ClusterAdvertise string
 
+	// LeafURLs makes this embedded broker a LEAF of the fleet rather than a
+	// member of it: JetStream switched off, so it holds no stream replica,
+	// sits in no raft group and counts toward no quorum, and one OUTBOUND
+	// link to the members' leaf listeners at these URLs carries everything
+	// its clients ask of the fleet — the JetStream API included, across
+	// [jsapi.Domain]. It is what a node without the `data` role runs: a
+	// broker holding replicas or voting in a quorum is durable state, and
+	// such a node keeps none.
+	//
+	// Exclusive with every member setting — a cluster, a leaf listener, a
+	// store directory — because each of them is a way of holding something.
+	LeafURLs []string
+
+	// LeafPort opens a leaf LISTENER on this member, which is where the
+	// fleet's leaves dial in. Zero opens none, and a fleet with no member
+	// listening has nowhere for a stateless node to join.
+	//
+	// It accepts any connection that reaches it, exactly as the route port
+	// does, and for the same reason: the fleet is one trust domain on a
+	// network its operator controls. Both belong on that network and
+	// nowhere else.
+	LeafPort int
+
+	// LeafHost is the interface the leaf listener binds, empty for all of
+	// them — the same pass-through [Config.ClusterHost] is, for the same
+	// reason.
+	LeafHost string
+
+	// LeafAdvertise is the address this member tells leaves to reach it
+	// on, when the one it binds is not the one they can route to.
+	LeafAdvertise string
+
 	// ServerName is this member's identity inside the cluster. REQUIRED
-	// when clustering and ignored otherwise.
+	// when clustering or joining as a leaf, and ignored otherwise.
 	//
 	// It must be unique across the cluster — NATS rejects a route from a
 	// server whose name it already knows — and it must be STABLE across
@@ -336,9 +369,18 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
-	if q.js, err = jetstream.New(q.nc); err != nil {
+	if q.js, err = cfg.API().Client(q.nc); err != nil {
 		q.nc.Close()
 		return nil, fmt.Errorf("open jetstream: %w", err)
+	}
+	// A LEAF'S JETSTREAM IS ACROSS ITS LINK, which comes up after the
+	// server reports ready and can take a round of retries against a
+	// member still booting — and a create sent before it has anywhere to
+	// go waits out its whole budget and then names the stream rather than
+	// the link.
+	if err := embedded.awaitLeafReady(ctx, q.js); err != nil {
+		q.nc.Close()
+		return nil, err
 	}
 	// A clustered member accepts connections long before its metadata
 	// group has a leader, and creating a replicated stream against a
@@ -466,8 +508,32 @@ func (q *Queue) lookupBudget() time.Duration {
 // reports a single-replica clustered member as solo — see
 // [jsprovision.Clustered].
 func (q *Queue) Clustered() jsprovision.Clustered {
-	return jsprovision.Clustered(q.cfg.URL != "" || q.cfg.ClusterName != "")
+	return q.cfg.Clustered()
 }
+
+// Clustered is whether a broker built from this configuration provisions
+// against a metadata group that is not simply its own — a cluster it is a
+// member of, a remote one it dials, or the fleet a leaf reaches across its
+// link, whose shape a leaf cannot see and must therefore budget for as the
+// larger one.
+func (c Config) Clustered() jsprovision.Clustered {
+	return jsprovision.Clustered(c.URL != "" || c.ClusterName != "" || len(c.LeafURLs) > 0)
+}
+
+// API is the JetStream this configuration's clients address: the embedded
+// fleet's own domain for every broker the engine starts, member and leaf
+// alike, and an external cluster's account for one it dials. See
+// [jsapi].
+func (c Config) API() jsapi.API {
+	if c.URL != "" {
+		return jsapi.Account()
+	}
+	return jsapi.Embedded()
+}
+
+// API is the JetStream this queue's clients address, which every other
+// client built on the same broker must address too. See [Config.API].
+func (q *Queue) API() jsapi.API { return q.cfg.API() }
 
 // ensureStream provisions one stream, remembering that it did so. Streams
 // are idempotent to create, but the round trip is not free and this runs on
@@ -551,8 +617,14 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 // storage is the class every stream this queue creates is stored in: memory on
 // an embedded server given no store directory, which is what an in-memory
 // server means, and the file store everywhere else.
+//
+// A LEAF IS "EVERYWHERE ELSE": it keeps no store because it keeps no streams,
+// and a stream it is the first to use is created on the members it joined —
+// which persist, because a member that serves leaves is refused without a
+// store directory. Reading its own empty store directory as "memory" made it
+// refuse every stream the members had already created.
 func (q *Queue) storage() jetstream.StorageType {
-	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
+	if q.cfg.StoreDir == "" && q.cfg.URL == "" && len(q.cfg.LeafURLs) == 0 {
 		return jetstream.MemoryStorage
 	}
 	return jetstream.FileStorage
@@ -860,6 +932,15 @@ func (q *Queue) ackWait() time.Duration {
 // same broker outside the queue contract (the KV coordination backend).
 // The queue keeps ownership: closing it is Stop's job, not the caller's.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
+
+// JetStream exposes this client's JetStream API, for subsystems that ride
+// the same connection outside the queue contract.
+//
+// THE QUEUE'S OWN CLIENT rather than one a caller builds over [Queue.Conn],
+// because the client is where the API is decided — the embedded fleet's
+// domain or an external cluster's account, see [jsapi] — and a subsystem that
+// built its own from the bare connection would have to decide it again.
+func (q *Queue) JetStream() jetstream.JetStream { return q.js }
 
 // DialOwned opens a SECOND connection to the same broker, which the caller
 // owns and closes.

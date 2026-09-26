@@ -194,7 +194,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -403,16 +402,14 @@ var _ coord.Backend = (*Store)(nil)
 // [OpenFleet] (every bucket that one makes plus these three, rather than these
 // three alone), and the engine applies it once where it makes both, in
 // internal/engine's attachCoordination.
-func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
-	if nc == nil {
-		return nil, errors.New("coord/kv: a NATS connection is required")
+func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, error) {
+	if js == nil {
+		return nil, errors.New("coord/kv: a JetStream client is required — built " +
+			"over the stream's own connection, in the API its broker speaks " +
+			"(see internal/jsapi)")
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
-	}
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
 	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{

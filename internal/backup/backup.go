@@ -95,6 +95,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -228,6 +229,12 @@ type Options struct {
 	// the store copies and no streams. The CLI says so when it prints one.
 	Conn *nats.Conn
 
+	// API is the JetStream API the streams are addressed in over Conn —
+	// the embedded fleet's domain (see internal/jsapi). Required with a
+	// Conn: a snapshot is a raw request past the client library, and one
+	// sent to the wrong API is answered by nothing.
+	API jsapi.API
+
 	// NodeID is this node's RESOLVED id (config.ResolveNodeID), never the
 	// raw `node.id` field. Required, and [New] refuses a blank one.
 	//
@@ -272,6 +279,7 @@ type Options struct {
 type Service struct {
 	store   *store.DB
 	conn    *nats.Conn
+	api     jsapi.API
 	holds   coord.HoldRegister
 	backups coord.BackupRegister
 	nodeID  string
@@ -315,12 +323,16 @@ func New(opts Options) (*Service, error) {
 	case opts.Backups == nil:
 		return nil, errors.New("backup: Options.Backups is required: a copy the " +
 			"fleet is never told about is one the trim can never advance against")
+	case opts.Conn != nil && !opts.API.Named():
+		return nil, errors.New("backup: Options.API is required with a Conn: the " +
+			"stream snapshots are raw requests, and only the API names where " +
+			"they are answered")
 	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
+	return &Service{store: opts.Store, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
 		now: now}, nil
 }
@@ -453,7 +465,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	}
 
 	if s.conn != nil {
-		streams, err := snapshotStreams(ctx, s.conn, dir)
+		streams, err := snapshotStreams(ctx, s.conn, s.api, dir)
 		if err != nil {
 			return Manifest{}, err
 		}

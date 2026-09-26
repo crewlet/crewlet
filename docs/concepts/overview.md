@@ -250,6 +250,10 @@ internal/
 │                         #   one policy for the streams, the consumers and the
 │                         #   coordination buckets, branching on whether this
 │                         #   node's broker has peers
+├── jsapi/                # Which JetStream API a connection speaks: the
+│                         #   embedded fleet's one domain, which a leaf node
+│                         #   reaches across its link, or an external
+│                         #   cluster's account
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,

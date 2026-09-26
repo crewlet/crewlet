@@ -38,10 +38,22 @@ func newConformanceQueue(t *testing.T) queue.EventQueue {
 // the node also took the broker down.
 func openForTest(t *testing.T, cfg Config) *Queue {
 	t.Helper()
-	// Production timings would make this suite take hours: a 30-minute ack
-	// window, a one-second poll, a one-second redelivery delay. The
-	// behaviours under test are the same at any scale, and the numbers
-	// themselves are pinned separately by the measurement harness.
+	cfg = testTimings(cfg)
+	srv, err := StartServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	return clientUnderTest(t, srv, srv)
+}
+
+// testTimings shortens the timings a suite would otherwise wait out.
+//
+// Production timings would make this suite take hours: a 30-minute ack
+// window, a one-second poll, a one-second redelivery delay. The behaviours
+// under test are the same at any scale, and the numbers themselves are pinned
+// separately by the measurement harness.
+func testTimings(cfg Config) Config {
 	if cfg.AckWait == 0 {
 		cfg.AckWait = 2 * time.Second
 	}
@@ -56,12 +68,13 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	if cfg.NakCeiling == 0 {
 		cfg.NakCeiling = 50 * time.Millisecond
 	}
-	srv, err := StartServer(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("StartServer: %v", err)
-	}
-	t.Cleanup(srv.Shutdown)
+	return cfg
+}
 
+// clientUnderTest is a client of srv, with an inspection client of inspect
+// registered beside it.
+func clientUnderTest(t *testing.T, srv, inspect *Server) *Queue {
+	t.Helper()
 	q, err := srv.Client(t.Context())
 	if err != nil {
 		t.Fatalf("Client: %v", err)
@@ -75,7 +88,7 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	// An inspection client the suite's capabilities read through. It
 	// outlives the queue under test on purpose: the backlog left behind
 	// by a stopped node is exactly what several cases assert about.
-	admin, err := srv.Client(t.Context())
+	admin, err := inspect.Client(t.Context())
 	if err != nil {
 		t.Fatalf("admin Client: %v", err)
 	}
@@ -108,7 +121,12 @@ func inspector(q queue.EventQueue) *Queue {
 	return jq
 }
 
-func capabilities() queuetest.Capabilities {
+func capabilities() queuetest.Capabilities { return capabilitiesFor(openForTest) }
+
+// capabilitiesFor is the suite's capabilities over queues open builds, so a
+// topology that starts its brokers differently is certified on the same
+// cases.
+func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilities {
 	return queuetest.Capabilities{
 		Peer: func(t *testing.T, q queue.EventQueue) queue.EventQueue {
 			t.Helper()
@@ -130,7 +148,7 @@ func capabilities() queuetest.Capabilities {
 		// observable the suite asks for, so the translation is the identity.
 		WithDeliveryAttempts: func(t *testing.T, attempts int) queue.EventQueue {
 			t.Helper()
-			return openForTest(t, Config{MaxDeliver: attempts})
+			return open(t, Config{MaxDeliver: attempts})
 		},
 
 		// Both reads report a failure AS a failure. Returning the error as

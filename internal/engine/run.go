@@ -909,14 +909,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
 	//
-	// THE QUEUE'S OWN CONNECTION, which every topology has — the one the
-	// snapshot join and donor ride for the same reason. [Backends.Conn] is
-	// the embedded broker's SECOND connection and is nil on purpose when
-	// this node dialled an external cluster, so handing it here switched
-	// memory replication off on exactly the topology whose seats move
-	// between machines: every seat forgot what it learned each time
-	// placement moved it.
-	if e.memory, err = memsync.New(backends.Store, brokerConn(backends.Queue),
+	// THE QUEUE'S OWN CLIENT, which every topology has, over the
+	// connection the snapshot join and donor ride for the same reason.
+	// [Backends.Conn] is the embedded broker's SECOND connection and is nil
+	// on purpose when this node dialled an external cluster, so building on
+	// it switched memory replication off on exactly the topology whose
+	// seats move between machines: every seat forgot what it learned each
+	// time placement moved it.
+	if e.memory, err = memsync.New(backends.Store, brokerJetStream(backends.Queue),
 		func(handle string) string {
 			c := e.Company()
 			if c == nil {

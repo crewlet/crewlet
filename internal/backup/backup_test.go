@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -30,9 +31,13 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "backup-test",
 		JetStream:  true,
-		Port:       -1,
-		DontListen: true,
-		StoreDir:   t.TempDir(),
+		// THE FLEET'S DOMAIN, as every embedded member serves it, so the
+		// snapshot's raw request is asked in the API a real node speaks
+		// rather than one no node answers any more.
+		JetStreamDomain: jsapi.Domain,
+		Port:            -1,
+		DontListen:      true,
+		StoreDir:        t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)
@@ -105,7 +110,7 @@ func service(t *testing.T, db *store.DB, nc *nats.Conn) *backup.Service {
 	t.Helper()
 	fleet := memory.NewFleet()
 	return build(t, backup.Options{
-		Store: db, Conn: nc, NodeID: "node-0", Holds: fleet, Backups: fleet,
+		Store: db, Conn: nc, API: jsapi.Embedded(), NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 }

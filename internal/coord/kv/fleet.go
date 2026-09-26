@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -611,16 +610,14 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // sizing argument, and a sizing argument over the wrong number of buckets is
 // worse than none — see TestEveryBucketHasALifetimeClass, which holds every
 // "N buckets" in this file against the open table below.
-func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
-	if nc == nil {
-		return nil, errors.New("coord/kv: a NATS connection is required")
+func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*FleetStore, error) {
+	if js == nil {
+		return nil, errors.New("coord/kv: a JetStream client is required — built " +
+			"over the stream's own connection, in the API its broker speaks " +
+			"(see internal/jsapi)")
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
-	}
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx,

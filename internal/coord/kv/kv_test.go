@@ -15,7 +15,19 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/jsapi"
 )
+
+// jsOf is a JetStream client over nc in the API these tests' own brokers
+// speak: they are started raw, with no domain, so a client addresses the
+// account's own JetStream.
+func jsOf(nc *nats.Conn) jetstream.JetStream {
+	js, err := jsapi.Account().Client(nc)
+	if err != nil {
+		panic(err)
+	}
+	return js
+}
 
 // embeddedNATS starts a nats-server inside the test process with no listener,
 // the same topology internal/queue/jetstream boots for a solo node. Nothing
@@ -56,7 +68,7 @@ var bucketSeq atomic.Int64
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), nc, Config{TTL: ttl, BucketPrefix: prefix})
+	s, err := Open(context.Background(), jsOf(nc), Config{TTL: ttl, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -239,7 +251,7 @@ func TestConfigIsValidated(t *testing.T) {
 		{"too many replicas", Config{TTL: time.Minute, Replicas: 9}},
 	}
 	for _, c := range cases {
-		if _, err := Open(context.Background(), nc, c.cfg); err == nil {
+		if _, err := Open(context.Background(), jsOf(nc), c.cfg); err == nil {
 			t.Fatalf("Open with %s was accepted", c.name)
 		}
 	}
@@ -408,7 +420,7 @@ func TestFleetContract(t *testing.T) {
 	nc := embeddedNATS(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
 		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		store, err := OpenFleet(context.Background(), nc, FleetConfig{
+		store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 			BucketPrefix: prefix,
 			// Every one of these is above the broker's 100 ms floor and
 			// far longer than a case takes, so nothing lapses under a
@@ -440,7 +452,7 @@ func TestFleetContract(t *testing.T) {
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,
@@ -655,7 +667,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	const inForce = 90 * time.Second
-	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
@@ -666,7 +678,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
 	// holding possibly-different Tier A files actually do.
-	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
 	}
@@ -712,13 +724,13 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
 	// deployment or an early cluster actually has.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
 	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
 	// one replica, and no node rewrites them.
-	_, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
 			"coordination and reported itself healthy — the leases, the " +
@@ -739,7 +751,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
 	// node against a replicated fleet's buckets is not locked out.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
 	}
@@ -801,7 +813,7 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 // reach inside one rather than run the contract suite over it.
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute,

@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -68,6 +70,9 @@ type Backends struct {
 	// lifetime and closing the connection from underneath it would take
 	// the stream down with the leases.
 	conn *nats.Conn
+
+	// api is the JetStream API this node's broker is addressed in.
+	api jsapi.API
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -100,6 +105,11 @@ func (b *Backends) Complete() error {
 		"OpenBackends, which builds the stream, coordination and the store together",
 		strings.Join(missing, ", "))
 }
+
+// API is the JetStream API every client of this node's broker speaks — the
+// one a subsystem reaching past the client (the backup's stream snapshot)
+// has to address too. See [jsapi].
+func (b *Backends) API() jsapi.API { return b.api }
 
 // Conn exposes the broker connection this node's coordination store rides.
 //
@@ -363,7 +373,16 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = attachCoordination(ctx, b, out, conn); err != nil {
+	out.api = cfg.API()
+	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection
+	// coordination rides — see [jsapi] for why a client built any other
+	// way reaches a member's JetStream and times out on a leaf's.
+	js, err := out.api.Client(conn)
+	if err != nil {
+		out.Close(ctx)
+		return nil, fmt.Errorf("engine: coordination: %w", err)
+	}
+	if err = attachCoordination(ctx, b, out, js); err != nil {
 		out.Close(ctx)
 		return nil, err
 	}
@@ -449,7 +468,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
-func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
+func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: eighteen replicated buckets across two calls,
 	// each of which would otherwise discover a wedged cluster on its own
@@ -462,7 +481,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 	defer cancel()
 
-	shared, err := openFleet(ctx, conn, b.Stream.Replicas, clusteredStream(b))
+	shared, err := openFleet(ctx, js, b.Stream.Replicas, clusteredStream(b))
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
@@ -472,7 +491,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		out.Coord = coordmem.New()
 		return nil
 	}
-	leases, err := kv.Open(ctx, conn, kv.Config{
+	leases, err := kv.Open(ctx, js, kv.Config{
 		TTL:       leaseTTL(b),
 		Replicas:  b.Stream.Replicas,
 		Clustered: clusteredStream(b),
@@ -490,8 +509,8 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // is a BUCKET's age, fixed when the bucket is created, so a silent default
 // would decide it at the moment nobody was looking. Every number is the one
 // the subsystem that reads it already uses, named at its own package.
-func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered bool) (coord.Fleet, error) {
-	return kv.OpenFleet(ctx, conn, kv.FleetConfig{
+func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
+	return kv.OpenFleet(ctx, js, kv.FleetConfig{
 		RateWindow:      coord.RateWindow,
 		ClaimTTL:        coord.ClaimTTL,
 		LedgerRetention: coord.LedgerRetention,

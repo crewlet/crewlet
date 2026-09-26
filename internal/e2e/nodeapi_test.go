@@ -123,7 +123,7 @@ func wireAPI(
 		return fail("setup surface", err)
 	}
 	copier, err := backup.New(backup.Options{
-		Store: backends.Store, Conn: backends.Conn(),
+		Store: backends.Store, Conn: backends.Conn(), API: backends.API(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
 	})
 	if err != nil {

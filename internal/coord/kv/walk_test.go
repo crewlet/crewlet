@@ -91,7 +91,7 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 // TestFleetContract gives for its own numbers.
 func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		BucketPrefix:    prefix,
 		RateWindow:      time.Minute,
 		ClaimTTL:        10 * time.Minute,

@@ -123,7 +123,7 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 // so a case can prove what did NOT expire beside something that did.
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		BucketPrefix:    fmt.Sprintf("p%d", bucketSeq.Add(1)),
 		RateWindow:      ttl,
 		ClaimTTL:        ttl,
