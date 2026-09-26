@@ -900,9 +900,10 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 
 // WriteDocument publishes a whole-document object.
 //
-// ONE PATH FOR SEVEN KINDS, because full post-state is one upsert with no
-// patch semantics to get wrong — and the kinds that take it are exactly the
-// ones small enough for that to be affordable.
+// ONE PATH FOR EVERY WHOLE-DOCUMENT KIND ([documentTable] is the list, and a
+// count kept here drifted from it), because full post-state is one upsert
+// with no patch semantics to get wrong — and the kinds that take it are
+// exactly the ones small enough for that to be affordable.
 func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject,
 	container string, document any, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
