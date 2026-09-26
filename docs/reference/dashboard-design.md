@@ -591,7 +591,8 @@ and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
 `g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
-single-modifier combination worth having is already the browser's.
+single-modifier combination worth having is already the browser's. Every key
+the dashboard answers is in [one table](#the-keys), and `?` shows it.
 
 ### The routes
 
@@ -1310,6 +1311,59 @@ identical rows pointing at different places, which is strictly worse than the
 two ids they replaced. The crumb draws an unlabelled segment in the mono face
 for the same reason it draws a handle in it — an identifier has to look like
 one.
+
+### The keys
+
+Every key the dashboard answers is a row of ONE table, `app/keymap.ts`, and
+`?` anywhere shows it — the legend renders the table and nothing else, so a
+key added there is a key the legend shows, with no second list to remember.
+The command palette has a row for the legend too, because the reader looking
+for the keys is the reader who does not know `?` yet.
+
+| Where it is live | Keys |
+|---|---|
+| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `Mod+\` the navigation drawer on a narrow window |
+| In a list | `j` and `k` walk the rows, `Enter` opens one |
+| With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
+| On a page with tabs | `1`–`9` go to that tab |
+| On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
+| In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
+| In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
+
+`Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
+the platform's own notation with the kit's `Kbd`.
+
+**A binding names a row, never a key.** A component asks `useKeymap` for the
+rows it answers — `{"peek.close": close}` — and the table says which key that
+is, so no two places can spell one key two ways. `keymap.test.tsx` refuses two
+rows answering one press where both can be live: the page's scopes are all
+live together (a list, with a peek open, on an object with tabs, beside a
+chart), so a press is unique across them, and the layer's rows are their own
+namespace because every page key stands aside while a layer is up. Rows the
+design system binds itself — the canvas's zoom, the layer's Escape — are in
+the table so the legend is the whole answer and the collision check sees
+them, and `useKeymap` refuses to bind one a second time. Nothing else binds a
+key: the suite fails a module that calls the mechanism under `useKeymap`, or
+listens for `keydown` itself, except the org builder's undo, which is scoped to
+presses inside the builder and reads its keys from the table with
+`matchesRow`.
+
+**`/` searches what you are looking at.** A screen with a search box of its
+own — the seat filter, the event log, the tools catalogue, the audit log's
+actor, work search and a list's key-or-title box, the knowledge base and its
+page finder — registers it with `useSearchTarget`, and `/` focuses it with its
+text selected to type over; on a screen with none, `/` opens the palette. It
+opened the palette everywhere, so on those screens the key a reader pressed to
+search the screen took them away from it.
+
+**A key waits for the reader.** A bare key does nothing while they are typing
+in a field, a select or anything a screen made focusable and handles keys for;
+only a row that says so (`Mod+K`, `Esc` out of a peek's field, `Mod+\`) fires
+from one. Every page key waits while a dialog, a menu or the drawer is open,
+because the page behind `aria-modal` is inert. And a press somebody already
+answered — the chart claiming `+`, a menu its arrows — or one an input method
+is still composing is not a key at all: Enter that picks a Japanese candidate
+must not also open the grid row behind the field.
 
 ### The page bar wraps by what it holds
 
@@ -2307,7 +2361,26 @@ rescued a lot.
 
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and
-`agents` is pushed twice per round and once more before every tool call.
+`agents` is pushed twice per round and once more before every tool call. Two
+kinds of motion are allowed, and `styles/motion.test.ts` holds every animation
+in the stylesheets to being declared as one of them, with its reason:
+
+- **an entrance** of a surface the reader opened — the palette rising, its
+  veil fading in — which plays once because somebody pressed something;
+- **a steady-state pulse** on something live right now — the round in flight,
+  a phase waiting on its first answer, the caret on text being written. It runs
+  for as long as the state holds rather than playing once when the state
+  arrives, so a push that starts or ends one changes WHETHER it runs and never
+  triggers it.
+
+An animation on a class a push adds — a row that is new, a value that changed —
+is neither, and the suite refuses one by its selector. **Under
+`prefers-reduced-motion: reduce` both stop.** `base.css` ends every entrance
+and transition on its first frame, document-wide; a pulse is not left to that
+rule, which would play one iteration instantly and leave the element wherever
+its keyframes rest, so each pulse carries its own `animation: none` and is
+static — drawn in its resting look, still saying "live", never moving. No
+component animates from a `style` attribute, where no sheet could stop it.
 
 **A control state is the other half of that rule, and it DOES ease.** The
 distinction is what the pointer did: a fill that changes because somebody moved
@@ -3678,12 +3751,12 @@ brings that carries a design-system rule.
   completion list, keeps the key. A veil press closes its modal on the
   press's click rather than on its first contact, so the tap that dismisses a
   dialog never also lands on the control the veil was covering.
-  The page's own shortcuts (Ctrl or Command with K, and a bare `/`, for
-  search) wait for the page: while a modal is open (`isModalLayerOpen`) they do
+  The page's own shortcuts ([every one of them](#the-keys)) wait for the page: while a modal is open (`isModalLayerOpen`) they do
   nothing, because the page behind `aria-modal` is inert and search opened
   over a dialog could navigate away from under it, unmounting an unsaved
   editor or a write whose outcome the operator has not seen. Search closes on
-  its own chord only from inside it.
+  its own chord from inside it: the palette answers `Mod+K` itself while it
+  is the topmost layer, because the page's binding is standing aside for it.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.
@@ -4033,7 +4106,10 @@ to.
 3. **A fill step is never text and an `-ink` step is never a background.** The
    palette suite measures both; an inline `background:` carrying a hue token is
    the specific mistake it exists to catch.
-4. **Nothing animates on a data push.** Entrances and control states only.
+4. **Nothing animates on a data push.** Entrances, control states and the
+   steady-state pulse on something live now — and under reduced motion every
+   pulse is static and every entrance ends on its first frame
+   (`styles/motion.test.ts`).
 5. **Every list sorts through `tsKey` with a three-way comparator**, and every
    keyed row uses an identity that survives the row's own lifecycle.
 6. **Every empty state says why it is empty** and what would fill it, and

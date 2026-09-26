@@ -45,7 +45,8 @@
  * the order the engine returned rather than anything the grid sorted.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -78,6 +79,9 @@ function itemId(hit: WorkRanked): string {
 }
 
 export function WorkSearch() {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   // THE QUERY IS IN THE URL, which is what makes a search shareable and what
   // makes the back button walk a reader's searches rather than their
   // keystrokes: it is a FILTER, so typing replaces the history entry.
@@ -128,6 +132,7 @@ export function WorkSearch() {
             type="search"
             width="full"
             aria-label="Search the company’s work"
+            ref={searchBox}
             leading={<SearchGlyph size="sm" />}
             placeholder="A phrase — the words somebody would have written"
             value={typed}

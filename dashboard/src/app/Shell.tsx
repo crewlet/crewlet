@@ -66,7 +66,9 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "./keymap.ts";
+import { focusSearchTarget } from "./searchTarget.ts";
+import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
 
 /**
@@ -245,16 +247,23 @@ function Frame({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
-  useKeyChords([
-    { key: "k", meta: true, run: () => setPaletteOpen((v) => !v), whileTyping: true },
-    // ESCAPE REACHES THE PALETTE FROM ITS OWN INPUT, which is the only field
-    // the reader can be in when they want it closed.
-    { key: "escape", run: () => setPaletteOpen(false), whileTyping: true },
-    // A bare "/" opens search the way every list-shaped tool does.
-    { key: "/", run: () => setPaletteOpen(true) },
-    // `g` then a letter jumps to a workspace — see `nav.ts` for the letters.
-    ...WORKSPACE_CHORDS.map((c) => ({ after: "g", key: c.chord, run: () => nav.to(c.path) })),
-  ]);
+  // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
+  const [legendOpen, setLegendOpen] = useState(false);
+  useKeymap({
+    // IT OPENS, and closing is the palette's own: while it is up it is a
+    // modal layer, every page key stands aside, and it answers this row
+    // itself (see `CommandPalette`).
+    palette: () => setPaletteOpen(true),
+    // `/` IS "SEARCH WHAT I AM LOOKING AT": the screen's own box where it
+    // registered one, the palette where it did not. It opened the palette
+    // everywhere, so on the eight screens with a search box of their own the
+    // key a reader pressed to search the screen took them away from it.
+    search: () => {
+      if (!focusSearchTarget()) setPaletteOpen(true);
+    },
+    keys: () => setLegendOpen(true),
+    ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+  });
 
   // THE PALETTE CLOSES whenever the route moves: picking a row closes it on
   // the way out, and this covers every OTHER way — Back and Forward, a
@@ -377,9 +386,13 @@ function Frame({ children }: { children: ReactNode }) {
           way the palette closes — and the next ⌘K is a fresh palette. */}
       {paletteOpen && (
         <PaletteBoundary onClose={() => setPaletteOpen(false)}>
-          <CommandPalette onClose={() => setPaletteOpen(false)} />
+          <CommandPalette
+            onClose={() => setPaletteOpen(false)}
+            onShowKeys={() => setLegendOpen(true)}
+          />
         </PaletteBoundary>
       )}
+      {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
       {tokenOpen && (
         <TokenDialog
           onClose={() => setTokenOpen(false)}
@@ -392,12 +405,3 @@ function Frame({ children }: { children: ReactNode }) {
     </PeekNeighbours>
   );
 }
-
-/**
- * `g` then a letter jumps to a workspace, derived from the one table so a
- * workspace added there is a chord here with no second edit. A CHORD RATHER
- * THAN A MODIFIER, because every single-modifier combination worth having is
- * already the browser's; the prefix times out after a second so a stray `g`
- * does not swallow the next key the reader meant for a field.
- */
-const WORKSPACE_CHORDS = WORKSPACES.map((ws) => ({ chord: ws.chord, path: ws.path }));

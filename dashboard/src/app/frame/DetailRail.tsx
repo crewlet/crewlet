@@ -46,7 +46,7 @@ import {
   ChevronDownGlyph,
   ChevronUpGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "../keymap.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { PEEK_MAX, PEEK_MIN, PEEK_WIDTH } from "../layout.ts";
 
@@ -170,14 +170,12 @@ export function DetailRail({
   const dragging = useRef(false);
   const rail = useRef<HTMLElement>(null);
 
-  useKeyChords([
-    // ESCAPE CLOSES FROM INSIDE A FIELD TOO: the peek holds inputs, and a
-    // reader who has focused one and wants out means the rail rather than the
-    // field.
-    { key: "escape", run: close, whileTyping: true },
-    { key: "[", run: () => onStep?.(-1), when: Boolean(onStep) },
-    { key: "]", run: () => onStep?.(1), when: Boolean(onStep) },
-  ]);
+  // ESCAPE CLOSES FROM INSIDE A FIELD TOO — the row says so in `keymap.ts`.
+  useKeymap({
+    "peek.close": close,
+    "peek.previous": { run: () => onStep?.(-1), when: Boolean(onStep) },
+    "peek.next": { run: () => onStep?.(1), when: Boolean(onStep) },
+  });
 
   // THE DRAGGED WIDTH IS PUBLISHED ON THE ROOT, not on the rail.
   //

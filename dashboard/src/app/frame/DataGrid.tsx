@@ -42,7 +42,7 @@ import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "../keymap.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "../layout.ts";
 
@@ -665,18 +665,17 @@ export function DataGrid<T>({
     announce();
   }, [gridId]);
 
-  useKeyChords([
-    { key: "j", run: () => step(1), when: driving },
-    { key: "k", run: () => step(-1), when: driving },
-    {
-      key: "enter",
+  useKeymap({
+    "list.next": { run: () => step(1), when: driving },
+    "list.previous": { run: () => step(-1), when: driving },
+    "list.open": {
       when: driving && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
       run: (e) => {
         const row = flat[cursor];
         if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
       },
     },
-  ]);
+  });
 
   function headerClick(column: GridColumn<T>): void {
     if (!column.sortValue) return;

@@ -20,7 +20,8 @@
  * retained history".
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
@@ -91,6 +92,9 @@ export function dayKey(ts: string): string {
 }
 
 export function Activity() {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const { socket } = useClient();
   const liveEvents = useEvents();
   const engine = useEngineHealth();
@@ -345,6 +349,7 @@ export function Activity() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           aria-label="Search events"
+          ref={searchBox}
           placeholder="Search summary, type or source"
           leading={<SearchGlyph size="sm" />}
           width="md"

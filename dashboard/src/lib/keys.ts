@@ -17,6 +17,10 @@
  *
  * # The binding
  *
+ * THIS IS THE MECHANISM, NOT THE TABLE. Which key does what is
+ * `app/keymap.ts`, the one place a key is spelled; its `useKeymap` is the only
+ * caller here, so the legend and the collision check see every binding.
+ *
  * ONE LISTENER PER HOOK, not per chord: a component with four shortcuts adds
  * one `keydown` handler rather than four, and the set it matches is a value
  * rather than a chain of ifs. The `g`-prefix grammar is here too, because a
@@ -25,7 +29,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { isModalLayerOpen } from "@crewlethq/ui";
+import { isComposing, isModalLayerOpen } from "@crewlethq/ui";
 
 /**
  * Whether the keyboard currently belongs to something the reader is typing in.
@@ -127,6 +131,17 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
       // press already somebody's" is a fact about the stack, not about the
       // event.
       if (isModalLayerOpen()) return;
+
+      // NOR A PRESS SOMEBODY ALREADY ANSWERED, and nor one an input method is
+      // still composing. The first is the same fault one level down: the
+      // chart claims `+`, `-` and `0` for its zoom and a list claims its own
+      // arrows, and a page chord acting on the same press does a second thing
+      // with it. The second is somebody typing Japanese, Chinese or Korean,
+      // whose Enter and Escape choose and dismiss a candidate and still
+      // arrive here as key presses — Enter on a grid row opened it, from a
+      // keystroke that was part of a word. `isComposing` is the kit's, which
+      // also knows Safari's `keyCode` 229 for the Enter that ends one.
+      if (e.defaultPrevented || isComposing(e)) return;
 
       const key = e.key.toLowerCase();
       const meta = e.metaKey || e.ctrlKey;

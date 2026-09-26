@@ -49,6 +49,7 @@ import {
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
+import { matchesRow } from "~/app/keymap.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
@@ -810,14 +811,15 @@ function Lens({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented || isComposing(e) || isModalLayerOpen()) return;
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (e.code !== "KeyZ" && e.key.toLowerCase() !== "z") return;
+      if (e.altKey) return;
+      const redo = matchesRow("builder.redo", e);
+      if (!redo && !matchesRow("builder.undo", e)) return;
       const root = container.current;
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (!root || (target && target !== document.body && !root.contains(target))) return;
       if (target && isTextEntry(target)) return;
       e.preventDefault();
-      dispatch({ type: e.shiftKey ? "redo" : "undo" });
+      dispatch({ type: redo ? "redo" : "undo" });
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

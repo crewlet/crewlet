@@ -1,0 +1,1 @@
+import{Kt as e}from"./clock-C6LlzaT0.js";import{E as t}from"./media-DJzwH2yQ.js";function n(n,r,i=`section`){let a=r[0],[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};

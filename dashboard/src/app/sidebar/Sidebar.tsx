@@ -48,7 +48,7 @@ import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-h
 import { indexOrg } from "~/lib/seats.ts";
 import { unfinished } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
-import { useKeyChords } from "~/lib/keys.ts";
+import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { HealthCard, healthReading } from "./HealthCard.tsx";
 import { RailBoundary } from "../boundaries.tsx";
@@ -76,9 +76,7 @@ export function Sidebar({
   // a modal layer that owns the keyboard (`lib/keys.ts` stands aside for
   // one), and the drawer's own Escape is what closes it.
   const shell = useAppShell();
-  useKeyChords([
-    { key: "\\", meta: true, run: shell.openDrawer, when: shell.narrow, whileTyping: true },
-  ]);
+  useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
   const org = useOrg();
   const agents = useAgents();
   const health = useEngineHealth();
@@ -201,7 +199,7 @@ export function Sidebar({
           title="Search everything"
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={["Mod", "k"]} subtle />}
+          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
         />
       </div>
       <SidebarNav label="Navigation">

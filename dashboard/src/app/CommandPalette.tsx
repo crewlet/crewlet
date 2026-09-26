@@ -12,11 +12,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Input, Kbd, useBodyScrollLock, useLayerContainer, useModalLayer } from "@crewlethq/ui";
+import {
+  Input,
+  Kbd,
+  useBodyScrollLock,
+  useLayerContainer,
+  useModalLayer,
+  useShortcut,
+} from "@crewlethq/ui";
 import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
+import { shortcutKeys } from "./keymap.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -85,7 +93,7 @@ function score(text: string, q: string): number {
  * dark" while the page is already dark is a control that does not know what it
  * is looking at.
  */
-function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
+function commands(prefs: ViewerPrefs, nav: Navigator, route: Route, onShowKeys: () => void): Hit[] {
   const out: Hit[] = [];
   const add = (id: string, icon: GlyphName, label: string, hint: string, go: () => void) =>
     out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
@@ -113,10 +121,20 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
   });
   add("token", "key", "Set the API token", "for the operator-only screens", requestToken);
   add("clear-recents", "clock", "Clear recents", "this browser only", forgetAll);
+  // THE LEGEND HAS A ROW, because `?` is a key and the reader looking for the
+  // keys is the reader who does not know it yet.
+  add("keys", "command", "Keyboard shortcuts", "every key, and where it works", onShowKeys);
   return out;
 }
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+export function CommandPalette({
+  onClose,
+  onShowKeys,
+}: {
+  onClose: () => void;
+  /** Open the key legend; the palette closes on the way, as for every row. */
+  onShowKeys: () => void;
+}) {
   const nav = useNavigator();
   const agents = useAgents();
   const org = useOrg();
@@ -147,6 +165,18 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const container = useLayerContainer();
   const layer = useModalLayer({ onClose, initialFocus: () => inputRef.current });
   useBodyScrollLock(true);
+
+  // THE CHORD THAT OPENED IT CLOSES IT. The frame's binding cannot: while
+  // this is up it is a modal layer and every page key stands aside, so the
+  // second press reached nobody — and in a browser whose own Ctrl+K focuses
+  // the address bar, it went THERE, with the palette still open. Topmost
+  // only, so it never closes this from beneath a dialog raised over it.
+  useShortcut({
+    keys: shortcutKeys("palette"),
+    onKey: onClose,
+    scope: "any",
+    enabled: layer.isTopmost,
+  });
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -279,7 +309,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     if (sigil === ">") {
-      for (const command of commands(prefs, nav, route)) {
+      for (const command of commands(prefs, nav, route, onShowKeys)) {
         const s = query ? score(command.label, query) : 0;
         if (s < 0) continue;
         push(command, s);
@@ -448,7 +478,21 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .sort((a, b) => a.rank - b.rank)
       .slice(0, 40)
       .map((r) => r.hit);
-  }, [term, sigil, index, agents, tools, nav, recents, work.data, answers, refusal, prefs, route]);
+  }, [
+    term,
+    sigil,
+    index,
+    agents,
+    tools,
+    nav,
+    recents,
+    work.data,
+    answers,
+    refusal,
+    prefs,
+    route,
+    onShowKeys,
+  ]);
 
   useEffect(() => setCursor(0), [q]);
   useEffect(() => {

@@ -39,7 +39,8 @@
  * is held to.
  */
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -297,6 +298,9 @@ function WriterCell({ writer }: { writer: Writer }) {
 const OPERATOR_KINDS = "operator,human";
 
 export function Audit() {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const now = useNow();
   const org = useOrg();
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE — the name and the kind — since
@@ -549,6 +553,7 @@ export function Audit() {
           leading={<SearchGlyph size="sm" />}
           placeholder="Who"
           aria-label="Actor"
+          ref={searchBox}
           width="sm"
         />
         <Select

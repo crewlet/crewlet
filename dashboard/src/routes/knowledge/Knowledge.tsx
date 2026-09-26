@@ -13,7 +13,8 @@
  *    episodes, the skills it drafted for itself. That lives on the seat.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section, SeatChip } from "~/components/common.tsx";
 import { Button, Callout, Card, EmptyState, EmptyValue, Input, Skeleton, Tag } from "@crewlethq/ui";
@@ -51,6 +52,9 @@ import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 import { PageLink } from "./Pages.tsx";
 
 export function Knowledge() {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const org = useOrg();
   const [q, setQ] = useParam("q", "");
   const [draft, setDraft] = useState(q);
@@ -109,6 +113,7 @@ export function Knowledge() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             aria-label="Search the knowledge base"
+            ref={searchBox}
             leading={<SearchGlyph size="sm" />}
             placeholder="Search the knowledge base — plain text, not a query language"
           />

@@ -6,7 +6,8 @@
  * that can say.
  */
 
-import { useCallback, useMemo, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import {
@@ -581,6 +582,9 @@ export function ToolPeek({ name }: { name: string }) {
 }
 
 export function Tools({ server, tool }: { server?: string; tool?: string }) {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const tools = useTools();
   const route = useRoute();
   const nav = useNavigator();
@@ -740,6 +744,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             aria-label="Search tools"
+            ref={searchBox}
             placeholder="Search by name or description"
             leading={<SearchGlyph size="sm" />}
             width="full"

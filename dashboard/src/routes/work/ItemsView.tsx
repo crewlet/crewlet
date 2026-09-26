@@ -50,7 +50,8 @@
  * deciding a team's order.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -1136,6 +1137,17 @@ function SubstringSearch({
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLInputElement>(null);
+  // `/` OPENS IT, or focuses it when it is already open: it is this screen's
+  // search, so the key a reader presses to search what they are looking at
+  // lands here rather than in the palette. A box that is closed opens with
+  // `autoFocus`, which is what puts the caret in it.
+  useSearchTarget(() => {
+    if (box.current) {
+      box.current.focus();
+      box.current.select();
+    } else setOpen(true);
+  });
   if (!open && !value) {
     return (
       <IconButton
@@ -1157,6 +1169,7 @@ function SubstringSearch({
         aria-label="Narrow these rows by key or title"
         leading={<SearchGlyph size="sm" />}
         placeholder="Key or title"
+        ref={box}
         autoFocus
       />
       <IconButton

@@ -271,20 +271,6 @@
 .dot.accent {
   background: var(--color-brand-accent);
 }
-.dot.working {
-  background: var(--color-feedback-info);
-  animation: pulse-dot 1.8s var(--motion-easing-default) infinite;
-}
-@keyframes pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
 /* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
    the image a reader hears, so it takes the badge's box and nothing more —
    no line box of its own around it, and never squeezed by a row it sits in. */
@@ -754,4 +740,47 @@ kbd {
 .palette-foot .is-on {
   color: var(--color-brand-accent-ink);
   font-weight: 600;
+}
+
+/* ---- The key legend -----------------------------------------------------
+   `?` anywhere. Its groups flow into as many columns as the dialog holds —
+   two on a desktop, one on a phone — because a single column of forty rows
+   is a legend nobody scrolls to the end of. A group never splits across
+   columns: its heading is what says where the keys under it are live. */
+.key-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.key-legend-groups {
+  columns: 2 280px;
+  column-gap: var(--spacing-6);
+}
+.key-legend-group {
+  break-inside: avoid;
+  margin-bottom: var(--spacing-5);
+}
+.key-legend-group dl {
+  margin: var(--spacing-2) 0 0;
+}
+.key-legend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  min-height: var(--size-row-sm);
+  padding-block: var(--spacing-1);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.key-legend-row dt {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.key-legend-keys {
+  margin: 0;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
 }

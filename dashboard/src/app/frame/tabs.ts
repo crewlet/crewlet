@@ -47,7 +47,7 @@
  */
 
 import { useParam } from "../router.tsx";
-import { useKeyChords } from "~/lib/keys.ts";
+import { useKeymap } from "../keymap.ts";
 
 export function useTab<T extends string>(
   key: string,
@@ -61,17 +61,16 @@ export function useTab<T extends string>(
   const [asked, set] = useParam(key, first, kind);
   const shown = (tabs as readonly string[]).includes(asked) ? (asked as T) : first;
 
-  // ONE BINDING PER TAB rather than a range check, because the chord list IS
-  // the shortcut table: a digit past the end of this object's tabs has no
-  // binding and falls through to whatever else wants it, instead of being
-  // swallowed by a strip that could not have used it.
-  useKeyChords(
-    tabs.slice(0, 9).map((tab, i) => ({
-      key: String(i + 1),
-      run: () => set(tab),
-      when: kind === "section",
-    })),
-  );
+  // A DIGIT PAST THE END OF THIS OBJECT'S TABS IS OFF, not swallowed: it
+  // falls through to whatever else wants it rather than being taken by a
+  // strip that could not have used it. The digits themselves are the
+  // `tab` row of `keymap.ts`, which hands over which one was pressed.
+  useKeymap({
+    tab: {
+      run: (_, i) => set(tabs[i] as T),
+      when: (i) => kind === "section" && i < tabs.length,
+    },
+  });
 
   return [shown, set as (value: T) => void];
 }

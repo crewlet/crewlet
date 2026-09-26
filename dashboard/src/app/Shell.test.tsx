@@ -10,8 +10,9 @@
  * "can I trust what I am looking at", and only three screens publish them.
  */
 
-import type { ReactNode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { useRef, type ReactNode } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useSearchTarget } from "./searchTarget.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, useSectionCounts } from "./Shell.tsx";
 import { Router } from "./router.tsx";
@@ -748,5 +749,81 @@ describe("the drawer's key", () => {
     } finally {
       win.restore();
     }
+  });
+});
+
+// THE FRAME'S KEYS, read from `keymap.ts`. `/` was bound to the palette on
+// every screen, so on a screen with a search box of its own the key a reader
+// pressed to search what they were looking at took them away from it.
+describe("the frame's keys", () => {
+  function key(key: string, init: KeyboardEventInit = {}): void {
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+      );
+    });
+  }
+
+  function Searchable() {
+    const box = useRef<HTMLInputElement>(null);
+    useSearchTarget(box);
+    return <input aria-label="the screen's own search" ref={box} />;
+  }
+
+  test("/ focuses the screen's own search, and opens nothing over it", () => {
+    frame(<Searchable />);
+    key("/");
+    expect(document.activeElement).toBe(screen.getByLabelText("the screen's own search"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("/ opens the palette on a screen with no search of its own", () => {
+    frame(<Bare />);
+    key("/");
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeNull();
+  });
+
+  test("the chord that opened the palette closes it", async () => {
+    frame(<Bare />);
+    key("k", { ctrlKey: true });
+    const palette = screen.getByRole("dialog", { name: "Search" });
+    // From inside its own field, where the reader is when they press it.
+    await act(async () => {
+      palette.querySelector("input")!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  });
+
+  test("? shows the legend, and so does the palette's row for it", async () => {
+    frame(<Bare />);
+    key("?", { shiftKey: true });
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeNull();
+    act(() => screen.getByRole("button", { name: /close/i }).click());
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+
+    key("k", { ctrlKey: true });
+    const input = screen.getByRole("dialog", { name: "Search" }).querySelector("input")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: ">keyboard" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeNull();
+  });
+
+  test("g then a letter goes to that workspace", () => {
+    frame(<Bare />);
+    key("g");
+    key("w");
+    expect(location.hash).toBe("#/work");
   });
 });

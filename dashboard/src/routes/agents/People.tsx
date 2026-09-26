@@ -12,7 +12,8 @@
  * cursor several times a second while a turn ran.
  */
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
@@ -192,6 +193,9 @@ function bucketOf(seat: Seat, agent: AgentRow | undefined): string {
 }
 
 export function People() {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const agents = useAgents();
   const org = useOrg();
   const [view, setView] = useTab("view", VIEWS);
@@ -199,7 +203,7 @@ export function People() {
   // distinction: a section is the page you are on and takes the number keys,
   // a filter narrows what is on it and leaves them alone. Declared as a
   // section it bound the digits a SECOND time on this one screen —
-  // `useKeyChords` installs one window listener per call and each returns
+  // each `useKeymap` installs one window listener and each returns
   // after its own first match, so there is no precedence and both fired:
   // `1` set the view AND regrouped, `2` set the view AND regrouped, and `3`,
   // which is past the end of the two views, moved the grouping alone. It also
@@ -354,6 +358,7 @@ export function People() {
               clearLabel="Clear the seat filter"
               leading={<SearchGlyph size="sm" />}
               aria-label="Filter seats"
+              ref={searchBox}
               placeholder="Filter by name, handle, goal or unit"
             />
           </div>

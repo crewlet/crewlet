@@ -35,7 +35,7 @@ function open(arrange?: (store: Store, socket: LiveSocket) => void) {
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <CommandPalette onClose={() => {}} />
+        <CommandPalette onClose={() => {}} onShowKeys={() => {}} />
       </Router>
     </ClientContext.Provider>,
   );

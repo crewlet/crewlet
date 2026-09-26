@@ -21,7 +21,8 @@
  * which is nobody and cannot be asked why.
  */
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
@@ -204,6 +205,9 @@ export function PageLink({ page }: { page: PageSummary }) {
 }
 
 export function Pages({ container: fromPath }: { container?: string }) {
+  // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useSearchTarget(searchBox);
   const org = useOrg();
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -268,6 +272,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             aria-label="Find a page by title"
+            ref={searchBox}
             leading={<SearchGlyph size="sm" />}
             placeholder="Words from the title"
           />
