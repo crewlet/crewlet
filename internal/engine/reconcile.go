@@ -61,6 +61,12 @@ type Reconciler struct {
 	// not a state this node was ever in.
 	progress atomic.Pointer[applyProgress]
 
+	// recorded is the last apply outcome this node wrote to the fleet view,
+	// which every tick after it writes again — see [Reconciler.refresh].
+	// Written and read by the tick alone; atomic because the tick is not
+	// pinned to one goroutine (Run's loop, or the one-shot CLI path).
+	recorded atomic.Pointer[coord.NodeApply]
+
 	// decided is the last posture this reconciler computed, for the one
 	// reader that cannot afford to compute its own.
 	//
@@ -404,13 +410,16 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		r.publish(progress)
 	}
 	if progress.applied == target.Epoch {
+		r.refresh(ctx, target)
 		r.holdLocalCopy(ctx, target)
 		return nil
 	}
 	if progress.attempts >= configplane.MaxApplyAttempts {
 		// Out of retries on this epoch. The posture already reads this
 		// node as having tried and failed, so it moves toward stuck or
-		// isolated without another counter to keep.
+		// isolated without another counter to keep — and the failure it
+		// recorded stays where its peers read it.
+		r.refresh(ctx, target)
 		return nil
 	}
 	progress.attempts++
@@ -702,14 +711,48 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 	if cause != nil {
 		message = cause.Error()
 	}
-	if err := r.plane.RecordApply(ctx, coord.NodeApply{
+	row := coord.NodeApply{
 		NodeID: r.nodeID, Epoch: target.Epoch, RevisionID: target.RevisionID,
 		Status: string(status), Error: message, UpdatedAt: r.now(),
-	}); err != nil {
+	}
+	r.recorded.Store(&row)
+	if err := r.plane.RecordApply(ctx, row); err != nil {
 		r.log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
 			"error", err, "detail", "peers will read this node as stale")
 	}
 	r.publishApplied(ctx, target, status, applied, message)
+}
+
+// refresh writes this node's last outcome for the current target again, with
+// the time of this tick.
+//
+// THE ROW AGES OUT BY DESIGN — the status bucket's TTL is
+// [coord.StatusFreshness], four reconcile intervals, so a node that STOPS
+// reporting vanishes from the fleet view instead of lingering as a healthy
+// row nobody writes — and that design needs every live node to keep writing
+// it. It was written on an APPLY alone, so a node that converged stopped
+// reporting a minute later: the fleet view drew it as having applied nothing
+// ("behind on config", epoch unknown) while its own /health said it served
+// the current epoch, and [Reconciler.peerHealth] on every other node dropped
+// it as stale evidence — so a laggard whose only healthy peer had been
+// current for a minute read the fleet as ISOLATED rather than SHED.
+//
+// Only an outcome this process recorded, and only for the epoch it is about:
+// a node that has not applied since it started has nothing of its own to
+// restate, and one that moved to a new target writes that target's outcome
+// through [Reconciler.record] first. No durable event: the event is the
+// record of an APPLY, and a refresh is not one.
+func (r *Reconciler) refresh(ctx context.Context, target coord.Activation) {
+	last := r.recorded.Load()
+	if last == nil || last.Epoch != target.Epoch {
+		return
+	}
+	row := *last
+	row.UpdatedAt = r.now()
+	if err := r.plane.RecordApply(ctx, row); err != nil {
+		r.log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
+			"error", err, "detail", "peers will read this node as stale")
+	}
 }
 
 // publishApplied puts one node's outcome into the audit event log.
