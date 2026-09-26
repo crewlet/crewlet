@@ -542,44 +542,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial
 		floor = history
 	}
 
-	where := []string{"turn_id != ''", "event_time >= ?"}
-	args := []any{EncodeTime(floor)}
-	if shares {
-		where = append(where, "turn_id IN (?"+strings.Repeat(",?", len(q.IDs)-1)+")")
-		for _, id := range q.IDs {
-			args = append(args, id)
-		}
-	}
-	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
-	// every row that carries none, which is every non-agent event in the
-	// window. See [seatClause].
-	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
-		where = append(where, strings.TrimPrefix(clause, " AND "))
-		args = append(args, ids...)
-	}
-	if q.WorkKey != "" {
-		where = append(where, "work_key = ?")
-		args = append(args, q.WorkKey)
-	}
-	if q.Model != "" && !shares {
-		// ON THE TURN, not on the row: a turn is selected when ANY of
-		// its phases used the model, which is what a reader means by
-		// "turns on the cheap model".
-		where = append(where,
-			"turn_id IN (SELECT turn_id FROM crewlet_events "+
-				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
-		args = append(args, q.Model, EncodeTime(floor))
-	}
-	if q.WorkItem != "" && !shares {
-		// ON THE TURN, not on the row, for Model's reason and one more:
-		// filtering rows would fold only the records that carry the item,
-		// and a parked segment resolved before its sole write — or any
-		// record that names no item — would drop out of the sums.
-		where = append(where,
-			"turn_id IN (SELECT turn_id FROM crewlet_events "+
-				"WHERE work_item = ? AND event_time >= ? AND turn_id != '')")
-		args = append(args, q.WorkItem, EncodeTime(floor))
-	}
+	where, args := q.turnWhere(floor, shares)
 
 	having := []string{}
 	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
@@ -710,3 +673,50 @@ func instantOf(v sql.NullInt64) *time.Time {
 // ErrTurnSort is returned for a sort this build does not know, naming the
 // ones it does.
 var ErrTurnSort = errors.New("store: unknown turn sort")
+
+// turnWhere is the row-level WHERE of [EventLog.TurnPartials] and its
+// arguments — a function of its own so the plan every filter gets can be read
+// back for the terms that run (see TestEveryTurnFilterSeeksItsIndex).
+func (q TurnQuery) turnWhere(floor time.Time, shares bool) ([]string, []any) {
+	where := []string{"turn_id != ''", "event_time >= ?"}
+	args := []any{EncodeTime(floor)}
+	if shares {
+		where = append(where, "turn_id IN (?"+strings.Repeat(",?", len(q.IDs)-1)+")")
+		for _, id := range q.IDs {
+			args = append(args, id)
+		}
+	}
+	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
+	// every row that carries none, which is every non-agent event in the
+	// window. See [seatClause].
+	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
+		where = append(where, strings.TrimPrefix(clause, " AND "))
+		args = append(args, ids...)
+	}
+	if q.WorkKey != "" {
+		// WITH THE PARTIAL INDEX'S OWN PREDICATE, which is what lets the
+		// planner use schema/0029's index — see [ListQuery.predicate].
+		where = append(where, "work_key = ?", "work_key <> ''")
+		args = append(args, q.WorkKey)
+	}
+	if q.Model != "" && !shares {
+		// ON THE TURN, not on the row: a turn is selected when ANY of
+		// its phases used the model, which is what a reader means by
+		// "turns on the cheap model".
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_events "+
+				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
+		args = append(args, q.Model, EncodeTime(floor))
+	}
+	if q.WorkItem != "" && !shares {
+		// ON THE TURN, not on the row, for Model's reason and one more:
+		// filtering rows would fold only the records that carry the item,
+		// and a parked segment resolved before its sole write — or any
+		// record that names no item — would drop out of the sums.
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_events "+
+				"WHERE work_item = ? AND work_item <> '' AND event_time >= ? AND turn_id != '')")
+		args = append(args, q.WorkItem, EncodeTime(floor))
+	}
+	return where, args
+}

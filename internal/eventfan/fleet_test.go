@@ -354,3 +354,133 @@ func TestPhaseTokensAreEveryNodesSpendNewestFirst(t *testing.T) {
 		t.Fatalf("records %v, want the fleet's newest two, pa-2 then pb-1", got)
 	}
 }
+
+// servesAsV1 stands a peer on the broker that behaves as a build speaking only
+// history protocol v1 does: it refuses any other version by name, and answers a
+// v1 listing with its own row — IGNORING every filter it does not know, which is
+// exactly what an older build does with a field it cannot read.
+func servesAsV1(t *testing.T, b *memory.Broker, node string, row store.EventRecord) {
+	t.Helper()
+	q := client(t, b)
+	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+		var req struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		if req.Version != 1 {
+			return json.Marshal(map[string]any{"version": 1, "node": node, "error": fmt.Sprintf(
+				"this node speaks history protocol v1 and was asked in v%d", req.Version)})
+		}
+		answer, _ := json.Marshal(map[string]any{"rows": []store.EventRecord{row}, "full": false})
+		return json.Marshal(map[string]any{"version": 1, "node": node, "answer": json.RawMessage(answer)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+}
+
+// A FILTER AN OLDER PEER CANNOT APPLY IS NOT ANSWERED AROUND.
+//
+// An older build ignores a parameter it does not know, so a channel or seat
+// filter scattered to it comes back as its UNFILTERED rows, merged in as though
+// they matched. So a request is stamped with the lowest version that answers
+// it: a listing narrowing by nothing new still goes out as v1 and the older
+// peer's rows are part of it, while one narrowing by a v2 filter goes out as v2,
+// the older peer refuses by version, and the coverage names it rather than the
+// page carrying its unmatched row. The histogram is always v2, because its
+// failed split is a field a v1 peer never sends and a sum would read as zero.
+//
+// Mutation: stamp every request with [eventfan.Protocol], and the plain listing
+// loses the older peer; stamp them all v1, and its row lands on the channel's
+// page.
+func TestAFilterAnOlderPeerCannotApplyIsNotAnsweredAround(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Minute)
+	appendTo(t, a, store.EventRecord{ID: "on-channel", Type: "a2a_asked", Category: "task",
+		Time: at, Tags: map[string]string{"channel_id": "ch-1"}})
+	servesAsV1(t, broker, "node-old", store.EventRecord{ID: "old-unrelated", Type: "x",
+		Category: "task", Time: at.Add(time.Second)})
+	fan := fanFrom(a, "node-a", "node-old")
+
+	plain, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(plain.Rows) != 2 {
+		t.Errorf("a listing with no new filter: %v, coverage %+v — want both nodes' rows "+
+			"and the older peer answering", idsOf(plain.Rows), coverage)
+	}
+
+	narrowed, coverage, err := fan.List(t.Context(), store.ListQuery{ChannelID: "ch-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(narrowed.Rows); !slices.Equal(got, []string{"on-channel"}) {
+		t.Errorf("the channel's page = %v, want only the row on it — an older peer's "+
+			"unfiltered row must not be merged in as a match", got)
+	}
+	if coverage.Complete || !missing(coverage, "node-old", "v2") {
+		t.Errorf("coverage %+v does not name node-old as unable to answer v2", coverage)
+	}
+
+	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Complete || !missing(coverage, "node-old", "v2") {
+		t.Errorf("the axis's coverage %+v does not name node-old — its bars carry no "+
+			"failed split and would under-count", coverage)
+	}
+}
+
+// A HISTOGRAM'S FAILED SPLIT IS EVERY NODE'S, summed bar by bar.
+func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Minute)
+	appendTo(t, a, store.EventRecord{ID: "a-fail", Type: "x", Category: "task", Time: at,
+		Tags: map[string]string{"failed": "true"}})
+	appendTo(t, b, store.EventRecord{ID: "b-fail", Type: "budget_exhausted", Category: "task", Time: at})
+	appendTo(t, b, store.EventRecord{ID: "b-ok", Type: "x", Category: "task", Time: at})
+
+	got, coverage, err := fanFrom(a, "node-a", "node-b").Histogram(t.Context(),
+		store.HistogramQuery{Bucket: store.BucketHour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v", coverage)
+	}
+	if got.Total != 3 || got.Failed != 2 {
+		t.Errorf("total %d with %d failed, want 3 with 2 — each node's failures summed", got.Total, got.Failed)
+	}
+	last := got.Bars[len(got.Bars)-1]
+	if last.Count != 3 || last.Failed != 2 {
+		t.Errorf("the current bar is %d with %d failed, want 3 with 2", last.Count, last.Failed)
+	}
+}
+
+// missing reports whether a node is named as not answering, for a reason
+// mentioning want.
+func missing(c eventfan.Coverage, node, want string) bool {
+	for _, n := range c.Nodes {
+		if n.ID == node && !n.Answered && strings.Contains(n.Error, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func idsOf(rows []store.EventRecord) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.ID)
+	}
+	return out
+}

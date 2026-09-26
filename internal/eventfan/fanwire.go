@@ -20,14 +20,58 @@ import (
 // ephemeral verbs.
 //
 // EVOLUTION IS ADDITIVE, on the event envelope's terms and for the same
-// reason: a rolling upgrade puts two builds on one broker. A new FIELD needs no
-// bump — an older peer ignores it and answers the question it understood. A
-// RESHAPE takes a new [Protocol], and a peer on the other one answers with its
-// own version and nothing else, which the asker names in the coverage rather
-// than guessing at fields it cannot read.
+// reason: a rolling upgrade puts two builds on one broker. But an older peer
+// IGNORES a field it does not know, and for this wire that is not harmless in
+// two cases: a new FILTER, which the peer drops and answers a WIDER question
+// than was asked — rows merged in as though they matched — and a new ANSWER
+// field a merge sums, which the peer never sends and the merge reads as zero.
+//
+// So every request is stamped with the LOWEST version that answers it, on the
+// tracker's rule for its records (internal/statelog's RecordFields): a
+// question carrying nothing new goes out as v1 and every build answers it,
+// and one that needs a newer field goes out at that field's version, which an
+// older peer refuses by version rather than answering around. A node answers
+// any version from 1 to its own [Protocol] and replies in the version it was
+// asked in, and the asker names a peer that refused — or replied in another
+// version — in the coverage rather than guessing at fields it cannot read.
+// [versionOf] is the table: adding a filter or a summed answer field is adding
+// a row there and moving [Protocol] to its version.
 
-// Protocol is the scatter's payload version.
-const Protocol = 1
+// Protocol is the highest scatter version this build speaks — never, on its
+// own, the version it asks in; see [versionOf].
+//
+//   - v1: the base format.
+//   - v2: `channel_id` and `agent_id` on a listing's filters, and the
+//     `failed` split on every histogram bar and total.
+const Protocol = 2
+
+// versionOf is the lowest scatter version that answers one question with
+// these parameters.
+//
+// A HISTOGRAM IS ALWAYS v2, because its answer carries the failed split and a
+// v1 peer would contribute bars with none — a sum that under-counts failures
+// by exactly that node's share, with nothing to say so. A listing is v2 only
+// when it narrows by a v2 filter, so every other listing is still answered by
+// the whole fleet during an upgrade.
+func versionOf(q Question, params any) int {
+	switch q {
+	case QuestionSeries:
+		return 2
+	case QuestionEvents:
+		if p, ok := params.(listParams); ok && p.version() > 1 {
+			return p.version()
+		}
+	}
+	return 1
+}
+
+// version is the lowest scatter version that honours every filter set.
+func (p listParams) version() int {
+	if p.ChannelID != "" || p.AgentID != "" {
+		return 2
+	}
+	return 1
+}
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every node serving it, because the answerers are every node rather
@@ -150,6 +194,10 @@ type listParams struct {
 	Until        time.Time   `json:"until,omitzero"`
 	Before       *cursorWire `json:"before,omitempty"`
 	Limit        int         `json:"limit"`
+
+	// v2 — see [listParams.version].
+	ChannelID string `json:"channel_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -158,6 +206,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		TraceID: q.TraceID, Actor: q.Actor, TurnID: q.TurnID,
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
+		ChannelID: q.ChannelID, AgentID: q.AgentID,
 	}
 }
 
@@ -167,6 +216,7 @@ func (p listParams) query() store.ListQuery {
 		TraceID: p.TraceID, Actor: p.Actor, TurnID: p.TurnID,
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
+		ChannelID: p.ChannelID, AgentID: p.AgentID,
 	}
 }
 
@@ -267,21 +317,24 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 			// beside the first.
 			return nil, errAsker
 		}
-		if req.Version != Protocol {
+		if req.Version < 1 || req.Version > Protocol {
 			return encodeError(self, fmt.Sprintf("this node speaks history protocol "+
-				"v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
+				"up to v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
 		}
 		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs)
 		if err != nil {
 			return encodeError(self, err.Error())
 		}
-		return fit(self, part, queue.MaxPayloadBytes)
+		return fit(self, part, queue.MaxPayloadBytes, req.Version)
 	})
 }
 
 // errAsker is how the asker's own answerer declines its own request.
 var errAsker = errors.New("eventfan: this node asked; it read its own store")
 
+// encodeError is a refusal, stamped with the HIGHEST version this node speaks:
+// it answers nothing, so there is no asked version to echo, and the number is
+// what tells the asker which build refused.
 func encodeError(self, why string) ([]byte, error) {
 	return json.Marshal(reply{Version: Protocol, Node: self, Error: why})
 }
@@ -412,13 +465,13 @@ var ErrTooLarge = errors.New("eventfan: the answer exceeds the transport's messa
 // filled. The size is the ENCODED size, measured rather than estimated,
 // because a JSON document re-encodes at anywhere from one to six times its
 // length depending on what it holds.
-func fit(self string, part any, limit int) ([]byte, error) {
+func fit(self string, part any, limit, version int) ([]byte, error) {
 	encode := func(p any) ([]byte, error) {
 		body, err := json.Marshal(p)
 		if err != nil {
 			return nil, fmt.Errorf("eventfan: encode an answer: %w", err)
 		}
-		return json.Marshal(reply{Version: Protocol, Node: self, Answer: body})
+		return json.Marshal(reply{Version: version, Node: self, Answer: body})
 	}
 	whole, err := encode(part)
 	if err != nil {

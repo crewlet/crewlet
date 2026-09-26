@@ -143,13 +143,16 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 	}
 	var replies chan scattered
 	budget := cmp.Or(f.Budget, FleetReadBudget)
+	// THE LOWEST VERSION THAT ANSWERS THIS, so a peer an upgrade has not
+	// reached yet still answers every question it can answer correctly.
+	version := versionOf(q, params)
 	if fan {
 		body, err := json.Marshal(params)
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode the %s parameters: %w", q, err)
 		}
 		req, err := json.Marshal(request{
-			Version: Protocol, Asker: f.Self, Question: q, Params: body, TurnIDs: ids,
+			Version: version, Asker: f.Self, Question: q, Params: body, TurnIDs: ids,
 		})
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode a %s request: %w", q, err)
@@ -197,7 +200,7 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 			}
 		}
 		for _, raw := range got.replies {
-			node, part, why := decodeReply[T](raw)
+			node, part, why := decodeReply[T](raw, version)
 			if node == "" || node == f.Self {
 				// AN UNREADABLE REPLY IS A MISSING ONE, and one
 				// that names nobody cannot even say whose it was:
@@ -231,19 +234,26 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 	return out, nil
 }
 
-// decodeReply reads one peer's reply: whose it is, its part, and — when it is
-// not an answer — why.
-func decodeReply[T any](raw []byte) (node string, part T, why string) {
+// decodeReply reads one peer's reply to a question asked in version `asked`:
+// whose it is, its part, and — when it is not an answer — why.
+//
+// A REFUSAL IS READ BEFORE THE VERSION, because a peer that refused says why in
+// its own words — an older build naming the version it was asked in is the
+// clearest account there is of why it is missing. An ANSWER in any version but
+// the one asked is not read at all: its fields are not the ones the merge
+// expects, and a part missing a filter or a summed field is wrong rather than
+// short.
+func decodeReply[T any](raw []byte, asked int) (node string, part T, why string) {
 	var r reply
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return "", part, ""
 	}
 	switch {
-	case r.Version != Protocol:
-		return r.Node, part, fmt.Sprintf("answered in history protocol v%d, and "+
-			"this node speaks v%d; it is running a different build", r.Version, Protocol)
 	case r.Error != "":
 		return r.Node, part, r.Error
+	case r.Version != asked:
+		return r.Node, part, fmt.Sprintf("answered in history protocol v%d, and "+
+			"was asked in v%d; it is running a different build", r.Version, asked)
 	}
 	if err := json.Unmarshal(r.Answer, &part); err != nil {
 		return r.Node, part, "its answer could not be read: " + err.Error()

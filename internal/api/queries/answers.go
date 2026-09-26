@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -708,7 +709,7 @@ func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
 // store filtered, and the difference shows up as rows that vanish when a reader
 // scrolls.
 func (s Sources) events(ctx context.Context, p Params) (any, error) {
-	q, err := eventFilters(p)
+	q, err := s.eventFilters(p)
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +754,7 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 // show is worse than no bar at all. The store compiles both from one predicate;
 // this makes sure both are handed the same one.
 func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
-	filters, err := eventFilters(p)
+	filters, err := s.eventFilters(p)
 	if err != nil {
 		return nil, err
 	}
@@ -783,12 +784,19 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 // ONE READER, for the reason the store has one predicate: a filter added to the
 // list and forgotten here would draw an axis over a wider set than the rows
 // beneath it, silently.
-func eventFilters(p Params) (store.ListQuery, error) {
+func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 	q := store.ListQuery{
-		Type:         p.String("type"),
-		Source:       p.String("source"),
-		Category:     p.String("category"),
-		TraceID:      p.String("trace_id"),
+		Type:     p.String("type"),
+		Source:   p.String("source"),
+		Category: p.String("category"),
+		// ONE TRACE, and the same trace the `trace` question answers — but
+		// as a FILTER, so it pages and takes a window and every other
+		// filter beside it, where `trace` is the whole trace oldest first.
+		TraceID: p.String("trace_id"),
+		// ONE AGENT-TO-AGENT CONVERSATION, by the channel id its events
+		// carry. The conversation's own page links here, and before this
+		// the link could only land on the unfiltered log.
+		ChannelID:    strings.TrimSpace(p.String("channel_id")),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
 		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
@@ -807,6 +815,12 @@ func eventFilters(p Params) (store.ListQuery, error) {
 		return store.ListQuery{}, err
 	}
 	q.WorkItem = item
+	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.AgentID = agentID
 	// THE WINDOW, which is what a reader scrubbing a time range means and
 	// is NOT the cursor: a cursor is where a page resumes and moves with
 	// every page, while these are what was asked for and do not.
@@ -849,6 +863,41 @@ func workItemParam(p Params) (string, error) {
 			"never its key", ErrBadParams, raw)
 	}
 	return raw, nil
+}
+
+// seatParam reads `seat=<handle>` and answers the agent id every node derives
+// for it, or "" when absent.
+//
+// A SEAT IS NAMED BY ITS HANDLE on every surface that takes one — the handle is
+// a seat's address in the dashboard's URLs and on its roster row — and it is
+// RESOLVED HERE, server-side, into the id the event log's `agent_id` column
+// holds. Neither alternative a caller had was a seat's identity: a role name
+// is shared by every seat a unit template stamps out and changes with a
+// rename, and a raw agent id is a derivation every client would have to
+// repeat. The id is DERIVED ([org.DeriveAgentID]) rather than looked up in the
+// current chart, so a seat since removed still names the history it left —
+// which is what `tokens` does with the same parameter.
+//
+// Refused rather than matched when it is not a handle, because a role name
+// pasted here would match nothing and an empty answer reads as a seat that
+// never did anything; and UNAVAILABLE before a company is applied, since the
+// id is derived from the company's name and there is none to derive it from.
+func (s Sources) seatParam(p Params) (string, error) {
+	handle := strings.TrimSpace(p.String("seat"))
+	if handle == "" {
+		return "", nil
+	}
+	if !org.ValidHandle(handle) {
+		return "", fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
+			"its handle (lowercase, as on its page), never its role name", ErrBadParams, handle)
+	}
+	id := s.derivedAgentID(handle)
+	if id == "" {
+		return "", fmt.Errorf("%w: seat=%q cannot be resolved until a company "+
+			"configuration is applied on this node — a seat's id is derived from "+
+			"the company's name", ErrUnavailable, handle)
+	}
+	return id, nil
 }
 
 // instantParam reads an RFC 3339 instant, or the zero time when absent.

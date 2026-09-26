@@ -27,8 +27,6 @@ import (
 func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	q := store.TurnQuery{
 		SinceDays: p.Int("days", 0),
-		AgentRole: strings.TrimSpace(p.String("role")),
-		AgentID:   strings.TrimSpace(p.String("agent_id")),
 		Model:     strings.TrimSpace(p.String("model")),
 		// EVERY ATTEMPT AT ONE TRIGGER. A turn id names one run now, so
 		// a redelivered trigger is several rows here — and this is how a
@@ -62,6 +60,16 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			return nil, badParams("sort", raw, names(store.TurnSorts))
 		}
 	}
+	// ONE SEAT'S TURNS, by its HANDLE and nothing else. The list took a
+	// role name and a raw agent id instead, so the sidebar's seat rows —
+	// which link here with `seat=<handle>` — landed on every seat's turns,
+	// and a role name could not tell apart two unit seats stamped from
+	// one template. See seatParam.
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return nil, err
+	}
+	q.AgentID = agentID
 	// THE TURNS ON ONE WORK ITEM, by its identity across trackers — see
 	// workItemParam for why a malformed one is refused rather than matched.
 	item, err := workItemParam(p)

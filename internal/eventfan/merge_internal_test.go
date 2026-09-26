@@ -206,14 +206,14 @@ func TestAnOversizedReplyIsCutAndKeepsTheTurnsEnding(t *testing.T) {
 		})
 	}
 	const limit = 40 << 10
-	body, err := fit("node-b", turnPart{Head: head, Total: len(head)}, limit)
+	body, err := fit("node-b", turnPart{Head: head, Total: len(head)}, limit, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(body) > limit {
 		t.Fatalf("the reply is %d bytes against a %d-byte limit", len(body), limit)
 	}
-	node, part, why := decodeReply[turnPart](body)
+	node, part, why := decodeReply[turnPart](body, 1)
 	if node != "node-b" || why != "" {
 		t.Fatalf("decoded %q with %q", node, why)
 	}
@@ -229,11 +229,11 @@ func TestAnOversizedReplyIsCutAndKeepsTheTurnsEnding(t *testing.T) {
 	// A LISTING CUT TO NOTHING cannot say where its rows are, so it is an
 	// error rather than an empty page.
 	huge := listPart{Rows: head[:1], Full: false}
-	body, err = fit("node-b", huge, 200)
+	body, err = fit("node-b", huge, 200, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, why := decodeReply[listPart](body); why != ErrTooLarge.Error() {
+	if _, _, why := decodeReply[listPart](body, 1); why != ErrTooLarge.Error() {
 		t.Errorf("a row larger than the limit answered %q, want %q", why, ErrTooLarge)
 	}
 }

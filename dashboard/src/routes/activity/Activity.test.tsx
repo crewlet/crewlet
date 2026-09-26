@@ -80,6 +80,7 @@ function mount() {
         until: String(params.until ?? ""),
         bars: [],
         total: 0,
+        failed: 0,
         by_category: {},
       });
     }

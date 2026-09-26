@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,5 +393,103 @@ func TestFacetCountsCoverTheWindowAskedFor(t *testing.T) {
 	}
 	if len(rows) != got.ByCategory["system"] {
 		t.Errorf("the listing has %d rows and the chip claims %d", len(rows), got.ByCategory["system"])
+	}
+}
+
+// A BAR SPLITS OUT ITS FAILURES, by the rule a turn's failed mark uses.
+//
+// A row fails when its writer said so (the `failed` tag) OR when its type IS a
+// failure — the records a turn the engine killed between phases leaves, which
+// carry no flag at all. Counted by the engine per bar, because a browser folding
+// the share over the rows it holds is right for one page and absent for every
+// other; and a SPLIT of the bar, so the failed share never exceeds the count.
+//
+// Mutation: count only the tag, and the budget refusal drops out of its bar.
+func TestAHistogramSplitsEachBarsFailures(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	for _, r := range []store.EventRecord{
+		{ID: "ok", Type: "agent_phase_completed", Time: base.Add(time.Minute)},
+		{ID: "flagged", Type: "agent_phase_completed", Time: base.Add(2 * time.Minute),
+			Tags: map[string]string{"failed": "true"}},
+		{ID: "refused", Type: "budget_exhausted", Time: base.Add(2 * time.Hour)},
+		{ID: "later", Type: "agent_phase_completed", Time: base.Add(2*time.Hour + time.Minute)},
+	} {
+		r.Category, r.Payload = "task", []byte(`{}`)
+		if err := log.Append(t.Context(), r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+	got, err := log.Histogram(t.Context(), store.HistogramQuery{
+		ListQuery: store.ListQuery{Since: base, Until: base.Add(3 * time.Hour)},
+		Bucket:    store.BucketHour,
+	})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	wantCount, wantFailed := []int{2, 0, 2}, []int{1, 0, 1}
+	for i, bar := range got.Bars {
+		if bar.Count != wantCount[i] || bar.Failed != wantFailed[i] {
+			t.Errorf("bar %d = %d with %d failed, want %d with %d failed",
+				i, bar.Count, bar.Failed, wantCount[i], wantFailed[i])
+		}
+	}
+	if got.Total != 4 || got.Failed != 2 {
+		t.Errorf("total %d with %d failed, want 4 with 2", got.Total, got.Failed)
+	}
+}
+
+// ONE CONVERSATION AND ONE SEAT, on the listing and its axis alike.
+//
+// `channel_id` names an agent-to-agent conversation's events and `agent_id` the
+// events one seat published — the seat's derived id, which two unit seats
+// sharing a role name do not share. Both go through the one predicate, so the
+// axis counts exactly the rows the listing returns.
+//
+// Mutation: leave either filter out of [ListQuery]'s predicate and its rows are
+// every row.
+func TestTheChannelAndSeatFiltersNarrowTheListingAndItsAxis(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	for i, r := range []store.EventRecord{
+		{ID: "asked", Type: "a2a_asked", Tags: map[string]string{"channel_id": "ch-1", "agent_id": "id-sre"}},
+		{ID: "answered", Type: "a2a_answered", Tags: map[string]string{"channel_id": "ch-1", "agent_id": "id-ops"}},
+		{ID: "elsewhere", Type: "a2a_asked", Tags: map[string]string{"channel_id": "ch-2", "agent_id": "id-sre"}},
+		{ID: "unrelated", Type: "agent_phase_completed", Tags: map[string]string{"agent_role": "Site Reliability"}},
+	} {
+		r.Time, r.Category, r.Payload = base.Add(time.Duration(i)*time.Minute), "task", []byte(`{}`)
+		if err := log.Append(t.Context(), r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		q    store.ListQuery
+		want []string
+	}{
+		{"channel", store.ListQuery{ChannelID: "ch-1"}, []string{"answered", "asked"}},
+		{"seat", store.ListQuery{AgentID: "id-sre"}, []string{"elsewhere", "asked"}},
+		{"both", store.ListQuery{ChannelID: "ch-1", AgentID: "id-sre"}, []string{"asked"}},
+	} {
+		rows, err := log.List(t.Context(), c.q)
+		if err != nil {
+			t.Fatalf("%s: list: %v", c.name, err)
+		}
+		var got []string
+		for _, r := range rows {
+			got = append(got, r.ID)
+		}
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: listed %v, want %v", c.name, got, c.want)
+		}
+		axis, err := log.Histogram(t.Context(), store.HistogramQuery{ListQuery: c.q, Bucket: store.BucketHour})
+		if err != nil {
+			t.Fatalf("%s: histogram: %v", c.name, err)
+		}
+		if axis.Total != len(c.want) {
+			t.Errorf("%s: the axis counts %d, the listing shows %d", c.name, axis.Total, len(c.want))
+		}
 	}
 }
