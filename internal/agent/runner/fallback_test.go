@@ -276,3 +276,47 @@ func userText(req llm.Request) string {
 	}
 	return b.String()
 }
+
+// A PHASE RECORD SPLITS ITS TOKENS BY THE MODEL THAT SERVED EACH ROUND.
+//
+// The record's `model` names the first model that answered, and a chain can
+// move a phase to another member for later rounds: a per-model breakdown keyed
+// on that one name bills the later rounds to a model that did not serve them.
+// The record carries what each model served, and its tokens are still the
+// phase's own total.
+func TestAPhaseRecordSplitsItsTokensByTheModelThatServedEachRound(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	rounds := deliver(t, "posted the weekly summary")
+	for i, spend := range []struct {
+		model   string
+		in, out int
+	}{{"model-a", 100, 10}, {"model-b", 40, 4}, {"model-a", 20, 2}} {
+		rounds[i].Model, rounds[i].InputTokens, rounds[i].OutputTokens = spend.model, spend.in, spend.out
+	}
+	prov := &scriptedProvider{execute: rounds}
+	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
+		buildOpts{pub: pub, execChain: org.ProviderKeys{"executor"}})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	records := phasesOfKind(t, pub, "execute")
+	if len(records) != 1 {
+		t.Fatalf("published %d execute records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Model != "model-a" {
+		t.Errorf("model = %q, want the first model that answered", rec.Model)
+	}
+	want := []types.ModelSpend{
+		{Model: "model-a", InputTokens: 120, OutputTokens: 12},
+		{Model: "model-b", InputTokens: 40, OutputTokens: 4},
+	}
+	if fmt.Sprint(rec.Models) != fmt.Sprint(want) {
+		t.Errorf("models = %+v, want %+v", rec.Models, want)
+	}
+	if rec.InputTokens != 160 || rec.OutputTokens != 16 {
+		t.Errorf("tokens = %d/%d, want the phase's whole 160/16", rec.InputTokens, rec.OutputTokens)
+	}
+}

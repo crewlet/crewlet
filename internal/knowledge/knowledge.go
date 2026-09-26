@@ -71,10 +71,10 @@ const AutoDraftedParent = "Auto-Drafted Skills"
 // DraftPage is an auto-drafted page a promotion writer created or found.
 //
 // Declared here rather than in internal/learning because BOTH sides need it —
-// the promotion pass that asks for a draft, and the writer that makes one,
-// which is Confluence's: the native knowledge base has no promotion writer —
-// and internal/knowledge is the package neither of them would have to import
-// the other to reach.
+// the promotion pass that asks for a draft, and the writer that makes one
+// (Confluence's, or the engine's own over its native pages) — and
+// internal/knowledge is the package neither of them would have to import the
+// other to reach.
 type DraftPage struct {
 	ID    string
 	Title string

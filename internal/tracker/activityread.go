@@ -89,9 +89,8 @@ type ActivityRecord struct {
 	// about the change itself. Who, when and what kind of change are what
 	// is left, and no read surface returns the rest. The purge's own row is
 	// not marked — it carries the purge's line whole — and neither is a row
-	// whose purge was written before purges emptied anything
-	// ([PurgeRecordVersion]): that row still holds its content, and the flag
-	// would say it does not.
+	// whose purge is at [RecordVersion], whose rule empties nothing: that row
+	// holds its content, and the flag would say it does not.
 	ContentPurged bool `json:"content_purged,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

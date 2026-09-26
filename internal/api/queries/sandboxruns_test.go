@@ -568,3 +568,67 @@ func TestARunAnOlderBuildRecordedShowsWhatItsRowDropped(t *testing.T) {
 		t.Fatalf("bridge_calls = %d calls, want every one of the %d the row kept", len(got), sandbox.MaxBridgeCalls)
 	}
 }
+
+// A RUN WHOSE ANSWER IS HELD SAYS SO, and which answer it is.
+//
+// A run parked on its question reads, on its own, as waiting on a person —
+// and once a reply is held for it that is no longer true: it waits on its
+// seat's token budget, with the question answered. A running run whose result
+// is held has a job that finished, its box paused. The board is told which,
+// and since when, so it does not send a person to answer a question somebody
+// already answered; a run holding nothing says nothing.
+func TestARunWhoseAnswerIsHeldSaysSo(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "t-reply", AgentHandle: "swe", CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t-result", AgentHandle: "swe", CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t-none", AgentHandle: "swe", CreatedAt: runBase},
+	)
+	for _, turnID := range []string{"t-reply", "t-result", "t-none"} {
+		if ok, err := store.MarkSuspended(ctx, turnID, map[string]any{"version": 2}); err != nil || !ok {
+			t.Fatalf("MarkSuspended %s = %v, %v", turnID, ok, err)
+		}
+	}
+	launch := func(turnID string) string {
+		run, _, err := store.Get(ctx, turnID)
+		if err != nil {
+			t.Fatalf("Get %s: %v", turnID, err)
+		}
+		return run.LaunchID
+	}
+	for _, turnID := range []string{"t-reply", "t-none"} {
+		if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{Question: "which branch?"}); err != nil {
+			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
+		}
+	}
+	replied := runBase.Add(time.Hour)
+	if landed, err := store.HoldAnswer(ctx, "t-reply", sandbox.HeldAnswer{
+		Launch: launch("t-reply"), Text: "use main", At: replied,
+	}); err != nil || !landed {
+		t.Fatalf("HoldAnswer = %v, %v", landed, err)
+	}
+	claimed, won, err := store.ClaimForResume(ctx, "t-result", sandbox.CompletionTail(launch("t-result")))
+	if err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	finished := runBase.Add(2 * time.Hour)
+	if released, err := store.ReleaseClaim(ctx, "t-result", sandbox.Release{
+		Launch: claimed.LaunchID, To: claimed.ClaimedFrom,
+		Held: &sandbox.HeldAnswer{Launch: claimed.LaunchID, Text: "done", At: finished},
+	}); err != nil || !released {
+		t.Fatalf("ReleaseClaim = %v, %v", released, err)
+	}
+
+	want := map[string][2]string{
+		"t-reply":  {string(queries.HeldReply), replied.Format(time.RFC3339Nano)},
+		"t-result": {string(queries.HeldResult), finished.Format(time.RFC3339Nano)},
+		"t-none":   {"", ""},
+	}
+	for _, row := range askRuns(t, store) {
+		turnID, _ := row["turn_id"].(string)
+		if got := [2]string{fmt.Sprint(row["answer_held"]), fmt.Sprint(row["answer_held_at"])}; got != want[turnID] {
+			t.Errorf("%s reads answer_held=%q answer_held_at=%q, want %q", turnID, got[0], got[1], want[turnID])
+		}
+	}
+}

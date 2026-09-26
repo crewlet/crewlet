@@ -17,18 +17,16 @@ import (
 // Everything a company does to its tasks is done by seats, through their own
 // tools, and that is the design: an engine whose operator edits work by hand is
 // one whose org chart is decoration. The exception is the operation no seat may
-// ever perform — a purge, which destroys a task and every row it produced on
-// every node, and which the write path restricts to a person or an operator
-// token precisely because nothing else can be asked to confirm it.
+// ever perform — a purge, which deletes a task's own rows and every row naming
+// it on every node and empties the content of its history, and which the write
+// path restricts to a person or an operator token precisely because nothing
+// else can be asked to confirm it.
 //
-// That operation had no caller anywhere. `tracker.Writer.PurgeTask` existed,
-// the applier handled its record, the deletion marker stopped a redelivery
-// resurrecting anything — and no CLI verb, no route and no tool reached it. So
-// a company could not destroy a task under any circumstances: an erasure
-// request had no mechanism, and a credential pasted into a task body stayed in
-// the durable rows of every node for ever. `remove` only hides a task and
-// `delete` only stops later records about it; neither takes the body out of a
-// single database.
+// No seat tool reaches it, so this verb and the route behind it are how a
+// company destroys a task at all: an erasure request needs a mechanism, and a
+// credential pasted into a task body is otherwise in the durable rows of every
+// node for ever. `remove` only hides a task, and takes nothing out of a single
+// database.
 
 // runWork dispatches `crewlet work`.
 func runWork(args []string, stdout, stderr io.Writer) error {
@@ -55,12 +53,13 @@ func runWork(args []string, stdout, stderr io.Writer) error {
 // in the ticket they were asked to act on, so it has to be looked up — which is
 // the whole point of asking.
 //
-// The reason is required because the rows are destroyed and the reason is the
-// only account of why. The node that takes the purge logs it beside the key
-// (`task_purged`), and when the project has a lead it travels whole on the
-// notification the lead receives — which is why the node refuses one too long
-// to fit that line (`reason_too_long`, naming how many bytes do) rather than
-// cutting it, lead or no lead.
+// The reason is required because the content is destroyed and the reason is
+// the account of why. The node that takes the purge logs it beside the key
+// (`task_purged`), and it travels whole on the purge's own line in the activity
+// feed — the line the project's lead is notified with, when there is one —
+// which is why the node refuses one too long to fit that line
+// (`reason_too_long`, naming how many bytes do) rather than cutting it, lead or
+// no lead.
 func workPurge(args []string, stdout, stderr io.Writer) error {
 	id, rest := splitSubject(args)
 	var project, reason, confirm, opID *string
@@ -69,7 +68,8 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		reason = fs.String("reason", "", "why; required, and refused rather "+
 			"than cut if too long to travel whole")
 		confirm = fs.String("confirm", "",
-			"the task's KEY — this destroys the task and every row it produced")
+			"the task's KEY — this deletes the task's rows and every row naming "+
+				"it, and empties its history")
 		opID = fs.String("op-id", "",
 			"retry an `unknown` outcome with the id it printed, so the retry "+
 				"cannot append a second purge")
@@ -81,16 +81,18 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 	case id == "" || strings.TrimSpace(*confirm) == "":
 		fmt.Fprintln(stderr, "usage: crewlet work purge <task-id> "+
 			"-project KEY -reason TEXT -confirm <task-key>")
-		return fmt.Errorf("a purge destroys the task and every row it produced " +
-			"on every node, and nothing undoes it — name the task's KEY in " +
-			"-confirm to run it")
+		return fmt.Errorf("a purge deletes the task's rows and every row naming " +
+			"it on every node, empties the content of its history and moves its " +
+			"subtasks onto its parent, and nothing undoes it — name the task's " +
+			"KEY in -confirm to run it")
 	case strings.TrimSpace(*project) == "":
 		return fmt.Errorf("name the task's project in -project: it is the " +
 			"container the record arbitrates under, and a purge filed under " +
 			"the wrong one blocks writes to a project it is not about")
 	case strings.TrimSpace(*reason) == "":
-		return fmt.Errorf("state why in -reason: the rows are destroyed and " +
-			"the reason is the only account of why")
+		return fmt.Errorf("state why in -reason: the content is destroyed and " +
+			"the reason, kept on the line the purge leaves in the activity " +
+			"feed, is the account of why")
 	}
 
 	var answer struct {

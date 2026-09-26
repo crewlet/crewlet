@@ -74,8 +74,9 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	// routing alone, and a searcher or a promotion writer built for it would
 	// read or write a wiki the company says it does not run. [Engine.Knowledge]
 	// answers by the same field, so it would never ask such a searcher — this
-	// is what keeps one from existing, and the promotion pass, which asks
-	// only whether an org client is wired, from drafting into it.
+	// is what keeps one from existing — and the promotion pass drafts through
+	// the backend that answer names ([Engine.promotionWriter]), so it never
+	// drafts into a wiki the company does not run either.
 	reads := c.Config.KnowledgeBackendFor() == config.KnowledgeConfluence
 
 	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON, as the file head says:

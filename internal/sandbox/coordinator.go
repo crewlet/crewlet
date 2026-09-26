@@ -102,16 +102,24 @@ type ResumeRequest struct {
 	Trigger *events.Event
 
 	// CostUSD and DeliveredRefs are what the run reported, for the resumed
-	// phase's own event. The coding agents produce both and nothing carried
-	// them: the phase record's `cost_usd` and `delivered_refs` had no
-	// producer at all, so a subscription CLI's spend — which never passes
-	// through the engine's token meter — was reported nowhere.
+	// phase's own event: a coding CLI's spend never passes through the
+	// engine's token meter, so its reported price is the only one the
+	// phase record can carry.
 	//
-	// Both are zero when a PERSON's answer resumes a parked clarification:
-	// no new run finished, and claiming a cost for one would double-count
-	// the run that is still going.
+	// The run is the one this resume collected, or — when a PERSON's answer
+	// resumes a parked clarification — the one that stopped to ask, which
+	// was collected when it parked ([PendingRun.AskedSpend]). DeliveredRefs
+	// are only ever a collected result's, and nil on a person's answer.
 	CostUSD       float64
 	DeliveredRefs []string
+
+	// RunSpend is that run's own model spend as its agent reported it — its
+	// tokens by model, and whether they are the whole run's — for the
+	// resumed phase's record to take in ([types.AgentPhaseCompleted.AddRun]).
+	// Collected on every resume, even one whose run's agent reported
+	// nothing, so the record can say that run's spend went unreported rather
+	// than read as a run that cost nothing.
+	RunSpend types.RunSpend
 }
 
 // Headroom reads whether a seat's token budget can admit the model call a
@@ -455,7 +463,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	answer := HeldAnswer{
 		Launch: run.LaunchID, Text: resumeText(result), Success: result.Success,
 		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
-		Trigger: trigger, At: c.now(),
+		Spend: heldSpendOf(result), Trigger: trigger, At: c.now(),
 	}
 	if room, err := c.room(ctx, run.AgentHandle); err != nil || !room.OK {
 		c.holdResult(ctx, run, answer, room, err)
@@ -463,6 +471,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	}
 	return c.resumeAndSettle(ctx, run, answer.Text, answer.Success, trigger, runOutcome{
 		CostUSD: answer.CostUSD, DeliveredRefs: answer.DeliveredRefs,
+		RunSpend: result.spend(),
 	})
 }
 
@@ -619,18 +628,46 @@ func (c *Coordinator) OnAnswerReady(ctx context.Context, ev types.SandboxAnswerR
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
 	}
-	held, _ := claimed.Held()
-	log.InfoContext(ctx, "sandbox_resume_budget_room", "turn_id", claimed.TurnID,
-		"agent", claimed.AgentHandle, "held_for_s", c.now().Sub(held.At).Seconds(),
-		"detail", "the seat's token budget has room, so the turn is resumed with the answer held for it")
-
-	if claimedFrom(claimed) != StatusRunning {
+	person := claimedFrom(claimed) != StatusRunning
+	if person {
 		// A PERSON'S REPLY, held on a run whose question freed its seat:
 		// the seat goes busy again for the resume, which is work like any
 		// other, as an answer handed over at once makes it.
 		c.markBusy(claimed.AgentHandle)
+	}
+	// WHOLE, read under the claim: a reply the row could not hold is in parts
+	// filed under the launch ([PendingStore.Answer]).
+	held, _, err := c.pending.Answer(ctx, claimed)
+	switch {
+	case errors.Is(err, ErrAnswerUnreadable):
+		// The parts are what the row names, and a retry reads the same
+		// ones: the answer is lost, and the turn cannot be resumed with it.
+		log.ErrorContext(ctx, "sandbox_held_answer_unreadable", "turn_id", claimed.TurnID,
+			"launch_id", claimed.LaunchID, "error", err.Error(),
+			"detail", "the answer held for the run was kept in parts that do not make the whole its "+
+				"record names; the turn cannot be resumed with it and the run is failed")
+		c.settleFailed(ctx, claimed, types.SandboxFailureAnswerUnreadable,
+			"the answer held for the run while its seat's token budget had no room was kept in parts "+
+				"that could not be read back whole, so the turn cannot be resumed with it; the work "+
+				"the job pushed, if any, is on its branch")
+		return nil
+	case err != nil:
+		// UN-CLAIMED, as a resume that failed is: the store could not be
+		// read, and the next signal may. The seat is freed first and the
+		// release leaves its count saying what the run holds after it.
+		log.ErrorContext(ctx, "sandbox_resume_failed", "turn_id", claimed.TurnID,
+			"revert_to", claimedFrom(claimed), "error", err.Error())
+		c.clearBusy(claimed.AgentHandle)
+		c.unclaim(ctx, claimed, false, nil)
+		return fmt.Errorf("sandbox: reading the answer held on %s: %w", ev.TurnID, err)
+	}
+	log.InfoContext(ctx, "sandbox_resume_budget_room", "turn_id", claimed.TurnID,
+		"agent", claimed.AgentHandle, "held_for_s", c.now().Sub(held.At).Seconds(),
+		"detail", "the seat's token budget has room, so the turn is resumed with the answer held for it")
+
+	if person {
 		return c.resumeAndSettle(ctx, claimed, answerText(claimed, held.Text), true,
-			held.Trigger, runOutcome{})
+			held.Trigger, askedOutcome(claimed))
 	}
 	if held.InBox {
 		// Still in the job's paused box, which the collect reconnects to
@@ -646,9 +683,11 @@ func (c *Coordinator) OnAnswerReady(ctx context.Context, ev types.SandboxAnswerR
 		}
 		held.Text, held.Success = resumeText(result), result.Success
 		held.CostUSD, held.DeliveredRefs = result.CostUSD, result.DeliveredRefs
+		held.Spend = heldSpendOf(result)
 	}
 	return c.resumeAndSettle(ctx, claimed, held.Text, held.Success, held.Trigger, runOutcome{
 		CostUSD: held.CostUSD, DeliveredRefs: held.DeliveredRefs,
+		RunSpend: held.Spend.runSpend(),
 	})
 }
 
@@ -658,6 +697,7 @@ func (c *Coordinator) OnAnswerReady(ctx context.Context, ev types.SandboxAnswerR
 type runOutcome struct {
 	CostUSD       float64
 	DeliveredRefs []string
+	RunSpend      types.RunSpend
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -815,6 +855,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		Question: question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+		Spend: heldSpendOf(result),
 	}); err != nil {
 		if errors.Is(err, coord.ErrTooLarge) {
 			// Within the bound and refused all the same: what the park
@@ -910,10 +951,18 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 	// The seat goes busy again for the duration of the resume: the parked
 	// run freed it, and re-entering the Execute loop is work like any other.
 	c.markBusy(claimed.AgentHandle)
-	// NO OUTCOME: this resume collects no run. The box is still parked and
-	// its cost is charged where it is collected, so reporting one here would
-	// bill the same run twice.
-	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger,
+		askedOutcome(claimed))
+}
+
+// askedOutcome is what a person's answer resumes the turn with about the run
+// that asked: its price and its own spend, collected — and charged — when it
+// parked. That run finished, since its agent stops once it has asked, so this
+// resume is the one record its figures reach; the run the answer leads to is
+// a new launch, collected and reported on its own.
+func askedOutcome(run PendingRun) runOutcome {
+	price, spend := run.askedSpend()
+	return runOutcome{CostUSD: price, RunSpend: spend}
 }
 
 // holdAnswer holds a person's reply on the run parked on the question it
@@ -924,40 +973,25 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 // executor whether its box is still up, and the pause reaper may take the box
 // while the reply waits.
 //
-// A REPLY PAST [MaxHeldAnswerBytes] IS REFUSED, naming that bound: the reply
-// is kept nowhere else, so it stays with its delivery, whose redelivery hands
-// it over once the budget has room. A hold that does not land — the run was
-// claimed, relaunched, ended or held another reply since the lookup — is
-// handled, as a claim another inbound won is, so this delivery is not run as
-// an unrelated message.
+// HELD WHOLE, WHATEVER ITS SIZE: a reply the run's row cannot hold beside its
+// question is kept in parts filed under the run's launch
+// ([PendingStore.HoldAnswer]). Its delivery is acknowledged once it is held,
+// so the hold never waits on a redelivery, which stops once the delivery's
+// budget is spent. A reply whose parts cannot be kept either is an error
+// naming the limit that refused them, for the caller to hand the delivery
+// back.
+//
+// A hold that does not land — the run was claimed, relaunched, ended or held
+// another reply since the lookup — is handled, as a claim another inbound won
+// is, so this delivery is not run as an unrelated message.
 func (c *Coordinator) holdAnswer(ctx context.Context, run PendingRun, answer string,
 	trigger *events.Event, room Room, roomErr error,
 ) (bool, error) {
-	held := HeldAnswer{Launch: run.LaunchID, Text: answer, Trigger: trigger, At: c.now()}
-	size, err := heldBytes(held)
+	landed, err := c.pending.HoldAnswer(ctx, run.TurnID,
+		HeldAnswer{Launch: run.LaunchID, Text: answer, Trigger: trigger, At: c.now()})
 	if err != nil {
-		return false, fmt.Errorf("sandbox: the answer to %s cannot be held for its turn: %w", run.TurnID, err)
-	}
-	if size > MaxHeldAnswerBytes {
-		return false, fmt.Errorf("sandbox: the answer to %s cannot be held while the seat's token "+
-			"budget has no room for its turn: held with the event that delivered it, it is %d "+
-			"bytes, past the %d a run's record holds an answer within "+
-			"(sandbox.MaxHeldAnswerBytes); it is left with its delivery, which hands it over "+
-			"whole once the budget has room", run.TurnID, size, MaxHeldAnswerBytes)
-	}
-	landed, err := c.pending.HoldAnswer(ctx, run.TurnID, held)
-	switch {
-	case errors.Is(err, coord.ErrTooLarge):
-		// Within its own bound and refused all the same: what the record
-		// already carries beside it — the question at its own bound — is
-		// not bounded here, and the record's ceiling is what answers.
-		return false, fmt.Errorf("sandbox: the answer to %s cannot be held while the seat's token "+
-			"budget has no room for its turn: its run's record could not hold its %d bytes beside "+
-			"what the record already carries, which a record keeps within %d bytes; it is left with "+
-			"its delivery, which hands it over whole once the budget has room: %w",
-			run.TurnID, size, coord.MaxRecordBytes, err)
-	case err != nil:
-		return false, fmt.Errorf("sandbox: holding the answer to %s: %w", run.TurnID, err)
+		return false, fmt.Errorf("sandbox: holding the answer to %s while the seat's token budget "+
+			"has no room for its turn: %w", run.TurnID, err)
 	}
 	if !landed {
 		log.InfoContext(ctx, "sandbox_clarification_answer_not_held", "turn_id", run.TurnID,
@@ -1051,6 +1085,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
+		RunSpend: outcome.RunSpend,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand

@@ -13,10 +13,10 @@ import (
 // is for: spend is only ever read against a shape, and a flat total has none.
 //
 // It is HERE rather than in the browser for the reason this package exists at
-// all. The client already holds the records for the live window and could
-// bucket them; the store's window it never holds, so a browser-side axis would
-// be correct for one window and absent for every other, and it would be the
-// fourth copy of an aggregation that had three.
+// all. The client holds the records for the live window and could bucket them;
+// the store's window it never holds, so a browser-side axis would be correct
+// for one window and absent for every other, and it would be a second
+// aggregation of records this package already folds.
 
 // Interval is a bucket's width.
 //
@@ -91,22 +91,39 @@ var Groups = []Group{GroupPhase, GroupModel, GroupSeat, GroupUnit, GroupWorker, 
 // Valid reports whether g is one this build knows.
 func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 
-// key is the group a record falls in, and whether it falls in one at all.
+// part is one band's claim on a record: the band's key, and the record as that
+// band counts it.
+type part struct {
+	key string
+	rec Record
+}
+
+// parts is what a record contributes to the bands of this grouping: none, one,
+// or — by model — one per model that served it.
 //
-// A THREE-VALUED ANSWER flattened to two, and the false is load-bearing:
-// GroupWorker leaves out every record that is not a worker's, and a
-// record with no worker is not "the unknown worker" — it is a phase that has
-// nothing to do with this grouping and belongs in no band of the chart. Every
-// other dimension is present on every record, so the empty ones become
-// "unknown" the way the rollup's do.
-func (g Group) key(r Record, units map[string]string) (string, bool) {
+// NONE IS LOAD-BEARING: GroupWorker leaves out every record that is not a
+// worker's, and a record with no worker is not "the unknown worker" — it is a
+// phase that has nothing to do with this grouping and belongs in no band of
+// the chart. Every other dimension is present on every record, so the empty
+// ones become "unknown" the way the rollup's do.
+//
+// SEVERAL IS THE MODEL GROUPING'S, and it is the rollup's own split
+// ([Record.shares]), so a model's band and its `by_model` row count the same
+// tokens: a phase whose rounds two models served lands in both bands, each
+// with its own part.
+func (g Group) parts(r Record, units map[string]string) []part {
 	switch g {
 	case GroupPhase:
-		return orUnknown(r.Phase), true
+		return []part{{orUnknown(r.Phase), r}}
 	case GroupModel:
-		return orUnknown(r.Model), true
+		shares := r.shares()
+		out := make([]part, 0, len(shares))
+		for _, share := range shares {
+			out = append(out, part{orUnknown(share.Model), share})
+		}
+		return out
 	case GroupSeat:
-		return orUnknown(r.AgentRole), true
+		return []part{{orUnknown(r.AgentRole), r}}
 	case GroupUnit:
 		// A seat at the root of the chart is in no unit, and that is a
 		// real placement rather than a missing one — so it groups under
@@ -114,9 +131,9 @@ func (g Group) key(r Record, units map[string]string) (string, bool) {
 		// every root seat with every seat whose role the caller's map
 		// happened not to carry.
 		if unit := units[r.AgentRole]; unit != "" {
-			return unit, true
+			return []part{{unit, r}}
 		}
-		return unattachedUnit, true
+		return []part{{unattachedUnit, r}}
 	case GroupWorker:
 		// The rollup's own predicate, so a worker's band and its row count
 		// the same records. The key carries the phase for the reason
@@ -124,19 +141,19 @@ func (g Group) key(r Record, units map[string]string) (string, bool) {
 		// name, and one band would sum them.
 		id, ok := workerOf(r)
 		if !ok {
-			return "", false
+			return nil
 		}
-		return id.band(), true
+		return []part{{id.band(), r}}
 	case GroupTurn:
-		// A phase with no turn is real spend that cannot be attributed to
+		// A record with no turn is real spend that cannot be attributed to
 		// one — the same judgement [Aggregate] makes, and for the same
-		// reason: inventing a key would draw one band per phase.
+		// reason: inventing a key would draw one band per record.
 		if r.TurnID == "" {
-			return "", false
+			return nil
 		}
-		return r.TurnID, true
+		return []part{{r.TurnID, r}}
 	}
-	return "", false
+	return nil
 }
 
 // unattachedUnit names the band holding every seat that sits at the root of
@@ -149,9 +166,10 @@ const unattachedUnit = "no unit"
 // DefaultSeriesGroups is how many bands a stacked chart carries before the
 // rest fold into the residual.
 //
-// Five, because that is how many distinguishable hues the design system has
-// (`VIZ` plus the residual): a sixth band would be drawn in a colour the
-// palette does not define, and a legend of forty turn ids is not a legend.
+// Five, because that is how many distinguishable hues the dashboard's data
+// ramp has — `dataColor` plus `DATA_COLOR_OTHER` for the residual, in
+// dashboard/src/ui/charts.tsx: a sixth band would be drawn in a colour the
+// ramp does not define, and a legend of forty turn ids is not a legend.
 const DefaultSeriesGroups = 5
 
 // MaxSeriesGroups bounds what a caller may ask for. Past this the chart is a
@@ -160,12 +178,13 @@ const MaxSeriesGroups = 20
 
 // MaxSeriesPoints bounds one answer's buckets.
 //
-// Hourly over the store's own thirty-day ceiling is 720, so nothing reachable
-// through the API hits this. It binds on a caller that names two instants
-// directly, and what it does then is move `since` FORWARD and report the
-// window it actually covered — the same discipline the rollup applies to a
-// clamped day count. Dropping the oldest buckets silently would put a month's
-// heading over a week of bars.
+// Hourly from the store's thirty-day floor to now is 721 buckets at most. The
+// store floors `since` and leaves `until` as the caller named it, so what binds
+// this is an `until` named far enough ahead of now, and what it does then is
+// move `since` FORWARD and report the window it actually covered — the same
+// discipline the store's own floor keeps, labelling an answer with what it
+// covers rather than with what was asked. Dropping the oldest buckets without
+// moving `since` would put a month's heading over a week of bars.
 const MaxSeriesPoints = 1000
 
 // GroupRow is one band: its share of the whole window, and its identity.
@@ -241,6 +260,11 @@ type Series struct {
 
 	// Grouped is what the bands do cover, so the gap above is a number
 	// rather than an inference a reader has to make by subtracting.
+	//
+	// Its TOKENS are the bands' tokens summed. Its calls count each record
+	// once, where grouping by model counts a record in the band of every
+	// model that served it (see [Group.parts]) — so by model the bands'
+	// calls can sum past this figure's.
 	Grouped Bucket `json:"grouped"`
 }
 
@@ -282,7 +306,9 @@ type SeriesOptions struct {
 // A record whose timestamp does not parse is DROPPED rather than pooled into
 // some bucket, and it is the one thing here that silently loses spend — the
 // alternative is a bar at an instant the record does not claim. It cannot
-// happen from either producer: both write RFC3339Nano.
+// happen from the one caller, the `token_series` question in
+// internal/api/queries, which buckets the event store's read, and that read
+// formats every stamp as RFC3339Nano.
 func Bucketed(records []Record, opts SeriesOptions) Series {
 	interval := opts.Interval
 	if interval != IntervalDay {
@@ -391,12 +417,14 @@ func Bucketed(records []Record, opts SeriesOptions) Series {
 	total := map[string]*Bucket{}
 	for _, d := range inside {
 		out.Totals.add(d.Record)
-		key, ok := opts.Group.key(d.Record, opts.Units)
-		if !ok {
+		parts := opts.Group.parts(d.Record, opts.Units)
+		if len(parts) == 0 {
 			continue
 		}
 		out.Grouped.add(d.Record)
-		bucketFor(total, key).add(d.Record)
+		for _, p := range parts {
+			bucketFor(total, p.key).add(p.rec)
+		}
 	}
 
 	ranked := make([]GroupRow, 0, len(total))
@@ -413,12 +441,7 @@ func Bucketed(records []Record, opts SeriesOptions) Series {
 	if len(ranked) > limit {
 		residual := GroupRow{Other: true, Folded: len(ranked) - limit}
 		for _, r := range ranked[limit:] {
-			residual.InputTokens += r.InputTokens
-			residual.OutputTokens += r.OutputTokens
-			residual.TotalTokens += r.TotalTokens
-			residual.Calls += r.Calls
-			residual.CostUSD += r.CostUSD
-			residual.PricedCalls += r.PricedCalls
+			residual.fold(r.Bucket)
 		}
 		ranked = append(ranked[:limit:limit], residual)
 	}
@@ -453,15 +476,14 @@ func Bucketed(records []Record, opts SeriesOptions) Series {
 		}
 		point := &out.Points[i]
 		point.Bucket.add(d.Record)
-		key, grouped := opts.Group.key(d.Record, opts.Units)
-		switch {
-		case !grouped:
-		case kept[key]:
-			b := point.Groups[key]
-			b.add(d.Record)
-			point.Groups[key] = b
-		default:
-			point.Residual.add(d.Record)
+		for _, p := range opts.Group.parts(d.Record, opts.Units) {
+			if !kept[p.key] {
+				point.Residual.add(p.rec)
+				continue
+			}
+			b := point.Groups[p.key]
+			b.add(p.rec)
+			point.Groups[p.key] = b
 		}
 	}
 	return out

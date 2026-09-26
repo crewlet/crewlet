@@ -119,8 +119,11 @@ type runningDomain struct {
 	createdAt  time.Time
 
 	// recreated is set when the position heartbeat finds the LIVE stream
-	// is not the one this applier started against. It is atomic because
-	// the heartbeat writes it while every health read takes it.
+	// is not the one this domain's checkpoint counts on
+	// ([runningDomain.createdAt], compared in [runningDomain.observeLive]),
+	// and cleared when the domain follows the live stream
+	// ([runningDomain.follow]). It is atomic because the heartbeat writes
+	// it while every health read takes it.
 	recreated atomic.Bool
 
 	// evicted is this domain's own eviction gate, taken from the write

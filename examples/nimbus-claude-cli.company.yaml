@@ -510,18 +510,18 @@ workers:
       required: [recommendation]
 
 # Agent-learning subsystem — episodic memory, reflection, skill
-# synthesis/refinement, counterparty profiling.  This is the company's
-# ONLY durable shared-context mechanism now that there is no wiki, so it
-# is worth more here than in the fully-wired org, not less.
+# synthesis/refinement and promotion, counterparty profiling.  What a seat
+# carries from one turn to the next lives here; the company's own pages
+# (``knowledge.backend: native``, below) are what it can look up.
 #
-# Two knobs are off, and both are off because of this deployment rather
-# than because the feature is unwanted:
+# ``skill_promotion`` is on: once a day it drafts a procedure several
+# seats converged on into their unit's container in the native knowledge
+# base, as an unpublished draft the unit lead reviews.  It is a handful of
+# auxiliary calls a day, so it costs the CLI slots below next to nothing.
 #
-#   - ``skill_promotion`` drafts a skill page into a unit's knowledge-base
-#     container so siblings can read it.  There is no knowledge base, so
-#     it would find nowhere to write.  The engine disables it on its own
-#     in that case; saying so here is the difference between a knob that
-#     is off and a knob that silently does nothing.
+# One knob is off, because of this deployment rather than because the
+# feature is unwanted:
+#
 #   - ``skill_synthesis.scheduler_enabled`` is the BACKGROUND clustering
 #     pass that looks for cross-turn patterns.  Every one of its calls
 #     takes one of the four CLI process slots above, competing with live
@@ -544,7 +544,7 @@ learning:
   skill_refinement:
     enabled: true                          # observed-in-practice / counter-example notes
   skill_promotion:
-    enabled: false                         # see above — no knowledge base to draft into
+    enabled: true                          # see above — drafts into the native knowledge base
   personal_memory:
     max_refreshes_per_turn: 3              # cap on distinct context_hint values per turn
   episode_lifecycle:

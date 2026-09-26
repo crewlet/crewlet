@@ -1399,16 +1399,22 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	// resolved against the task's own rows inside the decide, which is the
 	// one place a single consistent read of them exists.
 	//
-	// THE MARK CARRIES THE INTENT, because the duty that finishes this
-	// walk if this process dies reads it off the task and has no other
-	// way to know: a merge that declined to move the subtree and one that
-	// crashed before moving its first child leave identical rows.
+	// THE MARK CARRIES THE INTENT AND THE TARGET, because the duty that
+	// finishes this walk if this process dies reads both off the task and
+	// has no other way to know: a merge that declined to move the subtree
+	// and one that crashed before moving its first child leave identical
+	// rows, and the relation set may name more than one task this one
+	// duplicates by the time the duty reads it.
+	//
+	// AND THE EDGE REPLACES any `duplicates` edge the task already had —
+	// a task duplicates one other ([RelationKind.Single]) — so the link a
+	// reader sees names the task this merge folds it into.
 	merging := true
 	marked, err := w.mergingInto(into).UpdateTask(ctx, stepID(opID, "mark"),
 		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relate: &RelationIntent{Add: []Relation{{
 			Kind: RelationDuplicates, Other: into,
-		}}}, Merging: &merging, MergeReparent: &reparent},
+		}}}, Merging: &merging, MergeReparent: &reparent, MergeInto: &into},
 		ChangeRelations, nil)
 	if err != nil {
 		return WriteResult{}, err
@@ -1417,9 +1423,17 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		marked.Position, notify)
 	switch {
 	case errors.Is(err, errMergeOver):
-		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s had "+
-			"been ended by another writer when this call came to close it: %w",
-			duplicate, into, err)
+		// THE MARK HAS LANDED, and every subtask this call moved: what ended
+		// the merge is another writer — the tracker duty, once this call's
+		// claim ran out under it, or a purge of the duplicate — so this call
+		// closes nothing, and what it wrote stands. PARTIAL, because every
+		// other refusal a write returns says the change was not made
+		// ([PartialError]).
+		return WriteResult{}, partial(false, "tracker: the merge of %s into "+
+			"%s had been ended by another writer when this call came to close "+
+			"it: the %d subtask(s) this call moved stay under %s, and this "+
+			"call does not close %s: %w",
+			duplicate, into, end.Moved, into, duplicate, err)
 	case err != nil:
 		// THE MARK HAS LANDED, so this is a merge in progress rather than
 		// one that did not happen: the duplicate stays marked, and once
@@ -1432,8 +1446,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			"has been purged or put in the trash by then: %w",
 			duplicate, into, into, err)
 	case end.GivenUp != nil:
-		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s was "+
-			"given up after it began: %w — %s is left open with no merge "+
+		// PARTIAL TOO: the mark landed before a step saw the target go, and
+		// so may some of the moves. Calling again does not finish it — the
+		// target is gone, so the next mark is refused.
+		return WriteResult{}, partial(false, "tracker: the merge of %s into %s "+
+			"was given up after it began: %w — %s is left open with no merge "+
 			"marker, and %s", duplicate, into, end.GivenUp, duplicate,
 			movedBeforeGivingUp(end.GivenUp, into))
 	}
@@ -1615,9 +1632,10 @@ func targetGone(err error) bool {
 //
 // EACH MOVE ASKS WHETHER ITS SUBTASK IS STILL ONE ([Writer.movingOutOf]),
 // because the batch was read before it: a subtask re-parented elsewhere since
-// then would otherwise be moved back over somebody's decision, and one in the
-// trash — read here like any other child — would be refused on every attempt.
-// Either is passed over, and does not count as moved.
+// then would otherwise be moved back over somebody's decision, one in the
+// trash — read here like any other child — would be refused on every attempt,
+// and one purged since has no row to move. Each is passed over, and does not
+// count as moved.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
 	var moved int
 	var after string
@@ -1641,8 +1659,8 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 			switch {
 			case errors.Is(err, errLeftTheMerge):
 				// NOT THIS MERGE'S TO MOVE ANY MORE — re-parented
-				// elsewhere or put in the trash since the batch was read
-				// — so it is passed over rather than moved back.
+				// elsewhere, put in the trash or purged since the batch
+				// was read — so it is passed over rather than moved back.
 				continue
 			case targetGone(err):
 				// THE TARGET IS GONE — purged, or in the trash — and

@@ -807,7 +807,7 @@ func TestATaskMidMergeIsNotPutInTheTrash(t *testing.T) {
 			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
 				Kind: tracker.RelationDuplicates, Other: "keep",
 			}}},
-			Merging: &merging,
+			Merging: &merging, MergeInto: ptr("keep"),
 		}, tracker.ChangeRelations, nil); err != nil {
 		t.Fatalf("mark dup mid-merge: %v", err)
 	}

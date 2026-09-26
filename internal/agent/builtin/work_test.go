@@ -683,13 +683,15 @@ func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	}
 }
 
-// A FAILED READ MUST NEVER READ AS "NOTHING FOUND". A projection that has not
+// A FAILED READ MUST NEVER READ AS "NOTHING FOUND". A node whose rows have not
 // caught up telling a seat the company has no work makes it file a duplicate
-// or abandon work it was told to do.
+// or abandon work it was told to do. And it names the tracker, which is what
+// these tools could not read — the page tools' own read names the knowledge
+// base.
 func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.readErr = errors.New("the projection is not hydrated yet")
+	trk.readErr = errors.New("this node's rows are behind the log")
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
@@ -699,6 +701,10 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 		}
 		if !strings.Contains(got.Output, "NOT an empty result") {
 			t.Errorf("%s does not say the difference: %s", name, got.Output)
+		}
+		if !strings.Contains(got.Output, "could not read the tracker") {
+			t.Errorf("%s does not say it was the tracker it could not read: %s",
+				name, got.Output)
 		}
 	}
 }

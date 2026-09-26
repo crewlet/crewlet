@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -154,7 +152,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchID = uuid.NewString()
 	// Nor the count, which only the store raises: a new row has opened one
 	// launch, and it holds no answer and nothing a newer build wrote.
-	run.Launches, run.HeldAnswer, run.Extra = 1, nil, nil
+	run.Launches, run.HeldAnswer, run.HeldAnswerParts, run.Extra = 1, nil, nil, nil
 	run.UpdatedAt = now
 	raw, err := encodeRun(run)
 	if err != nil {
@@ -221,8 +219,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged = false
 		existing.CarriedCounted = false
 		// And an answer held for the previous job's call answers a call
-		// this job has not made.
-		existing.HeldAnswer = nil
+		// this job has not made. Its parts, if the row named any, are the
+		// replaced launch's and go with its purge below.
+		existing.HeldAnswer, existing.HeldAnswerParts = nil, nil
 		return true
 	})
 	if err != nil || !reset || replaced == "" {
@@ -296,8 +295,11 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.Charged = run.Charged || release.Charged
 		run.CarriedCounted = run.CarriedCounted || release.CarriedCounted
 		if release.Held != nil {
+			// Held on the row whole: a job's result the row cannot hold
+			// is held as a reference to its box ([HeldAnswer.InBox]), so
+			// it names no parts.
 			held := *release.Held
-			run.HeldAnswer = &held
+			run.HeldAnswer, run.HeldAnswerParts = &held, nil
 		}
 		return true
 	})
@@ -306,16 +308,147 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 
 // HoldAnswer holds a person's reply on the run parked on the question its
 // launch asked. See the contract on [PendingStore].
+//
+// ON THE ROW WHEN IT FITS: one write, and the form every build reads. A reply
+// past [MaxHeldAnswerBytes], or one the row's record refuses beside what it
+// already carries — which only a server set below the contract's ceiling does
+// to a reply within the bound — is kept whole in parts ([CoordStore.holdInParts]).
 func (s *CoordStore) HoldAnswer(ctx context.Context, turnID string, held HeldAnswer) (bool, error) {
+	whole, err := json.Marshal(held)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: encode the answer to run %s: %w", turnID, err)
+	}
+	if len(whole) > MaxHeldAnswerBytes {
+		return s.holdInParts(ctx, turnID, held, whole, fmt.Sprintf(
+			"held with the event that delivered it, it is %d bytes, past the %d a run's record "+
+				"holds an answer within (sandbox.MaxHeldAnswerBytes)", len(whole), MaxHeldAnswerBytes))
+	}
+	landed, err := s.hold(ctx, turnID, held, nil)
+	if errors.Is(err, coord.ErrTooLarge) {
+		return s.holdInParts(ctx, turnID, held, whole, fmt.Sprintf(
+			"the run's record refused its %d bytes beside what the record already carries (%v)",
+			len(whole), err))
+	}
+	return landed, err
+}
+
+// hold writes a held answer onto the row, with the reference to its parts when
+// it is kept in them, while the run waits on the answer's launch and holds none
+// for it.
+func (s *CoordStore) hold(ctx context.Context, turnID string, held HeldAnswer, parts *HeldParts) (bool, error) {
 	_, landed, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if _, already := run.Held(); already || run.LaunchID != held.Launch ||
-			!slices.Contains(Awaiting, run.Status) {
+		if !holdable(*run, held.Launch) {
 			return false
 		}
-		run.HeldAnswer = &held
+		run.HeldAnswer, run.HeldAnswerParts = &held, parts
 		return true
 	})
 	return landed, err
+}
+
+// holdable reports whether a run can take an answer held for launch: it waits
+// on a question that launch asked, and holds no answer for it.
+func holdable(run PendingRun, launch string) bool {
+	_, already := run.Held()
+	return !already && run.LaunchID == launch && slices.Contains(Awaiting, run.Status)
+}
+
+// holdInParts keeps a held answer's whole in parts filed under the run's
+// launch, then writes the row that names them, in one write.
+//
+// THE ROW IS READ FIRST, so a reply the run can no longer take — claimed,
+// relaunched, ended or answered since the caller found it waiting — files no
+// parts at all; the write that names them decides again, against what the row
+// holds then. THE PARTS BEFORE THAT WRITE, so a row naming them is never
+// visible without them: the completion poll signals a held answer the moment
+// it reads one.
+//
+// PAST EVERY PART THE LAUNCH ALREADY HOLDS ([HeldParts]): its suspension's,
+// and any a hold that did not land left behind. A part another hold filed at
+// one of those numbers first is [errAddressTaken], and the numbering is read
+// again; parts filed before that are named by nothing and go with the purge of
+// the launch.
+//
+// A WHOLE THAT CANNOT BE KEPT IS AN ERROR naming the limit that refused its
+// parts, and why the row could not hold it (why): nothing is held.
+func (s *CoordStore) holdInParts(ctx context.Context, turnID string, held HeldAnswer, whole []byte, why string) (bool, error) {
+	run, _, found, err := s.read(ctx, turnID)
+	if err != nil || !found || !holdable(run, held.Launch) {
+		return false, err
+	}
+	// casRetries, for the reason every lost race here takes it: the only
+	// party that files at the numbers this read finds free is another hold
+	// of the same launch, and each pass reads the numbering again.
+	for range casRetries {
+		filed, err := s.calls.SuspensionParts(ctx, turnID, held.Launch)
+		if err != nil {
+			return false, fmt.Errorf("sandbox: read the parts run %s's launch holds, to hold its answer "+
+				"past them: %w", turnID, err)
+		}
+		first := 1
+		if n := len(filed); n > 0 {
+			first = filed[n-1].Part + 1
+		}
+		count, err := fileParts(whole, func(part int, value []byte) (bool, error) {
+			return s.calls.CreateSuspensionPart(ctx, turnID, held.Launch, first+part-1, value)
+		})
+		if errors.Is(err, errAddressTaken) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("sandbox: the answer to run %s could not be held: %s, and its parts "+
+				"could not all be filed (%d were): %w", turnID, why, count, err)
+		}
+		ref := HeldParts{Launch: held.Launch, At: held.At, First: first, Parts: count, Bytes: len(whole)}
+		stub := HeldAnswer{Launch: held.Launch, At: held.At}
+		landed, err := s.hold(ctx, turnID, stub, &ref)
+		if err != nil {
+			return false, fmt.Errorf("sandbox: hold the answer to run %s, kept in %d parts: %w",
+				turnID, count, err)
+		}
+		if landed {
+			s.logger().InfoContext(ctx, "sandbox_answer_held_in_parts", "turn_id", turnID,
+				"launch_id", held.Launch, "answer_bytes", ref.Bytes, "answer_parts", ref.Parts,
+				"first_part", ref.First, "held_limit_bytes", MaxHeldAnswerBytes,
+				"detail", why+"; the run's record names the parts the answer is kept in, and the "+
+					"resume reads it back whole")
+		}
+		return landed, nil
+	}
+	return false, fmt.Errorf("sandbox: hold the answer to run %s: the parts its launch holds kept "+
+		"changing under the hold", turnID)
+}
+
+// Answer returns the answer held on a run for its launch, whole. See the
+// contract on [PendingStore].
+func (s *CoordStore) Answer(ctx context.Context, run PendingRun) (HeldAnswer, bool, error) {
+	held, ok := run.Held()
+	ref := run.HeldAnswerParts
+	if !ok || ref == nil || ref.Launch != held.Launch || !ref.At.Equal(held.At) {
+		// Held whole on the row, or none held; and a reference naming
+		// another answer is nobody's (see [PendingRun.HeldAnswerParts]).
+		return held, ok, nil
+	}
+	parts, err := s.calls.SuspensionParts(ctx, run.TurnID, held.Launch)
+	if err != nil {
+		return HeldAnswer{}, true, fmt.Errorf("sandbox: read the answer held on run %s: %w", run.TurnID, err)
+	}
+	joined, why := joinParts(parts, ref.First, ref.Parts, ref.Bytes)
+	if why != "" {
+		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's answer, %d bytes kept in %d parts from part %d: %s",
+			ErrAnswerUnreadable, run.TurnID, ref.Bytes, ref.Parts, ref.First, why)
+	}
+	var whole HeldAnswer
+	if err := json.Unmarshal(joined, &whole); err != nil {
+		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's answer does not decode from its %d parts: %w",
+			ErrAnswerUnreadable, run.TurnID, ref.Parts, err)
+	}
+	if whole.Launch != held.Launch || !whole.At.Equal(held.At) {
+		return HeldAnswer{}, true, fmt.Errorf("%w: run %s's parts hold an answer held for launch %q at %s, "+
+			"not the one its record names", ErrAnswerUnreadable, run.TurnID, whole.Launch,
+			whole.At.Format(time.RFC3339Nano))
+	}
+	return whole, true, nil
 }
 
 // MarkAwaiting parks a run until a person answers.
@@ -341,6 +474,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Audience = q.Audience
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
+		run.AskedSpend, run.AskedLaunch = q.Spend, run.LaunchID
 		return true
 	})
 	return err
@@ -1017,7 +1151,7 @@ func unreadable(cut BridgeCall, why string) BridgeCall {
 // reassemble is [CoordStore.whole]'s check and join, answering the reason in
 // place of the call when the parts do not make the whole the record names.
 func reassemble(cut BridgeCall, parts []coord.Part) (BridgeCall, string) {
-	joined, why := joinParts(parts, cut.WholeParts, cut.WholeBytes)
+	joined, why := joinParts(parts, 1, cut.WholeParts, cut.WholeBytes)
 	if why != "" {
 		return BridgeCall{}, why
 	}
@@ -1034,27 +1168,37 @@ func reassemble(cut BridgeCall, parts []coord.Part) (BridgeCall, string) {
 	return whole, ""
 }
 
-// joinParts joins the first count parts into the whole a record names, or
-// answers why they do not make it: a part missing or out of order, or a length
-// other than size. The parts are checked against the record's reference before
-// any byte is believed, and a part past count belongs to no reference and is
-// not read — the one check and join every whole kept in parts is read back by.
-func joinParts(parts []coord.Part, count, size int) ([]byte, string) {
-	if count < 1 {
+// joinParts joins count parts, numbered from first, into the whole a record
+// names, or answers why they do not make it: a part missing or out of order,
+// or a length other than size. The parts are checked against the record's
+// reference before any byte is believed, and a part outside the reference's
+// numbers belongs to another whole and is not read — the one check and join
+// every whole kept in parts is read back by. parts is in part order, as every
+// listing of them is.
+func joinParts(parts []coord.Part, first, count, size int) ([]byte, string) {
+	switch {
+	case count < 1:
 		return nil, fmt.Sprintf("its record names %d parts", count)
+	case first < 1:
+		return nil, fmt.Sprintf("its record names parts from part %d", first)
 	}
+	start := slices.IndexFunc(parts, func(p coord.Part) bool { return p.Part >= first })
+	if start < 0 {
+		start = len(parts)
+	}
+	named := parts[start:]
 	held := 0
 	for i := range count {
-		if i >= len(parts) || parts[i].Part != i+1 {
+		if i >= len(named) || named[i].Part != first+i {
 			return nil, fmt.Sprintf("part %d of %d is missing", i+1, count)
 		}
-		held += len(parts[i].Value)
+		held += len(named[i].Value)
 	}
 	if held != size {
 		return nil, fmt.Sprintf("its parts hold %d bytes, not %d", held, size)
 	}
 	joined := make([]byte, 0, held)
-	for _, part := range parts[:count] {
+	for _, part := range named[:count] {
 		joined = append(joined, part.Value...)
 	}
 	return joined, ""
@@ -1513,7 +1657,7 @@ func (s *CoordStore) Suspension(ctx context.Context, run PendingRun) (map[string
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: read the suspended conversation of run %s: %w", run.TurnID, err)
 	}
-	whole, why := joinParts(parts, ref.Parts, ref.Bytes)
+	whole, why := joinParts(parts, 1, ref.Parts, ref.Bytes)
 	if why != "" {
 		return nil, fmt.Errorf("%w: run %s's suspended conversation, %d bytes kept in %d parts: %s",
 			ErrSuspensionUnreadable, run.TurnID, ref.Bytes, ref.Parts, why)
@@ -1812,55 +1956,22 @@ func outranked(run PendingRun, fence Fence) bool {
 }
 
 // encodeRun is a run's record: its fields, and every member a newer build
-// wrote that this one does not know ([PendingRun.Extra]).
-//
-// A MEMBER THIS BUILD KNOWS IS NEVER TAKEN FROM EXTRA, even one its own value
-// leaves out of the encoding: a field this build cleared — an answer a launch
-// dropped — is written absent, and a copy carried beside it would undo the
-// clear. The decoder files no known member there; this holds whatever a
-// caller put in the map.
+// wrote that this one does not know, at every depth — the carry
+// [PendingRun.MarshalJSON] and every object on the row go through (carry.go).
 func encodeRun(run PendingRun) ([]byte, error) {
 	raw, err := json.Marshal(run)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
-	if len(run.Extra) == 0 {
-		return raw, nil
-	}
-	var merged map[string]json.RawMessage
-	if err = json.Unmarshal(raw, &merged); err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s with %d members this build does not know: %w",
-			run.TurnID, len(run.Extra), err)
-	}
-	for key, value := range run.Extra {
-		if !knownRunMember(key) {
-			merged[key] = value
-		}
-	}
-	if raw, err = json.Marshal(merged); err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
-	}
 	return raw, nil
 }
 
+// decodeRun is a run as its record holds it, keeping every member this build
+// does not know for the write that follows (carry.go).
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
 	if err := json.Unmarshal(record.Value, &run); err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
-	}
-	// EVERY MEMBER THIS BUILD DOES NOT KNOW, kept for the write that
-	// follows: see [PendingRun.Extra].
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(record.Value, &members); err != nil {
-		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
-	}
-	for key := range members {
-		if knownRunMember(key) {
-			delete(members, key)
-		}
-	}
-	if len(members) > 0 {
-		run.Extra = members
 	}
 	// The KEY is the identity, not the field: a record whose body somehow
 	// disagrees with the key it is stored under would hand a caller a run
@@ -1868,35 +1979,3 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 	run.TurnID = record.Key
 	return run, nil
 }
-
-// knownRunMember reports whether a member of a run's record is one of
-// [PendingRun]'s own fields.
-//
-// CASE-FOLDED, as encoding/json matches a member to a field when it decodes:
-// a member it decoded into a field is that field's, and carried beside it as
-// well it would be written twice.
-func knownRunMember(key string) bool { return runMembers()[strings.ToLower(key)] }
-
-// runMembers is the member name of every field [PendingRun] encodes, folded to
-// lower case.
-//
-// READ OFF THE STRUCT'S OWN TAGS rather than listed beside it, because the
-// list and the struct are one fact: a field added to the struct and missing
-// from a list would be carried in Extra as well as in its field and encoded
-// twice, while the tags are what the encoder itself writes.
-var runMembers = sync.OnceValue(func() map[string]bool {
-	fields := reflect.TypeFor[PendingRun]()
-	out := make(map[string]bool, fields.NumField())
-	for i := range fields.NumField() {
-		field := fields.Field(i)
-		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-		switch {
-		case !field.IsExported() || name == "-":
-			continue
-		case name == "":
-			name = field.Name
-		}
-		out[strings.ToLower(name)] = true
-	}
-	return out
-})

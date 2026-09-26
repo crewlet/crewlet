@@ -21,10 +21,11 @@ import (
 //
 // The record carries what changed and the row carries what it was. A patch
 // applied to the decoded document and re-encoded produces the complete new
-// state — including fields THIS BUILD DOES NOT KNOW, which round-trip through
-// the document untouched. Writing the patch's columns straight onto the row
-// would lose them at the first rolling upgrade, permanently, on the node that
-// happened to apply the record.
+// state — including fields THIS BUILD DOES NOT KNOW, which the decode keeps in
+// [Task.Extra] and the encode writes back (extra.go says what that preserves).
+// Writing the patch's columns straight onto the row would lose them at the
+// first rolling upgrade, permanently, on the node that happened to apply the
+// record.
 
 // applyTask writes one task record and everything derived from it.
 func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
@@ -428,6 +429,12 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.MergeReparent != nil {
 		task.MergeReparent = *patch.MergeReparent
 	}
+	if patch.MergeInto != nil {
+		// ONLY FROM THE PATCH, never derived from the marker: a record at
+		// a version below [MergeRecordVersion] carries no target and
+		// writes none, whatever it does to the marker.
+		task.MergeInto = *patch.MergeInto
+	}
 	if patch.Merging != nil {
 		task.Merging = *patch.Merging
 		if !task.Merging {
@@ -726,8 +733,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 //
 // # Which purges count is the caller's question, and there are two
 //
-// The APPLIER counts [scrubbingPurges] alone. The drop is a rule
-// [PurgeRecordVersion] brought, and a commit past a purge at [RecordVersion]
+// The APPLIER counts [scrubbingPurges] alone. The drop is a rule of
+// [PurgeRecordVersion], and a commit past a purge at [RecordVersion]
 // writes its rows by that purge's rule — the edge written back — on every node
 // that replays it, rather than by a rule its purge never had. No build that
 // reads below [PurgeRecordVersion] applies a record past a purge at it (its
@@ -798,7 +805,7 @@ const (
 
 	// scrubbingPurges is a task destroyed by a purge at
 	// [PurgeRecordVersion] or above: the question "did the purge that
-	// destroyed it apply the rules that version brought".
+	// destroyed it apply that version's rules".
 	scrubbingPurges
 )
 
@@ -1131,9 +1138,9 @@ func bucketOf(task Task) string {
 //
 // # What it does is the record's VERSION's, not this build's
 //
-// A purge at [RecordVersion] applies exactly as it was first applied — rows
-// deleted, marker written, children's rows moved — and one at
-// [PurgeRecordVersion] also does everything below marked as its own. The
+// A purge at [RecordVersion] deletes the rows, writes the marker and moves the
+// children's rows, and one at [PurgeRecordVersion] also does everything below
+// marked as its own. The
 // constant's doc says why that split is a version and never an edit.
 //
 // # Its HISTORY is scrubbed rather than deleted
@@ -1260,7 +1267,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 //
 // ONE LIST FOR BOTH VERSIONS, with the one difference in it: the mirror of a
 // dependency is deleted by a purge at [PurgeRecordVersion] and left by one at
-// [RecordVersion], which never deleted it.
+// [RecordVersion].
 func purgeDeletes(id string, scrubs bool) []struct {
 	sql  string
 	args []any
@@ -1302,7 +1309,7 @@ func purgeDeletes(id string, scrubs bool) []struct {
 // deletionMarker is the document a purge at [PurgeRecordVersion] writes on its
 // deletion marker, and what a later record reads off it.
 //
-// A purge at [RecordVersion] wrote its own payload there instead, which carries
+// A purge at [RecordVersion] writes its own payload there instead, which carries
 // the same `v` and `reason` and no `parent` — so both decode into this, and the
 // version says which rule the marker's purge applied.
 type deletionMarker struct {
@@ -1454,14 +1461,32 @@ const (
 // chain, and run before them it would walk through the row this purge is
 // removing and write an ancestry naming it.
 //
-// A purge at [RecordVersion] moved the `parent_id` column alone, and still
-// does. One at [PurgeRecordVersion] moves the child's DOCUMENT too, through the
-// decode and encode a task commit uses, because the columns beside a document
-// are extracted from it on every commit — so a column-only move was undone by
-// the child's next commit of any kind, which wrote the purged task back as its
-// parent and a subtree hanging from a row no node holds. It stamps
-// `scoped_through` rather than the version, as [placeTask] does and for its
-// reason: this record is on the purged task's subject, not the child's.
+// A purge at [RecordVersion] moves the `parent_id` column alone. One at
+// [PurgeRecordVersion] moves the child's DOCUMENT too, through the decode and
+// encode a task commit uses, because the columns beside a document are
+// extracted from it on every commit — so a column-only move is undone by the
+// child's next commit of any kind, which writes the purged task back as its
+// parent and a subtree hanging from a row no node holds.
+//
+// # It stamps nothing on the child
+//
+// Neither the version, which is the child's own subject's (see [Task]), nor
+// `scoped_through`. This record's scope is the purged task alone
+// ([Writer.PurgeTask]), never its children: which children it moves is
+// decided by the rows at this position, which no writer can state. So a node
+// holding one of the child's records back — one its build cannot read, and
+// every record on the child after it — applies this purge anyway, and
+// reprocesses the child's records later, BELOW this position. A `scoped_through` stamped here would
+// make [Applier.applyTask]'s redelivery guard read every one of them as already
+// applied, and that node would lack them for good.
+//
+// Left unstamped, both orders end in the same rows. The move is a function of
+// the rows at this position ([childrenOf]) and names no child twice; a child
+// record applied after it merges onto the moved document, so what it did not
+// touch keeps the purged task's parent and what it did touch is its own; and
+// a parent it names that this purge destroyed is redirected to where this
+// purge moved the children ([placedParent]). No guard is lost: a redelivery of
+// a child record this node HAS applied is at or below the child's own version.
 func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
 	parent *string, c applyContext, scrubs bool) (int, error) {
 
@@ -1487,7 +1512,8 @@ func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
 }
 
 // moveChildDocument writes one child's new parent into its document and its
-// row together — [Applier.reparent] for a purge at [PurgeRecordVersion].
+// row together — [Applier.reparent] for a purge at [PurgeRecordVersion], which
+// says why it stamps nothing else.
 func moveChildDocument(ctx context.Context, tx *sql.Tx, child string,
 	parent *string, c applyContext) error {
 
@@ -1503,15 +1529,13 @@ func moveChildDocument(ctx context.Context, tx *sql.Tx, child string,
 			"node does not hold", c.position, child)
 	}
 	task.Parent = parent
-	task.ScopedThrough = max(task.ScopedThrough, uint64(c.packed))
 	document, err := json.Marshal(task)
 	if err != nil {
 		return fmt.Errorf("tracker: encode child %s at %s: %w", child, c.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET parent_id = ?, scoped_through = ?, document = ?
-		WHERE id = ?`,
-		nullableStringPtr(parent), int64(task.ScopedThrough), document, child); err != nil {
+		UPDATE tracker_tasks SET parent_id = ?, document = ? WHERE id = ?`,
+		nullableStringPtr(parent), document, child); err != nil {
 		return fmt.Errorf("tracker: re-parent %s at %s: %w", child, c.position, err)
 	}
 	return nil

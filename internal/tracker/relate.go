@@ -123,6 +123,15 @@ func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 		next[at].OneSidedFinal = true
 	}
 	for _, add := range r.Add {
+		if add.Kind.Single() {
+			// ONE EDGE OF THIS KIND, so the one being added replaces
+			// any other — read here, against the set this decide holds,
+			// so an edge a colleague wrote after the caller's own read
+			// is replaced too rather than left beside it.
+			next = slices.DeleteFunc(next, func(have Relation) bool {
+				return have.Kind == add.Kind && have.Other != add.Other
+			})
+		}
 		if slices.ContainsFunc(next, func(have Relation) bool {
 			return have.Kind == add.Kind && have.Other == add.Other
 		}) {

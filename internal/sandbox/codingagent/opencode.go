@@ -3,6 +3,7 @@ package codingagent
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -230,11 +231,8 @@ func (OpenCode) Finished(stdout string) bool {
 	return false
 }
 
-// Parse reconstructs the answer from the stream.
-//
-// OpenCode exposes no stable token or cost envelope, so those stay ZERO rather
-// than being estimated: an invented number in the spend rollup is worse than a
-// missing one, because a reader cannot tell it is invented.
+// Parse reconstructs the answer from the stream, and the run's spend from its
+// steps (see [openCodeSpend]).
 func (OpenCode) Parse(stdout string) sandbox.Result {
 	text := strings.TrimSpace(stdout)
 	if text == "" {
@@ -269,6 +267,7 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 		Success:       success,
 		DeliveredRefs: prPattern.FindAllString(body, -1),
 	}
+	openCodeSpend(events, &res)
 	if !success {
 		res.Error = errText
 		if res.Error == "" {
@@ -276,6 +275,80 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 		}
 	}
 	return res
+}
+
+// openCodeSpend reads the run's own model spend off its `step_finish` events.
+//
+// EACH STEP REPORTS ITS OWN: the part a `step_finish` carries holds that
+// step's `cost` and its `tokens` — `input`, `output`, `reasoning`, and `cache`
+// with `read` and `write` — and the run's spend is their sum. A part is counted
+// once by its id, so a step reported twice is not billed twice.
+//
+// WHAT THE FIELDS MEAN HAS MOVED ACROSS OPENCODE RELEASES, and `total` is the
+// one that has not: where a step carries it, it is the provider's own count
+// for the step, and `input` is the part the cache neither served nor wrote. So
+// such a step is counted EXACTLY: its input is `input` plus both cache counts,
+// and its output is the rest of `total` — which includes the reasoning a
+// release that reports `output` without it leaves out. A step without `total`
+// is counted as `input` and `output` alone, which no release's shape of those
+// two overstates, and the run is then reported as a FLOOR (UsageWhole false),
+// as is a run whose stream carried no step's figures at all.
+//
+// No step names its model, so the run's figures are one part under no model's
+// name; the price is OpenCode's own, from its model table.
+func openCodeSpend(stream []map[string]any, res *sandbox.Result) {
+	type step struct {
+		in, out int
+		cost    float64
+		exact   bool
+	}
+	steps := map[string]step{}
+	var order []string
+	for i, obj := range stream {
+		if eventType(obj) != "step_finish" {
+			continue
+		}
+		part, _ := obj["part"].(map[string]any)
+		counts, ok := part["tokens"].(map[string]any)
+		if !ok {
+			// A step with no figures at all: the run did spend on it, and
+			// nothing says how much.
+			steps["#"+strconv.Itoa(i)] = step{}
+			order = append(order, "#"+strconv.Itoa(i))
+			continue
+		}
+		id := stringField(part, "id")
+		if id == "" {
+			id = "#" + strconv.Itoa(i)
+		}
+		cache, _ := counts["cache"].(map[string]any)
+		s := step{
+			in:   intField(counts, "input"),
+			out:  intField(counts, "output"),
+			cost: floatField(part, "cost"),
+		}
+		if _, has := counts["total"]; has {
+			in := s.in + intField(cache, "read") + intField(cache, "write")
+			if total := intField(counts, "total"); total >= in {
+				s.in, s.out, s.exact = in, total-in, true
+			}
+		}
+		if _, seen := steps[id]; !seen {
+			order = append(order, id)
+		}
+		steps[id] = s
+	}
+	whole := len(order) > 0
+	for _, id := range order {
+		s := steps[id]
+		res.InputTokens += s.in
+		res.OutputTokens += s.out
+		if s.cost > 0 {
+			res.CostUSD += s.cost
+		}
+		whole = whole && s.exact
+	}
+	res.UsageWhole = whole
 }
 
 // streamEvents decodes the newline-delimited JSON objects, skipping anything

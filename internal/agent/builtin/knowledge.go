@@ -213,10 +213,12 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			bullets = append(bullets, bullet)
 		}
 	}
-	// THE TURN-START BLOCK'S OWN SENTENCE for an answer that is missing
-	// part of what it searched, on an empty answer and a full one alike:
-	// "nothing matched" over half the corpus is not "nothing matched".
-	partial := prefetch.PartialKnowledgeNote(answer.Partial)
+	// THE TURN-START BLOCK'S OWN SENTENCES for an answer that is missing
+	// part of what it searched, or that its backend cut short of its
+	// ranking, on an empty answer and a full one alike: "nothing matched"
+	// over half the corpus, or over matches an exclusion thinned, is not
+	// "nothing matched".
+	partial := prefetch.KnowledgeAnswerNote(answer)
 	// ASKED AFTER THE SEARCH, WHATEVER IT FOUND. "Not indexed yet" is not
 	// "nothing matched", and the two send a seat to opposite places: the
 	// no-match answer invites different keywords, which on an index still
@@ -228,12 +230,21 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE BUILDING SENTENCE OUTRANKS THE PARTIAL ONE on such a node: its
 	// own share of a divided search is counted missing too, so both would
 	// be true, and the building one names the cause the seat can wait out.
+	// A truncated answer's note is kept beside it: that is a fact about the
+	// ranking the backend read, which the index's build does not explain.
 	building := t.search.Building(ctx)
+	if building {
+		partial = prefetch.KnowledgeAnswerNote(knowledge.Answer{Truncated: answer.Truncated})
+	}
 	if len(bullets) == 0 {
 		if building {
 			// THE TURN-START BLOCK'S OWN SENTENCE — one text for one
 			// state, because the seat reads both.
-			return tools.Result{Output: prefetch.BuildingKnowledgeHint}, nil
+			out := prefetch.BuildingKnowledgeHint
+			if partial != "" {
+				out += "\n\n" + partial
+			}
+			return tools.Result{Output: out}, nil
 		}
 		empty := fmt.Sprintf("No team documents match %q. Try different keywords, "+
 			"or work from what you have — not everything is written down.",
@@ -254,10 +265,10 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		b.WriteString(bullet)
 		b.WriteString("\n")
 	}
-	switch {
-	case building:
+	if building {
 		b.WriteString("\n" + partialKnowledgeNote + "\n")
-	case partial != "":
+	}
+	if partial != "" {
 		b.WriteString("\n" + partial + "\n")
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the

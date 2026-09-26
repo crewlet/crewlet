@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
+
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -37,7 +37,6 @@ func resumed(conversation string) resumeInput {
 			AgentHandle:     "swe",
 			ConversationKey: conversation,
 		},
-		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
 	}
 }
 
@@ -225,10 +224,6 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	in := resumed("slack:C1")
 	in.Company = admitted
 	in.Run.AgentHandle = seat.Handle()
-	in.Turn = &turnctx.Turn{
-		RunID: in.Run.TurnID, WorkKey: in.Run.WorkKey,
-		Seat: seat, Org: admitted.Org,
-	}
 
 	err := e.resumeTurn(t.Context(), in)
 	if err == nil || !strings.Contains(err.Error(), "resume round 1") {

@@ -373,3 +373,56 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// A MODEL'S BAND COUNTS WHAT ITS `by_model` ROW COUNTS. A phase whose rounds two
+// models served lands in both bands, each with its own part — the chart and
+// the breakdown beside it are one split, not two.
+func TestAPhaseTwoModelsServedLandsInBothModelBands(t *testing.T) {
+	t.Parallel()
+	phase := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:10:00Z", 150, 15)
+	phase.Models = []tokens.ModelSpend{
+		{Model: "sonnet", InputTokens: 100, OutputTokens: 10},
+		{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+	}
+	got := tokens.Bucketed([]tokens.Record{phase}, tokens.SeriesOptions{
+		Group: tokens.GroupModel, Interval: tokens.IntervalHour,
+		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+	})
+	point := got.Points[0]
+	if point.Groups["sonnet"].TotalTokens != 110 || point.Groups["haiku"].TotalTokens != 55 {
+		t.Errorf("bands = %+v, want each model's own part", point.Groups)
+	}
+	if got.Grouped.TotalTokens != 165 || got.Totals.TotalTokens != 165 {
+		t.Errorf("grouped %d / totals %d, want the record's 165 in both",
+			got.Grouped.TotalTokens, got.Totals.TotalTokens)
+	}
+}
+
+// THE RESIDUAL CARRIES AN UNREPORTED CALL LIKE ANY OTHER FIGURE. A band folded
+// past the cap takes its unmeasured calls into "other" with it; dropping them
+// there would state a floor as a whole the moment a seat left the legend.
+func TestTheResidualKeepsAnUnreportedCall(t *testing.T) {
+	t.Parallel()
+	var records []tokens.Record
+	for i, size := range []int{700, 600, 500, 400, 300, 200} {
+		r := tokens.Record{
+			EventID:   string(rune('a' + i)),
+			Timestamp: "2026-06-14T12:00:00Z",
+			AgentRole: string(rune('A' + i)), Phase: "execute", Model: "m",
+			TotalTokens: size, InputTokens: size,
+		}
+		r.Unreported = i == 5
+		records = append(records, r)
+	}
+	got := tokens.Bucketed(records, tokens.SeriesOptions{
+		Group: tokens.GroupSeat, Interval: tokens.IntervalHour,
+		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+	})
+	residual := got.ByGroup[len(got.ByGroup)-1]
+	if !residual.Other || residual.UnreportedCalls != 1 {
+		t.Errorf("residual = %+v, want the folded seat's unreported call kept", residual)
+	}
+	if got.Points[0].Residual.UnreportedCalls != 1 {
+		t.Errorf("the bucket's residual = %+v, want the unreported call", got.Points[0].Residual)
+	}
+}

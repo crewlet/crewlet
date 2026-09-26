@@ -151,7 +151,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
-- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
+- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are moved there at its next start, keeping whichever value was written later where the fleet already holds the name. Sealed with the Tier A keyring either way; no plaintext mode.
 
 Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 

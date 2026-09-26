@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -474,6 +475,9 @@ type indexSearcher struct {
 	partial  *knowledge.Partial
 	failed   bool
 	asked    *[]knowledge.Query
+
+	// truncated reports an answer the backend cut short of its ranking.
+	truncated bool
 }
 
 func (indexSearcher) Backend() string                             { return "native" }
@@ -484,7 +488,7 @@ func (s indexSearcher) Search(_ context.Context, q knowledge.Query) knowledge.An
 	if s.failed {
 		return knowledge.Answer{Failed: true}
 	}
-	return knowledge.Answer{Hits: s.hits, Partial: s.partial}
+	return knowledge.Answer{Hits: s.hits, Partial: s.partial, Truncated: s.truncated}
 }
 
 // A NODE STILL INDEXING SAYS SO, and searches nothing.
@@ -651,6 +655,45 @@ func TestKnowledgeMarksAPartialAnswerAndAFailedOne(t *testing.T) {
 	}
 	if failed["partial"] != nil {
 		t.Errorf("a failed search carries partial %v", failed["partial"])
+	}
+}
+
+// A TRUNCATED ANSWER SAYS SO, AND AN ANSWER BOTH PARTIAL AND TRUNCATED SAYS
+// BOTH. A backend that read its ranking to a depth, and whose exclusions took
+// places among what it read, answers fewer pages than it was asked for while
+// it ranks more: shown as a bare list it reads as everything that matched.
+// `truncated` is the flag a screen branches on and `note` the sentence it
+// shows, the one a seat's own search is told; the search still ran, so the
+// reason stays the zero one.
+func TestKnowledgeMarksATruncatedAnswer(t *testing.T) {
+	t.Parallel()
+	company := func() *config.Company { return &config.Company{Name: "Acme"} }
+	hits := []knowledge.Hit{{Title: "Deploy runbook", Container: "ENG", PageID: "p-1"}}
+	var asked []knowledge.Query
+	ask := func(s indexSearcher) map[string]any {
+		s.asked = &asked
+		return asMap(t, answer(t, queries.Sources{Knowledge: served(s), Company: company},
+			"knowledge", map[string]any{"q": "deploy"}))
+	}
+
+	if whole := ask(indexSearcher{hits: hits}); whole["truncated"] != false {
+		t.Errorf("a whole answer's truncated = %v, want an explicit false", whole["truncated"])
+	}
+	cut := ask(indexSearcher{hits: hits, truncated: true})
+	if cut["truncated"] != true || cut["reason"] != string(queries.KnowledgeRan) {
+		t.Errorf("a truncated answer reads truncated=%v reason=%v", cut["truncated"], cut["reason"])
+	}
+	if note, _ := cut["note"].(string); note != prefetch.TruncatedKnowledge {
+		t.Errorf("a truncated answer's note is %q, want the sentence a seat is told", note)
+	}
+	both := ask(indexSearcher{hits: hits, truncated: true, partial: &knowledge.Partial{
+		BucketsAnswered: 42, BucketsMissing: 22,
+	}})
+	note, _ := both["note"].(string)
+	for _, want := range []string{"22 of 64", prefetch.TruncatedKnowledge} {
+		if !strings.Contains(note, want) {
+			t.Errorf("an answer both partial and truncated says %q, missing %q", note, want)
+		}
 	}
 }
 

@@ -59,12 +59,11 @@ func postPurge(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	return rec.Code, body
 }
 
-// THE ROUTE IS THE ONLY WAY A COMPANY CAN DESTROY A TASK.
+// THE ROUTE IS HOW A COMPANY DESTROYS A TASK.
 //
-// `tracker.Writer.PurgeTask` had no caller anywhere: no verb, no route, no
-// tool. So an erasure request had no mechanism, and a credential pasted into a
-// task body stayed in the durable rows of every node for ever — `remove` only
-// hides a task and `delete` only stops later records about it.
+// No seat tool reaches `tracker.Writer.PurgeTask`, so without this route an
+// erasure request has no mechanism, and a credential pasted into a task body is
+// in the durable rows of every node for ever — `remove` only hides a task.
 func TestThePurgeRouteDestroysTheTaskAsTheOperatorWhoAsked(t *testing.T) {
 	p := &fakePurger{}
 	code, body := postPurge(t, purgeApp(t, p),

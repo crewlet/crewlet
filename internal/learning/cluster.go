@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -148,7 +147,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	handle, agentID string, cluster SkillCluster,
 ) ([]events.Payload, error) {
-	member, err := s.models.Head(seat, phase.Auxiliary)
+	member, err := auxiliary(s.models, seat, Attribution{Worker: ClusterWorker})
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill clustering: %w", err)
 	}

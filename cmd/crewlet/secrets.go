@@ -44,12 +44,16 @@ import (
 //
 // When the engine is STOPPED there is no KV to reach and no API to call, so
 // the command writes this node's own table. That is the bootstrap path: the
-// engine migrates those rows onto the fleet at its next start and removes
-// them — except a name the fleet already holds, whose fleet copy is kept and
-// whose local row is deleted, so a ROTATION cannot take this path. Which of
-// the two is in play is not a guess — the store's file lock makes "the engine
-// holds this database" an answer with a pid on it — and the command says which
-// one it used after every write.
+// engine moves those rows onto the fleet at its next start and removes them,
+// and where the fleet already holds a name it keeps whichever of the two
+// values was written LATER — the local row's write time against the fleet
+// row's, each by its own host's clock, a tie to the fleet
+// ([fleetsecrets.Migrate]). So a value written here while the whole fleet is
+// stopped reaches it, and one a running peer rotated since is not overwritten
+// by it; a fleet that is RUNNING reads none of it until this node starts.
+// Which of the two stores is in play is not a guess — the store's file lock
+// makes "the engine holds this database" an answer with a pid on it — and the
+// command says which one it used after every write.
 //
 // # Every command here needs the keyring, and the keyring is Tier A
 //
@@ -208,7 +212,7 @@ type secretTarget struct {
 // is inside the engine's process and listens on no socket — so while the
 // engine is up, the only way in is its API. While it is down there is no KV
 // at all, and this node's own table is the only place a value can go until
-// the engine migrates it at the next start.
+// the engine moves it onto the fleet at its next start.
 //
 // The STORE LOCK is what tells the two apart, and it is a fact rather than a
 // guess: the engine holds an OS advisory lock on each of its two store files
@@ -217,6 +221,25 @@ type secretTarget struct {
 // the API instead would confuse "the node is stopped" with "the node is up but
 // its HTTP port is bound elsewhere", and those need opposite answers.
 func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
+	// AN EXPLICIT -api SKIPS THE PROBE ENTIRELY. Naming a node is an
+	// instruction to write through it, and it is also how this command
+	// works from a machine that is not the node at all — where the local
+	// database in the Tier A file does not exist and opening it would
+	// create an empty one nothing ever reads. So it needs no keyring here
+	// either, and no Tier A at all: the node seals with its own, and a
+	// Tier A present here supplies only a bearer token (see [nodeAPIToken]).
+	if strings.TrimSpace(apiURL) != "" {
+		boot, err := optionalBootstrap(bootstrapPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		client, cerr := newSecretsClient(boot, apiURL)
+		if cerr != nil {
+			return nil, nil, cerr
+		}
+		return &secretTarget{secretBackend: client, fleet: true,
+			where: client.Describe()}, func() {}, nil
+	}
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, err
@@ -227,27 +250,15 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 				"store with; run `crewlet secrets keygen` and add one",
 			bootstrapPath)
 	}
-	// AN EXPLICIT -api SKIPS THE PROBE ENTIRELY. Naming a node is an
-	// instruction to write through it, and it is also how this command
-	// works from a machine that is not the node at all — where the local
-	// database in the Tier A file does not exist and opening it would
-	// create an empty one nothing ever reads.
-	if strings.TrimSpace(apiURL) != "" {
-		client, cerr := newSecretsClient(boot, apiURL)
-		if cerr != nil {
-			return nil, nil, cerr
-		}
-		return &secretTarget{secretBackend: client, fleet: true,
-			where: client.Describe()}, func() {}, nil
-	}
 
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err == nil {
 		return &secretTarget{
 			secretBackend: sv, fleet: false,
 			where: boot.Store.Path + " — this node's own rows, which no peer " +
-				"can see; the engine moves each onto the fleet at its next start " +
-				"unless the fleet already holds its name",
+				"can see; the engine moves each onto the fleet at its next start, " +
+				"keeping whichever value was written later where the fleet " +
+				"already holds its name",
 		}, closeStore, nil
 	}
 	target, rerr := throughTheRunningNode(boot, bootstrapPath, err)
@@ -290,11 +301,11 @@ func runningNodeClient(boot *config.Bootstrap, bootstrapPath string, err error) 
 		// local store were never an option.
 		//
 		// AND NO ROUTE ROUND THE API, because there is none. This node's
-		// own table is not one: at its next start the engine keeps the
-		// fleet's copy of every name the fleet already holds and deletes
-		// the local one ([fleetsecrets.Migrate]). Nor is the environment:
-		// the store is read before it, so an export is shadowed by any
-		// value the fleet holds under that name.
+		// own table is not one: the running engine holds its file, and a
+		// row there reaches the fleet only at the engine's next start
+		// ([fleetsecrets.Migrate]), never while the fleet is serving. Nor
+		// is the environment: the store is read before it, so an export is
+		// shadowed by any value the fleet holds under that name.
 		return nil, fmt.Errorf("%w\n\nthe engine for %s is running (`crewlet "+
 			"run`) and holds its store files, so the fleet's secret store is "+
 			"reached through its API — and it cannot be: %w\n\nMake the API "+
@@ -453,15 +464,18 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 // not guessable.
 //
 // AND THE CASE IN WHICH IT NEVER ARRIVES. At its next start the engine copies
-// a local row onto the fleet only when the fleet holds no value under that
-// name, and deletes it either way ([fleetsecrets.Migrate]): a rotation written
-// here is discarded, and nothing else would say so.
+// a local row onto the fleet when the fleet holds no value under that name or
+// one written earlier, by each host's own clock, and deletes the local row
+// either way ([fleetsecrets.Migrate]): a value the fleet was given at or
+// after this write — a peer's rotation while this node was stopped — is kept
+// over it, and this one is discarded, which only the engine's own log at that
+// start would otherwise say.
 func secretsLocalNote(name string) string {
-	return "At its next start this node copies it onto the fleet — unless the " +
-		"fleet already holds " + name + ", in which case the fleet keeps its own " +
-		"value and this one is deleted. A rotation, or a value a RUNNING fleet " +
-		"needs now, has to be written through a node that is up: re-run with " +
-		"-api naming one."
+	return "At its next start this node copies it onto the fleet. Where the " +
+		"fleet already holds " + name + ", the value written later is kept, by " +
+		"each host's own clock and the fleet's on a tie, and the other is " +
+		"deleted. A value a RUNNING fleet needs now has to be written through " +
+		"a node that is up: re-run with -api naming one."
 }
 
 // getSecret is the ONLY read-back, and it is break-glass.
@@ -540,6 +554,16 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 	if err != nil {
 		return err
+	}
+	// THE KEY THIS RUN EXPECTS, which a rekey through a node needs as much as
+	// one on this node's own table: the dry run counts the rows sealed under
+	// any other, and the node refuses a rekey onto a key its own keyring does
+	// not make active. With none here, both would be judged against nothing.
+	if boot.Secrets.ActiveKeyID == "" {
+		return fmt.Errorf("%s declares no secrets.active_key_id, so there is no "+
+			"key to rekey onto or to count stale rows against; install the "+
+			"keyring the fleet seals under (`crewlet secrets keygen` prints one)",
+			bootstrapPath)
 	}
 	if dryRun {
 		// LISTED FROM THE KEY ID COLUMN, which is denormalised out of the

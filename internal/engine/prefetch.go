@@ -22,27 +22,34 @@ import (
 // something the freeze did not surface asks for it with a tool call —
 // search_knowledge — which is an ordinary entry in its own log.
 
-// prefetcher builds the fetcher for the current node.
+// prefetcher builds the fetcher the memory tools recall through (equip.go):
+// the recall behind refresh_memory and query_episodes, whose auxiliary calls
+// are recorded under [learning.RecallWorker].
+func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
+	return e.fetcher(company, learning.Attribution{Worker: learning.RecallWorker})
+}
+
+// fetcher builds a fetcher whose auxiliary calls are attributed to who.
 //
 // Per CALL rather than held, because its knowledge source moves: an apply can
 // rebuild the Confluence searcher or move the company to another backend, and
 // [Engine.Knowledge] answers by the epoch current now. Building it is
 // assembling a handful of interface values — cheaper than the mutex a cached
 // one would need.
-func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
+func (e *Engine) fetcher(company *Company, who learning.Attribution) *prefetch.Fetcher {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		// METERED, like every learning worker's model: the episode
-		// briefing, the knowledge query and the memory filter are auxiliary
-		// calls on the seat's behalf, and a call resolved off the bare
-		// registry is spend no counter hears about. One the budget has no
-		// room for is refused before it is sent, and its block degrades the
-		// way it does for any failed auxiliary call — the episode briefing
-		// to its raw bullets, the knowledge block to none, the memory block
-		// to its hint to re-run the filter. This fetcher is also the recall
-		// behind the memory-refresh tool (equip.go), so that re-filter is
-		// charged the same way.
-		Models: e.meteredModelsFor(company),
+		// THROUGH THE METER, like every learning worker's model: the
+		// episode briefing, the knowledge query and the memory filter are
+		// auxiliary calls on the seat's behalf, so each completion is
+		// recorded as the seat's auxiliary spend, under who, and charged
+		// where a ceiling is set. A call resolved off the bare registry is
+		// spend no record and no counter hears about. One the budget has
+		// no room for is refused before it is sent, and its block degrades
+		// the way it does for any failed auxiliary call — the episode
+		// briefing to its raw bullets, the knowledge block to none, the
+		// memory block to its hint to re-run the filter.
+		Models: e.auxiliaryModelsFor(company, who),
 		// SummarizeEpisodes gates ONLY the episode summary. Wiring this
 		// switch by passing a nil provider pool silently disables the
 		// memory and knowledge filters too — an operator turning off a
@@ -80,13 +87,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		// THE RUN, not the unit of work. Every phase record of this turn
-		// is filed under the run, so a prefetch summary carrying the work
-		// key would sit under an id no phase shares — invisible to the
-		// turn view and to `GET /events?turn_id=`. And the prefetcher's
-		// own per-turn cache is keyed on it: a retry keyed on the work
-		// key would inherit the FAILED attempt's frozen context blocks
-		// rather than assembling its own. See ADR-0017.
+		// THE RUN, not the unit of work, which is the id every record of
+		// this turn is filed under (ADR-0017). The auxiliary calls the
+		// fetch makes are attributed to the run by the fetcher's model
+		// binding below, and the summary by publishPrefetchSummary's own
+		// argument; this field is the request's statement of the same run.
 		Task: task, TurnID: req.RunID,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
@@ -103,7 +108,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// reference to it.
 		RequiresRecon: requiresRecon(req.Ask()),
 	}
-	blocks := e.prefetcher(company).Fetch(ctx, r)
+	blocks := e.fetcher(company, learning.Attribution{
+		Worker: learning.PrefetchWorker, TurnID: req.RunID, WorkKey: req.WorkKey,
+	}).Fetch(ctx, r)
 	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks)
 	return blocks
 }

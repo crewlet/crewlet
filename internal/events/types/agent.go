@@ -26,6 +26,7 @@ func init() {
 	events.Register[AgentPhaseRecordPart]()
 	events.Register[AgentTurnProgress]()
 	events.Register[SubagentBatched]()
+	events.Register[AuxiliaryCallCompleted]()
 }
 
 // Phase names one leg of the turn engine's loop.
@@ -38,8 +39,9 @@ type Phase string
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
 // are the legs of the turn itself, in the order they run; PhaseSubagent and
 // PhaseJudge are nested calls made under one of those, and never appear without
-// a host phase around them. PhaseAuxiliary is a name no record of this build
-// carries; see its constant.
+// a host phase around them. PhaseAuxiliary is the phase an
+// [AuxiliaryCallCompleted] names, and no phase record carries it; see its
+// constant.
 //
 // The retired `plan` value has NO CONSTANT here, and that is not an oversight:
 // Phase is a plain string precisely so a value this build does not produce
@@ -53,10 +55,12 @@ const (
 	PhaseReview     Phase = "review"
 	PhaseSubagent   Phase = "subagent"
 	// PhaseAuxiliary names the auxiliary model the learning workers and the
-	// turn-start prefetch call, and NO RECORD OF THIS BUILD CARRIES IT:
-	// those calls publish no phase record at all. Where a cap is set their
-	// tokens are charged to the budget counter (internal/engine's
-	// learningbudget.go), and nothing that folds phase records counts them.
+	// turn-start prefetch call. Each of those completions is recorded by an
+	// [AuxiliaryCallCompleted] naming this phase, and by NO PHASE RECORD:
+	// an auxiliary call is not a leg of a turn — most run after the turn
+	// they learn from has ended, and a background pass serves no turn at
+	// all — and a phase record is what a live view reads as its seat
+	// working.
 	//
 	// PhaseJudge is the round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
@@ -386,10 +390,25 @@ type AgentPhaseCompleted struct {
 	// only on PhaseSubagent, and it is what pairs this phase record with
 	// a node of the call's graph on the matching SubagentBatched event —
 	// without it a call of eight is eight indistinguishable records.
-	TaskID      string  `json:"task_id,omitempty"`
-	Model       string  `json:"model"`
-	ProviderKey string  `json:"provider_key"`
-	Trigger     Trigger `json:"trigger"`
+	TaskID string `json:"task_id,omitempty"`
+	// Model is the model the phase's FIRST completion reported serving it
+	// — or, until a completion names one, the configured model of the
+	// provider the phase calls. It is what the record's summary names, and
+	// it is the whole attribution only where Models is absent.
+	Model string `json:"model"`
+	// Models is the record's tokens by the model each completion reported
+	// serving it, in the order the models first answered: a phase whose
+	// rounds a fallback chain moved between two models names both, with
+	// what each billed. A completion that named no model is counted under
+	// the configured model of the provider that served it.
+	//
+	// ADDITIVE, and so read with a rule for its absence: a record without
+	// it, and whatever part of a record's tokens it does not cover — rounds
+	// carried across a suspension by a build that kept no split — count
+	// under Model. See internal/tokens.
+	Models      []ModelSpend `json:"models,omitempty"`
+	ProviderKey string       `json:"provider_key"`
+	Trigger     Trigger      `json:"trigger"`
 	// The prompts, the response, every tool call and the error are VERBATIM
 	// on a record published whole: this telemetry is what shows the operator
 	// what the model actually saw. A record past what one event carries is
@@ -502,11 +521,26 @@ type AgentPhaseCompleted struct {
 	// the dashboard renders the sandbox badge precisely where it applies. Note
 	// BackendNative is the wire default and NOT the Go zero value —
 	// publishers set it explicitly.
-	Backend       ExecuteBackend `json:"backend"`
-	CodingAgent   string         `json:"coding_agent"`
-	SandboxID     string         `json:"sandbox_id"`
-	CostUSD       float64        `json:"cost_usd"`
-	DeliveredRefs []string       `json:"delivered_refs,omitempty"`
+	Backend     ExecuteBackend `json:"backend"`
+	CodingAgent string         `json:"coding_agent"`
+	SandboxID   string         `json:"sandbox_id"`
+	// CostUSD is what the phase's own provider priced it at, in dollars —
+	// on a phase that collected a detached coding run, what that run's
+	// agent reported it cost. Zero where nothing quoted a price, which is
+	// every phase the engine's own tool loop ran.
+	CostUSD       float64  `json:"cost_usd"`
+	DeliveredRefs []string `json:"delivered_refs,omitempty"`
+	// RunSpendUnreported says this record collected a detached coding run
+	// whose agent gave no complete account of its own model spend. The
+	// record's tokens are then a FLOOR — its own rounds, and whatever part
+	// of the run's spend the agent did report — and never the run's whole.
+	//
+	// A flag rather than a zero because zero is a figure: a run that spent
+	// nothing and a run nobody measured would otherwise be one record, and
+	// every total built on it would state the second as the first. False
+	// on every record that collected no run, and on one whose run reported
+	// its spend in full.
+	RunSpendUnreported bool `json:"run_spend_unreported,omitempty"`
 	// Failed is true when the phase died instead of finishing — its loop
 	// failed, or panicked.
 	//
@@ -846,6 +880,163 @@ func (e SubagentBatched) SummaryFor(actor string) string {
 	}
 	return lead(actor, fmt.Sprintf("delegated %d tasks (%d ok, %d failed, %d tokens%s)",
 		e.TaskCount, e.Successes, e.Failures, e.TotalTokens, shape))
+}
+
+// ModelSpend is one model's part of a record's spend: the `models` entry of an
+// [AgentPhaseCompleted].
+//
+// internal/tokens reads the list back with a type of its own spelled the same
+// way, because that package is a leaf and cannot import this one; a test holds
+// the two to one encoding.
+type ModelSpend struct {
+	Model        string `json:"model"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	// CostUSD is this model's part of the record's price, where whoever
+	// priced the record priced each model separately; zero where it did not.
+	CostUSD float64 `json:"cost_usd,omitempty"`
+}
+
+// RunSpend is what a detached coding run's agent reported about the run's own
+// model spend, as the phase that collects the run takes it into its record.
+//
+// NOT A WIRE TYPE. It is the value a resumed phase is handed, and
+// [AgentPhaseCompleted.AddRun] is the one rule for what the record then says;
+// the wire carries the result, in the record's tokens, its Models and its
+// RunSpendUnreported.
+//
+// The zero value is a phase that collected no run — every phase but the one a
+// detached run's resume re-enters — and says nothing about a run at all.
+type RunSpend struct {
+	// Collected says a finished run was collected for this phase.
+	Collected bool
+	// Models is what the run's agent reported each model costing, with
+	// Model empty for spend it reported without naming a model.
+	Models []ModelSpend
+	// Whole says the agent accounted for every model call the run made.
+	// False on a collected run means its figures are a floor.
+	Whole bool
+}
+
+// Tokens is the run's reported input and output, summed over its models: what
+// a phase that collects it adds to its own counts, and zero for a phase that
+// collected no run.
+func (r RunSpend) Tokens() (input, output int) {
+	if !r.Collected {
+		return 0, 0
+	}
+	for _, m := range r.Models {
+		input += m.InputTokens
+		output += m.OutputTokens
+	}
+	return input, output
+}
+
+// AddRun takes a collected run's reported spend into the record.
+//
+// THE RUN'S TOKENS JOIN THE RECORD'S, and its models join the record's split,
+// because the run is the phase's work: the record's `cost_usd` is already what
+// the run's agent priced it at, and tokens that stopped at the rounds in this
+// process would put a coding phase's price beside a fraction of its size. A run
+// whose agent accounted for less than the whole marks the record's spend
+// unreported, so nothing built on it states the floor as the total. A zero
+// RunSpend changes nothing.
+func (e *AgentPhaseCompleted) AddRun(run RunSpend) {
+	if !run.Collected {
+		return
+	}
+	input, output := run.Tokens()
+	e.InputTokens += input
+	e.OutputTokens += output
+	e.TotalTokens += input + output
+	for _, m := range run.Models {
+		merged := false
+		for i := range e.Models {
+			if e.Models[i].Model == m.Model {
+				e.Models[i].InputTokens += m.InputTokens
+				e.Models[i].OutputTokens += m.OutputTokens
+				e.Models[i].CostUSD += m.CostUSD
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			e.Models = append(e.Models, m)
+		}
+	}
+	e.RunSpendUnreported = !run.Whole
+}
+
+// AuxiliaryCallCompleted records one completion on a seat's AUXILIARY model:
+// what a learning worker or the turn-start prefetch spent, on whose behalf, and
+// for which turn.
+//
+// ONE PER COMPLETION, published by the one seam every auxiliary call resolves
+// its model through (internal/engine), so a worker added later is recorded
+// without anybody remembering to. It is the spend record the token rollups
+// fold beside the phase records: the budget counter is charged with the same
+// spend where a cap is set, and without this record that spend would be on the
+// counter and in no rollup.
+//
+// A RECORD OF ITS OWN rather than an [AgentPhaseCompleted] with
+// Phase = PhaseAuxiliary, because a phase record means "this seat is working
+// on a turn" to every live view that reads one, and an auxiliary call is
+// mostly neither: the reflection workers run after the turn they learn from
+// has ended, and the background passes serve no turn at all. A build that does
+// not know this type decodes and relays it losslessly and folds nothing from
+// it, which is the whole of what it can do with spend it has never heard of.
+//
+// Deliberately SMALL: no prompt and no response. An auxiliary answer is the
+// input to a record its worker publishes itself — a diary row, a profile, a
+// skill — and this one exists to say what the call cost.
+type AuxiliaryCallCompleted struct {
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	// TurnID and WorkKey name the turn the call served, and are empty on a
+	// call that served none — a background pass over a seat's history.
+	TurnID  string `json:"turn_id,omitempty"`
+	WorkKey string `json:"work_key,omitempty"`
+	// Phase is the chain the call resolved its model on — PhaseAuxiliary
+	// for every caller — carried under the key a phase record uses so the
+	// event store's spend columns read it the same way.
+	Phase Phase `json:"phase"`
+	// Worker is the name of what made the call: a learning worker's, or
+	// the prefetch's. Empty where the caller named none.
+	Worker string `json:"worker"`
+	// Model is the model the completion reported serving it, or the
+	// configured model of the provider that served it where it named none.
+	Model       string `json:"model"`
+	ProviderKey string `json:"provider_key"`
+
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	// DurationMS is how long the provider took to answer, measured by the
+	// process that made the call.
+	DurationMS int `json:"duration_ms"`
+}
+
+// EventType is the "auxiliary_call_completed" wire type.
+func (AuxiliaryCallCompleted) EventType() string { return "auxiliary_call_completed" }
+
+// Role is the seat the call was made on behalf of, which is the seat its
+// tokens belong to.
+func (e AuxiliaryCallCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance the call was made for.
+func (e AuxiliaryCallCompleted) AgentID() string { return e.Agent }
+
+// SummaryFor names the worker and the cost, the two things a feed row about a
+// background call is read for.
+func (e AuxiliaryCallCompleted) SummaryFor(actor string) string {
+	worker := e.Worker
+	if worker == "" {
+		worker = "auxiliary"
+	}
+	if e.Model != "" {
+		return lead(actor, fmt.Sprintf("auxiliary call by %s (%s, %d tokens)", worker, e.Model, e.TotalTokens))
+	}
+	return lead(actor, fmt.Sprintf("auxiliary call by %s (%d tokens)", worker, e.TotalTokens))
 }
 
 // FormatReasoningAndContent renders one assistant turn's reasoning and visible

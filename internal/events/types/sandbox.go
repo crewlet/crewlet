@@ -106,11 +106,12 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 // A PURE CONTROL SIGNAL, published to the seat's control topic alone and never
 // to crewlet.events.*: it announces nothing a person reads. The answer — a
 // finished job's result, or a person's reply to the run's question — was held
-// on the run's row when the budget had no room, and that hold is what the
-// board and the log already said; this only tells the seat's node that the
-// completion poll, which reads the budget on every tick, found room. The node
-// claims the held answer, so a duplicate of this signal, or one for an answer
-// already resumed, claims nothing.
+// on the run's row when the budget had no room, and that hold is what the run
+// board (`answer_held` on the `sandbox_runs` answer) and the log already said,
+// with a budget_exhausted where the budget was read at its cap; this only
+// tells the seat's node that the completion poll, which reads the budget on
+// every tick, found room. The node claims the held answer, so a duplicate of
+// this signal, or one for an answer already resumed, claims nothing.
 //
 // LaunchID names the job whose call the answer is for: an answer held for a
 // job a later launch replaced is nobody's.
@@ -217,8 +218,9 @@ type SandboxRunFailed struct {
 // unreachable box is infrastructure, a missing conversation is a bug in this
 // engine, a suspension that could not be recorded is the coordination store or
 // this engine, a question that could not be recorded is the coding agent's own
-// output, an abandoned tail is a node that died, and a removed seat is an
-// operator's own change. An operator seeing them merged into "the sandbox
+// output, a held answer that could not be read back is the coordination store
+// or this engine, an abandoned tail is a node that died, and a removed seat is
+// an operator's own change. An operator seeing them merged into "the sandbox
 // failed" would chase the wrong one.
 const (
 	// SandboxFailureCollect — the job finished but its box could not be
@@ -249,6 +251,13 @@ const (
 	// ask it again. The detail names the question's size and the limit it
 	// passed; the question itself is in the collecting node's log.
 	SandboxFailureQuestionUnrecorded = "question_unrecorded"
+
+	// SandboxFailureAnswerUnreadable is a run whose answer was held while
+	// its seat's token budget had no room, in parts filed under its launch
+	// that do not make the whole its record names. The parts are what the
+	// record names, and a retry reads the same ones, so the turn is ended
+	// rather than resumed with an answer it was not given.
+	SandboxFailureAnswerUnreadable = "answer_unreadable"
 
 	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
 	// company and not restored within the mailbox retirement grace. It is

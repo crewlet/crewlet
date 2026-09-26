@@ -634,7 +634,7 @@ func TestAResumeWhoseLogCannotBeReadIsHandedBack(t *testing.T) {
 func resumeAgentRunTurn(t *testing.T, store *sandbox.CoordStore, turnID string) *types.AgentPhaseCompleted {
 	t.Helper()
 	ctx := t.Context()
-	admitted, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
+	admitted, _ := modeCompany(t, "claude-code", true, config.PlacementDirect)
 	admitted.Tools = tools.NewRegistry()
 	q := memory.New()
 	if err := q.Start(ctx); err != nil {
@@ -653,7 +653,6 @@ func resumeAgentRunTurn(t *testing.T, store *sandbox.CoordStore, turnID string) 
 		Company: admitted,
 		Run:     run,
 		State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
-		Turn:    &turnctx.Turn{RunID: run.TurnID, Seat: seat, Org: admitted.Org},
 		Answer:  "nothing left to do",
 	})
 	if err != nil {

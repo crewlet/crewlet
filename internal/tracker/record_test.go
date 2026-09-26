@@ -516,3 +516,85 @@ func nonZero(t *testing.T, ft reflect.Type) reflect.Value {
 		return reflect.Value{}
 	}
 }
+
+// A DOCUMENT FROM A NEWER BUILD KEEPS WHAT THIS BUILD CANNOT READ.
+//
+// Every stored object is decoded, changed and encoded again by the commit that
+// changes it, so a key this build has no field for is gone from the next
+// encode unless the type carries it. A node holding rows a newer build wrote
+// would then hold documents without the key while every peer that knows it
+// holds them with it — one log, two sets of rows.
+//
+// Mutation: drop any one type's UnmarshalJSON and its case fails.
+func TestEveryStoredObjectKeepsAKeyThisBuildCannotRead(t *testing.T) {
+	t.Parallel()
+	const stored = `{"v":1,"version":7,"lane":{"name":"urgent"}}`
+	for name, roundTrip := range map[string]func([]byte) ([]byte, error){
+		"task":            keptThrough[tracker.Task],
+		"task patch":      keptThrough[tracker.TaskPatch],
+		"counter":         keptThrough[tracker.Counter],
+		"rank order":      keptThrough[tracker.RankOrder],
+		"eviction":        keptThrough[tracker.Eviction],
+		"generation":      keptThrough[tracker.Generation],
+		"type catalogue":  keptThrough[tracker.TypeCatalogue],
+		"field catalogue": keptThrough[tracker.FieldCatalogue],
+		"project":         keptThrough[tracker.Project],
+		"tag set":         keptThrough[tracker.TagSet],
+		"view":            keptThrough[tracker.View],
+		"goal":            keptThrough[tracker.Goal],
+		"person":          keptThrough[tracker.Person],
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, err := roundTrip([]byte(stored))
+			if err != nil {
+				t.Fatalf("round trip: %v", err)
+			}
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal(out, &keys); err != nil {
+				t.Fatalf("decode the re-encoded object: %v", err)
+			}
+			if got := string(keys["lane"]); got != `{"name":"urgent"}` {
+				t.Fatalf("the key this build does not know came back as %q in %s",
+					got, out)
+			}
+			if got := string(keys["v"]); got != "1" {
+				t.Errorf("a known key came back as %q", got)
+			}
+		})
+	}
+}
+
+// keptThrough decodes a stored object into T and encodes it again, which is
+// what every commit does to the object it changes.
+func keptThrough[T any](stored []byte) ([]byte, error) {
+	var v T
+	if err := json.Unmarshal(stored, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
+}
+
+// AND AN OBJECT WITH NOTHING UNKNOWN ENCODES AS ITS STRUCT DOES — in field
+// order, not the sorted order a merge with unknown keys takes — so every
+// document this build writes itself is the bytes it was before the round trip
+// existed, and a key spelled with other case is decoded once, not kept too.
+func TestAnObjectWithNothingUnknownEncodesAsItsStruct(t *testing.T) {
+	t.Parallel()
+	out, err := json.Marshal(tracker.Task{V: 1, ID: "t-1", Title: "a task"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.HasPrefix(string(out), `{"v":1,"id":"t-1","version":0,`) {
+		t.Fatalf("a task with no unknown keys encodes as %s, not in its "+
+			"struct's order", out)
+	}
+	var task tracker.Task
+	if err := json.Unmarshal([]byte(`{"v":1,"Title":"a task"}`), &task); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if task.Title != "a task" || len(task.Extra) != 0 {
+		t.Errorf("a key its field decodes is also kept as unknown: title %q, "+
+			"extra %v", task.Title, task.Extra)
+	}
+}

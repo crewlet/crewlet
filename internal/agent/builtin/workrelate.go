@@ -277,6 +277,13 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 	// A SCALAR rather than the `set` grammar the two above use: an item is
 	// a duplicate of ONE other item, and offering a list would invite one
 	// nothing downstream means.
+	//
+	// AND IT REPLACES the item's earlier `duplicates` edge rather than
+	// joining it. That is the writer's rule for the kind
+	// ([tracker.RelationKind.Single]), resolved inside the write's own
+	// snapshot, so this states the one edge as an add and nothing more — a
+	// removal composed here would name the edge this tool read, not the one
+	// the item holds when the write lands.
 	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
 		id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
 		if refusal != "" {

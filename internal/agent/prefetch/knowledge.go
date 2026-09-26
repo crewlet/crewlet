@@ -133,6 +133,44 @@ func PartialKnowledgeNote(p *knowledge.Partial) string {
 		"colleague who would know)"
 }
 
+// TruncatedKnowledge is what the block, the `search_knowledge` tool and the
+// dashboard's knowledge search say about an answer its backend cut short of
+// its ranking ([knowledge.Answer.Truncated]): fewer hits than it was asked
+// for, while the backend ranks more matches than it read.
+//
+// ONE SENTENCE FOR EVERY READER, for [BuildingKnowledgeHint]'s reason; a seat
+// reads it as [TruncatedKnowledgeNote], set apart as the block's other notes
+// are. Its OWN sentence rather than a clause of [PartialKnowledgeNote], because
+// nothing was left unsearched: the whole knowledge base was ranked, and pages
+// the search leaves out took places among the matches it read. A short list
+// with nothing beside it reads as everything that matched, which is the
+// conclusion this exists to stop; the rest of the ranking is reached by asking
+// in more specific words, which ranks the pages that were below it higher.
+const TruncatedKnowledge = "this answer has fewer pages than were asked for " +
+	"because pages the search leaves out, such as unreviewed drafts, took " +
+	"places among the matches it read, and the knowledge base ranks more " +
+	"matches than it read. Before concluding a page does not exist, search " +
+	"again in more specific words"
+
+// TruncatedKnowledgeNote is [TruncatedKnowledge] as a seat reads it.
+const TruncatedKnowledgeNote = "(" + TruncatedKnowledge + ")"
+
+// KnowledgeAnswerNote is every note an answer carries about what its hits do
+// not cover — [PartialKnowledgeNote] and [TruncatedKnowledgeNote], each where
+// it applies, one per line — or "" for an answer that covers everything that
+// matched. The block and the `search_knowledge` tool both render it, so an
+// answer is qualified the same way wherever a seat reads it.
+func KnowledgeAnswerNote(answer knowledge.Answer) string {
+	var notes []string
+	if partial := PartialKnowledgeNote(answer.Partial); partial != "" {
+		notes = append(notes, partial)
+	}
+	if answer.Truncated {
+		notes = append(notes, TruncatedKnowledgeNote)
+	}
+	return strings.Join(notes, "\n")
+}
+
 // KnowledgeReadHint closes every rendering of hits, the block's and the
 // `search_knowledge` tool's alike: these are pointers, and here is how to
 // follow one.
@@ -232,9 +270,10 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 			bullets = append(bullets, bullet)
 		}
 	}
-	// A PARTIAL ANSWER SAYS SO, found or not: "nothing surfaced" over half
-	// the knowledge base is not "nothing surfaced".
-	partial := PartialKnowledgeNote(answer.Partial)
+	// A PARTIAL OR TRUNCATED ANSWER SAYS SO, found or not: "nothing surfaced"
+	// over half the knowledge base, or over the matches a draft exclusion
+	// thinned, is not "nothing surfaced".
+	partial := KnowledgeAnswerNote(answer)
 	if len(bullets) == 0 {
 		if partial != "" {
 			return EmptyKnowledgeHint + "\n" + partial, 0

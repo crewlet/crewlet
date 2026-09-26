@@ -125,16 +125,13 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
 	t.interactions = e.interactionsOf(req.Ask())
-	// The turn's own span, not the trigger's ids copied forward.
-	//
-	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
-	// the trigger, which made every event the turn published claim the
-	// TRIGGER's span as its own — so `span_id` named a span that had already
-	// ended and the dashboard's tree collapsed the whole turn onto the wake
-	// that started it. The trace is still inherited, which was the right
-	// half: the dispatcher restored it onto ctx before runTurn opened the
-	// turn span beneath it, so the trace id is the trigger's and the span id
-	// is this turn's, with the trigger as its parent.
+	// The turn's own span, not the trigger's ids copied forward: the
+	// dispatcher restored the trigger's trace onto ctx before runTurn opened
+	// the turn span beneath it, so the trace id is the trigger's and the span
+	// id is this turn's, with the trigger as its parent. The trigger's own
+	// span id here would have every event the turn publishes claim a span
+	// that had already ended, and the dashboard's tree would fold the whole
+	// turn onto the wake that started it.
 	t.trace = tracing.TraceOf(ctx)
 	for _, ev := range req.Events {
 		if ev == nil {
@@ -519,7 +516,12 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 	}
 }
 
-// describeResume is describeTurn for a re-entry.
+// describeResume is describeTurn for a re-entry, and the ONE derivation of a
+// resumed turn's identity: its run, its unit of work, its instant and its seat
+// are read off the run's row here, and [turnTelemetry.runnerTurn] builds the
+// runner's turn from what this returns, as it does for a dispatched turn. So
+// the events published at the two ends of the resumed turn and the context its
+// tools run under cannot name different runs or different instants.
 //
 // The trace comes from the SUSPENDED TURN's row rather than from the event
 // that woke this one, so the resumed phases join the span the original wake
@@ -540,9 +542,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		workKey:   in.Run.UnitOfWork(),
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
-		// THE LAUNCHING TURN'S OWN INSTANT, which the launch writes onto the
-		// run's row, or the run's first launch where the row carries none
-		// (one a build that predates the field wrote): see
+		// THE EARLIER OF THE LAUNCHING TURN'S OWN INSTANT, which the launch
+		// writes onto the run's row, and the run's first launch, which
+		// stands in where the row carries none: see
 		// [sandbox.PendingRun.TriggerInstant]. resumeTurn builds the
 		// runner's turn from this, so it is what every write the resume
 		// makes is minted under.
@@ -550,11 +552,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		role:        in.Run.Role,
 		agentID:     in.Run.AgentID,
 		// The resumed turn's OWN span, opened by resumeTurn under the
-		// reconstructed suspended one. This used to be built by hand as
-		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
-		// left EMPTY, so every event the second half of a turn published
-		// carried span_id="" — unplaceable in the dashboard's tree and
-		// indistinguishable from every other resumed turn.
+		// reconstructed suspended one — never assembled from the row's ids,
+		// which name the suspended turn's span and carry none of this one,
+		// so the events the second half of a turn publishes are placed
+		// beneath it in the dashboard's tree.
 		trace: tracing.TraceOf(ctx),
 	}
 	if in.Trigger != nil {

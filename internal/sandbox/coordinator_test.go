@@ -2155,27 +2155,108 @@ func TestAnAnswerWithNoBudgetRoomIsHeldAndResumedOnceThereIsRoom(t *testing.T) {
 	}
 }
 
-// tooLargeToHold is a store whose record refuses a held reply as too large, as
-// one would that already carries a question at its own bound.
-type tooLargeToHold struct{ PendingStore }
-
-func (tooLargeToHold) HoldAnswer(context.Context, string, HeldAnswer) (bool, error) {
-	return false, fmt.Errorf("sandbox: update run t1: %w", coord.ErrTooLarge)
-}
-
-// A REPLY THE RECORD REFUSES BESIDE WHAT IT CARRIES IS REFUSED, NAMING THE
-// RECORD'S CEILING, and left with its delivery: within its own bound, the
-// store's ceiling is what answered, and the reply is kept nowhere else.
-func TestAReplyTheRecordRefusesIsRefusedNamingItsCeiling(t *testing.T) {
-	rig := newCoordRig(t)
-	rig.launch("t1")
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+// parkOnAQuestion leaves t1 parked on "which branch?", its suspension in parts
+// when large, and returns a coordinator whose seat's budget is at its cap.
+func (r *coordRig) parkOnAQuestion(t *testing.T, large bool) (*Coordinator, *roomSpy) {
+	t.Helper()
+	if large {
+		r.launching("t1")
+		r.suspendLarge("t1")
+	} else {
+		r.launch("t1")
+	}
+	r.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	payload, ev := r.completion("t1")
+	if err := r.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
+	return r.budgeted(t, budget), budget
+}
+
+// A REPLY NO RECORD CAN HOLD IS HELD WHOLE, AND RESUMED WHOLE.
+//
+// Refused and left with its delivery, it would be redelivered with backoff
+// until the delivery's budget was spent and then dead-lettered, with the run
+// still parked on a question somebody had answered — so a cap that held for
+// longer than the redeliveries lost the reply. It is held instead: its whole
+// in parts filed under the run's launch, past the parts the launch's own
+// suspension is kept in, and its delivery acknowledged. Once the budget has
+// room the turn resumes with every byte of it, and the suspension it re-enters
+// is still whole.
+func TestAReplyNoRecordCanHoldIsHeldAndResumedWhole(t *testing.T) {
+	rig := newCoordRig(t)
+	coordinator, budget := rig.parkOnAQuestion(t, true)
+	before, err := rig.pending.calls.SuspensionParts(t.Context(), "t1", rig.get("t1").LaunchID)
+	if err != nil || len(before) == 0 {
+		t.Fatalf("the premise: the launch's suspension is in parts (%d, %v)", len(before), err)
+	}
+
+	long := strings.Repeat("m", coord.MaxRecordBytes+1)
+	reply := events.New(types.ExternalNotification{Body: "see above"}, events.TraceContext{TraceID: "tr-answer"})
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, reply)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the reply held and its delivery acknowledged",
+			handled, err)
+	}
+	got := rig.get("t1")
+	ref := got.HeldAnswerParts
+	if _, held := got.Held(); !held || ref == nil || ref.Parts < 2 || ref.First != len(before)+1 {
+		t.Fatalf("the row reads held answer %+v beside reference %+v: want a reply of more than one "+
+			"record in parts from part %d, past the suspension's", got.HeldAnswer, ref, len(before)+1)
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 1 {
+		t.Errorf("the wait was announced %d times, want once", n)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held reply's resume: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || !strings.Contains(calls[0].Answer, long) {
+		t.Fatalf("resumed %d times, want once with the whole reply", len(calls))
+	}
+	if calls[0].Trigger == nil || calls[0].Trigger.TraceID != "tr-answer" {
+		t.Errorf("the resumed turn names %+v as what woke it, want the reply's own event", calls[0].Trigger)
+	}
+	if _, inParts := suspensionRefOf(calls[0].Run.ExecuteState); inParts || len(calls[0].Run.ExecuteState) < 2 {
+		t.Errorf("the resume re-entered %d keys of conversation, want the suspension read whole",
+			len(calls[0].Run.ExecuteState))
+	}
+	rig.finished("t1")
+}
+
+// holdsFirst is a store in which another reply is held on the run between the
+// lookup that found it waiting and this reply's hold.
+type holdsFirst struct {
+	*CoordStore
+	once sync.Once
+}
+
+func (h *holdsFirst) HoldAnswer(ctx context.Context, turnID string, held HeldAnswer) (bool, error) {
+	h.once.Do(func() {
+		first := held
+		first.Text = "the reply that got there first"
+		if landed, err := h.CoordStore.HoldAnswer(ctx, turnID, first); err != nil || !landed {
+			panic(fmt.Sprintf("the premise: the first reply is held (%v, %v)", landed, err))
+		}
+	})
+	return h.CoordStore.HoldAnswer(ctx, turnID, held)
+}
+
+// A HOLD THAT DID NOT LAND IS HANDLED, AND SAYS NOTHING.
+//
+// The run was found waiting, and by the hold another reply had been held on
+// it: the question has its answer, and this delivery is not a new turn's —
+// run as an ordinary message it would start one that knows nothing of the
+// question. So it is acknowledged, with the first reply left where it is, and
+// the wait the first hold announced is not announced again.
+func TestAHoldThatDidNotLandIsHandledAndSaysNothing(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.parkOnAQuestion(t, false)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: tooLargeToHold{rig.pending}, Manager: rig.manager,
+		Queue: rig.queue, Pending: &holdsFirst{CoordStore: rig.pending}, Manager: rig.manager,
 		Resume: rig.resumer, Headroom: &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}},
 	})
 	if err != nil {
@@ -2183,42 +2264,88 @@ func TestAReplyTheRecordRefusesIsRefusedNamingItsCeiling(t *testing.T) {
 	}
 
 	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
-	if handled || !errors.Is(err, coord.ErrTooLarge) ||
-		!strings.Contains(err.Error(), strconv.Itoa(coord.MaxRecordBytes)) {
-		t.Fatalf("TryResumeFromAnswer = %v, %v, want a refusal naming the record's ceiling", handled, err)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want a delivery whose hold did not land handled",
+			handled, err)
+	}
+	if held, _ := rig.get("t1").Held(); held.Text != "the reply that got there first" {
+		t.Errorf("the run holds %q, want the reply held first left where it is", held.Text)
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 0 {
+		t.Errorf("a hold that did not land announced a wait %d times", n)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Errorf("a hold that did not land resumed the turn %d times", n)
 	}
 }
 
-// A REPLY PAST THE HOLD'S BOUND IS REFUSED, NAMING IT, and left with its
-// delivery: it is kept nowhere else, so it is neither cut to fit nor dropped,
-// and a redelivery that finds room hands it over whole.
-func TestAReplyPastTheHoldsBoundIsRefusedNamingIt(t *testing.T) {
-	rig := newCoordRig(t)
-	rig.launch("t1")
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
-	coordinator := rig.budgeted(t, budget)
+// partsRefused is run records whose server refuses every part as too large.
+type partsRefused struct{ *memory.Fleet }
+
+func (partsRefused) CreateSuspensionPart(context.Context, string, string, int, []byte) (bool, error) {
+	return false, fmt.Errorf("the server accepts nothing this long: %w", coord.ErrTooLarge)
+}
+
+// A REPLY THAT CANNOT BE HELD IS HANDED BACK, NAMING WHY: its parts were
+// refused, it is kept nowhere else, and acknowledged it would be gone. Nothing
+// is held, so no reference names parts that are not there.
+func TestAReplyThatCannotBeHeldIsHandedBack(t *testing.T) {
+	rig := newCoordRigOn(t, partsRefused{memory.NewFleet()})
+	coordinator, _ := rig.parkOnAQuestion(t, false)
 
 	long := strings.Repeat("m", MaxHeldAnswerBytes)
 	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, nil)
-	if handled || err == nil || !strings.Contains(err.Error(), "MaxHeldAnswerBytes") ||
-		!strings.Contains(err.Error(), strconv.Itoa(MaxHeldAnswerBytes)) {
-		t.Fatalf("TryResumeFromAnswer = %v, %v, want a refusal naming the bound", handled, err)
+	if handled || !errors.Is(err, coord.ErrTooLarge) ||
+		!strings.Contains(err.Error(), "sandbox.MaxHeldAnswerBytes") {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the delivery handed back naming the bound "+
+			"and the refusal", handled, err)
 	}
-	if _, held := rig.get("t1").Held(); held {
-		t.Fatal("a reply past the bound was held")
+	if got := rig.get("t1"); got.HeldAnswer != nil || got.HeldAnswerParts != nil {
+		t.Errorf("the run holds %+v beside %+v, want nothing held", got.HeldAnswer, got.HeldAnswerParts)
+	}
+}
+
+// AN ANSWER WHOSE PARTS DO NOT MAKE ITS WHOLE ENDS THE RUN, SAYING SO. The
+// parts are what the row names and a retry reads the same ones, so handing the
+// claim back would fail the same way on every signal; and resumed with what
+// the parts hold instead, the turn would act on a reply it was not given.
+func TestAnAnswerWhosePartsDoNotMakeItsWholeEndsTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	coordinator, budget := rig.parkOnAQuestion(t, false)
+	long := strings.Repeat("m", MaxHeldAnswerBytes)
+	if handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, nil); err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v", handled, err)
+	}
+	run := rig.get("t1")
+	if run.HeldAnswerParts == nil {
+		t.Fatal("the premise: the reply is held in parts")
+	}
+	// A part of another whole where the reference says this one continues.
+	if _, err := rig.pending.calls.CreateSuspensionPart(t.Context(), "t1", run.LaunchID,
+		run.HeldAnswerParts.First+run.HeldAnswerParts.Parts, []byte("x")); err != nil {
+		t.Fatalf("CreateSuspensionPart: %v", err)
+	}
+	stretched := *run.HeldAnswerParts
+	stretched.Parts++
+	stretched.Bytes++
+	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(r *PendingRun) bool {
+		r.HeldAnswerParts = &stretched
+		return true
+	}); err != nil {
+		t.Fatalf("mutate: %v", err)
 	}
 
 	budget.set(Room{OK: true}, nil)
-	if handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, nil); err != nil || !handled {
-		t.Fatalf("the redelivery with room = %v, %v, want the reply handed over", handled, err)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the signal: %v", err)
 	}
-	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, long) {
-		t.Fatal("the redelivered reply was not handed over whole")
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Errorf("the turn was resumed %d times with an answer that could not be read back", n)
+	}
+	rig.finished("t1")
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureAnswerUnreadable {
+		t.Errorf("failures = %+v, want one naming %q", failed, types.SandboxFailureAnswerUnreadable)
 	}
 }
 

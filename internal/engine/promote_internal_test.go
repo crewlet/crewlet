@@ -6,6 +6,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 // THE PROMOTION WIRING.
@@ -45,7 +47,6 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
         handle: sre
         llm: gateway
 `))
-	wireConfluence(e)
 	units := e.promotionUnits()
 	if len(units) != 1 {
 		t.Fatalf("units = %d, want 1", len(units))
@@ -70,7 +71,6 @@ func TestAUnitWithNoContainerCarriesItsRemediation(t *testing.T) {
         handle: eng
         llm: gateway
 `))
-	wireConfluence(e)
 	units := e.promotionUnits()
 	if len(units) != 1 {
 		t.Fatalf("units = %d, want 1", len(units))
@@ -106,7 +106,6 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
             handle: eng
             llm: gateway
 `))
-	wireConfluence(e)
 	for _, unit := range e.promotionUnits() {
 		if unit.ID != "Engineering" {
 			continue
@@ -134,7 +133,6 @@ func TestTheContainerIsTheWikiSpaceNotTheTrackerProject(t *testing.T) {
         handle: eng
         llm: gateway
 `))
-	wireConfluence(e)
 	units := e.promotionUnits()
 	if len(units) != 1 {
 		t.Fatalf("units = %d", len(units))
@@ -160,10 +158,9 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
         handle: eng
         llm: gateway
 `))
-	wireConfluence(e)
 	units := e.promotionUnits()
 	if len(units) != 1 || units[0].Container != "" {
-		t.Fatalf("unit = %+v, want no container under a Confluence backend", units)
+		t.Fatalf("unit = %+v, want no container for a unit with no `space`", units)
 	}
 	if !strings.Contains(units[0].Hint, "`space`") {
 		t.Fatalf("the hint does not name the field that would fix it: %q", units[0].Hint)
@@ -173,10 +170,10 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	}
 }
 
-// A COMPANY WITH A KNOWLEDGE BASE BUILDS THE PASS — and its toggle is still
-// what decides. Without a writer wired, both answers are nil for the wrong
-// reason.
-func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
+// THE TOGGLE DECIDES WHETHER THE PASS IS BUILT, and it is on by default. The
+// knowledge base does not: the pass resolves its writer at every tick, so
+// one wired after the pass was armed is found — see the case below.
+func TestPromotionIsBuiltByItsToggle(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
@@ -198,7 +195,6 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
         llm: gateway
 `)
 			setEpoch(e, c)
-			wireConfluence(e)
 			if got := e.buildPromoter(c) != nil; got != tc.want {
 				t.Fatalf("promoter built = %v, want %v", got, tc.want)
 			}
@@ -209,14 +205,13 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 // THE WRITER IS READ AT PASS TIME, NOT WHEN THE PASS IS ARMED.
 //
 // The background passes are armed BEFORE startNotifications builds the
-// third-party app clients, so a promoter that resolved its writer at arm time held a
-// nil for every company that ever ran — and the only symptom was one boot
-// line saying no knowledge base was configured while one was. A pass that
-// runs after the wiring catches up must find it.
+// third-party app clients, so a promoter that resolved its writer at arm time
+// would hold a nil for every company on Confluence, and say only that it had
+// nowhere to draft. A pass that runs after the wiring catches up must find it.
 func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
-	c := promotionCompany(t, `units:
+	c := promotionCompany(t, confluenceKnowledge+`units:
   - name: Platform
     space: ENG
     roles:
@@ -232,19 +227,102 @@ func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 		t.Fatal("no promoter was armed, so a company whose knowledge base " +
 			"wires moments later can never promote")
 	}
-	if e.promotionWriter() != nil {
+	if w, _ := e.promotionWriter(); w != nil {
 		t.Fatal("a writer resolved before the knowledge base was wired")
 	}
 
 	// The inbound service catches up, as it does two lines later at boot.
 	wireConfluence(e)
-	if e.promotionWriter() == nil {
-		t.Fatal("the writer stayed nil after the knowledge base was wired")
+	if w, why := e.promotionWriter(); w == nil {
+		t.Fatalf("the writer stayed nil after the knowledge base was wired: %s", why)
 	}
 	// And the armed pass runs against it rather than the nil it was armed
 	// with: a captured writer would panic here, and a pass that re-checked
 	// nothing would report idle for ever.
 	promoter.Pass(t.Context())
+}
+
+// A DRAFT LANDS WHERE THE COMPANY'S SEARCH READS, decided by the one question
+// [Engine.KnowledgeServed] answers.
+//
+// The draft's only protection is that search's exclusion of the auto-drafted
+// subtree, and a writer that chose its backend by a rule of its own drafted
+// nothing at all for a company on the engine's own knowledge base — the
+// default — while its search ran natively, and would draft into a wiki the
+// company's search had left behind. So every row here holds BOTH backends
+// where it can, and only the company's `knowledge.backend` may decide.
+//
+// Mutation: a writer that asks whether a Confluence client is wired, rather
+// than asking the search, fails every row but Confluence's own.
+func TestPromotionDraftsWhereTheKnowledgeSearchReads(t *testing.T) {
+	t.Parallel()
+	units := `units:
+  - name: Platform
+    space: ENG
+    roles:
+      - name: Engineer
+        handle: eng
+        llm: gateway
+`
+	for _, tc := range []struct {
+		name       string
+		knowledge  string
+		native     bool
+		confluence bool
+
+		// want is the writer's backend, or empty for none; refusal is
+		// what the reason must carry when there is none.
+		want    string
+		refusal string
+	}{
+		// A CONFLUENCE WIRING THIS NODE STILL HOLDS from a revision the
+		// company has left: the search reads the native pages, so the
+		// drafts go there.
+		{name: "the native knowledge base, beside a Confluence wiring",
+			native: true, confluence: true, want: "native"},
+		{name: "Confluence, beside this node's own pages",
+			knowledge: confluenceKnowledge,
+			native:    true, confluence: true, want: "confluence"},
+		{name: "no knowledge base at all",
+			knowledge: "knowledge:\n  backend: none\n",
+			native:    true, confluence: true,
+			refusal: "`knowledge.backend: none`"},
+		{name: "the native knowledge base on a node that started without it",
+			confluence: true, refusal: "this node started without it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := engineOver(t)
+			setEpoch(e, promotionCompany(t, tc.knowledge+units))
+			if tc.native {
+				holdNativePages(t, e)
+			}
+			if tc.confluence {
+				wireConfluence(e)
+			}
+			writer, why := e.promotionWriter()
+			switch tc.want {
+			case "native":
+				if writer != learning.PromotionWriter(e.native.drafts) {
+					t.Fatalf("the writer is %T (%s), want this node's own pages — "+
+						"the knowledge base the company's search reads", writer, why)
+				}
+			case "confluence":
+				if _, ok := writer.(*confluence.PromotionWriter); !ok {
+					t.Fatalf("the writer is %T (%s), want Confluence's", writer, why)
+				}
+			default:
+				if writer != nil {
+					t.Fatalf("a company whose search reads no knowledge base here "+
+						"drafts through %T", writer)
+				}
+				if !strings.Contains(why, tc.refusal) {
+					t.Fatalf("the reason is %q, want the knowledge search's own, "+
+						"naming %q", why, tc.refusal)
+				}
+			}
+		})
+	}
 }
 
 // THE TOGGLE IS WHAT DECIDES, not the wiring. A company with promotion on
@@ -297,8 +375,18 @@ units:
 	}
 }
 
-// wireConfluence gives the engine a knowledge base, which is what the
-// promotion writer is built from.
+// confluenceKnowledge is the block that makes Confluence a company's knowledge
+// base.
+const confluenceKnowledge = `integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
+`
+
+// wireConfluence gives the engine the Confluence wiring a company on it gets:
+// the searcher and the org client, built together as startConfluence builds
+// them.
 func wireConfluence(e *Engine) {
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: "https://wiki.example.com", Token: "t",
@@ -309,6 +397,22 @@ func wireConfluence(e *Engine) {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
 	e.notify.confluence.pages = client
+	e.notify.confluence.searcher = confluence.NewSearcher(confluence.SearcherOptions{Org: client})
+}
+
+// holdNativePages gives the engine the part of a native runtime promotion
+// reads: the searcher and, built beside it, the draft writer.
+func holdNativePages(t *testing.T, e *Engine) {
+	t.Helper()
+	index := search.NewIndexerOver(e.backends.Store,
+		[]search.LexicalSource{search.PageSource{}})
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{
+		Index: index, DB: e.backends.Store,
+	})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+	e.native = &native{searcher: searcher, drafts: &nativeDrafts{}}
 }
 
 // setEpoch publishes an epoch, which is what the fresh-read rosters resolve

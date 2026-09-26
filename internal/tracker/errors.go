@@ -24,8 +24,10 @@ import "fmt"
 // subtask the first one filed — its id is derived from the checklist item —
 // and goes on to mark the item. A cross-project move's second call is refused,
 // because its root has already moved, and its message says that nothing
-// completes the walk on its own; a merge's message says the tracker duty
-// completes what its marker began.
+// completes the walk on its own. A merge's message says the tracker duty
+// completes what its marker began — or, for a merge given up because its
+// target went, or ended by another writer, what of it stays; a second call
+// finishes neither.
 type PartialError struct {
 	// Rerun reports whether calling the same gesture again finishes it.
 	Rerun bool

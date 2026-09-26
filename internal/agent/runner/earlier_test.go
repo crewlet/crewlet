@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -164,7 +165,9 @@ func TestAWriteAfterAResumeIsNamedAfterTheWritesBeforeTheSuspend(t *testing.T) {
 // redelivered turn does not onboard again — so a write it made would take the
 // name the turn's own first write to that object derives, on this attempt or
 // on a redelivery, and the ledger would collapse the turn's write into it.
-// Such a write is not discoverable from the pass, nor callable by name.
+// Such a write is not discoverable from the pass, nor callable by name — and
+// the pass's prompt does not list it among its tools either, since a model
+// told it has a tool calls it, and every such call fails.
 func TestTheOnboardingPassCannotReachAWriteNamedByItsPlaceInTheTurn(t *testing.T) {
 	t.Parallel()
 	write := &namedWrite{}
@@ -187,11 +190,27 @@ func TestTheOnboardingPassCannotReachAWriteNamedByItsPlaceInTheTurn(t *testing.T
 	if got := write.names(); len(got) != 0 {
 		t.Errorf("the onboarding pass wrote %v, under names the turn's own writes derive", got)
 	}
-	for _, req := range prov.requestsFor("onboarding") {
+	requests := prov.requestsFor("onboarding")
+	if len(requests) == 0 {
+		t.Fatal("the onboarding pass sent no request")
+	}
+	for _, req := range requests {
 		for _, def := range req.Tools {
 			if def.Name == namedWriteTool {
 				t.Fatalf("the onboarding pass was offered %s", namedWriteTool)
 			}
+		}
+		var catalogue string
+		for _, m := range req.Messages {
+			if m.Role == llm.RoleSystem {
+				_, catalogue, _ = strings.Cut(m.Content, "## Available tools")
+			}
+		}
+		if !strings.Contains(catalogue, runner.MarkOnboardedTool) {
+			t.Fatalf("the pass's prompt lists no catalogue with the tools it may call: %q", catalogue)
+		}
+		if strings.Contains(catalogue, namedWriteTool) {
+			t.Fatalf("the pass's prompt lists %s among its tools, which it cannot call", namedWriteTool)
 		}
 	}
 }

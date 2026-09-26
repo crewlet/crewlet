@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -114,9 +114,6 @@ func TestAResumeHandedBackSaysWhetherItCountedTheCarriedSpend(t *testing.T) {
 			in.Company = company
 			in.Run.AgentHandle = seat.Handle()
 			in.Run.CarriedCounted = tc.counted
-			in.Turn = &turnctx.Turn{
-				RunID: in.Run.TurnID, WorkKey: in.Run.WorkKey, Seat: seat, Org: company.Org,
-			}
 
 			err := e.resumeTurn(t.Context(), in)
 			if err == nil || errors.Is(err, sandbox.ErrResumeAbandoned) {
@@ -288,7 +285,6 @@ func TestAResumeThatFinishedAndWhoseReviewBrokeSaysItCountedTheCarriedSpend(t *t
 			in.Company = company
 			in.Run.AgentHandle = seat.Handle()
 			in.Run.Reply = "tool"
-			in.Turn = &turnctx.Turn{RunID: in.Run.TurnID, Seat: seat, Org: company.Org}
 			if tc.agent {
 				store := sandbox.NewCoordStore(coordmemory.NewFleet())
 				if err := store.BeginLaunch(ctx, sandbox.PendingRun{

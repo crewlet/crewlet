@@ -3,9 +3,11 @@ package codingagent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -148,13 +150,9 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		Text:          resultText,
 		Success:       success,
 		SessionID:     stringField(obj, "session_id"),
-		CostUSD:       floatField(obj, "total_cost_usd"),
 		DeliveredRefs: prPattern.FindAllString(resultText, -1),
 	}
-	if usage, ok := obj["usage"].(map[string]any); ok {
-		res.InputTokens = intField(usage, "input_tokens")
-		res.OutputTokens = intField(usage, "output_tokens")
-	}
+	claudeSpend(obj, &res)
 	if !success {
 		res.Error = stringField(obj, "error")
 		if res.Error == "" {
@@ -162,6 +160,62 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		}
 	}
 	return res
+}
+
+// claudeSpend reads the run's own model spend off the CLI's result envelope.
+//
+// `modelUsage` IS THE ACCOUNT, per model, of every model call the run made —
+// its main loop, its subagents, its sidechains and its own internal calls such
+// as compaction — and the vendor's SDK types name it the field for token and
+// cost accounting. `usage` is the MAIN LOOP ONLY, so a run whose envelope
+// carries no per-model account is reported from it as a floor, never as the
+// whole.
+//
+// INPUT COUNTS THE CACHE. Both shapes carry the Anthropic split — the uncached
+// remainder, what the cache served, what was written to it — and the engine
+// counts a prompt as all three (internal/providers/llm/anthropic's package doc
+// says why), so a cached run is not billed as the few tokens its prompt did not
+// hit.
+func claudeSpend(obj map[string]any, res *sandbox.Result) {
+	if byModel, ok := obj["modelUsage"].(map[string]any); ok && len(byModel) > 0 {
+		names := make([]string, 0, len(byModel))
+		for name := range byModel {
+			names = append(names, name)
+		}
+		// Sorted, so one envelope gives one split whatever order the map
+		// decoded in.
+		slices.Sort(names)
+		for _, name := range names {
+			usage, ok := byModel[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			m := types.ModelSpend{
+				Model: name,
+				InputTokens: intField(usage, "inputTokens") +
+					intField(usage, "cacheReadInputTokens") +
+					intField(usage, "cacheCreationInputTokens"),
+				OutputTokens: intField(usage, "outputTokens"),
+				CostUSD:      floatField(usage, "costUSD"),
+			}
+			res.Models = append(res.Models, m)
+			res.InputTokens += m.InputTokens
+			res.OutputTokens += m.OutputTokens
+			// THE PRICE IS THE SPLIT'S SUM, so the run's figure and its
+			// parts agree by construction; the envelope's own total
+			// covers the same calls.
+			res.CostUSD += m.CostUSD
+		}
+		res.UsageWhole = true
+		return
+	}
+	res.CostUSD = floatField(obj, "total_cost_usd")
+	if usage, ok := obj["usage"].(map[string]any); ok {
+		res.InputTokens = intField(usage, "input_tokens") +
+			intField(usage, "cache_read_input_tokens") +
+			intField(usage, "cache_creation_input_tokens")
+		res.OutputTokens = intField(usage, "output_tokens")
+	}
 }
 
 // decodeObject reads a JSON object, falling back to the LAST line.

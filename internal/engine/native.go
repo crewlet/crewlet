@@ -28,10 +28,10 @@ import (
 //
 // # What is per-NODE and what is per-EPOCH, and why the split is not obvious
 //
-// The apply loops, the projector, the indexer and the change feeds are
-// per-NODE: they follow a LOG or a coordination family, and neither changes
-// when a company revision does. Rebuilding them on an apply would restart
-// every node's applier and re-run a boot reconcile on every configuration
+// The apply loops, the indexer and the change feeds are per-NODE: the loops
+// and the feeds follow a domain's LOG, the indexer follows the rows the loops
+// write, and none of that changes when a company revision does. Rebuilding
+// them on an apply would restart every node's appliers on every configuration
 // change, which for a company that edits its org chart twice a day is a node
 // that is never established.
 //
@@ -77,10 +77,9 @@ type native struct {
 	// has no native at all.
 	log *stateLog
 
-	// It adopts the state log in its own step; until then this node runs
-	// one projector and one log side by side, and that is visible here
-	// rather than hidden behind a common name.
-	// indexer keeps the lexical search index behind the page projection.
+	// indexer keeps the lexical index over this node's own applied rows —
+	// the pages and the work items, whichever of the two this company runs
+	// natively — which the knowledge search and the work search both read.
 	indexer *search.Indexer
 
 	// writer is the tracker's write authority and pages the wiki's.
@@ -94,6 +93,11 @@ type native struct {
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
 
+	// drafts is where a cross-agent skill promotion files its draft on this
+	// knowledge base, built beside the searcher that hides it — see
+	// [Engine.promotionWriter].
+	drafts *nativeDrafts
+
 	// itemSearch is the tracker's own ranked search, over the SAME index
 	// and the SAME fan-out — see worksearch.go. Its own field because the
 	// two verbs are the tracker's and the wiki's, and a caller holding one
@@ -101,20 +105,19 @@ type native struct {
 	itemSearch *tracker.Searcher
 
 	// stopSlices withdraws this node as an answerer for the fleet's
-	// search fan-out. Nil when there is no queue to serve on, which is
-	// every embedded engine and every test.
+	// search fan-out. Nil until the answerer is registered, which is the
+	// state the failure path in [Engine.startNative] can reach
+	// [native.shutdown] in.
 	stopSlices queue.Unsubscribe
 
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
-	// HELD, not re-derived. The feeds start later than the projectors — a
-	// feed publishes onto the inbound edge, so it is armed with the rest
-	// of the node rather than at construction — and a goroutine registered
-	// on done but started under the CALLER's context would never be ended
-	// by stop, which then blocks on the wait for ever. That is not a
-	// hypothetical: it wedged every engine test that shut down before its
-	// own context expired.
+	// HELD, not re-derived. The feeds start after the rest of this runtime
+	// — a feed publishes onto the inbound edge, so it is armed with the
+	// rest of the node rather than at construction — and a goroutine
+	// registered on done but started under the CALLER's context would
+	// never be ended by stop, which then blocks on the wait for ever.
 	run  context.Context
 	stop context.CancelFunc
 	done sync.WaitGroup
@@ -123,12 +126,15 @@ type native struct {
 // startNative opens this node's native backends, once.
 //
 // PER NODE, called from [Engine.New] before anything claims a seat, and NOT
-// re-run on an apply. It returns without waiting for hydration: the reconcile
-// is O(keys) and a node that blocked here would not serve its dashboard,
-// answer a probe or run a duty until it finished.
+// re-run on an apply. It returns without waiting for the appliers to replay
+// the log: a node that blocked here until it had caught up would not serve
+// its dashboard, answer a probe or run a duty meanwhile. What waits is seat
+// admission, through [Engine.NativeHydrated].
 //
-// The store and the fleet are not nil-checked: [New] refuses a Backends
-// without either, so every engine that reaches this holds both.
+// The store, the queue, the coordination backend and the fleet are not
+// nil-checked: [New] refuses a supplied Backends missing any of them
+// ([Backends.Complete]) and [OpenBackends] builds all four, so every engine
+// that reaches this holds them.
 func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR. [Engine.New] refused a
 	// company that runs the log on one ([config.CheckTiers]): its first
@@ -200,7 +206,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 
 	if runTracker {
 		running := sl.Domain(tracker.Domain{}.Name())
-		writer, err := tracker.NewWriter(tracker.WriterDeps{
+		n.writer, err = tracker.NewWriter(tracker.WriterDeps{
 			Publisher: running.publisher,
 			// THE APPLIER'S OWN MEASURED RATE, which a bulk edit's
 			// projection divides its records by: the occupancy it
@@ -243,7 +249,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if err != nil {
 			return fmt.Errorf("engine: tracker writer: %w", err)
 		}
-		n.writer = writer
 		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for
 		// is a level served: the refusal ladder, the coverage probe and
 		// the barrier a linearizable read waits through. Built beside
@@ -288,14 +293,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// beside the coordinator because they are different jobs on one node:
 	// every node with an index answers, whether or not anybody on it ever
 	// searches.
-	if e.backends.Queue != nil {
-		stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
-			search.NodeScanner{Index: n.indexer})
-		if err != nil {
-			return fmt.Errorf("engine: serve search slices: %w", err)
-		}
-		n.stopSlices = stop
+	stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
+		search.NodeScanner{Index: n.indexer})
+	if err != nil {
+		return fmt.Errorf("engine: serve search slices: %w", err)
 	}
+	n.stopSlices = stop
 
 	if wiki {
 		running := sl.Domain(pages.Domain{}.Name())
@@ -343,19 +346,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}); err != nil {
 			return fmt.Errorf("engine: pages searcher: %w", err)
 		}
+		// AND THE PROMOTION WRITER, in the same step as the searcher that
+		// hides its drafts: [Engine.promotionWriter] hands this writer to
+		// the pass exactly when [Engine.KnowledgeServed] answers with that
+		// searcher, and building them together is what makes one imply the
+		// other.
+		n.drafts = &nativeDrafts{store: n.pages, reader: n.pageReader}
 	}
 
-	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
-	// domains, and their apply loops are the state log's own — started
-	// with the register above, stopped with it, and reporting their
-	// position rather than a hydration flag.
-	if n.indexer != nil {
-		n.done.Add(1)
-		go func() {
-			defer n.done.Done()
-			n.indexer.Run(runCtx)
-		}()
-	}
+	// THE INDEXER'S LOOP IS THIS RUNTIME'S OWN. The apply loops are the state
+	// log's — started with the register above and stopped with it — and the
+	// indexer follows the rows they write.
+	n.done.Add(1)
+	go func() {
+		defer n.done.Done()
+		n.indexer.Run(runCtx)
+	}()
 
 	e.native = n
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
@@ -423,15 +429,15 @@ func (n *native) shutdown(ctx context.Context) {
 	}
 	n.stop()
 	n.done.Wait()
-	// THE APPLY LOOPS LAST, after the feeds and the projector that read
-	// what they write. A loop stopped first leaves a feed consuming a log
+	// THE APPLY LOOPS LAST, after the feeds and the indexer that read what
+	// they write. A loop stopped first leaves a feed consuming a log
 	// nothing is applying, which is not wrong so much as a shutdown that
 	// looks like a stall in every log line it produces on the way out.
 	n.log.Stop()
 }
 
-// NativeHydrated reports whether every native projection this node runs has
-// caught up.
+// NativeHydrated reports whether every state-log domain whose health gates
+// seat admission has caught up on this node.
 //
 // THE GATE ON SEAT ACQUISITION. A seat whose mailbox attached first would
 // answer "there is no such item" to its own tools — an answer it acts on by
@@ -482,37 +488,26 @@ func (e *Engine) SeatsServiceable() (bool, string) {
 	return true, ""
 }
 
-// ReplicationStatus is one of this node's replication loops, as the fleet view
+// ReplicationStatus is one of this node's state-log domains, as the fleet view
 // counts them.
 //
-// # Why one type over two mechanisms
-//
-// This node runs two kinds of loop and they are genuinely different: a
-// PROJECTOR follows a coordination bucket's change feed and holds a revision
-// cursor, and a state-log APPLIER consumes an ordered stream and commits a
-// checkpoint with the rows it derives. Nothing about their internals is
-// shared, and forcing one into the other's status struct would put a revision
-// where a position belongs.
-//
-// What the fleet view asks is not about either mechanism. It asks "how many of
-// this node's copies of the company's state have caught up" — the question
-// behind an operator's "why is the new node holding no seats" — and a count
-// that included only one of the two kinds would answer 1 of 1 for a node whose
-// tracker is hours behind. So the shared thing is the QUESTION, and this is
-// its shape: a name, whether it is ready, and the detail an operator reads
-// when it is not.
+// The fleet view asks "how many of this node's copies of the company's state
+// have caught up" — the question behind an operator's "why is the new node
+// holding no seats" — so a row is that question's shape rather than the
+// applier's: a name, whether it is ready, and the detail an operator reads
+// when it is not. Every registered domain has one, including a domain whose
+// health does not gate seat admission ([stateLog.Status] says why).
 type ReplicationStatus struct {
-	// Name is the family or the domain, which is what an operator sees.
+	// Name is the domain, which is what an operator sees.
 	Name string
 
-	// Kind is `projection` or `domain`, so the two mechanisms are
-	// distinguishable when the detail below is not enough.
+	// Kind is the mechanism the row describes. `domain`, a state-log
+	// applier, is the only one a node runs.
 	Kind string
 
-	// Ready is the same fact for both: this loop's copy is one a seat's
-	// tools may be attached to. It is NOT strict readiness — see
-	// [Engine.NativeHydrated], which asks the stricter question that
-	// actually gates admission.
+	// Ready is whether this copy is one a seat's tools may be attached to.
+	// It is NOT strict readiness — see [Engine.NativeHydrated], which asks
+	// the stricter question that actually gates admission.
 	Ready bool
 
 	// Detail is why it is not ready, in the loop's own words. Empty for a
@@ -520,7 +515,7 @@ type ReplicationStatus struct {
 	Detail string
 }
 
-// NativeStatus is what this node reports about its replication loops, for the
+// NativeStatus is what this node reports about its state-log domains, for the
 // fleet view. Empty for a node running no native backend.
 //
 // IT TAKES THE CALLER'S CONTEXT, and that is load-bearing rather than
@@ -535,12 +530,7 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 	if e.native == nil {
 		return nil
 	}
-	// EVERY ROW IS A DOMAIN'S NOW. The wiki's projection row went with the
-	// projector: a row that could only say hydrated or not has been
-	// replaced by a position on a log, which is the same question answered
-	// with a distance.
-	out := e.native.log.Status(ctx)
-	return out
+	return e.native.log.Status(ctx)
 }
 
 // Domains is every state-log domain this build runs, in the fixed order
@@ -592,24 +582,33 @@ func (e *Engine) NativeSearcher() *pages.Searcher {
 	return e.native.searcher
 }
 
-// WaitCommitted blocks until this node's tracker applier has consumed through
-// a position.
+// WaitCommitted blocks until this node's applier for a position's domain has
+// consumed through that position.
 //
-// THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
-// than a revision because that is what a write answers with: a bucket write
-// returns a revision on one family, and a log write returns a place on a
-// stream that only compares against the same stream and the same generation.
+// THE READ-YOUR-WRITES PRIMITIVE ON THE LOGS. A native write answers with a
+// position — a place on one domain's stream, which compares only against the
+// same stream and the same generation — and the position NAMES ITS OWN
+// STREAM, so the domain is resolved from it rather than taken from the
+// caller. That is what lets the tracker's tools and the page tools settle
+// through this one primitive ([builtin.WorkDeps.Await], [builtin.PageDeps.Await]).
+//
+// A ZERO SEQUENCE IS NOTHING TO WAIT FOR — a write that appended no record, or
+// an unknown outcome that carries no position — and answers nil.
+// A position on a stream no domain here runs is an ERROR rather than nil:
+// nil is the answer that says "applied", and a caller told that goes on to
+// read rows the position was never checked against.
 func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error {
-	if e.native == nil || e.native.log == nil || at.Seq == 0 {
+	if at.Seq == 0 {
 		return nil
 	}
-	// THE POSITION NAMES ITS OWN STREAM, so this resolves the domain from
-	// it rather than taking one. That is what a bucket revision could never
-	// do — it was a number on a family, and the caller had to say which —
-	// and it is why both native backends now settle through one primitive.
-	running := e.native.log.Domain(e.native.log.domainOf(at.Stream))
+	var running *runningDomain
+	if e.native != nil {
+		running = e.native.log.Domain(e.native.log.domainOf(at.Stream))
+	}
 	if running == nil {
-		return nil
+		return fmt.Errorf("engine: position %s is on a stream no state-log "+
+			"domain on this node applies, so there is nothing here to wait for "+
+			"it on", at.String())
 	}
 	return running.runner.WaitCommitted(ctx, at)
 }
@@ -622,26 +621,20 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 // because a feed follows a DOMAIN and a domain does not change when a company
 // revision does.
 func (e *Engine) startNativeFeeds(ctx context.Context) {
-	if e.native == nil || e.native.log == nil {
+	if e.native == nil {
 		return
 	}
 
-	// EVERY SOURCE IS A LOG NOW, and the coordination Feeder this function
-	// used to require is gone with the last bucket family. A translator
-	// says what it can read and a feed says how to run a durable consumer
-	// over one domain's own stream; which estate the records are in was
-	// the piece the domains replaced outright.
+	// EVERY SOURCE IS A DOMAIN'S LOG. A translator says what it can read,
+	// and an opener runs a durable consumer over one domain's own stream.
 	type source struct {
 		translator changefeed.Translator
 		opener     changefeed.Opener
 	}
 	sources := []source{}
 	if running := e.native.log.Domain(tracker.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE, and it is the piece the domain
-		// replaced outright: a bucket feed needs a family and a key
-		// class, and a log delivery has neither. Its own fleet-wide
-		// group over the same stream the applier reads is what derives
-		// a wake from a committed record.
+		// ITS OWN FLEET-WIDE GROUP over the stream the applier reads,
+		// which is what derives a wake from a committed record.
 		feed, err := trackerFeedSource(running)
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
@@ -654,10 +647,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		}
 	}
 	if running := e.native.log.Domain(pages.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE HERE TOO. A bucket feed needed a family
-		// and a key class; a log delivery has neither, and its own
-		// fleet-wide group over the same stream the applier reads is
-		// what derives a wake from a committed record.
+		// The same, over the pages log.
 		feed, err := pagesFeedSource(running)
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
@@ -736,16 +726,16 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // the old company's org chart — an item filed into a project whose lead
 // moved would keep waking the seat that used to own it.
 //
-// NOT the projectors, the index, the stores or the feeds. Those follow a
-// coordination FAMILY, which no company revision changes; rebuilding them
-// here would drop this node's projection and re-run a boot reconcile on
-// every configuration edit.
+// NOT the apply loops, the index, the stores or the feeds. Those follow a
+// domain's LOG, which no company revision changes; rebuilding them here
+// would restart this node's appliers on every configuration edit.
 //
 // There is no retirement branch. Switching `tracker.backend` away from
-// native is not a live gesture — the tools, the projector and the feed are
-// all built at boot — so a revision that changes it takes effect on
-// restart, and the parser staying registered until then is the honest
-// state: the records are still there and still reachable.
+// native is not a live gesture — the stores the tools write through, the
+// apply loops and the feeds are all built at boot — so a revision that
+// changes it takes effect on restart, and the parser staying registered
+// until then is the honest state: the records are still there and still
+// reachable.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 	if e.native == nil {
 		return
@@ -1131,17 +1121,17 @@ func parentOf(o *org.Organization, child *org.Unit) *org.Unit {
 	return nil
 }
 
-// skillDetector answers whether a page body is a tool skill, for the
-// projection's derived flag.
+// skillDetector answers whether a page body is a tool skill, for the pages
+// applier's derived skill flag.
 type skillDetector struct{}
 
 // IsSkill reports a body that parses as a tool skill.
 //
-// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the projected flag
-// means exactly what the registry means by it: a page the sync would admit.
-// A second heuristic here would let one page be a skill to the projection
-// and prose to the loader — and the disagreement is silent, because each
-// half is self-consistent.
+// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the applied flag means
+// exactly what the registry means by it: a page the sync would admit. A
+// second heuristic here would let one page be a skill to the applier and
+// prose to the loader — and the disagreement is silent, because each half is
+// self-consistent.
 func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 
 // ---- what a seat's tools are given ------------------------------------- //
@@ -1442,34 +1432,35 @@ func (m seatMentions) Mentions(text string) []string {
 //
 // # Why it is a nudge and not a read
 //
-// It is called from the page projection's post-commit hook, which runs on the
-// projector's own loop, so doing the read here would hold every subsequent
-// change behind a page walk and a registry replace. So it is a request to the
-// node's one sync loop, which coalesces however many arrive into one walk: the
-// read is wholesale, and one re-read after N changes is the same answer as N
-// of them.
+// It is called from the pages applier's post-commit hook
+// ([pages.Applier.Committed]), which runs on that domain's apply loop, so
+// doing the read here would hold every subsequent record behind a page walk
+// and a registry replace. So it is a request to the node's one sync loop,
+// which coalesces however many arrive into one walk: the read is wholesale,
+// and one re-read after N changes is the same answer as N of them.
 //
 // # Why this backend needs no fleet nudge
 //
-// Every node applies the page log itself, so every node's own projection sees
-// a skill page move and calls this. The broadcast the Confluence path needs
+// Every node applies the page log itself, so every node's own applier sees a
+// skill page move and calls this. The broadcast the Confluence path needs
 // exists because a vendor webhook reaches one node; a log every node applies
 // already reaches all of them.
 //
-// NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
+// NAMED AS THE NATIVE BACKEND'S, because the applier outlives an apply that
 // moves the company's skills to Confluence, and the loop ignores a refresh
 // from a backend its source is not on.
 func (e *Engine) nudgeSkills() { e.skillSync.Refresh(string(config.KnowledgeNative)) }
 
-// walkNativeSkills reads the tool-skill container out of this node's own page
-// projection.
+// walkNativeSkills reads the tool-skill container out of this node's own
+// applied page rows.
 //
-// # It waits for hydration first
+// # It waits for this node's domains to catch up first
 //
 // A walk over a container this node has not applied through is a PARTIAL set,
 // and the registry replaces wholesale, so reading early would silently delete
-// every skill the walk did not reach. The wait is cancelled with the walk: a
-// source change or a stop ends it.
+// every skill the walk did not reach. The wait is the one seat admission
+// makes ([Engine.NativeHydrated]), and it is cancelled with the walk: a source
+// change or a stop ends it.
 func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skills.Page, error) {
 	if !e.awaitHydration(ctx) {
 		return nil, ctx.Err()
@@ -1513,25 +1504,22 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 	return true
 }
 
-// hydrationPoll is how often the first skill read checks whether the
-// projection has caught up.
+// hydrationPoll is how often a skill walk checks whether this node's domains
+// have caught up.
 //
-// A quarter-second. The wait is bounded by a boot reconcile, which is
-// hundreds of milliseconds on an ordinary company and minutes on a large one
-// — so the cost of polling is a handful of atomic reads either way, and a
-// condition variable here would be a second thing to keep correct for a wait
-// that happens once per process.
+// A quarter-second. Each check is the health read seat admission makes — per
+// domain that gates it, the stream's bounds from the broker and the fleet's
+// published trim floor — so a node catching up pays a few round trips a
+// second for as long as it is behind, and a node that is not pays one check
+// per walk. A condition variable here would be a second definition of
+// "caught up" to keep in step with that read.
 const hydrationPoll = 250 * time.Millisecond
 
-// searchPeers is the fleet half of the knowledge search's fan-out.
-//
-// NIL WHEN THERE IS NO QUEUE, which is a legal deployment rather than a
-// degradation: an embedded engine with no broker holds the whole corpus and
-// takes every bucket, exactly as a single node does.
+// searchPeers is the fleet half of both searches' fan-out: the broker this
+// node's queue rides, which every engine holds ([Backends.Complete]). What
+// keeps a node alone in its fleet searching by itself is the roster rather
+// than this — see [search.FanOut.Peers].
 func (e *Engine) searchPeers() search.Peers {
-	if e.backends == nil || e.backends.Queue == nil {
-		return nil
-	}
 	return search.Broker{Queue: e.backends.Queue}
 }
 
@@ -1543,9 +1531,6 @@ func (e *Engine) searchPeers() search.Peers {
 // while a lease expires. A dead node in the roster costs every search on this
 // node a partial answer for as long as its row survives.
 func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil, nil
-	}
 	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err

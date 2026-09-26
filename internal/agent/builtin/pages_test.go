@@ -591,12 +591,86 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 		t.Errorf("mentions = %v", kb.comments[0].Mentions)
 	}
 
-	kb.readErr = errors.New("the projection is not hydrated yet")
-	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
-		got := callWork(t, reg, name, map[string]any{"page": "p1"})
+	// EVERY TOOL THAT READS, AND IT NAMES WHAT IT READ. A seat told the
+	// tracker is unreadable when the knowledge base was reports an outage
+	// nobody has, and goes looking for its answer in a store that was
+	// never down.
+	kb.readErr = errors.New("this node's pages are behind the log")
+	for name, args := range map[string]map[string]any{
+		builtin.ListPagesTool:     {"container": "ENG"},
+		builtin.GetPageTool:       {"page": "p1"},
+		builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "v5"},
+		builtin.CommentOnPageTool: {"page": "p1", "body": "still right?"},
+	} {
+		got := callWork(t, reg, name, args)
 		if !got.Failed || !strings.Contains(got.Output, "NOT an empty result") {
 			t.Errorf("%s on a failed read gave %q", name, got.Output)
 		}
+		if !strings.Contains(got.Output, "could not read the knowledge base") ||
+			strings.Contains(got.Output, "tracker") {
+			t.Errorf("%s does not say it was the knowledge base it could not "+
+				"read: %q", name, got.Output)
+		}
+		if !strings.Contains(got.Output, "the page or the list") {
+			t.Errorf("%s does not name what not to conclude is missing: %q",
+				name, got.Output)
+		}
+	}
+}
+
+// AN ARGUMENT LIST_PAGES DOES NOT READ IS REFUSED, NAMING IT AND WHAT TO USE.
+//
+// Ignored, a continuation passed under another tool's name — `offset` is the
+// one a stale doc taught — answers the FIRST page again, which looks exactly
+// like the next one, and a caller walking the listing reads page one for
+// ever. Refused before the reader is asked, so nothing reads as a listing.
+//
+// Mutation: drop the refusal and every case below reaches the reader.
+func TestAnArgumentListPagesDoesNotReadIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want []string
+	}{
+		{"a continuation by offset",
+			map[string]any{"container": "ENG", "offset": 50},
+			[]string{"`offset`", "`next_cursor`", "`after`", "`children_cursor`"}},
+		{"a filter it has no argument for",
+			map[string]any{"container": "ENG", "status": "draft"},
+			[]string{"`status`", "after, container, label, limit, parent, title"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			kb := &listRecorder{answer: pages.Listing{Complete: true}}
+			reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+			got := callWork(t, reg, builtin.ListPagesTool, tc.args)
+			if !got.Failed {
+				t.Fatalf("an argument list_pages does not read answered as a "+
+					"listing:\n%s", got.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the refusal does not name %s: %s", want, got.Output)
+				}
+			}
+			if len(kb.filters) != 0 {
+				t.Errorf("the reader was asked %d time(s) for a request the "+
+					"tool refused", len(kb.filters))
+			}
+		})
+	}
+
+	// THE CONTROL: every argument the schema offers, together, is a
+	// listing — or the refusal above would pass on a tool that refuses
+	// everything.
+	kb := &listRecorder{answer: pages.Listing{Complete: true}}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+	if got := callWork(t, reg, builtin.ListPagesTool, map[string]any{
+		"container": "ENG", "parent": "p1", "title": "Run", "label": "ops",
+		"limit": 5, "after": "RU5H.QWxwaGE.cDE",
+	}); got.Failed {
+		t.Fatalf("every argument list_pages offers was refused: %s", got.Output)
 	}
 }
 

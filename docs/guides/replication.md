@@ -19,7 +19,7 @@ are stated first.
 |---|---|---|
 | **the arbitration anchor** | `statelog_anchor` | The position of the last record this node consumed on a subject, *whatever that record then did*. It is what the broker arbitrates a new write against. |
 | **`version`** | a column on every object row | The object's accepted state. It is what a caller's `if_match` compares against. |
-| **the barrier comparison** | computed | `MAX(version, scoped_through)` — what a read barrier compares, because a record can change an object without being *about* it. |
+| **the reflected position** | computed | `MAX(version, scoped_through)` — the newest record a row already reflects, which an applier compares an arriving record against, because a record can change an object without being *about* it. |
 
 The anchor and the version are equal only while every accepted record produces
 rows, and an apply **gate** is by definition the rule that makes them differ.
@@ -31,9 +31,15 @@ round budget — for at least the trim's age floor, and unbounded above while an
 retention term blocks.
 
 **`scoped_through`** is the third. A record bumps `version` only on its **own**
-subject; every other row it writes carries `scoped_through` instead. A barrier
-that compared only `version` would let a read past a record that had already
-changed the row it was about to return.
+subject, and a row it writes for another subject can carry `scoped_through`
+instead: a rank order stamps it on each task it places, so a redelivery of the
+placement is recognised as already applied, and a page rename stamps it on the
+page's head. A purge stamps nothing on the subtasks it moves onto the purged
+task's parent. A node that is holding back a record about one of those subtasks
+— one its build cannot read yet — applies the purge first and that record after
+it, below the purge's position, and a `scoped_through` at the purge's position
+would make the record look applied and drop it on that node for good.
+Unstamped, both orders end in the same rows.
 
 ## A write has three outcomes
 

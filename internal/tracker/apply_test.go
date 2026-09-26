@@ -502,16 +502,19 @@ func TestARankOrderIsAppliedAsTheVersionItWasWrittenAtSays(t *testing.T) {
 // EACH RECORD IS WRITTEN AT THE VERSION ITS APPLY MEANS, AND NO HIGHER.
 //
 // The version is what tells a node which apply a record was written for, so the
-// writer has to stamp it — a rank order and a purge each at their own, and
-// every other record at the first: a record of any other kind stamped above
-// what an older build reads would be retained by every such node for no change
-// in what it does, together with every later record its scope covers.
+// writer has to stamp it — a rank order, a purge and a patch carrying a merge
+// target each at their own, and every other record at the first: a record of
+// any other kind stamped above what an older build reads would be retained by
+// every such node for no change in what it does, together with every later
+// record its scope covers.
 func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
+	r.applyWhileWriting()
 	filedTask(t, r, "t-1")
 	filedTask(t, r, "t-2")
 	filedTask(t, r, "t-3")
+	filedTask(t, r, "t-4")
 	if _, err := r.writer.MoveTask(t.Context(), "op-drop", "ENG", "t-2", "",
 		"t-1"); err != nil {
 		t.Fatalf("MoveTask: %v", err)
@@ -522,15 +525,31 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 		t.Fatalf("PurgeTask: %v", err)
 	}
 	r.drain()
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "t-4", "t-1",
+		false, nil); err != nil {
+		t.Fatalf("MergeDuplicates: %v", err)
+	}
+	r.drain()
 
 	// EVERY RECORD ON THE LOG, each against the version its apply means:
-	// a rank order and a purge at their own, everything else at the first.
-	want := func(env tracker.RecordEnvelope) int {
+	// a rank order, a purge and a merge target at their own, everything
+	// else at the first.
+	want := func(env tracker.RecordEnvelope, payload []byte) int {
 		switch {
 		case env.Subject.Kind == tracker.KindRankOrder:
 			return tracker.RankOrderRecordVersion
 		case env.Op == tracker.OpPurge:
 			return tracker.PurgeRecordVersion
+		}
+		record, err := tracker.Decode(payload)
+		if err != nil {
+			t.Fatalf("decode the %s record on %s: %v", env.Op, env.Subject, err)
+		}
+		var patch map[string]json.RawMessage
+		if env.Op == tracker.OpPatch && json.Unmarshal(record.Mutation, &patch) == nil {
+			if _, carries := patch["merge_into"]; carries {
+				return tracker.MergeRecordVersion
+			}
 		}
 		return tracker.RecordVersion
 	}
@@ -544,9 +563,9 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode record %d: %v", seq, err)
 		}
-		if env.V != want(env) {
+		if expected := want(env, payload); env.V != expected {
 			t.Errorf("the %s %s record at %d was written at version %d, want %d",
-				env.Subject.Kind, env.Op, seq, env.V, want(env))
+				env.Subject.Kind, env.Op, seq, env.V, expected)
 		}
 		seen[env.V] = true
 		if env.Op == tracker.OpPurge {
@@ -567,7 +586,8 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 		}
 	}
 	for _, version := range []int{tracker.RecordVersion,
-		tracker.RankOrderRecordVersion, tracker.PurgeRecordVersion} {
+		tracker.RankOrderRecordVersion, tracker.PurgeRecordVersion,
+		tracker.MergeRecordVersion} {
 		if !seen[version] {
 			t.Fatalf("no record on the log was written at version %d, so this "+
 				"case is not the shape it names", version)
@@ -592,7 +612,7 @@ func TestEachRecordIsWrittenAtTheVersionItsApplyMeans(t *testing.T) {
 	}
 	got := (tracker.Domain{}).RecordVersion()
 	for _, version := range []int{tracker.RankOrderRecordVersion,
-		tracker.PurgeRecordVersion} {
+		tracker.PurgeRecordVersion, tracker.MergeRecordVersion} {
 		if got < version {
 			t.Errorf("the domain declares it reads version %d, below the %d it "+
 				"writes", got, version)
@@ -1065,6 +1085,200 @@ func TestAChildThatCrossedAPurgeLandsWhereThePurgeMovedItsChildren(t *testing.T)
 			}
 		})
 	}
+}
+
+// A CHILD'S RECORD HELD BACK BELOW A PURGE OF ITS PARENT STILL APPLIES.
+//
+// A node that cannot read a record on a child retains it — and every later
+// record on that child — until a build that can arrives. The purge of the
+// child's parent is a record on ANOTHER subject, which that retained record's
+// scope does not cover, so the node applies the purge first and the child's
+// record after it, below the purge's position. The two orders have to end in
+// one set of rows: the purge moves the child it finds, and the child's own
+// records, whenever they apply, merge onto whatever document the child then
+// has. A child row stamped with the purge's position read every child record
+// below that position as already applied, so the reprocess wrote a history row
+// and nothing else, and that node lacked the change for good.
+//
+// Mutation: stamp `scoped_through` with the purge's position in
+// moveChildDocument and both cases diverge.
+func TestAChildRecordHeldBackBelowAPurgeOfItsParentStillApplies(t *testing.T) {
+	t.Parallel()
+	moved := "y"
+	renamed := "renamed while its parent was being purged"
+	for _, tc := range []struct {
+		name  string
+		patch tracker.TaskPatch
+	}{
+		{"it renames the child, which the purge then moves", tracker.TaskPatch{
+			Title: &renamed,
+		}},
+		{"it moves the child out from under the purged task", tracker.TaskPatch{
+			Title: &renamed, Parent: &moved,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			at := time.Unix(1_700_000_100, 0).UTC()
+			gp, p := "gp", "p"
+			fixture := []tracker.MutationRecord{
+				taskRecord("gp", tracker.OpCreate, newTask("gp"), nil),
+				taskRecord("p", tracker.OpCreate, newTask("p"), nil),
+				taskRecord("y", tracker.OpCreate, newTask("y"), nil),
+				taskRecord("c", tracker.OpCreate, newTask("c"), nil),
+				taskRecord("p", tracker.OpPatch, tracker.TaskPatch{Parent: &gp}, nil),
+				taskRecord("c", tracker.OpPatch, tracker.TaskPatch{Parent: &p}, nil),
+			}
+			fixture[5].OpID = "c-into-p"
+			held := taskRecord("c", tracker.OpPatch, tc.patch, nil)
+			held.OpID = "c-held"
+			purge := taskRecord("p", tracker.OpPurge, map[string]any{
+				"v": tracker.PurgeRecordVersion, "reason": "filed twice",
+			}, nil)
+			purge.V = tracker.PurgeRecordVersion
+			heldAt := uint64(len(fixture) + 1)
+
+			inOrder, deferred := newApplyHarness(t), newApplyHarness(t)
+			for _, h := range []*applyHarness{inOrder, deferred} {
+				for _, rec := range fixture {
+					if _, err := h.apply(rec, at); err != nil {
+						t.Fatalf("fixture %s: %v", rec.OpID, err)
+					}
+				}
+			}
+			// IN ORDER: the child's record, then the purge.
+			if _, err := inOrder.applyAt(held, at, heldAt); err != nil {
+				t.Fatalf("apply the child's record: %v", err)
+			}
+			if _, err := inOrder.applyAt(purge, at, heldAt+1); err != nil {
+				t.Fatalf("apply the purge: %v", err)
+			}
+			// HELD BACK: the purge at its position, then the child's
+			// record reprocessed at its own, below it.
+			if _, err := deferred.applyAt(purge, at, heldAt+1); err != nil {
+				t.Fatalf("apply the purge: %v", err)
+			}
+			if _, err := deferred.applyAt(held, at, heldAt); err != nil {
+				t.Fatalf("reprocess the child's record: %v", err)
+			}
+
+			if got := deferred.text(`SELECT title FROM tracker_tasks WHERE id = 'c'`); got != renamed {
+				t.Errorf("the reprocessed record did not apply: the child is "+
+					"titled %q", got)
+			}
+			want, got := inOrder.estate(), deferred.estate()
+			if !slices.Equal(want, got) {
+				t.Errorf("a node that held the child's record back below the "+
+					"purge holds different rows from one that applied the two "+
+					"in order:\n in order: %v\n held:     %v", want, got)
+			}
+		})
+	}
+}
+
+// A FIELD THIS BUILD DOES NOT KNOW SURVIVES EVERY APPLY THAT REWRITES THE
+// DOCUMENT: the commit that merges a patch onto it, and the purge that moves
+// it to a new parent. Each decodes the stored document and encodes it again,
+// and a key with no field would be gone from the node that did it while every
+// peer that knows the key keeps it.
+//
+// Mutation: drop [tracker.Task]'s UnmarshalJSON and the key is gone at the
+// first commit.
+func TestAFieldThisBuildDoesNotKnowSurvivesACommitAndAPurgeMove(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	gp, p := "gp", "p"
+	for _, rec := range []tracker.MutationRecord{
+		taskRecord("gp", tracker.OpCreate, newTask("gp"), nil),
+		taskRecord("p", tracker.OpCreate, newTask("p"), nil),
+		taskRecord("p", tracker.OpPatch, tracker.TaskPatch{Parent: &gp}, nil),
+	} {
+		if _, err := h.apply(rec, at); err != nil {
+			t.Fatalf("fixture %s: %v", rec.OpID, err)
+		}
+	}
+	child := newTask("c")
+	child.Parent = &p
+	body, err := json.Marshal(child)
+	if err != nil {
+		t.Fatalf("encode the child: %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode the child: %v", err)
+	}
+	document["lane"] = json.RawMessage(`"urgent"`)
+	withLane, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encode the child with its lane: %v", err)
+	}
+	lane := func(when string) {
+		t.Helper()
+		if got := h.text(`SELECT json_extract(CAST(document AS TEXT), '$.lane')
+			FROM tracker_tasks WHERE id = 'c'`); got != "urgent" {
+			t.Errorf("after %s the child's document holds lane %q, want the "+
+				"newer build's value kept", when, got)
+		}
+	}
+	if _, err := h.apply(taskRecord("c", tracker.OpCreate,
+		json.RawMessage(withLane), nil), at); err != nil {
+		t.Fatalf("create the child: %v", err)
+	}
+	lane("its create")
+	renamed := "renamed"
+	patch := taskRecord("c", tracker.OpPatch, tracker.TaskPatch{Title: &renamed}, nil)
+	patch.OpID = "c-rename"
+	if _, err := h.apply(patch, at); err != nil {
+		t.Fatalf("rename the child: %v", err)
+	}
+	lane("a commit on it")
+	purge := taskRecord("p", tracker.OpPurge, map[string]any{
+		"v": tracker.PurgeRecordVersion, "reason": "filed twice",
+	}, nil)
+	purge.V = tracker.PurgeRecordVersion
+	if _, err := h.apply(purge, at); err != nil {
+		t.Fatalf("purge the parent: %v", err)
+	}
+	if got := h.text(`SELECT parent_id FROM tracker_tasks WHERE id = 'c'`); got != "gp" {
+		t.Fatalf("the purge left the child under %q, so it did not move it and "+
+			"this case is not the shape it names", got)
+	}
+	lane("the purge of its parent moved it")
+}
+
+// estate is every row a task commit derives, rendered for comparison between
+// two nodes: the task rows whole, documents included, and the ancestry.
+func (h *applyHarness) estate() []string {
+	h.t.Helper()
+	var out []string
+	for _, query := range []string{
+		`SELECT id || '|' || COALESCE(parent_id, '') || '|' || root_id || '|' ||
+		        depth || '|' || title || '|' || version || '|' || scoped_through ||
+		        '|' || CAST(document AS TEXT)
+		 FROM tracker_tasks ORDER BY id`,
+		`SELECT ancestor_id || '>' || descendant_id || '@' || distance
+		 FROM tracker_task_closure ORDER BY ancestor_id, descendant_id`,
+	} {
+		if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(h.t.Context(), query)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var row string
+				if err := rows.Scan(&row); err != nil {
+					return err
+				}
+				out = append(out, row)
+			}
+			return rows.Err()
+		}); err != nil {
+			h.t.Fatalf("read the estate: %v", err)
+		}
+	}
+	return out
 }
 
 // THE EFFECTIVE INSTANT IS A MAX OVER A SET, so a late record RAISES its

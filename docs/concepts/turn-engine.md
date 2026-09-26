@@ -817,13 +817,35 @@ apart, which for a record this build just wrote is simply false.
 **And one scale per phase, not per loop invocation.** The tool loop numbers
 its rounds from 1 each time it is *entered*, and an extended phase enters it
 again — so every publisher folds the invocation onto the rounds behind it.
-All three do it through one function, because they were three places that had
-to agree and did not: the live frame carried the invocation alone (an
-extension's first frame collapsed a twenty-round ledger to one), the round in
-flight was never renumbered (its streaming text overwrote the block of a
-committed round twenty rounds earlier), and the completed record took the
-invocation's token counters (every round before the extension billed, then
-dropped from the report).
+All three do it through one function, because each is a place that has to
+agree with the other two: without the fold the live frame would carry the
+invocation alone (an extension's first frame collapsing a twenty-round ledger
+to one), the round in flight would keep its own numbering (its streaming text
+overwriting the block of a committed round twenty rounds earlier), and the
+completed record would report the last invocation's tokens alone (every round
+before the extension billed, and missing from the report).
+
+**Spend is recorded under the model that served it.** A phase record names
+one `model` — the first a completion of the phase reported serving it — and
+carries `models`, its tokens split by the model each completion reported: a
+fallback chain can move a phase from one member to the next round by round,
+and a breakdown keyed on the first name would bill every later round to a
+model that did not serve it. A completion that names no model is counted under
+the configured model of the provider that served it. The spend rollups read
+the split, and count a record without one — or the part of a record's tokens
+its split does not cover — under its `model` (see
+[`GET /tokens/breakdown`](../reference/api-endpoints.md#get-tokensbreakdown)).
+
+**An auxiliary call is recorded, and is not a phase.** The learning workers,
+the background learning passes and the turn-start prefetch call the seat's
+auxiliary model outside the tool loop, and every one of those completions goes
+through one seam in the engine: it publishes an `auxiliary_call_completed` —
+the seat, the worker that made the call, the turn it served, the model and the
+tokens — and charges the tokens to the budget where a cap is set. It is not an
+`agent_phase_completed` with phase `auxiliary`, because an auxiliary call is
+not a leg of the turn — the reflection workers run after the turn they learn
+from has ended, and a background pass serves no turn at all — and a phase
+record is what every live view reads as the seat working.
 
 **Never load-bearing.** Every phase telemetry publish is a live view of
 the phase, not part of it: a failure is logged

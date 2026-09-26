@@ -289,11 +289,13 @@ type mergeStep struct {
 }
 
 // errMergeOver refuses one of a merge's appends because the merge has already
-// ended: its marker was cleared by a close or a give-up that landed first.
+// ended: its marker was cleared by a close or a give-up that landed first, or
+// the task being merged was purged.
 var errMergeOver = errors.New("tracker: the merge had already ended")
 
 // errLeftTheMerge refuses the move of a subtask a merge no longer moves: one
-// somebody re-parented elsewhere, or put in the trash, after the merge read it.
+// somebody re-parented elsewhere, put in the trash, or purged, after the merge
+// read it.
 var errLeftTheMerge = errors.New("tracker: the task is no longer a live subtask " +
 	"of the one being merged")
 
@@ -313,6 +315,31 @@ func (s mergeStep) subtask(current Task) error {
 		return fmt.Errorf("%w: %s, of %s", errLeftTheMerge, current.ID, s.from)
 	}
 	return nil
+}
+
+// purged refuses one of a merge's appends whose task has been purged since the
+// merge read it: a subtask's move as [errLeftTheMerge], because a purged task
+// is no subtask of anything, and an append on the duplicate as [errMergeOver],
+// because a purge of the task being merged ends its merge with it. It passes
+// every other write, and a task this node simply does not hold.
+func (s mergeStep) purged(ctx context.Context, tx *sql.Tx, id string) error {
+	if s.from == "" && !s.marked {
+		return nil
+	}
+	var gone int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM tracker_deletions WHERE task_id = ?)`,
+		id).Scan(&gone); err != nil {
+		return fmt.Errorf("tracker: read whether %s was purged: %w", id, err)
+	}
+	switch {
+	case gone == 0:
+		return nil
+	case s.from != "":
+		return fmt.Errorf("%w: %s was purged, and was a subtask of %s",
+			errLeftTheMerge, id, s.from)
+	}
+	return fmt.Errorf("%w: %s was purged", errMergeOver, id)
 }
 
 // holds refuses a merge's append whose merge has ended or whose target is gone.
@@ -615,6 +642,10 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		}
 		patch.Tags = &tags
 	}
+	var err error
+	if patch, err = settleMergeTarget(id, patch); err != nil {
+		return WriteResult{}, err
+	}
 	subject := TaskSubject(id)
 	// A PROJECT MOVE TOUCHES BOTH CONTAINERS, so it states them: the
 	// task's rows leave one project's closure and arrive in another's, and
@@ -638,7 +669,6 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// tells the caller to re-run, and the re-run took the same gate and
 	// came up short again. Any edit at all to a task somebody waits on was
 	// refused for ever, with an error promising it would not be.
-	var err error
 	if scope, err = w.scopeForDependents(ctx, id, project, scope); err != nil {
 		return WriteResult{}, err
 	}
@@ -661,6 +691,17 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
+				// A MERGE'S TASK PURGED since the merge read it — a
+				// subtask it was moving, or the duplicate itself — is
+				// [mergeStep.subtask]'s or [mergeStep.holds]' case,
+				// reached before either can run because there is no row
+				// to hand it. Refused as unavailable instead, it would
+				// stop the merge as a failure after its mark and earlier
+				// moves had landed, and leave the sweep a task to finish
+				// that no node holds.
+				if err = w.merge.purged(ctx, tx, id); err != nil {
+					return statelog.Decision{}, err
+				}
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
@@ -818,6 +859,39 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
 	return result, err
+}
+
+// settleMergeTarget makes the merge marker and its target travel together
+// ([TaskPatch.MergeInto]): a patch that raises the marker names what the merge
+// folds into, a patch that lowers it writes the target empty, and a target
+// never rides a patch that does not touch the marker.
+//
+// REFUSED RATHER THAN DEFAULTED on the raise, because the target is the one
+// fact the sweep finishing an abandoned merge cannot recover from anything
+// else ([duty.abandonedMerge]). FILLED IN on the lower, because no caller
+// lowering the marker has a target to state, and a lowered marker that left
+// one behind would describe a merge that is over.
+func settleMergeTarget(id string, patch TaskPatch) (TaskPatch, error) {
+	switch {
+	case patch.Merging == nil && patch.MergeInto == nil:
+		return patch, nil
+	case patch.Merging == nil:
+		return patch, fmt.Errorf("tracker: a patch on task %s names a merge "+
+			"target and does not touch the merge marker — the target rides "+
+			"the patch that raises the marker", id)
+	case *patch.Merging && (patch.MergeInto == nil || *patch.MergeInto == ""):
+		return patch, fmt.Errorf("tracker: a patch on task %s raises the merge "+
+			"marker and names no target — the sweep that finishes an abandoned "+
+			"merge reads the target off the task and nowhere else", id)
+	case !*patch.Merging && patch.MergeInto != nil && *patch.MergeInto != "":
+		return patch, fmt.Errorf("tracker: a patch on task %s lowers the merge "+
+			"marker and names target %s — a merge that is over has none", id,
+			*patch.MergeInto)
+	case !*patch.Merging:
+		none := ""
+		patch.MergeInto = &none
+	}
+	return patch, nil
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.
@@ -1246,7 +1320,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: recordVersionOf(subject, op), OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(subject, op, payload), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Scope: scope,
 		},
 		Kind:       kind,
