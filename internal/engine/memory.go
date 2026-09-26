@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 // memorySyncInterval is how often a node carries what its seats have just
@@ -121,4 +123,15 @@ func (e *Engine) syncSeatMemory(ctx context.Context) {
 				"seat", handle, "error", err)
 		}
 	}
+}
+
+// brokerConn is the queue's own broker connection, or nil for a queue that
+// has none — the memory twin, in a test, which has no broker to carry memory
+// over.
+func brokerConn(q any) *nats.Conn {
+	broker, ok := q.(interface{ Conn() *nats.Conn })
+	if !ok {
+		return nil
+	}
+	return broker.Conn()
 }
