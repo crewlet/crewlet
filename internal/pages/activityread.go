@@ -155,7 +155,7 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 
 	out := PageActivity{Changes: []PageChange{}}
 	served, err := r.log.Read(ctx,
-		q.Freshness.Query(ReadScope(q.Container, ""), true),
+		q.Freshness.Query(ReadScope(q.Container), true),
 		func(tx *sql.Tx) error {
 			changes, next, err := readPageActivity(ctx, tx, q, limit)
 			if err != nil {
@@ -311,7 +311,7 @@ func (r *Reader) Revision(ctx context.Context, pageID string, version int,
 
 	out := Revision{PageID: pageID, Version: version}
 	held := false
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), false), func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), false), func(tx *sql.Tx) error {
 		var at int64
 		err := tx.QueryRowContext(ctx, `
 			SELECT title, body, message, author, created_at

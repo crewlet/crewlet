@@ -223,7 +223,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		limit = MaxLimit
 	}
 	var out []Summary
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
 		return err
@@ -366,8 +366,15 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			"it reads")
 	}
 	var detail Detail
-	container, _, _ := strings.Cut(ref, "/")
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ref), false), func(tx *sql.Tx) error {
+	// THE SCOPE IS WHERE THE PAGE IS FILED, which only its rows can say: a
+	// reference is an id or an address, and neither is a path — an id
+	// names no space, and an address names a title rather than the page
+	// holding it. So the framework resolves it in the answer's own
+	// transaction ([pageReadScope]) and probes there.
+	served, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return pageReadScope(ctx, tx, ref)
+	}, false), func(tx *sql.Tx) error {
 		document, revision, id, err := r.locate(ctx, tx, ref)
 		if err != nil {
 			return err
@@ -398,6 +405,46 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 	detail.Position = served.Position
 	detail.LogLag = served.Lag
 	return detail, nil
+}
+
+// pageReadScope is what a point read of one page is about, resolved from the
+// reference the caller named.
+//
+// THE PAGE'S OWN PATH, under the space it is filed in. An address adds its
+// title term as well, because a create or a rename arbitrates on the title and
+// is filed under it — a deferred rename that took this address is about this
+// read even while the page it resolved to still holds the name.
+//
+// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
+// page" is a claim about rows a deferred create has not written: an address is
+// exactly the term such a create is filed under, and an id names nothing
+// narrower than the domain.
+func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
+	query := `SELECT id, container FROM pages_heads WHERE id = ?`
+	args := []any{ref}
+	var address *ScopeTerm
+	if container, title, ok := strings.Cut(ref, "/"); ok {
+		container = strings.ToUpper(strings.TrimSpace(container))
+		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
+		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+		args = []any{container, NormalizeTitle(title)}
+	}
+	var id, container string
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&id, &container)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if address == nil {
+			return statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}, nil
+		}
+		return statelog.ScopeSet{Paths: []string{address.Path()}}, nil
+	case err != nil:
+		return statelog.ScopeSet{}, fmt.Errorf("pages: resolve %s: %w", ref, err)
+	}
+	paths := []string{ScopeTerm{Kind: TermObject, Container: container, ID: id}.Path()}
+	if address != nil {
+		paths = append(paths, address.Path())
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
 // locate resolves a reference to a page row.
@@ -557,7 +604,7 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 		return nil, errors.New("pages: this read names no level")
 	}
 	var out []ContainerListing
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), true), func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true), func(tx *sql.Tx) error {
 		containers, err := r.containers(ctx, tx)
 		if err != nil {
 			return err
@@ -662,7 +709,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 		return nil, nil
 	}
 	var out []Page
-	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ""), true), func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.skillPages(ctx, tx, container)
 		return err

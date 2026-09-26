@@ -69,7 +69,7 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	return false, false, nil
 }
 
-// ReadScope is the closure a READ is about.
+// ReadScope is the closure a SET read is about.
 //
 // It is the same alphabet a record's own scope resolves into, which is what
 // makes the coverage probe one comparison rather than a translation between two
@@ -77,13 +77,11 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 // touches everything, but because a read that cannot say what it is about is
 // one every deferred record concerns, and the honest answer to "is this
 // complete" is then "no".
-func ReadScope(container, pageID string) statelog.ScopeSet {
-	switch {
-	case pageID != "":
-		return statelog.ScopeSet{Paths: []string{
-			ScopeTerm{Kind: TermObject, Container: container, ID: pageID}.Path(),
-		}}
-	case container != "":
+//
+// A POINT read is not formed here: one page is filed under the space its rows
+// say, which the reference does not — see [pageReadScope].
+func ReadScope(container string) statelog.ScopeSet {
+	if container != "" {
 		return statelog.ScopeSet{Paths: []string{
 			ScopeTerm{Kind: TermContainer, ID: container}.Path(),
 		}}
