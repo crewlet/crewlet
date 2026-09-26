@@ -44,12 +44,33 @@ const MigrateSource = "migrated"
 // fleet would be silently undone by the stale copy resurfacing, forever. The
 // migration has to terminate, and deleting the source is what terminates it.
 //
-// # The fleet's copy wins, and a name already there is left alone
+// # The later write wins
 //
-// A local row is by definition the older write: the fleet is where every
-// rotation since has landed. So a name that already exists on the KV is
-// skipped and its local copy removed — copying it would resurrect a value an
-// operator rotated away from on another node.
+// A name on both sides keeps whichever value was written LATER: the local row
+// is copied over the fleet's when its UpdatedAt is after the fleet's, and is
+// removed without copying otherwise, a tie included. Neither side is the
+// older write by construction. A fleet row can be one a peer rotated after
+// this node's local write, and copying over it would resurrect a value an
+// operator rotated away from; a local row can be one an operator wrote while
+// the whole fleet was stopped, after its last rotation, and dropping it would
+// discard the newest value there is while the command that wrote it reported
+// it stored. Refusing the local write instead is not available: on the
+// default topology the fleet's store is inside the engine's own process, so
+// with the fleet stopped nothing can read what it holds.
+//
+// The comparison is between two clocks — the host that wrote the local row
+// and the node that wrote the fleet's — so two writes closer together than
+// the skew between those hosts can be ordered wrongly. Preferring either side
+// whatever the times orders one of the two cases above wrongly however far
+// apart the writes were.
+//
+// A COPIED ROW KEEPS ITS OWN WRITE TIME on the fleet, and the migration's
+// instant is only its ceiling. The stamp is what the next node's migration
+// compares its own local rows against, so stamping the boot would make a
+// value written earlier outrank one written later on a node that boots
+// second; and a stamp past now — this host's clock stepped back since the
+// write — would outrank every write made on a correct clock until the clocks
+// passed it.
 //
 // # It is not best effort
 //
@@ -79,14 +100,14 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 	if err != nil {
 		return nil, fmt.Errorf("fleetsecrets: read the fleet's secrets: %w", err)
 	}
-	known := make(map[string]struct{}, len(onFleet))
+	fleetWrote := make(map[string]time.Time, len(onFleet))
 	for _, row := range onFleet {
-		known[row.Name] = struct{}{}
+		fleetWrote[row.Name] = row.UpdatedAt
 	}
 
-	var moved []string
+	var moved, superseded []string
 	for _, row := range local {
-		if _, ok := known[row.Name]; !ok {
+		if at, held := fleetWrote[row.Name]; !held || row.UpdatedAt.After(at) {
 			value, err := from.Get(ctx, row.Name)
 			if err != nil {
 				return moved, fmt.Errorf(
@@ -97,10 +118,16 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 			// stamped: "who set this" is the question the provenance
 			// columns exist to answer, and answering it with the
 			// migration would erase the only record of it.
-			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, now); err != nil {
+			written := row.UpdatedAt
+			if written.After(now) {
+				written = now
+			}
+			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, written); err != nil {
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)
+		} else {
+			superseded = append(superseded, row.Name)
 		}
 		if _, err := from.Unset(ctx, row.Name); err != nil {
 			return moved, fmt.Errorf(
@@ -114,6 +141,14 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 		// set locally is now the fleet's.
 		log.InfoContext(ctx, "secrets_migrated_onto_the_fleet", "names", moved,
 			"detail", "these were this node's own rows; every node reads them now")
+	}
+	if len(superseded) > 0 {
+		// AT WARN, because the command that wrote each of these said it
+		// was stored: this is the one place that says it was not kept.
+		log.WarnContext(ctx, "secrets_local_superseded", "names", superseded,
+			"detail", "these were written on this node while it was stopped, "+
+				"and the fleet holds a value for each written at or after that "+
+				"time; the fleet's is kept and this node's copy is removed")
 	}
 	return moved, nil
 }

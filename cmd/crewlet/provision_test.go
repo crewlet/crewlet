@@ -253,11 +253,10 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		if err := fs.Parse([]string{"-print"}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), w)
+		sink, err := sinks.open(w, &fleetRead{env: config.EnvOnly(), absent: "no store"})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		t.Cleanup(closeSink)
 		return sink
 	}
 
@@ -559,6 +558,13 @@ func TestTheMissingPublicBaseRefusalNamesTheRightThing(t *testing.T) {
 		if !strings.Contains(got, "integrations.public_base_url") {
 			t.Errorf("the refusal does not name the field it came from: %q", got)
 		}
+		// AND ONLY WHERE A ${VAR} RESOLVES FROM: the file a -env-file sink
+		// writes is where a run records what it mints, and nothing resolves
+		// from it, so setting the variable there changes nothing.
+		if strings.Contains(got, "-env-file") {
+			t.Errorf("the refusal sends the operator to the sink's file, which "+
+				"nothing resolves from: %q", got)
+		}
 	})
 	t.Run("a literal that resolved to nothing", func(t *testing.T) {
 		got := noPublicBase(&config.Integrations{PublicBaseURL: "  "})
@@ -612,55 +618,72 @@ func TestTheServiceAccountModeComesFromTheDocumentUnlessTheFlagSaysOtherwise(t *
 // node reads before the environment, and with no engine running on this host
 // it cannot be read: a credential the fleet holds reads as absent to any sink
 // and would be minted anew, a -rotate run mints regardless, and whatever is
-// recorded — a file, the printed output, this node's own table — loses to the
-// fleet's copy on every node. Each replaces a working credential at the app
-// while the fleet goes on using the one it replaced. So the run stops where
-// it asks for a sink, which is before an account is created or a token
-// minted, and before the sink itself makes anything.
+// recorded in a file or the printed output loses to the fleet's copy on every
+// node. Each replaces a working credential at the app while the fleet goes on
+// using the one it replaced. So the run stops before an account is created or
+// a token minted, and before the sink itself makes anything: the GitLab
+// command right after it resolves the company, and every command where it
+// asks for its sink — which is the only refusal the Mattermost command meets.
 //
-// Mutation: drop the check from [sinkFlags.open], and each run reaches the
-// administrator-token refusal instead — the step before the first call to
-// GitLab.
+// Mutation: drop the refusal from [sinkFlags.open], and the Mattermost run
+// reaches its administrator-token refusal instead; drop it from the GitLab
+// command as well, and so does the GitLab run.
 func TestARunThatCannotReachTheFleetIsRefusedBeforeTheApp(t *testing.T) {
 	t.Setenv("GITLAB_ADMIN_TOKEN", "")
-	t.Setenv("GITLAB_PROVISION_TOKEN", "")
-	company := gitlabCompanyFile(t)
-	for _, tc := range []struct {
-		name string
-		sink func(t *testing.T) []string
+	t.Setenv("MATTERMOST_ADMIN_TOKEN", "")
+	gitlabCompany := gitlabCompanyFile(t)
+	chatCompany := filepath.Join(t.TempDir(), "company.yaml")
+	if err := os.WriteFile(chatCompany, []byte(chatCompanyDoc), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, command := range []struct {
+		vendor, company string
 	}{
-		{"an env file", func(t *testing.T) []string {
-			return []string{"-env-file", filepath.Join(t.TempDir(), ".env")}
-		}},
-		{"the printed output", func(*testing.T) []string { return []string{"-print"} }},
-		{"this node's own table", func(*testing.T) []string { return []string{"-secret-store"} }},
+		{"gitlab", gitlabCompany},
+		{"mattermost", chatCompany},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := bootstrapWithKeyring(t, "k1")
-			sink := tc.sink(t)
-			_, _, err := provisionCmd(t, append([]string{company, "-config", cfg}, sink...)...)
-			if !errors.Is(err, errFleetUnread) {
-				t.Fatalf("a run with no engine to reach the fleet through answered %v, "+
-					"want it refused as unable to reach the fleet's store", err)
-			}
-			if !strings.Contains(err.Error(), "crewlet run") {
-				t.Errorf("the refusal does not say what to do: %v", err)
-			}
-			if sink[0] == "-env-file" {
-				if _, statErr := os.Stat(sink[1]); statErr == nil {
-					t.Error("the refused run created the env file it was pointed at")
+		for _, tc := range []struct {
+			name string
+			sink func(t *testing.T) []string
+		}{
+			{"an env file", func(t *testing.T) []string {
+				return []string{"-env-file", filepath.Join(t.TempDir(), ".env")}
+			}},
+			{"the printed output", func(*testing.T) []string { return []string{"-print"} }},
+			{"the secret store", func(*testing.T) []string { return []string{"-secret-store"} }},
+		} {
+			t.Run(command.vendor+"/"+tc.name, func(t *testing.T) {
+				cfg := bootstrapWithKeyring(t, "k1")
+				sink := tc.sink(t)
+				var out, errs bytes.Buffer
+				err := run(append([]string{command.vendor, "provision", command.company,
+					"-config", cfg}, sink...), &out, &errs)
+				if !errors.Is(err, errFleetUnread) {
+					t.Fatalf("a run with no engine to reach the fleet through "+
+						"answered %v, want it refused as unable to reach the "+
+						"fleet's store", err)
 				}
-			}
-		})
+				for _, want := range []string{"crewlet run", "-api"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the refusal does not say %q: %v", want, err)
+					}
+				}
+				if sink[0] == "-env-file" {
+					if _, statErr := os.Stat(sink[1]); statErr == nil {
+						t.Error("the refused run created the env file it was pointed at")
+					}
+				}
+			})
+		}
 	}
 }
 
-// AND A RUN THAT CAN REACH IT IS NOT: the secret-store sink names a node that
-// is up, or the Tier A declares no keyring, so no fleet store can hold a
-// credential. Both reach the step after the sink — the administrator token.
+// AND A RUN THAT CAN REACH IT IS NOT: -api names a node that is up, which
+// every sink is then built over, or the Tier A declares no keyring, so no
+// fleet store can hold a credential. Each reaches the step after the sink —
+// the administrator token.
 func TestARunThatCanReachTheFleetIsNotRefused(t *testing.T) {
 	t.Setenv("GITLAB_ADMIN_TOKEN", "")
-	t.Setenv("GITLAB_PROVISION_TOKEN", "")
 	t.Setenv(apiTokenEnv, "ops-token")
 	company := gitlabCompanyFile(t)
 	node := newFakeSecretsNode(t)
@@ -669,8 +692,12 @@ func TestARunThatCanReachTheFleetIsNotRefused(t *testing.T) {
 	if err := os.WriteFile(keyringless, []byte("node:\n  id: cli-test\n"), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
 	}
+	node.body = `{"values":{}}`
 	for name, args := range map[string][]string{
 		"-secret-store through a named node": {"-secret-store", "-api", node.server.URL,
+			"-config", bootstrapWithKeyring(t, "k1")},
+		"an env file, the fleet read through a named node": {"-env-file",
+			filepath.Join(t.TempDir(), ".env"), "-api", node.server.URL,
 			"-config", bootstrapWithKeyring(t, "k1")},
 		"a Tier A with no keyring": {"-print", "-config", keyringless},
 	} {

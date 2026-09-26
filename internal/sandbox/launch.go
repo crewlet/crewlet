@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -43,6 +44,13 @@ type TurnRef struct {
 	// Depth and Chain are the delegation state a resumed turn inherits.
 	Depth int
 	Chain []string
+
+	// TriggeredAt is the TriggeredAt of the launching turn's context
+	// (internal/agent/turnctx): the earliest instant an operation id the
+	// turn derives can have been minted. Carried onto the row
+	// ([PendingRun.TriggeredAt]) because the turn a resume re-enters derives
+	// the same ids and has no trigger left to re-derive the instant from.
+	TriggeredAt time.Time
 }
 
 // LaunchRequest is everything one detached coding run needs.
@@ -73,6 +81,12 @@ type LaunchRequest struct {
 
 	// Fence is the ownership token every mutation on the row carries.
 	Fence Fence
+
+	// MaxLaunches is the most launches the run may open across its resumes
+	// ([PendingRun.Launches]), zero for no bound. A launch past it is
+	// refused with a [LaunchCapError] before anything is recorded or
+	// provisioned.
+	MaxLaunches int
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
@@ -108,6 +122,9 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
+	if err := withinLaunches(ctx, store, req); err != nil {
+		return LaunchResult{}, err
+	}
 
 	// The row FIRST, so a crash between here and the box leaves a record
 	// rather than nothing. It opens in [StatusLaunching] and stays there
@@ -129,7 +146,8 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
-		CreatedAt: now(),
+		TriggeredAt: req.Turn.TriggeredAt,
+		CreatedAt:   now(),
 	}, req.Fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
@@ -226,6 +244,45 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, Reused: reused,
 	}, nil
+}
+
+// ErrLaunchCap reports a launch refused because the run has already opened as
+// many launches as it may. See [LaunchCapError].
+var ErrLaunchCap = errors.New("sandbox: the run has opened as many launches as it may")
+
+// LaunchCapError is a launch refused at [LaunchRequest.MaxLaunches], naming
+// how many the run has opened and the bound.
+type LaunchCapError struct {
+	Launched, Max int
+}
+
+func (e *LaunchCapError) Error() string {
+	return fmt.Sprintf("sandbox: this turn has already started %d coding runs, and a turn may "+
+		"start at most %d", e.Launched, e.Max)
+}
+
+// Unwrap is [ErrLaunchCap], which every refusal at the bound is.
+func (e *LaunchCapError) Unwrap() error { return ErrLaunchCap }
+
+// withinLaunches refuses a launch past [LaunchRequest.MaxLaunches].
+//
+// READ APART FROM THE LAUNCH THAT COUNTS IT, which is sound because a run's
+// launches are serial: each one suspends the loop that asked for it, and the
+// next can only be asked for by the turn that loop resumes into. Nothing else
+// opens a launch under a run's id, so the count cannot move between this read
+// and [PendingStore.BeginLaunch].
+func withinLaunches(ctx context.Context, store PendingStore, req LaunchRequest) error {
+	if req.MaxLaunches <= 0 {
+		return nil
+	}
+	existing, found, err := store.Get(ctx, req.Turn.TurnID)
+	if err != nil {
+		return fmt.Errorf("sandbox: reading how many runs this turn has started: %w", err)
+	}
+	if found && existing.Launches >= req.MaxLaunches {
+		return &LaunchCapError{Launched: existing.Launches, Max: req.MaxLaunches}
+	}
+	return nil
 }
 
 // acquire reattaches to this turn's existing box, or provisions a new one.

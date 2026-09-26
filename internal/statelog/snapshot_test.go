@@ -15,10 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// liveStreamCreatedAt is the instant the probe stream was created, as both
-// this node's live registration and its checkpoint row report it. A case that
-// needs them to DISAGREE moves the file's copy, which is what a donor
-// restarted onto a rebuilt stream holds.
+// liveStreamCreatedAt is the instant the probe stream was created, as this
+// node's checkpoint row reports it. A case that needs the file to name ANOTHER
+// stream moves the row, which is what a donor restarted onto a rebuilt stream
+// holds.
 var liveStreamCreatedAt = time.Unix(1_700_000_000, 0).UTC()
 
 // snapHarness is a node with a replicated estate, a domain and somewhere to
@@ -112,9 +112,8 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain:          probeDomain{},
-			Health:          func() statelog.Health { return h.health },
-			StreamCreatedAt: liveStreamCreatedAt,
+			Domain: probeDomain{},
+			Health: func() statelog.Health { return h.health },
 		}},
 		DB:            h.db,
 		Dir:           h.dir,
@@ -574,21 +573,20 @@ func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
 // A SNAPSHOT NAMES THE STREAM THE FILE WAS APPLYING, NOT THE ONE ITS DONOR IS
 // LIVE ON.
 //
-// Every other checkpoint field is read out of the copy, for the reason the
-// package states: the checkpoint commits in the same transaction as the rows,
-// so the position inside a file is the only position that describes that file.
-// The identity was the exception — taken from the donor's live registration —
-// and the two are the same stream only until one is rebuilt. A donor restarted
-// onto a recreated stream therefore stamped OLD rows with the NEW stream's
-// identity, and the artefact was self-consistent enough to pass every check a
-// recipient could make: its position matched the file, its identity matched
-// the recipient's live stream, and its history no longer existed.
+// Every checkpoint field is read out of the copy, for the reason the package
+// states: the checkpoint commits in the same transaction as the rows, so what
+// is inside a file is the only thing that describes that file — its stream's
+// identity included. The donor's live stream and the file's are the same only
+// until one is rebuilt; a donor restarted onto a recreated stream that stamped
+// its OLD rows with the NEW stream's identity would hand out an artefact
+// self-consistent enough to pass every check a recipient could make — its
+// position matching the file, its identity matching the recipient's live
+// stream — with a history that no longer exists.
 func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
 	// The checkpoint in the file was committed against the stream this
-	// node was applying BEFORE the rebuild; the registration reports the
-	// one it is live on now.
+	// node was applying BEFORE the rebuild.
 	h.created = liveStreamCreatedAt.Add(-72 * time.Hour)
 	h.cursor(4_200)
 
@@ -599,14 +597,9 @@ func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 	got := m.Domains["probe"]
 	if !got.StreamCreatedAt.Equal(h.created) {
 		t.Errorf("the manifest names the stream created at %s and the file was "+
-			"applying the one created at %s — an identity from the donor's live "+
-			"handle describes a stream the rows in this copy never saw",
+			"applying the one created at %s — any other identity describes a "+
+			"stream the rows in this copy never saw",
 			got.StreamCreatedAt.UTC(), h.created.UTC())
-	}
-	if got.StreamCreatedAt.Equal(liveStreamCreatedAt) {
-		t.Error("the manifest took its identity from the donor's live " +
-			"registration, which is the defect: the artefact then matches a " +
-			"recipient's live stream while carrying another one's history")
 	}
 }
 

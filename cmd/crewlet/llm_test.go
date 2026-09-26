@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 )
 
@@ -170,5 +174,144 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 				t.Errorf("level = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// loggedInProvider is a cli-agent provider holding a login to export, whose
+// CLI names the variable a headless token lives in.
+func loggedInProvider(t *testing.T) []cliAgentProvider {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "custom", StateDir: t.TempDir(),
+		Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "true", "complete_args": []any{"-p"}, "model_args": []any{},
+			"output":                "text",
+			"credential_paths":      []any{".fake/creds.json"},
+			"host_credential_paths": []any{".fake/creds.json"},
+			"token_env":             "CUSTOM_CLI_TOKEN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	creds := filepath.Join(p.Workspace().CredentialsDir(), "creds.json")
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, []byte(`{"token":"exported"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return []cliAgentProvider{{key: "sub", provider: p}}
+}
+
+// A STORED LOGIN GOES THROUGH A RUNNING NODE, AND SAYS WHICH.
+//
+// The fleet's store is the one every node resolves from, and a running
+// node's API is the way in. The line after the write names that node, and
+// says every node restores the bundle — a line saying this node's own store
+// and "once per node" sends an operator round a fleet repeating a write that
+// already reached every node.
+//
+// Mutation: write anywhere but through the node the run read the fleet
+// through, or print where the write did not go, and this fails.
+func TestAStoredExportIsWrittenThroughTheRunningNode(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	fleet := &fleetRead{env: config.EnvOnly(), held: map[string]string{},
+		node: node.client(t)}
+
+	var out bytes.Buffer
+	if err := exportLLM(t.Context(), loggedInProvider(t), "sub", true, fleet, &out); err != nil {
+		t.Fatalf("exportLLM: %v", err)
+	}
+	name := cliagent.BundleVarName("sub")
+	if node.last.method != http.MethodPut || node.last.path != "/secrets/"+name ||
+		node.last.body == "" {
+		t.Fatalf("the node was sent %s %s (%d bytes), want the bundle under %s",
+			node.last.method, node.last.path, len(node.last.body), name)
+	}
+	if !strings.Contains(out.String(), node.server.URL) ||
+		!strings.Contains(out.String(), "Every node restores it") {
+		t.Errorf("the report does not name the node it wrote through: %s", out.String())
+	}
+	if strings.Contains(out.String(), "THIS NODE") || strings.Contains(out.String(), "once per node") {
+		t.Errorf("the report says the write stayed on one node: %s", out.String())
+	}
+}
+
+// A STORE WRITE WITH NO RUNNING NODE TO GO THROUGH IS REFUSED.
+//
+// This node's own table is not a way round: no node resolves from it, and
+// the engine copies a row onto the fleet only at its next start — so a write
+// there would be reported as stored while every running node read something
+// else. Refused before the bundle is packed, and so is a write where there is
+// no store at all, naming what would make one.
+//
+// Mutation: fall back to this node's table, or pack before asking, and a
+// write lands somewhere nothing reads.
+func TestAStoreWriteWithNoNodeToGoThroughIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		fleet *fleetRead
+		want  string
+	}{
+		{"a keyring and no engine", &fleetRead{env: config.EnvOnly(),
+			unread: fmt.Errorf("%w: no engine is running on this host", errFleetUnread)},
+			"crewlet run"},
+		{"no store at all", &fleetRead{env: config.EnvOnly(),
+			absent: "crewlet.yaml declares no secrets.keys"}, "secrets keygen"},
+	} {
+		// A PROVIDER WITH NO LOGIN, whose bundle cannot be packed: a
+		// refusal is the answer only when it comes first.
+		var out bytes.Buffer
+		err := exportLLM(t.Context(), bundleProvider(t), "sub", true, tc.fleet, &out)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: the export answered %v, want a refusal saying %q",
+				tc.name, err, tc.want)
+		}
+		if tc.fleet.unread != nil && !errors.Is(err, errFleetUnread) {
+			t.Errorf("%s: the refusal lost the cause: %v", tc.name, err)
+		}
+		if out.Len() > 0 {
+			t.Errorf("%s: a refused export wrote %q", tc.name, out.String())
+		}
+	}
+}
+
+// A TOKEN PRINTED UNDER A NAME THE FLEET HOLDS IS ONE NO NODE WOULD READ.
+//
+// Every node resolves the fleet's store before the environment, so a token an
+// operator exports under that name is shadowed on every node — the twin of a
+// file sink refusing to record a name the fleet holds. Refused before the
+// token is read or minted; with the store unread the run cannot tell, and
+// refuses as a provisioning run does.
+//
+// Mutation: drop the check, and the run goes on to read a token from stdin.
+func TestAPrintedTokenNoNodeWouldReadIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		fleet *fleetRead
+		want  error
+	}{
+		{"the fleet holds the name", &fleetRead{env: config.EnvOnly(),
+			held: map[string]string{"CUSTOM_CLI_TOKEN": "the-fleets"}}, errFleetHolds},
+		{"the fleet could not be read", &fleetRead{env: config.EnvOnly(),
+			unread: fmt.Errorf("%w: no engine is running on this host", errFleetUnread)},
+			errFleetUnread},
+	} {
+		var out, errs bytes.Buffer
+		err := loginLLM(t.Context(), loginRequest{
+			providers: loggedInProvider(t), key: "sub",
+			tokenStdin: true, printToken: true, fleet: tc.fleet,
+		}, &out, &errs)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: the login answered %v, want %v", tc.name, err, tc.want)
+		}
+		if out.Len() > 0 {
+			t.Errorf("%s: a refused login printed %q", tc.name, out.String())
+		}
 	}
 }

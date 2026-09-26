@@ -283,12 +283,14 @@ func TestAnEvictionAnswersForEveryLogItReached(t *testing.T) {
 //
 // Three endings send an operator three different ways: a stream no domain runs
 // on is a name to correct, which the status read beside this route already
-// answers `404`; a refusal — a hydrated peer, a confirmation for another
-// instant, a transition already running, a generation another reanchor holds —
-// is the transition declining, with nothing to retry into success; and a
-// failure partway is one the transition's step order makes safe to run again.
-// One conflict for all three would tell an operator who mistyped a stream, and
-// one whose disk filled mid-transition, that the fleet had refused them.
+// answers `404`; a refusal is the transition declining with nothing written,
+// its reason in the engine's own words — some clear and the same call then
+// lands (a transition already running, a confirmation for another instant),
+// some never do by calling again (a hydrated peer, a generation another
+// reanchor holds); and a failure partway is one the transition's step order
+// makes safe to run again. One conflict for all three would tell an operator
+// who mistyped a stream, and one whose disk filled mid-transition, that the
+// fleet had refused them.
 //
 // Mutation: answer every error `409 reanchor_refused` and the unknown stream
 // and the failure are misfiled.
@@ -307,6 +309,18 @@ func TestAReanchorIsAnsweredByHowItEnded(t *testing.T) {
 		},
 		"a hydrated peer": {
 			err: fmt.Errorf("%w: 1 peer(s) are hydrated on the live stream",
+				statelog.ErrReanchorRefused),
+			code: http.StatusConflict, want: "reanchor_refused",
+		},
+		"a transition already running, which clears once it ends": {
+			err: fmt.Errorf("%w: engine: this node is already rewriting its "+
+				"replicated estate: another reanchor is running on it",
+				statelog.ErrReanchorRefused),
+			code: http.StatusConflict, want: "reanchor_refused",
+		},
+		"a confirmation naming another instant, which clears when re-sent": {
+			err: fmt.Errorf("%w: the confirmation names \"2031-04-02T04:00:00Z\" "+
+				"and the live stream was created at 2031-04-02T03:00:00Z",
 				statelog.ErrReanchorRefused),
 			code: http.StatusConflict, want: "reanchor_refused",
 		},

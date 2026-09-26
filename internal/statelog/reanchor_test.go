@@ -196,15 +196,19 @@ func TestAnIdentityClaimingReanchorPublishesItsRecord(t *testing.T) {
 	}
 }
 
-// A GENERATION ANOTHER REANCHOR HOLDS IS A REFUSAL, NOT A FAILURE.
+// A GENERATION ANOTHER REANCHOR HOLDS IS A REFUSAL, NOT A FAILURE, AND IT
+// WRITES NOTHING.
 //
 // The record is a claim, and a second node that derived the same number meets
-// the first one's record. Nothing about that is retried into success, and no
-// checkpoint of this node's has moved — so it is the transition declining,
-// named as one, with the holder in it; answered as a failure, it sends an
-// operator to run again a reanchor that can never land.
+// the first one's record. Running the transition again meets the same record,
+// and no checkpoint of this node's has moved — so it is the transition
+// declining, named as one, with the holder in it; answered as a failure, it
+// sends an operator to run again a reanchor that can never land. And it is
+// decided before the reset: a refused transition that had already reset the
+// domain's rows would leave them in a generation another node holds.
 //
-// Mutation: return the claim's error unwrapped and the refusal is not one.
+// Mutation: return the claim's error unwrapped and the refusal is not one;
+// reset before the claim and the refused transition has reset the rows.
 func TestAGenerationAnotherReanchorHoldsIsRefused(t *testing.T) {
 	t.Parallel()
 	db := reanchorStore(t)
@@ -212,8 +216,13 @@ func TestAGenerationAnotherReanchorHoldsIsRefused(t *testing.T) {
 		Subject: statelog.Subject{Kind: "generation", ID: "2"},
 		Holder:  "reanchor:2:1700000000000000000:node-b",
 	}
+	var reset atomic.Int64
 	_, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
 		Domain: probeDomain{}, DB: db,
+		ResetVersions: func(context.Context, uint32) error {
+			reset.Add(1)
+			return nil
+		},
 		PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error {
 			return holder
 		},
@@ -228,6 +237,96 @@ func TestAGenerationAnotherReanchorHoldsIsRefused(t *testing.T) {
 	}
 	if got := cursorGeneration(t, db); got != 0 {
 		t.Fatalf("the refused reanchor moved the cursor to generation %d", got)
+	}
+	if reset.Load() != 0 {
+		t.Error("the refused reanchor reset the domain's rows into a generation " +
+			"another node's record holds")
+	}
+}
+
+// A REFUSAL IS DECIDED BEFORE ANYTHING IS STOPPED, WHERE IT CAN BE READ.
+//
+// The transition runs with the domain's applier halted, and a refusal is the
+// ordinary answer on a healthy fleet. So the caller asks first, with nothing
+// stopped: the guards, and whether another reanchor's record already holds the
+// generation this one would take. A read that fails is a failure rather than a
+// refusal — whether the generation is held is unknown, not "no" — and a
+// generation free, or held by this node's own earlier attempt, is permitted.
+//
+// Mutation: skip the holder read and a held generation is permitted; answer a
+// failed read as a refusal, or as a permission, and the third case misfiles
+// it.
+func TestAReanchorsRefusalsAreReadBeforeAnythingStops(t *testing.T) {
+	t.Parallel()
+	holder := &statelog.ClaimedElsewhere{
+		Subject: statelog.Subject{Kind: "generation", ID: "2"},
+		Holder:  "reanchor:2:1700000000000000000:node-b",
+	}
+	unreadable := errors.New("the broker did not answer")
+	for name, tc := range map[string]struct {
+		held    error
+		refused bool
+		failed  bool
+	}{
+		"a generation nobody holds":         {},
+		"a generation another record holds": {held: holder, refused: true},
+		"a holder that cannot be read":      {held: unreadable, failed: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var asked atomic.Int64
+			gen, err := statelog.PreflightReanchor(t.Context(), statelog.ReanchorDeps{
+				Domain: probeDomain{},
+				HeldElsewhere: func(_ context.Context, gen uint32, _ statelog.ReanchorInputs) error {
+					asked.Add(1)
+					if gen != 2 {
+						t.Errorf("the holder was asked about generation %d, want "+
+							"the 2 the transition would take", gen)
+					}
+					return tc.held
+				},
+			}, reanchorInputs(), confirmed())
+			switch {
+			case tc.refused:
+				var elsewhere *statelog.ClaimedElsewhere
+				if !errors.Is(err, statelog.ErrReanchorRefused) ||
+					!errors.As(err, &elsewhere) {
+					t.Fatalf("a held generation = %v, want a refusal naming "+
+						"the holder", err)
+				}
+			case tc.failed:
+				if err == nil || errors.Is(err, statelog.ErrReanchorRefused) ||
+					!errors.Is(err, unreadable) {
+					t.Fatalf("an unreadable holder = %v, want a failure that "+
+						"is not a refusal", err)
+				}
+			default:
+				if err != nil || gen != 2 {
+					t.Fatalf("a free generation = %d, %v; want generation 2", gen, err)
+				}
+			}
+			if asked.Load() != 1 {
+				t.Errorf("the holder was read %d times, want once", asked.Load())
+			}
+		})
+	}
+
+	// AND THE GUARDS FIRST: a confirmation for another instant is refused
+	// without the broker being asked anything.
+	var asked atomic.Int64
+	if _, err := statelog.PreflightReanchor(t.Context(), statelog.ReanchorDeps{
+		Domain: probeDomain{},
+		HeldElsewhere: func(context.Context, uint32, statelog.ReanchorInputs) error {
+			asked.Add(1)
+			return nil
+		},
+	}, reanchorInputs(), statelog.ReanchorGuard{
+		Confirm: reanchorCreated.Add(time.Hour).Format(time.RFC3339),
+	}); !errors.Is(err, statelog.ErrReanchorRefused) {
+		t.Fatalf("a wrong confirmation = %v, want a refusal", err)
+	}
+	if asked.Load() != 0 {
+		t.Error("a transition its guards refuse still read the generation's holder")
 	}
 }
 
@@ -324,12 +423,15 @@ func TestAReanchorWhoseAuditRowFailsMovesNoCursor(t *testing.T) {
 	}
 }
 
-// THE RESET RUNS BEFORE THE RECORD, AND THE RECORD BEFORE THE CURSORS.
+// THE RECORD RUNS BEFORE THE RESET, AND THE RESET BEFORE THE CURSORS.
 //
-// The order IS the crash matrix. A reset interrupted needs no repairer,
-// because every row it did not reach is covered by the lazy rule; a record
-// published without its cursors is collapsed by first-writer-wins on the
-// re-run. Reversed, neither of those is true.
+// The order IS the crash matrix, and the refusal matrix with it. The record is
+// a claim, and the one step that can be refused once the guards have passed:
+// ahead of the reset, a refused transition has written nothing. A record
+// published without its cursors is met by the re-run as its own; a reset
+// interrupted needs no repairer, because every row it did not reach is covered
+// by the lazy rule. And the cursors come last, because a cursor in the new
+// generation is what the relaunched applier follows.
 func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	t.Parallel()
 	db := reanchorStore(t)
@@ -353,14 +455,14 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	}, reanchorInputs(), confirmed()); err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
-	want := []string{"reset", "publish", "record"}
+	want := []string{"publish", "reset", "record"}
 	if len(order) != len(want) {
 		t.Fatalf("the steps ran as %v, want %v", order, want)
 	}
 	for i := range want {
 		if order[i] != want[i] {
 			t.Fatalf("the steps ran as %v, want %v — the order IS the crash "+
-				"matrix, and reversed neither residue has a repairer", order, want)
+				"matrix and the refusal matrix", order, want)
 		}
 	}
 }
@@ -446,7 +548,7 @@ func cursorGeneration(t *testing.T, db *store.DB) uint32 {
 
 // AN INTERRUPTED REANCHOR IS FINISHED BY RE-RUNNING IT, AND NEEDS NO REPAIRER.
 //
-// Step 4 resets the domain's rows in bounded transactions because half a
+// Step 5 resets the domain's rows in bounded transactions because half a
 // million of them cannot be one, and a process that dies partway leaves some
 // rows at the new generation and some at the old; the probe domain's reset
 // below stands its rows in with anchors. That state is CORRECT rather than
@@ -498,12 +600,14 @@ func TestAReanchorIsResumable(t *testing.T) {
 			t.Fatalf("Reanchor returned %v, want the crash — a failed reset must "+
 				"not be reported as a completed transition", err)
 		}
-		// NOTHING PAST STEP 4 RAN. The record and the cursor are what
-		// make the transition fleet-visible, and a crash inside the
-		// reset must leave the fleet on the old generation.
-		if published.Load() != 0 || recorded.Load() != 0 {
-			t.Fatalf("a crash inside the reset still published=%d recorded=%d",
-				published.Load(), recorded.Load())
+		// NOTHING PAST STEP 5 RAN. The record before it did, and the
+		// re-run meets that record as its own; the cursor and the audit
+		// row are what the relaunched applier follows, and a crash inside
+		// the reset must leave this node's checkpoint on the old
+		// generation.
+		if published.Load() != 1 || recorded.Load() != 0 {
+			t.Fatalf("a crash inside the reset left published=%d recorded=%d, "+
+				"want the record alone", published.Load(), recorded.Load())
 		}
 		if got := cursorGeneration(t, db); got != 1 {
 			t.Fatalf("the cursor moved to generation %d during a reset that "+
@@ -513,8 +617,8 @@ func TestAReanchorIsResumable(t *testing.T) {
 		// THE RE-RUN DERIVES THE SAME GENERATION. It is derived from
 		// this node's own checkpoint, which the crash did not move — so
 		// a second attempt is a retry rather than a second transition,
-		// and the record it publishes is the one the first attempt
-		// would have.
+		// under the op id the first attempt's record was published
+		// under, which its claim therefore meets as its own.
 		gen, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed())
 		if err != nil {
 			t.Fatalf("the re-run failed: %v", err)

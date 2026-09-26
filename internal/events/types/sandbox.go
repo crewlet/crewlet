@@ -10,6 +10,7 @@ import "github.com/crewlet/crewlet/internal/events"
 func init() {
 	events.Register[SandboxRunStarted]()
 	events.Register[SandboxRunCompleted]()
+	events.Register[SandboxAnswerReady]()
 	events.Register[SandboxClarificationRequested]()
 	events.Register[SandboxRunFailed]()
 }
@@ -97,6 +98,35 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 		return "Sandbox job completed"
 	}
 	return actor + "'s sandbox job completed"
+}
+
+// SandboxAnswerReady signals that the seat's token budget has room for the
+// turn an answer held on a detached run would resume.
+//
+// A PURE CONTROL SIGNAL, published to the seat's control topic alone and never
+// to crewlet.events.*: it announces nothing a person reads. The answer — a
+// finished job's result, or a person's reply to the run's question — was held
+// on the run's row when the budget had no room, and that hold is what the
+// board and the log already said; this only tells the seat's node that the
+// completion poll, which reads the budget on every tick, found room. The node
+// claims the held answer, so a duplicate of this signal, or one for an answer
+// already resumed, claims nothing.
+//
+// LaunchID names the job whose call the answer is for: an answer held for a
+// job a later launch replaced is nobody's.
+type SandboxAnswerReady struct {
+	TurnID      string `json:"turn_id"`
+	LaunchID    string `json:"launch_id,omitempty"`
+	AgentHandle string `json:"agent_handle"`
+}
+
+// EventType is the "sandbox_answer_ready" wire type.
+func (SandboxAnswerReady) EventType() string { return "sandbox_answer_ready" }
+
+// SummaryFor names what the signal is about, for a log or a debugger reading
+// the control topic: no feed ever shows it.
+func (e SandboxAnswerReady) SummaryFor(actor string) string {
+	return lead(actor, "has budget room to resume the answer held on its sandbox run")
 }
 
 // SandboxClarificationRequested records the in-sandbox coding agent asking a

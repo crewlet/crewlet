@@ -99,11 +99,22 @@ type runningDomain struct {
 	log       *jetstream.DomainLog
 	consumer  *jetstream.DomainConsumer
 
-	// createdAt is the broker's own creation instant for the stream this
-	// domain's applier runs on, which is what DETECTS a recreated one — the
-	// generation is the response. Read through [runningDomain.identity] and
+	// createdAt is the creation instant of the stream this domain's
+	// committed checkpoint counts on — the stream every position this node
+	// states for the domain is a number on. It is what the heartbeat
+	// compares the live stream against to DETECT a recreated one (the
+	// generation is the response), and what the positions register row
+	// states beside those numbers. Read through [runningDomain.identity] and
 	// moved only by [runningDomain.follow], under identityMu: a rejoin moves
 	// it while the heartbeat compares the live stream against it.
+	//
+	// NOT ALWAYS THE STREAM THE APPLIER WAS HANDED. A node that boots over
+	// a rebuilt log hands its applier the live stream, and the applier
+	// stops on a checkpoint recorded under the deleted one — committing
+	// nothing, so the checkpoint and every number read off it still count
+	// on the deleted stream, and so does this ([checkpointStream]). Until
+	// the domain follows the live stream, by a reanchor or an adoption,
+	// that is the stream it states.
 	identityMu sync.Mutex
 	createdAt  time.Time
 
@@ -148,7 +159,8 @@ type runningDomain struct {
 	applyDone chan struct{}
 }
 
-// identity is the stream creation instant this domain's applier runs against.
+// identity is the creation instant of the stream this domain's committed
+// checkpoint counts on — see [runningDomain.createdAt].
 func (r *runningDomain) identity() time.Time {
 	r.identityMu.Lock()
 	defer r.identityMu.Unlock()
@@ -156,8 +168,8 @@ func (r *runningDomain) identity() time.Time {
 }
 
 // observeLive compares the live stream's creation instant against the one this
-// domain runs on and latches a recreation, reporting whether this call is the
-// one that latched it.
+// domain's checkpoint counts on and latches a recreation, reporting whether
+// this call is the one that latched it.
 //
 // UNDER identityMu, so it cannot interleave with [runningDomain.follow]: a
 // comparison against the instant a rejoin is replacing, latched after the
@@ -175,16 +187,42 @@ func (r *runningDomain) observeLive(live time.Time) bool {
 
 // follow moves this domain onto the stream created at created: its applier's
 // next run compares the checkpoint against that stream and records it, the
-// heartbeat compares the live stream against it, and a recreation latched
-// against the stream this domain has left is cleared.
+// heartbeat compares the live stream against it and the register states it,
+// and a recreation latched against the stream this domain has left is
+// cleared.
 //
-// FOR THE GAP BETWEEN TWO RUNS of the applier — see [statelog.Runner.Follow].
+// FOR THE GAP BETWEEN TWO RUNS of the applier — see [statelog.Runner.Follow] —
+// and only once the checkpoint counts on created: a reanchor has just
+// committed it there, and an adoption installs one recorded under it
+// ([stateLog.followAdopted]).
 func (r *runningDomain) follow(created time.Time) {
 	r.identityMu.Lock()
 	defer r.identityMu.Unlock()
 	r.createdAt = created
 	r.runner.Follow(created)
 	r.recreated.Store(false)
+}
+
+// checkpointStream is the stream a domain's committed checkpoint counts on, as
+// the boot finds it: live is the broker's instant for the stream the applier is
+// handed, and recorded and found the instant the checkpoint row names.
+//
+// THE CHECKPOINT'S OWN STREAM WHEN IT NAMES ANOTHER, because the applier
+// handed the live stream stops on that checkpoint ([statelog.Runner]'s boot
+// comparison) and commits nothing over it — so the numbers this node states
+// for the domain are still positions on the stream the row names. Stated
+// against the live stream instead, a node restarted after a rebuild tells
+// every peer it has applied records off the live stream, and every peer's
+// reanchor is refused naming it, as its own is naming theirs.
+//
+// THE LIVE STREAM OTHERWISE: a checkpoint recorded under it, and one recorded
+// under no instant or not at all, which the applier resumes from and commits
+// under the live stream from its first batch.
+func checkpointStream(live, recorded time.Time, found bool) time.Time {
+	if statelog.IdentityOf(recorded, live, found) == statelog.StreamRecreated {
+		return recorded.UTC()
+	}
+	return live
 }
 
 // floorWatch is how long one domain's published trim floor has been
@@ -808,7 +846,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// so it is the only durable statement of it — and resuming a consumer
 	// anywhere else is either a hole (at the head) or a million
 	// redeliveries (at the beginning).
-	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), spec.Name)
+	at, recorded, found, err := statelog.CursorFor(ctx, s.db.Replicated(), spec.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -854,8 +892,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 
 	running := &runningDomain{
 		domain: domain, runner: runner, publisher: publisher,
-		log: appendTo, consumer: consumer, createdAt: created,
-		evicted: evicted,
+		log: appendTo, consumer: consumer,
+		createdAt: checkpointStream(created, recorded, found),
+		evicted:   evicted,
 	}
 	// AFTER the struct exists, because the health closure the reader
 	// holds reads through it — a reader built first would capture a
@@ -1986,7 +2025,6 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		name := domain.Name()
 		entry := statelog.Registered{Domain: domain}
 		if running, held := s.domains[name]; held {
-			entry.StreamCreatedAt = running.identity()
 			// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s
 			// reason: the snapshot loop and the adopter call this
 			// closure on their own cadence, long after whoever built
@@ -2065,9 +2103,12 @@ func replicationRow(name string, health statelog.Health, err error, now time.Tim
 				health.Position.Seq, *health.LastSeq)
 			break
 		}
-		row.Detail = "the log was deleted and rebuilt under this node, so its " +
-			"rows are keyed to a history this log does not have; `crewlet " +
-			"retention reanchor` follows the new one from its head"
+		// NOT "UNDER THIS NODE": the heartbeat names a rebuild the same
+		// way whether it happened while this node ran or before it booted
+		// over the rebuilt log ([checkpointStream]).
+		row.Detail = "the log was deleted and rebuilt, so this node's rows are " +
+			"keyed to a history the log does not have; `crewlet retention " +
+			"reanchor` follows the new one from its head"
 	case statelog.RefuseStalled:
 		if health.Err != "" {
 			// A HALTED OR FAULTED APPLIER IS NOT READY, whatever its
@@ -2678,10 +2719,14 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()
-		// THE STREAM THESE NUMBERS COUNT ON, which is the one the applier
-		// runs against rather than the live one: after a rebuild the two
-		// differ, and a peer deciding whether this node holds the live
-		// stream's history has to be told it does not.
+		// THE STREAM THESE NUMBERS COUNT ON, which is the one the
+		// committed checkpoint was recorded under ([runningDomain.createdAt])
+		// — not the live one, and not the one a node that booted over a
+		// rebuilt log handed its applier. After a rebuild the numbers are
+		// positions on the deleted stream until this node follows the live
+		// one, and a peer deciding whether this node holds the live
+		// stream's history — or whether it is the furthest along the
+		// deleted one — has to be told which stream they count on.
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
 			StreamCreatedAt: running.identity().UTC(),
@@ -2727,8 +2772,8 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// AND WHETHER IT IS EVEN THE SAME LOG.
 			//
 			// This is the one place a running node compares the live
-			// stream's creation instant against the one its applier
-			// started on, which arrives in this same answer. The
+			// stream's creation instant against the one its checkpoint
+			// counts on, which arrives in this same answer. The
 			// sequence terms above cannot see a rebuild — a rebuilt
 			// stream comes back at generation 0 counting from 1, so
 			// once it has published past this node's checkpoint every
@@ -2737,15 +2782,14 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			if running.observeLive(stats.CreatedAt) {
 				log.ErrorContext(ctx, "statelog_stream_recreated",
 					"node", s.nodeID, "domain", name,
-					"started_against", running.identity().UTC(),
+					"checkpoint_on", running.identity().UTC(),
 					"live", stats.CreatedAt.UTC(),
-					"detail", "this domain's log was deleted and rebuilt under "+
-						"a running node, so its sequences name a history this "+
-						"node's rows are not keyed to; reads and writes refuse "+
-						"until it follows the new stream — by an operator's "+
-						"crewlet retention reanchor, or by adopting a peer's "+
-						"snapshot taken on it once this node is below the new "+
-						"stream's floor")
+					"detail", "this domain's log was deleted and rebuilt, so its "+
+						"sequences name a history this node's rows are not keyed "+
+						"to; reads and writes refuse until it follows the new "+
+						"stream — by an operator's crewlet retention reanchor, "+
+						"or by adopting a peer's snapshot taken on it once this "+
+						"node is below the new stream's floor")
 			}
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, lag, held > 0)

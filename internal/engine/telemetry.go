@@ -540,12 +540,13 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		workKey:   in.Run.UnitOfWork(),
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
-		// THE RUN'S FIRST LAUNCH, the earliest instant its row records.
-		// Every operation a resume mints is minted after it, so it bounds
-		// those. An operation the turn named before that launch and the
-		// resume names again was minted before it, and only the dispatched
-		// turn's own instant, which the row does not carry, bounds that.
-		triggeredAt: in.Run.CreatedAt,
+		// THE LAUNCHING TURN'S OWN INSTANT, which the launch writes onto the
+		// run's row, or the run's first launch where the row carries none
+		// (one a build that predates the field wrote): see
+		// [sandbox.PendingRun.TriggerInstant]. resumeTurn builds the
+		// runner's turn from this, so it is what every write the resume
+		// makes is minted under.
+		triggeredAt: in.Run.TriggerInstant(),
 		role:        in.Run.Role,
 		agentID:     in.Run.AgentID,
 		// The resumed turn's OWN span, opened by resumeTurn under the

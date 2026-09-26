@@ -99,8 +99,15 @@ func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iterati
 			func() []ledger.Call { whole, _ := resumedCalls(surface, state, answer); return whole },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, history, snapshot, submit,
-		state.ActiveTools, state.LoadedSkills...)
+	// BOUND TO THE CALLS THE ROUND MADE BEFORE IT SUSPENDED, the one it
+	// suspended on among them. A write is named after the writes before it
+	// in the turn ([turnctx.Turn.Earlier]), and the re-entered round's own
+	// are in no closed round of history: bound without them, its next write
+	// to an object it wrote before the suspend would be named as that write
+	// was, and the operation ledger would answer it applied without writing
+	// it.
+	built, err := r.surfaceWith(ctx, phase.Execute, round, history, priorCalls(state, answer),
+		snapshot, submit, state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -188,6 +195,15 @@ func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iterati
 // answered and is not made again; what this re-entry made itself, a retry
 // would make again.
 func resumedCalls(s *tools.Surface, state execstate.State, answer string) (whole []ledger.Call, carried int) {
+	prior := priorCalls(state, answer)
+	return append(prior, calls(s)...), len(prior)
+}
+
+// priorCalls is what the re-entered round called before it suspended, the call
+// it suspended on last, answered with answer ([suspendedOn]): the carried
+// prefix of [resumedCalls], and the calls the resumed surface is bound to as
+// the turn's earlier ones.
+func priorCalls(state execstate.State, answer string) []ledger.Call {
 	prior := make([]ledger.Call, 0, len(state.ToolExecutions)+1)
 	for _, exec := range state.ToolExecutions {
 		call := ledger.Call{}
@@ -211,7 +227,7 @@ func resumedCalls(s *tools.Surface, state execstate.State, answer string) (whole
 	if name, args, ok := suspendedOn(state); ok {
 		prior = append(prior, ledger.Call{Name: name, Args: args, Result: answer})
 	}
-	return append(prior, calls(s)...), len(prior)
+	return prior
 }
 
 // suspendedOn is the call the phase suspended on: the one its conversation

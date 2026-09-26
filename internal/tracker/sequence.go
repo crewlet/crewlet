@@ -1336,9 +1336,11 @@ func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
 // re-parented onto a task no row holds and the duplicate cancelled as merged
 // into nothing. So the mark and the close read the target in their own decide
 // snapshots ([Writer.mergingInto]), and every re-parent reads it as the
-// parent it is about to write ([refusePurged]). A purge the mark sees refuses
-// the merge before anything is written; one a later step sees gives it up
-// ([Writer.abandonMerge]); both return [ErrPurged].
+// parent it is about to write ([refusePurged], [refuseRemovedParent]). A
+// target the mark sees purged, or in the trash, refuses the merge before
+// anything is written ([mergeTargetHeld]); one a later step sees gives it up
+// ([Writer.abandonMerge]). A purge returns [ErrPurged] either way, and a
+// removal names the restore.
 //
 // The same holds for everything else those reads found ([mergeStep]): a
 // subtask moved elsewhere or put in the trash after the walk read it is passed
@@ -1420,20 +1422,36 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			duplicate, into, err)
 	case err != nil:
 		// THE MARK HAS LANDED, so this is a merge in progress rather than
-		// one that did not happen: the duplicate stays marked, and the
-		// tracker duty completes every merge whose marker outlives its
-		// holder's claim.
+		// one that did not happen: the duplicate stays marked, and once
+		// this call has given its claim back the tracker duty takes over
+		// every merge whose marker outlives it ([duty.finishAbandoned]),
+		// running the same steps this call did not reach.
 		return WriteResult{}, partial(false, "tracker: %s is marked as "+
 			"merging into %s and this call stopped before the merge closed; "+
-			"the tracker duty completes it: %w", duplicate, into, err)
-	case end.Purged != nil:
+			"the tracker duty finishes it — closing it, or giving it up if %s "+
+			"has been purged or put in the trash by then: %w",
+			duplicate, into, into, err)
+	case end.GivenUp != nil:
 		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s was "+
 			"given up after it began: %w — %s is left open with no merge "+
-			"marker, and a subtask already moved onto %s went where that "+
-			"purge moved its children", duplicate, into, end.Purged,
-			duplicate, into)
+			"marker, and %s", duplicate, into, end.GivenUp, duplicate,
+			movedBeforeGivingUp(end.GivenUp, into))
 	}
 	return end.Result, nil
+}
+
+// movedBeforeGivingUp says where a subtask the walk moved before a merge was
+// given up now is — which depends on what took the target away.
+//
+// A PURGE MOVES ITS TASK'S CHILDREN, the ones it found and the ones that
+// arrive after it ([placedParent]). A REMOVAL IS A STAMP ON ONE TASK and moves
+// nothing, so a subtask already under the target stays under it.
+func movedBeforeGivingUp(cause error, into string) string {
+	if errors.Is(cause, ErrPurged) {
+		return fmt.Sprintf("a subtask already moved onto %s went where that "+
+			"purge moved its children", into)
+	}
+	return fmt.Sprintf("a subtask already moved onto %s stays under it", into)
 }
 
 // mergeEnd is how everything a merge does after its mark came out.
@@ -1445,14 +1463,16 @@ type mergeEnd struct {
 	// Moved is how many subtasks this run re-parented onto the target.
 	Moved int
 
-	// Purged is the refusal that gave the merge up — the target was
-	// purged after the mark — and nil when the merge closed.
-	Purged error
+	// GivenUp is the refusal that gave the merge up — the target was
+	// purged or put in the trash after the mark ([targetGone]) — and nil
+	// when the merge closed.
+	GivenUp error
 }
 
 // finishMerge is everything a merge does after its mark: the subtasks moved
 // onto the target if the merge said to, then the close — or, when a step finds
-// the target purged, the merge given up ([Writer.abandonMerge]).
+// the target purged or in the trash, the merge given up
+// ([Writer.abandonMerge]).
 //
 // SHARED BY THE SEQUENCE AND THE DUTY, so the repair of a merge whose holder
 // died is a re-run of the steps the holder did not reach rather than a second
@@ -1470,7 +1490,7 @@ func (w *Writer) finishMerge(ctx context.Context, opID, duplicate, project, into
 		moved, err := w.reparentOnto(ctx, opID, duplicate, into)
 		end.Moved = moved
 		switch {
-		case errors.Is(err, ErrPurged):
+		case targetGone(err):
 			return w.abandonMerge(ctx, opID, duplicate, project, marked, end, err)
 		case err != nil:
 			return end, err
@@ -1491,7 +1511,7 @@ func (w *Writer) finishMerge(ctx context.Context, opID, duplicate, project, into
 		stepID(opID, "close"), duplicate, project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
 	switch {
-	case errors.Is(err, ErrPurged):
+	case targetGone(err):
 		return w.abandonMerge(ctx, opID, duplicate, project, marked, end, err)
 	case err != nil:
 		return end, err
@@ -1500,21 +1520,23 @@ func (w *Writer) finishMerge(ctx context.Context, opID, duplicate, project, into
 	return end, nil
 }
 
-// abandonMerge gives up a merge whose target was purged after its mark: the
-// marker is cleared and the duplicate left open, with whatever subtasks it
-// still has.
+// abandonMerge gives up a merge whose target was purged, or put in the trash,
+// after its mark: the marker is cleared and the duplicate left open, with
+// whatever subtasks it still has.
 //
 // # Why not finish it, and why not leave it
 //
-// Finishing it would cancel the duplicate as merged into a task that no longer
-// exists, which closes an item nobody merged. Leaving the marker would hand the
-// duty a merge whose every step meets the same refusal on every tick. So the
-// merge did not happen and now cannot, and the marker goes — the same repair
-// the duty makes for a marker naming no target at all.
+// Finishing it would cancel the duplicate as merged into a task nobody can
+// reach — gone for good after a purge, out of every list after a removal —
+// which closes an item into nothing anybody can follow. Leaving the marker
+// would hand the duty a merge whose every step meets the same refusal on every
+// tick. So the merge did not happen and now cannot, and the marker goes — the
+// same repair the duty makes for a marker naming no target at all.
 //
-// A subtask the walk moved before a step saw the purge is not moved back: it
-// is where that purge puts the target's children — the ones it found
-// ([Applier.purgeTask]) and the ones that arrived after it ([placedParent]).
+// A subtask the walk moved before a step saw the target go is not moved back:
+// after a purge it is where that purge puts the target's children — the ones
+// it found ([Applier.purgeTask]) and the ones that arrived after it
+// ([placedParent]) — and after a removal it stays under the target.
 func (w *Writer) abandonMerge(ctx context.Context, opID, duplicate, project string,
 	marked statelog.Position, end mergeEnd, cause error) (mergeEnd, error) {
 
@@ -1527,28 +1549,46 @@ func (w *Writer) abandonMerge(ctx context.Context, opID, duplicate, project stri
 		// and a caller asking whether this error is the purge would be told
 		// yes about a merge whose marker may still stand.
 		return end, fmt.Errorf("tracker: give up the merge of %s, whose "+
-			"target was purged (%s): %w", duplicate, cause.Error(), err)
+			"target is gone (%s): %w", duplicate, cause.Error(), err)
 	}
-	end.Result, end.Purged = cleared, cause
+	end.Result, end.GivenUp = cleared, cause
 	return end, nil
 }
 
-// mergeTargetHeld refuses a merge step whose target has been purged or is not
-// on this node — [Writer.mergingInto], read inside the step's own decide.
+// mergeTargetHeld refuses a merge step whose target has been purged, is in the
+// trash, or is not on this node — [Writer.mergingInto], read inside the step's
+// own decide.
+//
+// A TARGET IN THE TRASH IS REFUSED like a purged one, and for the same reason:
+// the subtasks a merge moves are placed under it, which [refuseRemovedParent]
+// refuses on every attempt, and a duplicate closed as merged into a task
+// nobody can see points its readers at nothing. Unlike a purge, a removal has
+// an inverse, and the refusal names it.
 func mergeTargetHeld(ctx context.Context, tx *sql.Tx, duplicate, into string) error {
 	if err := refusePurged(ctx, tx, into, "merge target"); err != nil {
 		return err
 	}
-	var present int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`, into).Scan(&present); err != nil {
+	target, held, err := readTask(ctx, tx, into)
+	switch {
+	case err != nil:
 		return fmt.Errorf("tracker: read the merge target %s: %w", into, err)
-	}
-	if present == 0 {
+	case !held:
 		return fmt.Errorf("tracker: task %s, which %s is being merged into, is "+
 			"not on this node: %w", into, duplicate, statelog.ErrUnavailable)
+	case target.Removed != nil:
+		return fmt.Errorf("%w: task %s, which %s is being merged into, was "+
+			"removed by %s at %s; restore it before merging into it",
+			errInTrash, into, duplicate, target.Removed.By,
+			target.Removed.At.Format(time.RFC3339))
 	}
 	return nil
+}
+
+// targetGone reports a merge step refused because the task it folds into has
+// been purged or put in the trash since the merge read it — the two refusals a
+// merge gives up on rather than retries ([Writer.abandonMerge]).
+func targetGone(err error) bool {
+	return errors.Is(err, ErrPurged) || errors.Is(err, errInTrash)
 }
 
 // reparentOnto moves whatever is left of a duplicate's subtasks onto the
@@ -1604,9 +1644,10 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 				// elsewhere or put in the trash since the batch was read
 				// — so it is passed over rather than moved back.
 				continue
-			case errors.Is(err, ErrPurged):
-				// THE TARGET IS GONE, and that is the one refusal no
-				// repair completes: it is returned as it is, for the
+			case targetGone(err):
+				// THE TARGET IS GONE — purged, or in the trash — and
+				// that is the refusal no repair completes: every later
+				// move meets it too. It is returned as it is, for the
 				// caller to give the merge up.
 				return moved, err
 			case err != nil:

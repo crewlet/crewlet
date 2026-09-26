@@ -242,11 +242,11 @@ type Registered struct {
 	// Health is this node's readiness for that domain, which is what the
 	// snapshot gate reads: how far behind, whether it has ever drained,
 	// and whether it holds anything it cannot decode.
+	//
+	// NO STREAM INSTANT BESIDE IT: an artefact's identity is the one its
+	// own checkpoint rows carry ([Manifest]), read from the file it copies,
+	// and a recipient compares that against its live stream.
 	Health func() Health
-
-	// StreamCreatedAt is the broker's own creation instant for the
-	// domain's stream, which is what detects a recreated one.
-	StreamCreatedAt time.Time
 }
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.

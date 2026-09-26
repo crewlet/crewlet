@@ -504,10 +504,21 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		Force: r.URL.Query().Get("force") == "true",
 	})
 	// THREE ANSWERS, because they send an operator three different ways: a
-	// stream no domain runs on is a name to correct, a refusal is the
-	// transition declining — with its reason, and nothing to retry into
-	// success — and anything else is a failure, which the transition's own
-	// step order makes safe to run again ([statelog.Reanchor]).
+	// stream no domain runs on is a name to correct; a refusal is the
+	// transition declining, having written nothing, with its reason; and
+	// anything else is a failure, which the transition's own step order
+	// makes safe to run again ([statelog.Reanchor]).
+	//
+	// A REFUSAL IS NOT "NEVER". Most clear, and this same call then lands:
+	// a transition already running on this node, once it ends; a live
+	// instant the broker would not give, once it answers; an unreadable
+	// positions register, once it reads or with force; a confirmation
+	// naming another instant, sent again with the live one; a node that is
+	// not the most caught-up, with force. Two do not clear by calling again
+	// — a peer hydrated on the live stream, and a generation another
+	// reanchor's record holds — and each names what to adopt instead. The
+	// detail carries which, in the engine's own words; the code says only
+	// that nothing was written.
 	switch {
 	case errors.Is(err, engine.ErrNotADomainLog):
 		writeJSON(w, http.StatusNotFound,

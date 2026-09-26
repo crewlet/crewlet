@@ -107,7 +107,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			func() []ledger.Call { return calls(surface) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, history, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, round, history, nil, snapshot, submit,
 		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -194,7 +194,13 @@ func (r *Runner) resumeAgentRun(ctx context.Context, round int, state execstate.
 			func() []ledger.Call { return bridged },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, state.Iterations, snapshot, submit,
+	// NOT BOUND TO THE RUN'S CALLS, unlike a native resume's surface to its
+	// round's pre-suspend ones, because nothing runs on this surface: the
+	// run made its calls in its box, through the surface its launch built,
+	// and its submission is replayed through the submission tool itself.
+	// The round after this one is bound to them through the closed round the
+	// turn loop files this pass's calls in.
+	built, err := r.surfaceWith(ctx, phase.Execute, round, state.Iterations, nil, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

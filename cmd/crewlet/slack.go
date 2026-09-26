@@ -77,12 +77,21 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	// MANIFEST is an address: read raw, the manifest carries
 	// "${PUBLIC_URL}/webhooks/slack/<handle>" where a URL belongs, Slack
 	// refuses the app, and nothing anywhere names the cause.
-	resolveCtx := context.Background()
-	env, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	ctx := context.Background()
+	fleet, err := companyResolver(ctx, *sinks.bootstrap, *sinks.api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	env := fleet.env
+	// A RUN THAT WILL RECORD IS REFUSED HERE, before any check of a value
+	// that resolved empty: with the fleet's store unread, the refusal below
+	// over a missing public base would tell an operator to set a ${VAR} the
+	// store may already hold.
+	if !*dryRun {
+		if refusal := fleet.recordable(); refusal != nil {
+			return refusal
+		}
+	}
 
 	// RESOLVED ONCE. Four places below build a URL from it, and four
 	// separate reads of the flag is how one of them ends up using the flag
@@ -111,7 +120,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		// roughly one request a minute, so discovering a malformed
 		// manifest from the create costs a minute per seat and leaves
 		// the seats before the bad one already created.
-		res, checked := slack.Validate(context.Background(), slack.Options{
+		res, checked := slack.Validate(ctx, slack.Options{
 			Admin: slack.NewAdmin(nil), Seats: plans,
 			Ledger: ledger, LedgerPath: *ledgerPath,
 			BaseURL: base, ConfigRefreshToken: refresh,
@@ -138,12 +147,10 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return errors.New(noPublicBase(&company.Integrations))
 	}
 
-	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout)
+	sink, err := sinks.open(stdout, fleet)
 	if err != nil {
 		return err
 	}
-	defer closeSink()
 
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,

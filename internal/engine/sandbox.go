@@ -266,8 +266,8 @@ func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens
 	return over, nil
 }
 
-// resumeRoom answers whether a seat's budget has room for the turn a completion
-// would resume, off the same meter that turn's rounds are charged through.
+// resumeRoom answers whether a seat's budget has room for the turn a resume
+// would re-enter, off the same meter that turn's rounds are charged through.
 //
 // The epoch is the one live NOW, which is the one the resume would run under
 // ([resumer.resume] reads it the same way), so a cap raised since the run
@@ -358,9 +358,10 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			// that run, and its writes stay idempotent against the
 			// trigger the run was dispatched for.
 			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
-			// Off the row as well, and the same instant the resumed
-			// turn's own telemetry reads — see [Engine.describeResume].
-			TriggeredAt: req.Run.CreatedAt,
+			// Off the row as well: the launching turn's own instant
+			// where the row carries it, its first launch where it does
+			// not ([sandbox.PendingRun.TriggerInstant]).
+			TriggeredAt: req.Run.TriggerInstant(),
 			Seat:        seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
@@ -886,12 +887,17 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// Taken from the ACTIVE span, which at this point is the run_sandbox
 	// tool call, so the box's spans nest under the call that started them.
 	runTrace := tracing.TraceOf(ctx)
-	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
+	maxLaunches := company.Config.TurnEngine.MaxToolRounds
+	res, launchErr := sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{
 			TurnID: t.RunID, WorkKey: t.WorkKey,
 			AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
 			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+			// When the ids this turn derives can first have been minted,
+			// which the turn a resume re-enters derives again and has no
+			// trigger left to re-read; see [sandbox.PendingRun.TriggerInstant].
+			TriggeredAt: t.TriggeredAt,
 			// THE CONVERSATION THE WORK CAME FROM, which nothing set
 			// either. The row has carried this field since it was
 			// written, and with it empty a resumed turn had no way to
@@ -912,7 +918,21 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		LLM:        agentLLM,
 		MCPServers: servers,
 		ReuseBox:   reuse,
+		// THE EXECUTOR'S ROUND CAP BOUNDS A TURN'S CODING RUNS. Each run
+		// suspends the executor and its resume re-enters with a fresh tool
+		// loop, so a round that relaunched on every resume is bounded by
+		// nothing the loop counts; the row counts the launches instead
+		// ([sandbox.PendingRun.Launches]), and a turn may start as many as
+		// one executor pass may take rounds, since one that never suspended
+		// could call the tool once per round at most.
+		MaxLaunches: maxLaunches,
 	})
+	var capped *sandbox.LaunchCapError
+	if errors.As(launchErr, &capped) {
+		return res, fmt.Errorf("%w — the executor's round cap, turn_engine.max_tool_rounds (%d); "+
+			"finish the work with your own tools, or report what is left undone", launchErr, maxLaunches)
+	}
+	return res, launchErr
 }
 
 // sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
@@ -1134,9 +1154,9 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
-		// Read before a completion is claimed, so a turn the budget would
-		// stop at its first round waits rather than looping; see
-		// [sandbox.Coordinator.OnCompleted].
+		// Read before a turn is resumed, so one the budget would stop at
+		// its first round has its answer held rather than looping; see
+		// [sandbox.HeldAnswer].
 		Headroom: resumeRoom{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
@@ -1172,9 +1192,9 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
 		ClaimDuty: sandbox.DutyFunc(duty),
-		// The room the coordinator reads before it claims, read here before
-		// a completion is raised at all, so a budget wait is not a
-		// completion raised and declined on every poll.
+		// The room the coordinator reads before it resumes, read here on
+		// every tick for each run holding an answer, so the seat's node is
+		// signalled once the budget has room for it.
 		Headroom: resumeRoom{engine: e},
 	})
 	if err != nil {

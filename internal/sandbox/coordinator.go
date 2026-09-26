@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -117,10 +118,11 @@ type ResumeRequest struct {
 // resumed turn sends first.
 //
 // Declared here, by the consumer, because the coordinator is what must not
-// claim a run whose turn the budget would stop: the resumed round's first call
-// is refused before it is sent when a scope is at its cap, and a claim taken
-// for it would collect the box, fail the turn, hand the claim back and do it
-// all again on the next completion, for as long as the cap held.
+// resume a turn the budget would stop: the resumed round's first call is
+// refused before it is sent when a scope is at its cap, and a resume attempted
+// anyway would fail the turn, hand the claim back and do it all again on the
+// next signal, for as long as the cap held. With no room the answer the
+// resume would splice in is held on the run's row instead ([HeldAnswer]).
 type Headroom interface {
 	// Room reports whether handle's seat may send its next model call. An
 	// error is a counter that could not be read, which is not a refusal.
@@ -172,9 +174,11 @@ type CoordinatorOptions struct {
 	// Account post-charges collected tokens. Nil skips accounting.
 	Account Accountant
 
-	// Headroom is read before a completion is claimed and before an answer
-	// is handed to the run parked on its question. Nil takes every one of
-	// them, which is what a node with no budget to enforce does.
+	// Headroom is read before a turn is resumed: after a completion is
+	// collected and charged, before a person's answer is handed to the run
+	// parked on its question, and before an answer held for either is
+	// resumed. Nil has room for every one of them, which is what a node with
+	// no budget to enforce does.
 	Headroom Headroom
 
 	// Ended is called once for every run this node finishes with, whatever
@@ -205,11 +209,13 @@ type CoordinatorOptions struct {
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
 //     reuse, tokens post-accounted once per launch however often the tail is
-//     retried, and the suspended loop re-entered with the result spliced in.
-//     The seat stays busy through all of it and is freed only at the last
-//     moment before the resume, because freeing it earlier lets a queued
-//     event take the slot, the resume fail, and the redelivery find the claim
-//     already flipped, with the suspended conversation permanently lost.
+//     retried, and the suspended loop re-entered with the result spliced in —
+//     or, when the seat's budget has no room for that loop, the result held
+//     on the run's row until it has ([HeldAnswer]). The seat stays busy
+//     through all of it and is freed only at the last moment before the
+//     resume, because freeing it earlier lets a queued event take the slot,
+//     the resume fail, and the redelivery find the claim already flipped,
+//     with the suspended conversation permanently lost.
 //   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs busy
 //     and reaps any tail the previous owner abandoned mid-resume.
 type Coordinator struct {
@@ -223,7 +229,8 @@ type Coordinator struct {
 	now      func() time.Time
 
 	// mu guards busy, the seat-level "is a detached run in flight?" answer
-	// the inbox screening reads on every delivery, and waiting.
+	// the inbox screening reads on every delivery, and the manager, which
+	// an apply swaps.
 	//
 	// In memory rather than a store read per delivery: the seat's owner is
 	// the only node that runs its turns, so its own memory is authoritative
@@ -232,20 +239,6 @@ type Coordinator struct {
 	// round trip to answer a question this process already knows.
 	mu   sync.Mutex
 	busy map[string]int
-
-	// waiting is the runs whose completion this node has left unclaimed for
-	// want of budget room, by turn id — see [Coordinator.mayClaim]. Only so
-	// the wait is announced once rather than once per poll: the run itself
-	// needs no record, since its job stays finished and its row running, and
-	// every poll raises its completion again.
-	waiting map[string]budgetWait
-}
-
-// budgetWait is one run whose completion waits for budget room: the launch it
-// waits with, and the seat it waits on.
-type budgetWait struct {
-	launch string
-	handle string
 }
 
 // NewCoordinator validates the options and returns the coordinator, or refuses
@@ -274,8 +267,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, headroom: opts.Headroom,
 		ended: opts.Ended, now: opts.Now,
-		busy:    map[string]int{},
-		waiting: map[string]budgetWait{},
+		busy: map[string]int{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -347,6 +339,8 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 		return c.OnStarted(ctx, *payload)
 	case *types.SandboxRunCompleted:
 		return c.OnCompleted(ctx, *payload, ev)
+	case *types.SandboxAnswerReady:
+		return c.OnAnswerReady(ctx, *payload)
 	}
 	return nil
 }
@@ -400,13 +394,27 @@ func (c *Coordinator) syncBusy(ctx context.Context, handle string) {
 	c.busy[handle] = n
 }
 
-// OnCompleted claims the run, collects, accounts, then resumes the loop — once
-// the seat's budget has room for the turn it resumes (see
-// [Coordinator.mayClaim]).
+// OnCompleted claims the run, collects, accounts, then resumes the loop — or,
+// when the seat's budget has no room for the loop, holds the result on the
+// run's row for the resume that room allows.
+//
+// EVERY COMPLETION THAT WINS ITS CLAIM IS COLLECTED, whatever the budget. A
+// finished job left uncollected keeps its box running, and billed, for as long
+// as the cap holds; collecting pauses it, and the run's spend is charged
+// either way.
+//
+// THE BUDGET IS READ AFTER THE CHARGE, and that one read decides. The charge
+// is this run's own spend landing on the counters, and it can take a scope to
+// its cap by itself — a job that spent its seat's last tokens — so a turn
+// resumed on a read taken before it would have its first round refused before
+// it was sent: failed, handed back, and collected again by the next
+// completion. With no room, or a counter that cannot be read, the result is
+// held ([Coordinator.holdResult]).
+//
+// A QUESTION IS PARKED WHATEVER THE BUDGET: a park resumes no turn — it frees
+// the seat to receive the answer — and the answer reads the budget when it
+// arrives ([Coordinator.TryResumeFromAnswer]).
 func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
-	if !c.mayClaim(ctx, ev, trigger) {
-		return nil
-	}
 	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID))
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
@@ -416,7 +424,8 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		// (successive poll ticks both firing before the claim landed, an
 		// at-least-once redelivery, the retry a failed resume opened), or
 		// the row no longer holds its job running: parked on the question
-		// that job asked, replaced by the next run_sandbox call, or over.
+		// that job asked, holding the result a duplicate collected, replaced
+		// by the next run_sandbox call, or over.
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
@@ -443,161 +452,204 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return c.park(ctx, run, result)
 	}
 
-	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+	answer := HeldAnswer{
+		Launch: run.LaunchID, Text: resumeText(result), Success: result.Success,
 		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
+		Trigger: trigger, At: c.now(),
+	}
+	if room, err := c.room(ctx, run.AgentHandle); err != nil || !room.OK {
+		c.holdResult(ctx, run, answer, room, err)
+		return nil
+	}
+	return c.resumeAndSettle(ctx, run, answer.Text, answer.Success, trigger, runOutcome{
+		CostUSD: answer.CostUSD, DeliveredRefs: answer.DeliveredRefs,
 	})
 }
 
-// mayClaim reports whether a completion may be claimed now: whether the seat's
-// budget has room for the model call the resumed turn starts with.
+// room reads whether the seat handle's budget has room for the turn a resume
+// would re-enter.
 //
-// READ BEFORE THE CLAIM, and so before the box is touched. With no room the
-// turn's first round is refused before it is sent, so a claim would collect
-// the box only to break the turn, publish its failure and hand the claim back
-// for the next completion to do the same — on every poll, until the cap moved.
-//
-// A RUN WITH NO ROOM WAITS, AND WAITS QUIETLY. Its completion is acknowledged
-// unclaimed: the row stays running with its job finished, its seat stays busy
-// so the seat's other mail stays parked behind it, and the waiter polls it
-// again. The waiter reads the same room before it raises a completion
-// ([Waiter.hasRoom]), so this read finds none only when the room went between
-// the two reads, or when the completion came from a waiter that does not read
-// it — one of a build without that read, which raises it again on every poll.
-// The wait is announced once here, when this coordinator first finds it
-// ([Coordinator.admit]), and a completion that finds room claims the run as
-// any other does. A counter that cannot be read waits too, loudly each time:
-// the turn's first round would be refused on it as well, and a claim would buy
-// nothing but the same loop.
-func (c *Coordinator) mayClaim(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) bool {
-	ok, err := c.admit(ctx, resumeOf{
-		turnID: ev.TurnID, launch: ev.LaunchID, handle: ev.AgentHandle,
-		agentID: ev.Agent, role: ev.RoleName, workKey: ev.WorkKey, trigger: trigger,
-	})
-	if err != nil {
-		log.WarnContext(ctx, "sandbox_resume_budget_unreadable", "turn_id", ev.TurnID,
-			"agent", ev.AgentHandle, "error", err.Error(),
-			"detail", "the run's completion is left unclaimed until a poll can read the seat's "+
-				"token budget: the resumed turn's first round is refused on a counter that "+
-				"cannot be read")
-		return false
+// THREE-VALUED: room, no room, or a counter that could not be read — the
+// error, which is neither. Every caller holds on the last as on the second,
+// because the resumed turn's first round is refused on a counter that cannot
+// be read as well. A node with no budget to enforce, and a run naming no seat,
+// always have room.
+func (c *Coordinator) room(ctx context.Context, handle string) (Room, error) {
+	if c.headroom == nil || handle == "" {
+		return Room{OK: true}, nil
 	}
-	return ok
+	return c.headroom.Room(ctx, handle)
 }
 
-// ErrNoBudgetRoom reports an answer to a parked run that was not handed over,
-// because the seat's token budget has no room for the turn it would resume.
+// holdResult hands a collected run's claim back to running with its result
+// held on the row, for a turn the seat's budget has no room to resume, and
+// says the wait once.
 //
-// Its own sentinel so the caller can tell it from a store that failed: both
-// leave the answer with the caller, and only this one names a cap to raise.
-var ErrNoBudgetRoom = errors.New("sandbox: the seat's token budget has no room for the resumed turn")
-
-// resumeOf is the run a resume would re-enter, as a budget read names it: the
-// run and launch, the seat the budget is read for, the identity its wait is
-// announced under and the event that would resume it.
-type resumeOf struct {
-	turnID, launch, handle string
-	agentID, role, workKey string
-	trigger                *events.Event
-}
-
-// resumeOfRun is the resume a run's record names, before any event has come to
-// resume it.
-func resumeOfRun(run PendingRun) resumeOf {
-	return resumeOf{
-		turnID: run.TurnID, launch: run.LaunchID, handle: run.AgentHandle,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		agentID: run.AgentID, role: run.Role, workKey: run.UnitOfWork(),
-	}
-}
-
-// admit reads whether a run's turn may resume now, starting or ending the
-// run's wait on the answer.
+// ONE WRITE: the hand-back, the charge record and the held result together
+// ([Release.Held]). The run is back where the completion found it, its job
+// finished and its box paused, holding its seat, and nothing polls it again:
+// the completion poll skips a run holding an answer and signals the seat's
+// node once the budget has room ([Coordinator.OnAnswerReady]).
 //
-// THREE-VALUED: room, no room, or a counter that could not be read — the error,
-// which is neither, and which each caller settles its own way. A node with no
-// budget to enforce, and a run naming no seat, always have room.
+// A RESULT TOO LARGE TO HOLD is held without its text ([HeldAnswer.InBox]),
+// because the collect left it in the job's paused box, where the resume reads
+// it again.
 //
-// THE WAIT IS SAID ONCE, WHEN IT STARTS: a warning, and one budget_exhausted
-// naming the run's turn, which is what shows the seat stopped and why. Every
-// later read that still finds no room is quiet, and the first to find room
-// says the wait is over.
-func (c *Coordinator) admit(ctx context.Context, r resumeOf) (bool, error) {
-	if c.headroom == nil || r.handle == "" {
-		return true, nil
-	}
-	room, err := c.headroom.Room(ctx, r.handle)
-	switch {
+// THE WAIT IS SAID HERE, when the hold lands, which is once per launch: a hold
+// is written only onto a row holding no answer, and a completion claims only a
+// row holding none. A hold that did not land says nothing; the release has
+// already said why.
+func (c *Coordinator) holdResult(ctx context.Context, run PendingRun, answer HeldAnswer, room Room, roomErr error) {
+	switch size, err := heldBytes(answer); {
 	case err != nil:
-		return false, err
-	case room.OK:
-		if c.stopWaiting(r.turnID) {
-			log.InfoContext(ctx, "sandbox_resume_budget_room", "turn_id", r.turnID,
-				"agent", r.handle, "detail", "the seat's token budget has room again, so the "+
-					"run's turn is resumed")
-		}
-		return true, nil
+		// Held as the reference alone, which encodes whatever the result
+		// and its event were: the resume reads everything else back from
+		// the box, and names no trigger.
+		log.WarnContext(ctx, "sandbox_result_held_in_box", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "error", err.Error(),
+			"detail", "the job's result could not be encoded with the event that delivered it, so "+
+				"it stays in the job's paused box and the resume collects it from there again")
+		answer = HeldAnswer{Launch: answer.Launch, InBox: true, At: answer.At}
+	case size > MaxHeldAnswerBytes:
+		log.WarnContext(ctx, "sandbox_result_held_in_box", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "held_bytes", size, "held_limit_bytes", MaxHeldAnswerBytes,
+			"detail", "the job's result is past the bound a run's record holds an answer within, so "+
+				"it stays in the job's paused box and the resume collects it from there again")
+		answer = HeldAnswer{Launch: answer.Launch, InBox: true, Trigger: answer.Trigger, At: answer.At}
 	}
-	if !c.startWaiting(r.turnID, budgetWait{launch: r.launch, handle: r.handle}) {
-		log.DebugContext(ctx, "sandbox_resume_still_waiting_for_budget", "turn_id", r.turnID,
-			"agent", r.handle, "scope", room.Scope, "used", room.Used, "limit", room.Limit)
-		return false, nil
+	if !c.unclaim(ctx, run, true, &answer) {
+		return
 	}
-	log.WarnContext(ctx, "sandbox_resume_waiting_for_budget", "turn_id", r.turnID,
-		"agent", r.handle, "scope", room.Scope, "used", room.Used, "limit", room.Limit,
-		"detail", "the run's turn cannot continue until the token budget has room: its first "+
-			"round would be refused before it was sent, so the run is not resumed, and every "+
-			"poll or answer reads the budget again")
-	trace := events.TraceContext{}
-	if r.trigger != nil {
-		// A SIBLING of the event that would have resumed it, under that
-		// event's own parent: a completion carries no span of its own
+	c.sayWait(ctx, run, room, roomErr, answer.Trigger,
+		"the coding job has finished and its result is held on the run's record with its box "+
+			"paused")
+}
+
+// heldBytes is what a held answer weighs on its run's row, encoded.
+func heldBytes(held HeldAnswer) (int, error) {
+	raw, err := json.Marshal(held)
+	return len(raw), err
+}
+
+// sayWait says that a run's turn waits for budget room with an answer held
+// for it: once, when the hold lands.
+//
+// With the counter read at its cap, a warning and one budget_exhausted naming
+// the scope, its figures and the run's turn, which is what shows the seat
+// stopped and why. With a counter that could not be read, the warning alone,
+// naming the error: no scope was read at its cap, and an exhausted budget
+// announced for it would name one.
+func (c *Coordinator) sayWait(ctx context.Context, run PendingRun, room Room, roomErr error,
+	trigger *events.Event, held string,
+) {
+	if roomErr != nil {
+		log.WarnContext(ctx, "sandbox_resume_budget_unreadable", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "error", roomErr.Error(),
+			"detail", held+"; the turn resumes once a poll of the completion loop reads the seat's "+
+				"token budget with room, because its first round is refused on a counter that "+
+				"cannot be read")
+		return
+	}
+	log.WarnContext(ctx, "sandbox_resume_waiting_for_budget", "turn_id", run.TurnID,
+		"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit,
+		"detail", held+"; the turn resumes once the token budget has room, which the completion "+
+			"poll reads on every tick, because its first round would be refused before it was sent")
+	trace := events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID}
+	if trigger != nil {
+		// A SIBLING of the event that would have resumed the turn, under
+		// that event's own parent: a completion carries no span of its own
 		// ([Waiter.publishCompletion]), so nested under one the
 		// announcement would be a root of the run's trace.
-		trace = events.TraceContext{TraceID: r.trigger.TraceID, ParentSpanID: r.trigger.ParentSpanID}
+		trace = events.TraceContext{TraceID: trigger.TraceID, ParentSpanID: trigger.ParentSpanID}
 	}
-	announceBudgetWait(ctx, c.queue, r, room, trace)
-	return false, nil
-}
-
-// startWaiting records that a run's turn waits for budget room, and reports
-// whether this is the start of the wait — the one read the wait is announced
-// on. A run that relaunched since starts a new wait.
-func (c *Coordinator) startWaiting(turnID string, wait budgetWait) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.waiting[turnID] == wait {
-		return false
-	}
-	c.waiting[turnID] = wait
-	return true
-}
-
-// stopWaiting forgets a run's wait, reporting whether it had one.
-func (c *Coordinator) stopWaiting(turnID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, was := c.waiting[turnID]
-	delete(c.waiting, turnID)
-	return was
-}
-
-// announceBudgetWait publishes the one budget_exhausted a waiting run's seat is
-// shown stopped by, naming the scope at its cap, its figures and the run's
-// turn, under trace. The coordinator says a wait it finds this way, and so does
-// the waiter ([Waiter.hasRoom]).
-//
-// Best effort, like every announcement here: the wait is already in the log.
-func announceBudgetWait(ctx context.Context, queue Publisher, r resumeOf, room Room, trace events.TraceContext) {
 	exhausted := types.BudgetExhausted{
-		Agent: r.agentID, RoleName: r.role, TurnID: r.turnID, WorkKey: r.workKey,
+		Agent: run.AgentID, RoleName: run.Role, TurnID: run.TurnID,
+		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
+		WorkKey:    run.UnitOfWork(),
 		BudgetType: types.BudgetScope(room.Scope), UsedTokens: room.Used, MaxTokens: room.Limit,
 	}
 	announcement := events.New(exhausted, trace)
-	announcement.Source = r.role
-	if err := queue.Publish(ctx, topics.Event(exhausted.EventType()), announcement); err != nil {
-		log.WarnContext(ctx, "sandbox_budget_wait_publish_failed", "turn_id", r.turnID,
+	announcement.Source = run.Role
+	// Best effort, like every announcement here: the wait is in the log.
+	if err := c.queue.Publish(ctx, topics.Event(exhausted.EventType()), announcement); err != nil {
+		log.WarnContext(ctx, "sandbox_budget_wait_publish_failed", "turn_id", run.TurnID,
 			"error", err.Error())
 	}
+}
+
+// OnAnswerReady resumes the turn an answer is held for, once the seat's budget
+// has room for it: the signal the completion poll raises on a tick that reads
+// room for a run holding one ([types.SandboxAnswerReady]).
+//
+// THE ROW FIRST, then the budget. A signal for an answer already resumed — a
+// second tick's, a redelivery — is a duplicate, and a budget read for it would
+// be a question about a turn that is not waiting. The budget is read again
+// here because the room the poll read can have gone since; with none, or a
+// counter that cannot be read, the answer stays held and the next tick that
+// reads room signals it again, so nothing is said and nothing is handed back.
+func (c *Coordinator) OnAnswerReady(ctx context.Context, ev types.SandboxAnswerReady) error {
+	run, found, err := c.pending.Get(ctx, ev.TurnID)
+	if err != nil {
+		return fmt.Errorf("sandbox: reading run %s for the answer held on it: %w", ev.TurnID, err)
+	}
+	if _, held := run.Held(); !found || !held || run.LaunchID != ev.LaunchID ||
+		!slices.Contains(Claimable, run.Status) {
+		log.DebugContext(ctx, "sandbox_answer_ready_stale", "turn_id", ev.TurnID,
+			"launch_id", ev.LaunchID)
+		return nil
+	}
+	switch room, roomErr := c.room(ctx, run.AgentHandle); {
+	case roomErr != nil:
+		log.WarnContext(ctx, "sandbox_answer_ready_budget_unreadable", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "error", roomErr.Error(),
+			"detail", "the answer stays held on the run's record; the next poll that reads the "+
+				"seat's token budget with room signals it again")
+		return nil
+	case !room.OK:
+		log.DebugContext(ctx, "sandbox_answer_ready_without_room", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit)
+		return nil
+	}
+	claimed, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, HeldTail(ev.LaunchID))
+	if err != nil {
+		return fmt.Errorf("sandbox: claiming the answer held on %s: %w", ev.TurnID, err)
+	}
+	if !won {
+		log.InfoContext(ctx, "sandbox_held_answer_already_claimed",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
+		return nil
+	}
+	held, _ := claimed.Held()
+	log.InfoContext(ctx, "sandbox_resume_budget_room", "turn_id", claimed.TurnID,
+		"agent", claimed.AgentHandle, "held_for_s", c.now().Sub(held.At).Seconds(),
+		"detail", "the seat's token budget has room, so the turn is resumed with the answer held for it")
+
+	if claimedFrom(claimed) != StatusRunning {
+		// A PERSON'S REPLY, held on a run whose question freed its seat:
+		// the seat goes busy again for the resume, which is work like any
+		// other, as an answer handed over at once makes it.
+		c.markBusy(claimed.AgentHandle)
+		return c.resumeAndSettle(ctx, claimed, answerText(claimed, held.Text), true,
+			held.Trigger, runOutcome{})
+	}
+	if held.InBox {
+		// Still in the job's paused box, which the collect reconnects to
+		// and pauses again; the run's spend is already charged.
+		result, err := c.collect(ctx, claimed)
+		if err != nil {
+			log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", claimed.TurnID,
+				"error", err.Error())
+			c.settleFailed(ctx, claimed, types.SandboxFailureCollect,
+				"the coding job finished and its result was held in its paused box, which could "+
+					"not be read back, so its result is lost; the work it pushed, if any, is on its branch")
+			return nil
+		}
+		held.Text, held.Success = resumeText(result), result.Success
+		held.CostUSD, held.DeliveredRefs = result.CostUSD, result.DeliveredRefs
+	}
+	return c.resumeAndSettle(ctx, claimed, held.Text, held.Success, held.Trigger, runOutcome{
+		CostUSD: held.CostUSD, DeliveredRefs: held.DeliveredRefs,
+	})
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
@@ -686,13 +738,15 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // A parked run's question is kept on the run's own record, one message that
 // [coord.MaxRecordBytes] bounds. The record keeps its suspension within
 // [rowBytes], half the transport's ceiling, so that the rest is room for the
-// writes its lifecycle makes to it, and a park's question is the one of those
-// a coding agent sizes. JSON writes one byte of a string as at most
-// [jsonEscapeBytes] — a control character, an invalid byte, or one of the
-// < > & the encoder escapes becomes a \u escape — so a question within that
-// fraction of the room never outgrows the room on its own, whatever its bytes
-// are.
-const MaxQuestionBytes = (coord.MaxRecordBytes - rowBytes) / jsonEscapeBytes
+// writes its lifecycle makes to it ([lifecycleBytes]), and two of those are
+// sized by what somebody else wrote: the question a coding agent parks on, and
+// the reply a person answers it with, which is held beside it while the budget
+// has no room ([MaxHeldAnswerBytes]). Each has half. JSON writes one byte of a
+// string as at most [jsonEscapeBytes] — a control character, an invalid byte,
+// or one of the < > & the encoder escapes becomes a \u escape — so a question
+// within that fraction of its half never outgrows it on its own, whatever its
+// bytes are.
+const MaxQuestionBytes = lifecycleBytes / 2 / jsonEscapeBytes
 
 // jsonEscapeBytes is the most bytes encoding/json writes for one byte of a
 // string: a \u00XX escape.
@@ -754,7 +808,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		c.unclaim(ctx, run, true)
+		c.unclaim(ctx, run, true, nil)
 		return fmt.Errorf("sandbox: announcing the question %s asked: %w", run.TurnID, err)
 	}
 
@@ -773,7 +827,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 				len(question), coord.MaxRecordBytes))
 			return nil
 		}
-		c.unclaim(ctx, run, true)
+		c.unclaim(ctx, run, true, nil)
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
 	c.clearBusy(run.AgentHandle)
@@ -809,35 +863,35 @@ func (c *Coordinator) questionUnrecorded(ctx context.Context, run PendingRun, qu
 // Reports whether it handled the event, so the caller skips normal handling.
 // The disambiguation is positional: the next inbound on the question's
 // conversation while a clarification is pending IS the answer.
+//
+// AN ANSWER THE BUDGET HAS NO ROOM FOR IS HELD, and handled: the turn it would
+// resume would have its first round refused before it was sent, so the reply
+// is held on the run's row ([Coordinator.holdAnswer]) and its delivery
+// acknowledged, and the turn resumes with it once the budget has room
+// ([Coordinator.OnAnswerReady]).
+//
+// A LOOKUP THAT FAILS IS AN ERROR, for the caller to hand the delivery back:
+// whether a run is parked on this conversation is unknown, and handled as an
+// ordinary message the reply would start a turn that knows nothing of the
+// question while the run went on waiting for it. That is why the lookup raises
+// rather than answering "nothing is parked here" ([PendingStore.
+// FindAwaitingByConversation]), and the redelivery asks again.
 func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversation, answer string, trigger *events.Event) (bool, error) {
 	if conversation == "" {
 		return false, nil
 	}
 	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, conversation)
 	if err != nil {
-		// FAIL OPEN. An unreadable store must not swallow an ordinary
-		// message: handling it as a normal inbound is recoverable, dropping
-		// it is not.
-		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
-			"agent", handle, "conversation", conversation, "error", err.Error())
-		return false, nil
+		return false, fmt.Errorf("sandbox: whether %s's delivery on %s answers a parked run is "+
+			"unknown, because the runs parked on it could not be read: %w", handle, conversation, err)
 	}
 	if !found {
 		return false, nil
 	}
-	// THE BUDGET BEFORE THE CLAIM, for the reason [Coordinator.mayClaim]
-	// reads it: a turn its budget would stop at its first round is not
-	// resumed. The answer is not handed over, and stays the caller's to
-	// deliver again — it is this run's answer whenever it is handed over.
-	switch room, roomErr := c.admit(ctx, resumeOf{
-		turnID: run.TurnID, launch: run.LaunchID, handle: run.AgentHandle,
-		agentID: run.AgentID, role: run.Role, workKey: run.UnitOfWork(), trigger: trigger,
-	}); {
-	case roomErr != nil:
-		return false, fmt.Errorf("sandbox: the answer to %s is not handed over, because the "+
-			"token budget its turn would resume under could not be read: %w", run.TurnID, roomErr)
-	case !room:
-		return false, fmt.Errorf("%w: the answer to %s is not handed over yet", ErrNoBudgetRoom, run.TurnID)
+	// THE BUDGET BEFORE THE CLAIM: a turn its budget would stop at its first
+	// round is not resumed, and its answer is held for it instead.
+	if room, roomErr := c.room(ctx, run.AgentHandle); roomErr != nil || !room.OK {
+		return c.holdAnswer(ctx, run, answer, trigger, room, roomErr)
 	}
 	// THE JOB THAT ASKED, still waiting. The lookup is a snapshot, and a
 	// claim that took whatever the row held by now would hand this answer
@@ -860,6 +914,63 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 	// its cost is charged where it is collected, so reporting one here would
 	// bill the same run twice.
 	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+}
+
+// holdAnswer holds a person's reply on the run parked on the question it
+// answers, for a turn the seat's budget has no room to resume, and reports it
+// handled.
+//
+// THE REPLY AS IT ARRIVED, framed only at the resume: the framing tells the
+// executor whether its box is still up, and the pause reaper may take the box
+// while the reply waits.
+//
+// A REPLY PAST [MaxHeldAnswerBytes] IS REFUSED, naming that bound: the reply
+// is kept nowhere else, so it stays with its delivery, whose redelivery hands
+// it over once the budget has room. A hold that does not land — the run was
+// claimed, relaunched, ended or held another reply since the lookup — is
+// handled, as a claim another inbound won is, so this delivery is not run as
+// an unrelated message.
+func (c *Coordinator) holdAnswer(ctx context.Context, run PendingRun, answer string,
+	trigger *events.Event, room Room, roomErr error,
+) (bool, error) {
+	held := HeldAnswer{Launch: run.LaunchID, Text: answer, Trigger: trigger, At: c.now()}
+	size, err := heldBytes(held)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: the answer to %s cannot be held for its turn: %w", run.TurnID, err)
+	}
+	if size > MaxHeldAnswerBytes {
+		return false, fmt.Errorf("sandbox: the answer to %s cannot be held while the seat's token "+
+			"budget has no room for its turn: held with the event that delivered it, it is %d "+
+			"bytes, past the %d a run's record holds an answer within "+
+			"(sandbox.MaxHeldAnswerBytes); it is left with its delivery, which hands it over "+
+			"whole once the budget has room", run.TurnID, size, MaxHeldAnswerBytes)
+	}
+	landed, err := c.pending.HoldAnswer(ctx, run.TurnID, held)
+	switch {
+	case errors.Is(err, coord.ErrTooLarge):
+		// Within its own bound and refused all the same: what the record
+		// already carries beside it — the question at its own bound — is
+		// not bounded here, and the record's ceiling is what answers.
+		return false, fmt.Errorf("sandbox: the answer to %s cannot be held while the seat's token "+
+			"budget has no room for its turn: its run's record could not hold its %d bytes beside "+
+			"what the record already carries, which a record keeps within %d bytes; it is left with "+
+			"its delivery, which hands it over whole once the budget has room: %w",
+			run.TurnID, size, coord.MaxRecordBytes, err)
+	case err != nil:
+		return false, fmt.Errorf("sandbox: holding the answer to %s: %w", run.TurnID, err)
+	}
+	if !landed {
+		log.InfoContext(ctx, "sandbox_clarification_answer_not_held", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID,
+			"detail", "the run was claimed, relaunched, ended or answered since it was found waiting")
+		return true, nil
+	}
+	log.InfoContext(ctx, "sandbox_clarification_answer_held", "turn_id", run.TurnID,
+		"conversation_key", run.ConversationKey, "answer_bytes", len(answer))
+	c.sayWait(ctx, run, room, roomErr, trigger,
+		"a person answered the question the coding job asked, and the answer is held on the "+
+			"run's record")
+	return true, nil
 }
 
 // resumeAndSettle re-enters the suspended loop, then settles the box.
@@ -924,7 +1035,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
 		c.clearBusy(run.AgentHandle)
-		c.unclaim(ctx, run, false)
+		c.unclaim(ctx, run, false, nil)
 		return err
 	}
 	run.ExecuteState = state
@@ -984,7 +1095,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
 		run.CarriedCounted = run.CarriedCounted || errors.Is(err, ErrCarriedCounted)
-		c.unclaim(ctx, run, false)
+		c.unclaim(ctx, run, false, nil)
 		return err
 	}
 
@@ -1049,6 +1160,11 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 
 // unclaim hands a claimed tail back, so the signal's retry can win the flip
 // again, and leaves the seat's busy count saying what the run holds after it.
+// It reports whether this call handed the claim back.
+//
+// held, when not nil, is an answer the same write holds on the row for the
+// claim's launch ([Release.Held]): a collected result the budget has no room
+// to resume.
 //
 // To the EXACT status the claim took it from, which the claim snapshotted: a
 // run answered out of a clarification goes back to waiting for its answer,
@@ -1063,8 +1179,9 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 //
 // THE SEAT FOLLOWS THE STATUS THE RUN GOES BACK TO. counted is whether the
 // busy count still includes this run, which it does until the resume frees
-// the seat, and only a park, whose claim is always out of running, hands one
-// back before that. A run back in running holds the seat again; one back
+// the seat, and only a park and a held result, whose claims are always out of
+// running, hand one back before that. A run back in running holds the seat
+// again; one back
 // waiting on a person does not, and marking the seat busy for it parked every
 // later delivery on a run no poll completes, with nothing left to take the
 // mark back once its answer's retry had settled it.
@@ -1075,13 +1192,13 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 // inherited it wrote nothing. The run then stayed resumed, and the seat's next
 // owner, the node the drain was handing it to, reaped it as abandoned instead
 // of resuming it.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool) {
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, held *HeldAnswer) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		CarriedCounted: run.CarriedCounted, Fence: fenceOf(run),
+		CarriedCounted: run.CarriedCounted, Held: held, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
@@ -1097,6 +1214,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool)
 	case !counted && slices.Contains(Holding, to):
 		c.markBusy(run.AgentHandle)
 	}
+	return err == nil && released
 }
 
 // claimedFrom is the status a claimed run held before its claim. A claim
@@ -1232,8 +1350,6 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // its seat on the next busy count for as long as this node keeps the seat. The
 // failure is logged, and a remote box runs out its TTL.
 func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) bool {
-	// A run that is ending is waiting for nothing.
-	c.stopWaiting(run.TurnID)
 	if outranked(run, fence) {
 		// A newer lease owns the run; its box is that owner's to reclaim.
 		log.WarnContext(ctx, "sandbox_finish_outranked", "turn_id", run.TurnID,
@@ -1469,9 +1585,6 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.busy, handle)
-	// The seat's next owner reads the budget for its runs itself, and says
-	// so once when it finds them waiting.
-	maps.DeleteFunc(c.waiting, func(_ string, wait budgetWait) bool { return wait.handle == handle })
 	log.Debug("sandbox_seat_released", "seat", handle)
 }
 

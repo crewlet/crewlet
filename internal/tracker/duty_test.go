@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -1558,5 +1559,135 @@ func TestTheSweepDoesNotClearAMarkerAlreadyCleared(t *testing.T) {
 		WHERE subject_id = 'dup' AND kind = 'fields'`); len(writes) != 2 {
 		t.Errorf("the task carries %d marker writes, want the mark and one clear",
 			len(writes))
+	}
+}
+
+// AN ABANDONED MERGE INTO AN ITEM SINCE PUT IN THE TRASH IS GIVEN UP, NOT
+// RETRIED FOR EVER.
+//
+// A target in the trash refuses every step the duty would take — each subtask
+// move as a parent in the trash, the close as a merge target in it — and none
+// of those clears with time. Retried, the duty met the same refusal on every
+// tick, and returned at it before any abandoned merge that sorted after it. So
+// it is given up as a purged target's is: the marker cleared, the duplicate
+// left open with its subtasks, and its own warning, because a removal has a
+// remedy a purge does not.
+//
+// Mutation: give up on a purged target alone and the tick fails with the
+// duplicate still marked.
+func TestAnAbandonedMergeIntoAnItemInTheTrashIsGivenUp(t *testing.T) {
+	t.Parallel()
+	for _, reparent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reparent=%v", reparent), func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			for _, id := range []string{"keep", "dup"} {
+				if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+					newTask(id), nil); err != nil {
+					t.Fatalf("CreateTask %s: %v", id, err)
+				}
+				r.drain()
+			}
+			parent := "dup"
+			kid := newTask("kid")
+			kid.Parent, kid.Depth = &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("CreateTask kid: %v", err)
+			}
+			r.drain()
+			merging := true
+			if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{
+					Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+						Kind: tracker.RelationDuplicates, Other: "keep",
+					}}},
+					Merging: &merging, MergeReparent: &reparent,
+				}, tracker.ChangeRelations, nil); err != nil {
+				t.Fatalf("UpdateTask mark: %v", err)
+			}
+			r.drain()
+			if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "keep",
+				"ENG", false, nil); err != nil {
+				t.Fatalf("remove the target: %v", err)
+			}
+			r.drain()
+
+			log := &capturedLog{}
+			holdTheAppliersPin(t, r)
+			r.applyWhileWriting()
+			if _, err := trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context()); err != nil {
+				t.Fatalf("Tick: %v", err)
+			}
+			r.drain()
+			if line := log.only(t, "tracker_merge_target_removed"); line.attrs["target"] != "keep" {
+				t.Fatalf("the warning names target %v, want keep", line.attrs["target"])
+			}
+			dup := r.task(t, "dup")
+			if dup.Task.Merging || dup.Task.Status == tracker.StatusCancelled {
+				t.Errorf("the duplicate reads merging=%v and status %q, want the "+
+					"marker cleared and the task left open", dup.Task.Merging,
+					dup.Task.Status)
+			}
+			if got := parentOf(r.task(t, "kid")); got != "dup" {
+				t.Errorf("the subtask's parent is %q, want it left under dup — "+
+					"the target it would move onto is in the trash", got)
+			}
+		})
+	}
+}
+
+// ONE MERGE THE DUTY CANNOT FINISH DOES NOT HOLD UP THE REST.
+//
+// The sweep reads the abandoned merges in id order and finishes each under its
+// own claim, on its own subjects — nothing one does depends on another. So a
+// merge whose step fails is logged, counted and left marked for the next
+// sweep, and the sweep goes on to the next one. Returning at the first failure
+// instead held every abandoned merge sorting after a merge that fails on every
+// tick for as long as it kept failing, with nothing but that one error to say
+// so.
+//
+// Mutation: return at the first failure and m-b and m-c stay marked.
+func TestOneMergeTheDutyCannotFinishDoesNotHoldUpTheRest(t *testing.T) {
+	t.Parallel()
+	broker := &refusingAppender{subject: tracker.TaskSubject("m-a").Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	// MARKERS WITH NO TARGET, which the duty finishes with a single write
+	// each — so the case is about the sweep's walk over them rather than
+	// about any one merge's steps.
+	for _, id := range []string{"m-a", "m-b", "m-c"} {
+		task := newTask(id)
+		task.Merging = true
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	broker.refusing(true)
+
+	logged := &capturedLog{}
+	swept, err := trackerWorkerLogging(t, r, slog.New(logged)).Tick(t.Context())
+	r.drain()
+	if err == nil || !strings.Contains(err.Error(), "m-a") {
+		t.Errorf("a sweep with a merge it could not finish answered %v, want the "+
+			"failure reported naming it", err)
+	}
+	if swept["tracker_abandoned_merges"] != 2 {
+		t.Errorf("the sweep finished %d merges, want the 2 it could", swept["tracker_abandoned_merges"])
+	}
+	for id, want := range map[string]bool{"m-a": true, "m-b": false, "m-c": false} {
+		if got := r.task(t, id).Task.Merging; got != want {
+			t.Errorf("%s reads merging=%v after the sweep, want %v", id, got, want)
+		}
+	}
+	if line := logged.only(t, "tracker_merge_finish_failed"); line.attrs["task"] != "m-a" {
+		t.Errorf("the failure's line names %v, want m-a", line.attrs["task"])
+	}
+	summary := logged.only(t, "tracker_abandoned_merges_finished")
+	if summary.attrs["merges"] != int64(2) || summary.attrs["failed"] != int64(1) {
+		t.Errorf("the sweep's line says %+v, want 2 finished and 1 failed",
+			summary.attrs)
 	}
 }

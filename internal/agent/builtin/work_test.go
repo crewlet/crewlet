@@ -57,6 +57,11 @@ type fakeTracker struct {
 	created []tracker.Task
 	merged  []mergeCall
 
+	// mergeOps and dependOps are the operations the merge and dependency
+	// sequences were handed, apart from opIDs so a case about an item's own
+	// writes does not count a sequence's among them.
+	mergeOps, dependOps []string
+
 	// searched is every text the ranked search was asked for, ranked what
 	// it answers with, and partial what that ranking says it is missing.
 	searched  []string
@@ -323,10 +328,11 @@ type mergeCall struct {
 // MergeDuplicates records the fold, for the same reason Depend does: what the
 // TOOL resolves and decides is the half that lives here, and the sequence
 // itself is certified against a real store in the tracker's own suite.
-func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
+func (f *fakeTracker) MergeDuplicates(_ context.Context, opID string,
 	duplicate, into string, reparent bool,
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 
+	f.mergeOps = append(f.mergeOps, opID)
 	f.merged = append(f.merged, mergeCall{
 		duplicate: duplicate, into: into, reparent: reparent, notify: notify,
 	})
@@ -1143,9 +1149,10 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	}, nil
 }
 
-func (f *fakeTracker) Depend(_ context.Context, _ string,
+func (f *fakeTracker) Depend(_ context.Context, opID string,
 	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
 
+	f.dependOps = append(f.dependOps, opID)
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
 		return tracker.DependencyResult{}, f.dependErr

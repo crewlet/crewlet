@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -133,6 +134,29 @@ func TestAFailedLaunchIsAToolFailureAndDoesNotSuspend(t *testing.T) {
 	}
 	if !res.Failed || !strings.Contains(res.Output, "no sandbox capacity") {
 		t.Fatalf("result = %+v, want a failure naming the reason", res)
+	}
+}
+
+// A LAUNCH REFUSED AT THE TURN'S CAP IS SAID AS A REFUSAL, naming the cap:
+// a box that "could not be started" reads as one a retry might start, and the
+// turn has started as many coding runs as it may.
+func TestALaunchPastTheTurnsCapIsSaidAsARefusal(t *testing.T) {
+	capped := fmt.Errorf("%w — the executor's round cap, turn_engine.max_tool_rounds (2)",
+		&sandbox.LaunchCapError{Launched: 2, Max: 2})
+	surface := sandboxSurface(t, &launchSpy{err: capped})
+
+	res, err := surface.Execute(t.Context(), llm.ToolCall{ID: "c1", Name: builtin.RunSandboxTool, Arguments: map[string]any{
+		"brief": "fix the flake",
+	}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Suspend || !res.Failed {
+		t.Fatalf("result = %+v, want a refusal that does not suspend", res)
+	}
+	if !strings.HasPrefix(res.Output, "run_sandbox is refused") ||
+		!strings.Contains(res.Output, "turn_engine.max_tool_rounds (2)") {
+		t.Errorf("the refusal reads %q, want it said as a refusal naming the cap", res.Output)
 	}
 }
 

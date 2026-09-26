@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -95,7 +96,13 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 	}
 
 	res, err := t.launcher.Launch(ctx, turn, brief)
-	if err != nil {
+	switch {
+	case errors.Is(err, sandbox.ErrLaunchCap):
+		// REFUSED, not failed: the turn has started as many coding runs as
+		// it may, and the error names the cap. Said as a refusal so the
+		// model does not read it as a box that might start on a retry.
+		return failedDetached(fmt.Sprintf("run_sandbox is refused: %v", err)), nil
+	case err != nil:
 		// A launch that failed is a TOOL FAILURE, not an engine one: the
 		// model asked for something the engine could not do, and telling it
 		// so lets it fall back to its own tools rather than losing the turn.

@@ -1,12 +1,18 @@
 package secretsapi_test
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,10 +20,61 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 var clock = time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+// logs is every record this package's tests wrote.
+//
+// Installed as the PROCESS's sink, from TestMain, because that is where
+// [logging.Configure] lets a test put one: the package logger resolves the
+// process root per record. A case finds its own records by a value no other
+// case logs, which is what lets parallel cases share one sink.
+var logs tap
+
+// tap is a concurrency-safe sink the JSON handler writes one record per line
+// into.
+type tap struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (t *tap) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.buf.Write(p)
+}
+
+// records is every record named event, decoded, beside its raw line.
+func (t *tap) records(tb testing.TB, event string) (decoded []map[string]any, raw []string) {
+	tb.Helper()
+	t.mu.Lock()
+	all := bytes.Clone(t.buf.Bytes())
+	t.mu.Unlock()
+	lines := bufio.NewScanner(bytes.NewReader(all))
+	lines.Buffer(nil, len(all)+1)
+	for lines.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(lines.Bytes(), &record); err != nil {
+			tb.Fatalf("a log line is not a JSON record: %v\n%s", err, lines.Bytes())
+		}
+		if record["msg"] == event {
+			decoded = append(decoded, record)
+			raw = append(raw, lines.Text())
+		}
+	}
+	if err := lines.Err(); err != nil {
+		tb.Fatalf("reading the captured log: %v", err)
+	}
+	return decoded, raw
+}
+
+func TestMain(m *testing.M) {
+	logging.Configure(slog.LevelDebug, logging.FormatJSON, &logs)
+	os.Exit(m.Run())
+}
 
 func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 	t.Helper()
@@ -37,6 +94,12 @@ func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 // the way the guard attaches one.
 func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
 	t.Helper()
+	return surfaceAs(t, "ops", cipher, keyID)
+}
+
+// surfaceAs is [surface] with the operator the guard authenticated named.
+func surfaceAs(t *testing.T, operator string, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
+	t.Helper()
 	fleet := coordmem.NewFleet()
 	svc := newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipher, ActiveKeyID: keyID,
@@ -45,7 +108,7 @@ func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, c
 	mux := http.NewServeMux()
 	svc.Routes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
+		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), operator)))
 	}), fleet
 }
 
@@ -444,5 +507,61 @@ func TestWithoutAKeyringNothingIsRevealedInBulk(t *testing.T) {
 	if code != http.StatusServiceUnavailable || !strings.Contains(body, "no_keyring") {
 		t.Fatalf("GET /secrets?reveal=true with no keyring = %d %s, want 503 no_keyring",
 			code, body)
+	}
+}
+
+// A BULK REVEAL LEAVES ONE LINE NAMING EVERY NAME IT RETURNED AND WHO ASKED.
+//
+// A read-back that leaves no trace is indistinguishable from an exfiltration,
+// and a read of the whole store is the largest one there is. One line per
+// read, naming every value's name and the operator the guard authenticated —
+// and never a value, because logging one would be the leak.
+//
+// Mutation: drop the line, or its names or its operator, or log the values,
+// and this fails.
+func TestABulkRevealIsLoggedByNameAndOperator(t *testing.T) {
+	t.Parallel()
+	const operator = "bulk-reveal-reader"
+	h, _ := surfaceAs(t, operator, cipherFor(t, "k1"), "k1")
+	values := map[string]string{
+		"AUDITED_ONE": "glpat-audited-one", "AUDITED_TWO": "whsec_audited_two",
+	}
+	for name, value := range values {
+		if code, body := call(t, h, http.MethodPut, "/secrets/"+name, value); code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s", name, code, body)
+		}
+	}
+	if code, body := call(t, h, http.MethodGet, "/secrets?reveal=true", ""); code != http.StatusOK {
+		t.Fatalf("GET /secrets?reveal=true = %d %s", code, body)
+	}
+
+	records, raw := logs.records(t, "secrets_revealed")
+	var mine []map[string]any
+	var lines []string
+	for i, record := range records {
+		if record["operator"] == operator {
+			mine = append(mine, record)
+			lines = append(lines, raw[i])
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("the bulk reveal logged %d lines for its operator, want one: %v", len(mine), mine)
+	}
+	if mine[0]["level"] != "WARN" {
+		t.Errorf("the line is at %v, want WARN beside the break-glass read", mine[0]["level"])
+	}
+	var names []string
+	listed, _ := mine[0]["names"].([]any)
+	for _, name := range listed {
+		text, _ := name.(string)
+		names = append(names, text)
+	}
+	if want := []string{"AUDITED_ONE", "AUDITED_TWO"}; !slices.Equal(names, want) {
+		t.Errorf("the line names %v, want every name revealed, sorted: %v", mine[0]["names"], want)
+	}
+	for _, value := range values {
+		if strings.Contains(lines[0], value) {
+			t.Errorf("the audit line carries a revealed value: %s", lines[0])
+		}
 	}
 }

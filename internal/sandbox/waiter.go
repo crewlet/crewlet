@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -78,9 +79,10 @@ type WaiterOptions struct {
 	// ClaimDuty gates the tick in a fleet. Nil means single-node.
 	ClaimDuty DutyFunc
 
-	// Headroom is read before a finished job's completion is raised (see
-	// [Waiter.hasRoom]). Nil raises every completion, which is what a node
-	// with no budget to enforce does.
+	// Headroom is read on every tick for each run holding an answer the
+	// seat's budget had no room to resume ([HeldAnswer]), and the seat's
+	// node is signalled when it has room ([Waiter.Tick]). Nil has room for
+	// every one of them, which is what a node with no budget to enforce does.
 	Headroom Headroom
 
 	// Now is the clock, injectable so a test can expire a pause without
@@ -100,12 +102,20 @@ type WaiterOptions struct {
 // push signal could only shave less than one interval off jobs that run for
 // minutes.
 //
-// On detected completion it publishes SandboxRunCompleted, once the seat's
-// budget has room for the turn it resumes ([Waiter.hasRoom]); the coordinator
+// On detected completion it publishes SandboxRunCompleted; the coordinator
 // does the at-most-once claim, the collection, and the resume of the suspended
-// Execute loop. A duplicate signal is harmless — successive ticks can both fire
-// before the first claim lands, and queue delivery is at-least-once, but the
-// coordinator claims once.
+// Execute loop — or holds the result on the run's row when the seat's budget
+// has no room for that loop ([HeldAnswer]). A duplicate signal is harmless —
+// successive ticks can both fire before the first claim lands, and queue
+// delivery is at-least-once, but the coordinator claims once.
+//
+// THE SAME TICK SIGNALS A HELD ANSWER. A run holding one is not polled — its
+// job is over and its box is paused, or it waits on a person — and each tick
+// reads its seat's budget instead, signalling the seat's node when there is
+// room ([Waiter.signalHeld]). The budget is read here because this is the one
+// loop that visits every run on a clock, and nothing the coordinator handles
+// ([Coordinator.OnEvent]) says the room has come back — a cap raised by an
+// apply, a counter an operator reset.
 //
 // The same tick is also the PAUSE REAPER. A run blocked on a person's answer
 // parks its box paused so a quick reply resumes exactly where the coding agent
@@ -127,10 +137,6 @@ type Waiter struct {
 	// on any success. Per-turn rather than per-box because a box id can be
 	// cleared and re-minted on a reseed while the run continues.
 	failures map[string]connectStreak
-	// waits is the launch of every run whose completion this waiter is
-	// withholding for want of budget room, by turn: what says a wait was
-	// already announced ([Waiter.hasRoom]).
-	waits map[string]string
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -152,7 +158,6 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		headroom:  opts.Headroom,
 		now:       opts.Now,
 		failures:  map[string]connectStreak{},
-		waits:     map[string]string{},
 		stopped:   make(chan struct{}),
 	}
 	if w.interval <= 0 {
@@ -211,8 +216,9 @@ func (w *Waiter) jittered() time.Duration {
 	return backoff.Jitter(w.interval, jitterFraction)
 }
 
-// Tick polls every running run once and reaps expired pauses. Returns how many
-// completions fired.
+// Tick polls every running run once, signals each run holding an answer whose
+// seat's budget now has room ([Waiter.signalHeld]), and reaps expired pauses.
+// Returns how many completions fired.
 //
 // Exported so a test drives one pass deterministically without the loop.
 func (w *Waiter) Tick(ctx context.Context) (int, error) {
@@ -232,8 +238,17 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 		log.WarnContext(ctx, "sandbox_awaiting_index_not_repaired", "error", err.Error())
 	}
 
-	fired := 0
+	fired, ready := 0, 0
 	for _, run := range runs {
+		if _, held := run.Held(); held && slices.Contains(Claimable, run.Status) {
+			// NOT POLLED: a held result's job is over and its box is
+			// paused, where a reconnect would boot it back up to be billed,
+			// and a held reply's run is waiting on nothing the box does.
+			if w.signalHeld(ctx, run) {
+				ready++
+			}
+			continue
+		}
 		if run.Status != StatusRunning {
 			// Running is the ONLY pollable state, and the one it most
 			// obviously excludes is [StatusLaunching]: that run's job is
@@ -259,13 +274,6 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 			// gone → the box vanished; fire anyway so the coordinator frees
 			// the seat and marks the run failed (collect will fail to
 			// reconnect) instead of hanging.
-			//
-			// Either way only once the seat's budget has room: the
-			// coordinator claims no completion before that, gone box or
-			// not, since the event does not say which.
-			if !w.hasRoom(ctx, run) {
-				continue
-			}
 			if err := w.publishCompletion(ctx, run); err != nil {
 				log.WarnContext(ctx, "sandbox_completion_publish_failed",
 					"turn_id", run.TurnID, "error", err.Error())
@@ -274,8 +282,8 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 			fired++
 		}
 	}
-	if fired > 0 {
-		log.InfoContext(ctx, "sandbox_waiter_fired", "completions", fired)
+	if fired > 0 || ready > 0 {
+		log.InfoContext(ctx, "sandbox_waiter_fired", "completions", fired, "held_answers_ready", ready)
 	}
 	if reaped := w.reapExpiredPauses(ctx, runs); reaped > 0 {
 		// Said out loud: a reaped box is a checkout an operator will find
@@ -330,75 +338,56 @@ func (w *Waiter) forget(runs []PendingRun) {
 			delete(w.failures, id)
 		}
 	}
-	for id := range w.waits {
-		if !active[id] {
-			delete(w.waits, id)
-		}
-	}
 }
 
-// hasRoom reports whether a finished job's completion may be raised: whether
-// its seat's budget has room for the model call the turn it resumes sends
-// first.
+// signalHeld reads whether a run holding an answer has budget room for the
+// turn it would resume, and when it has, signals the seat's node to resume it
+// ([types.SandboxAnswerReady]). Reports whether it signalled.
 //
-// A COMPLETION WITH NO ROOM IS WITHHELD, which is what keeps a budget wait
-// quiet. The coordinator claims no completion whose turn its budget would stop
-// ([Coordinator.OnCompleted]), and the run stays running with its job done, so
-// a completion raised anyway would be raised again on every poll for as long
-// as the cap held — each one a `sandbox_run_completed` the event store keeps,
-// and each one declined. Withheld, the box is still polled, and
-// so kept alive, and the first poll that finds room raises the completion like
-// any other.
-//
-// THE WAIT IS SAID ONCE by this waiter, when it first withholds a run's
-// completion: a warning, and one budget_exhausted naming the run's turn. Later
-// polls that still find no room are quiet, and the first to find room says the
-// wait is over. The record of which waits were said is this process's, so a
-// waiter that takes the duty over mid-wait says it once more. A counter that
-// cannot be read withholds too, and says so on every poll: the turn's first
-// round would be refused on it as well.
-func (w *Waiter) hasRoom(ctx context.Context, run PendingRun) bool {
-	if w.headroom == nil || run.AgentHandle == "" {
-		return true
-	}
-	room, err := w.headroom.Room(ctx, run.AgentHandle)
-	switch {
-	case err != nil:
-		log.WarnContext(ctx, "sandbox_completion_budget_unreadable", "turn_id", run.TurnID,
-			"agent", run.AgentHandle, "error", err.Error(),
-			"detail", "the job's completion is withheld until a poll can read the seat's token "+
-				"budget: the resumed turn's first round is refused on a counter that cannot be read")
-		return false
-	case room.OK:
-		w.mu.Lock()
-		_, waited := w.waits[run.TurnID]
-		delete(w.waits, run.TurnID)
-		w.mu.Unlock()
-		if waited {
-			log.InfoContext(ctx, "sandbox_completion_budget_room", "turn_id", run.TurnID,
-				"agent", run.AgentHandle, "detail", "the seat's token budget has room again, so "+
-					"the job's completion is raised")
+// ON EVERY TICK THAT FINDS ROOM, until the answer is claimed: the node that
+// takes the signal claims the held answer at most once, so a second signal —
+// a tick that landed before the claim — claims nothing, and a signal that was
+// lost, or that found the room gone by the time it arrived, is raised again
+// by the next tick. No room is the wait the coordinator announced when it
+// held the answer, so it is said here only at debug; a counter that cannot be
+// read is said on every tick, because nothing else will say it.
+func (w *Waiter) signalHeld(ctx context.Context, run PendingRun) bool {
+	if w.headroom != nil && run.AgentHandle != "" {
+		room, err := w.headroom.Room(ctx, run.AgentHandle)
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "sandbox_held_answer_budget_unreadable", "turn_id", run.TurnID,
+				"agent", run.AgentHandle, "error", err.Error(),
+				"detail", "the answer held for the run stays held until a poll can read the seat's "+
+					"token budget: the resumed turn's first round is refused on a counter that "+
+					"cannot be read")
+			return false
+		case !room.OK:
+			log.DebugContext(ctx, "sandbox_held_answer_still_waiting_for_budget", "turn_id", run.TurnID,
+				"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit)
+			return false
 		}
-		return true
 	}
-	w.mu.Lock()
-	said := w.waits[run.TurnID] == run.LaunchID
-	w.waits[run.TurnID] = run.LaunchID
-	w.mu.Unlock()
-	if said {
-		log.DebugContext(ctx, "sandbox_completion_still_waiting_for_budget", "turn_id", run.TurnID,
-			"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit)
+	control := topics.AgentControl(run.AgentHandle)
+	if control == "" {
+		// No handle means no routable seat, and no node to resume it; the
+		// run waits for a seat's recovery pass or its retirement.
+		log.WarnContext(ctx, "sandbox_held_answer_unroutable", "turn_id", run.TurnID)
 		return false
 	}
-	log.WarnContext(ctx, "sandbox_completion_waiting_for_budget", "turn_id", run.TurnID,
-		"agent", run.AgentHandle, "scope", room.Scope, "used", room.Used, "limit", room.Limit,
-		"detail", "the job has finished and its turn cannot continue until the token budget has "+
-			"room: its first round would be refused before it was sent, so the completion is "+
-			"withheld, and every poll reads the budget again")
-	announceBudgetWait(ctx, w.queue, resumeOfRun(run), room, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
-	return false
+	ready := types.SandboxAnswerReady{
+		TurnID: run.TurnID, LaunchID: run.LaunchID, AgentHandle: run.AgentHandle,
+	}
+	ev := events.New(ready, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
+	ev.Source = run.Role
+	// THE CONTROL TOPIC ALONE: the signal is a command to the seat's node,
+	// and the hold it ends was announced when it began.
+	if err := w.queue.Publish(ctx, control, ev); err != nil {
+		log.WarnContext(ctx, "sandbox_held_answer_signal_failed", "turn_id", run.TurnID,
+			"error", err.Error())
+		return false
+	}
+	return true
 }
 
 type pollState int

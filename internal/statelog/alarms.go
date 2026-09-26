@@ -469,8 +469,8 @@ var table = []rule{
 					round(r.PrefetchP95), round(PrefetchScanBudget)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
-		remedy: "Every turn on this node pays this before its first token. Check " +
-			"the store's own latency and the knowledge backend's.",
+		remedy: "Check the store's own latency and the knowledge backend's: " +
+			"each turn that searches at its start waits this long first.",
 	},
 	{
 		kind: KindSearchSlow,

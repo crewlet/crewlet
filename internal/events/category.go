@@ -156,6 +156,11 @@ var excluded = map[string]string{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet",
+	"sandbox_answer_ready": "a COMMAND to one seat's node, published to that seat's control " +
+		"topic alone and never to crewlet.events.*: the budget now has room for the answer held " +
+		"on the seat's detached coding run. The wait it ends was said when the answer was held — " +
+		"a budget_exhausted naming the scope at its cap, or a log line when the budget could not " +
+		"be read — and what the resumed turn does is in its own phase records",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +

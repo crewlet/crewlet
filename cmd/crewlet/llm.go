@@ -71,6 +71,8 @@ Usage:
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
+  -api URL       The running node the fleet's secret store is read and written
+                 through; default is the engine running on this host
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
@@ -91,8 +93,8 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	companyPath := fs.String("company", defaultCompanyPath,
 		"Tier B config: the company document naming the providers")
-	bootstrapPath := fs.String("config", defaultBootstrapPath,
-		"Tier A config: this node's store and its secret keyring")
+	bootstrapPath := bootstrapFlag(fs)
+	api := apiFlag(fs)
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,
@@ -120,11 +122,10 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	providers, closeResolver, err := loadCLIAgents(ctx, *companyPath, *bootstrapPath, stderr)
+	providers, fleet, err := loadCLIAgents(ctx, *companyPath, *bootstrapPath, *api, stderr)
 	if err != nil {
 		return err
 	}
-	defer closeResolver()
 
 	switch sub {
 	case "list":
@@ -136,7 +137,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath, printToken: *printToken,
+			fleet: fleet, printToken: *printToken,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -155,7 +156,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
 		return nil
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, providers, key, *secretStore, fleet, stdout)
 	case "import":
 		return importLLM(providers, key, os.Stdin, stdout)
 	default:
@@ -171,19 +172,23 @@ type cliAgentProvider struct {
 	provider *cliagent.Provider
 }
 
-// loadCLIAgents builds every cli-agent provider the company declares.
+// loadCLIAgents builds every cli-agent provider the company declares, and
+// reports what the run read of the fleet's secret store, which is where a
+// login or an export that stores a value writes it.
 //
 // Through the SAME resolver the provisioning CLIs use — store first, then the
 // environment — because a token rotated into the secret store must win over a
 // stale `.env` exported into this shell months ago. A command that resolved
 // from the environment alone would report a provider as having no token while
 // the running engine used one.
-func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) ([]cliAgentProvider, func(), error) {
+func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath, api string,
+	notes io.Writer) ([]cliAgentProvider, *fleetRead, error) {
+
 	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	resolver, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	fleet, err := companyResolver(ctx, bootstrapPath, api, notes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -194,21 +199,19 @@ func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes
 		if spec.Type != config.LLMCLIAgent {
 			continue
 		}
-		built, err := engine.BuildCLIAgent(key, spec, resolver)
+		built, err := engine.BuildCLIAgent(key, spec, fleet.env)
 		if err != nil {
-			closeResolver()
 			return nil, nil, err
 		}
 		out = append(out, cliAgentProvider{key: key, provider: built})
 	}
 	if len(out) == 0 {
-		closeResolver()
 		return nil, nil, fmt.Errorf(
 			"%s declares no cli-agent providers — see "+
 				"docs/concepts/subscription-llm-backends.md for the config block",
 			companyPath)
 	}
-	return out, closeResolver, nil
+	return out, fleet, nil
 }
 
 // oneProvider picks the provider a key names, or explains the choice.
@@ -299,8 +302,11 @@ type loginRequest struct {
 	tokenStdin    bool
 	username      string
 	passwordStdin bool
-	bootstrapPath string
 	printToken    bool
+
+	// fleet is what the run read of the fleet's secret store: where a
+	// captured token is stored, and what a printed one could be shadowed by.
+	fleet *fleetRead
 }
 
 func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
@@ -351,27 +357,13 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		return nil
 
 	case req.captureToken, req.tokenStdin:
-		var token string
-		if req.tokenStdin {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			raw, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				return fmt.Errorf("reading the token from stdin: %w", err)
-			}
-			token = strings.TrimSpace(string(raw))
-			if token == "" {
-				return errors.New("stdin held no token")
-			}
-		} else {
-			token, err = p.CaptureToken(ctx, os.Stdin, stderr)
-			if err != nil {
-				return err
-			}
-		}
 		tokenVar, err := cliagent.TokenVarName(p.Profile())
 		if err != nil {
 			return fmt.Errorf("cannot store a token for %q: %w", p.Agent(), err)
 		}
+		// WHERE THE TOKEN WILL GO IS SETTLED BEFORE ONE EXISTS. A token
+		// captured and then refused is a live credential at the vendor
+		// that nothing holds and nobody will revoke.
 		if req.printToken {
 			// TO STDOUT, STORING NOTHING. An operator whose secrets live
 			// in somebody else's manager should not have to write the
@@ -390,20 +382,46 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 						"do it on a terminal: pipe it into your secret manager, " +
 						"or redirect it to a file you then remove")
 			}
+			if refusal := req.fleet.keptElsewhere(tokenVar); refusal != nil {
+				return refusal
+			}
+		} else if refusal := req.fleet.storable(tokenVar); refusal != nil {
+			return refusal
+		}
+		var token string
+		if req.tokenStdin {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("reading the token from stdin: %w", err)
+			}
+			token = strings.TrimSpace(string(raw))
+			if token == "" {
+				return errors.New("stdin held no token")
+			}
+		} else {
+			token, err = p.CaptureToken(ctx, os.Stdin, stderr)
+			if err != nil {
+				return err
+			}
+		}
+		if req.printToken {
 			fmt.Fprintln(stdout, token)
 			fmt.Fprintf(stderr,
 				"Wrote the headless token to stdout and stored NOTHING. "+
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
+		where, err := storeLLMSecret(ctx, req.fleet, tokenVar, token)
+		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
-			"Stored the headless token as %s in the encrypted secret store.\n"+
+			"Stored the headless token as %s in %s.\n%s\n"+
 				"Reference it from the company document as:\n\n"+
 				"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-				"            token: \"${%s}\"\n", tokenVar, key, tokenVar)
+				"            token: \"${%s}\"\n", tokenVar, where, snapshotNextStep,
+			key, tokenVar)
 		return nil
 
 	case req.username != "":
@@ -435,13 +453,23 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool,
+	fleet *fleetRead, stdout io.Writer) error {
+
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
 	}
 	if key == "" {
 		key = providers[0].key
+	}
+	name := cliagent.BundleVarName(key)
+	// BEFORE THE BUNDLE IS PACKED: a refusal after it would have read every
+	// credential file for nothing.
+	if toStore {
+		if refusal := fleet.storable(name); refusal != nil {
+			return refusal
+		}
 	}
 	bundle, err := p.ExportBundle()
 	if err != nil {
@@ -454,35 +482,90 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		fmt.Fprintln(stdout, bundle)
 		return nil
 	}
-	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
+	where, err := storeLLMSecret(ctx, fleet, name, bundle)
+	if err != nil {
 		return err
 	}
-	// NOT "any engine sharing that database". The store is one file, one
-	// process — a second engine pointed at this path is corruption, not a
-	// warm standby — so what actually restores a bundle on another node is
-	// running this command there too.
+	// EVERY NODE, because the store is the fleet's: a node restores the
+	// bundle when it builds this provider and its own credentials directory
+	// is empty ([cliagent.Provider.RestoreBundle] declines to overwrite a
+	// login it already holds).
 	fmt.Fprintf(stdout,
-		"Stored the credential bundle as %s in THIS NODE's encrypted secret\n"+
-			"store. This engine restores it at boot when its own credentials\n"+
-			"directory is empty; on a fleet, run this once per node.\n"+
+		"Stored the credential bundle as %s in %s.\n"+
+			"Every node restores it into its own credentials directory, when\n"+
+			"that is empty, as it next builds this provider: at its next start,\n"+
+			"or when the current revision is re-activated (`crewlet config\n"+
+			"activate <uuid>`).\n"+
 			"Reference it as:\n\n"+
 			"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
-			"            credential_bundle: \"${%s}\"\n", name, key, name)
+			"            credential_bundle: \"${%s}\"\n", name, where, key, name)
 	return nil
 }
 
-// storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, "")
-	if err != nil {
-		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
-	}
-	defer closeStore()
-	if err := sv.Set(ctx, name, value, currentOperator(), "llm-login", time.Now().UTC()); err != nil {
-		return fmt.Errorf("writing %s: %w", name, err)
+// snapshotNextStep is what a value stored in the fleet's secret store still
+// needs to reach a running node: a node resolves ${VAR} through a snapshot of
+// the store that it rebuilds when it applies an epoch.
+const snapshotNextStep = "Running nodes read it when they next apply the " +
+	"company: re-activate the current revision (`crewlet config activate " +
+	"<uuid>`), or restart them."
+
+// storable refuses a write of name to the fleet's secret store that this run
+// cannot make.
+//
+// THROUGH A RUNNING NODE OR NOT AT ALL. The fleet's store is on the
+// coordination KV, which on the default topology is inside the engine's own
+// process, so a node's /secrets surface is the only way in. This node's own
+// table is not a way round it: no node resolves from it, and the engine copies
+// a row from it onto the fleet only at its next start, and only where the
+// fleet holds nothing newer under that name — so a write there would report a
+// stored value that no running node reads.
+func (c *fleetRead) storable(name string) error {
+	switch {
+	case c.unread != nil:
+		return fmt.Errorf("cannot store %s: %w, and a write to this node's own "+
+			"table would reach no running node. %s", name, c.unread, reachTheFleet)
+	case c.node == nil:
+		return fmt.Errorf("cannot store %s: there is no secret store to hold "+
+			"it — %s. Set secrets.keys in Tier A (`crewlet secrets keygen` prints "+
+			"one), or keep the value outside Crewlet: -print-token writes a "+
+			"token to stdout, and `crewlet llm export` without -secret-store "+
+			"writes the bundle there", name, c.absent)
 	}
 	return nil
+}
+
+// keptElsewhere refuses to hand name's value to the operator to keep outside
+// Crewlet when no node would read it from there.
+//
+// The twin of [fleetShadowedSink.Record]: every node resolves the fleet's
+// store before the environment, so a value exported under a name the fleet
+// holds is never read — and with the store unread, this run cannot tell
+// whether it holds one.
+func (c *fleetRead) keptElsewhere(name string) error {
+	if c.unread != nil {
+		return fmt.Errorf("%w, so it may hold %s — which every node resolves "+
+			"before the environment, and a value kept elsewhere under that name "+
+			"would never be read. %s", c.unread, name, reachTheFleet)
+	}
+	if _, held := c.held[name]; held {
+		return fmt.Errorf("%w: %s, which every node resolves before the "+
+			"environment, so a value kept elsewhere under that name would never "+
+			"be read. Store it with -capture-token alone, which replaces the "+
+			"fleet's copy", errFleetHolds, name)
+	}
+	return nil
+}
+
+// storeLLMSecret writes one value into the fleet's secret store, through the
+// running node the run read it through, and says where it went.
+func storeLLMSecret(ctx context.Context, fleet *fleetRead, name, value string) (string, error) {
+	if err := fleet.storable(name); err != nil {
+		return "", err
+	}
+	if err := fleet.node.Set(ctx, name, value, currentOperator(), "llm-login", time.Now().UTC()); err != nil {
+		return "", fmt.Errorf("writing %s: %w", name, err)
+	}
+	return fleet.node.Describe(), nil
 }
 
 // importLLM restores an exported credential bundle onto this host.

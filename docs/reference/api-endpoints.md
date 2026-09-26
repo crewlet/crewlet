@@ -461,9 +461,10 @@ them, because every node opens the fleet's
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **No value** — the listing has no value field at all |
+| `GET` | `/secrets?reveal=true` | **Every value the fleet holds, in one answer**: `{"values": {"NAME": "value", …}}`, `Cache-Control: no-store`, logged once as `secrets_revealed` naming every name it returned and the authenticated operator. What a CLI command resolving the company document off a running node reads — see [the secret store](../concepts/secret-store.md#what-reads-the-fleets-values) |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
-| `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
+| `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged as `secret_revealed` by name against the authenticated operator |
 | `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id`, answering the names it moved. `?key_id=` is refused with `409` when it names a different key |
@@ -482,14 +483,23 @@ given, so a row written before the check can still be inspected and deleted.
 between the operator and the sequence the vendor compares is a `401` nobody
 can explain.
 
-**Reveal is opt-in on the wire**, not merely in the CLI. Without `?reveal=true`
-the route answers what a listing answers for one name, so a browser, a crawl or
-a link preview cannot pull a credential out by accident.
+**Reveal is opt-in on the wire**, not merely in the CLI. Two routes return
+values, and each only with `?reveal=true`: without it `GET /secrets` is the
+listing and `GET /secrets/{name}` answers what the listing answers for one
+name, so a browser, a crawl or a link preview cannot pull a credential out by
+accident. Each revealing read leaves a line in the node's log naming the
+operator and the names it returned, and never a value: `secret_revealed` for
+one name, `secrets_revealed` for the whole store.
+
+**The whole-store read is all or nothing.** It opens every row before it
+answers, and a row this node's keyring cannot open fails the read with `500`
+rather than answering the rest: a command that resolved from part of the store
+would read every missing name as unset.
 
 **A node with no `secrets.keys` answers `503 no_keyring`** on every route that
-seals or opens, pointing at `crewlet secrets keygen`. The store has no
-plaintext mode; refusing is the only alternative to holding credentials in the
-clear.
+seals or opens, the whole-store read included, pointing at `crewlet secrets
+keygen`. The store has no plaintext mode; refusing is the only alternative to
+holding credentials in the clear.
 
 `crewlet secrets` is the client for all of this — see
 [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for
@@ -2541,13 +2551,21 @@ without a restart. The `POST` answers:
   `403 operator_required` when the call carries no operator identity — the
   generation record and the audit row both name who re-anchored.
 - `404 unknown_stream`, as the `GET`.
-- `409 reanchor_refused`, with the reason in `detail`: a confirmation naming
-  another instant, or a live instant the broker would not give; a peer
-  hydrated on the live stream, named; a positions register that cannot be
-  read, or a node that is not the most caught-up one on its stream; another
-  reanchor's generation record already holding the new generation; and a
-  transition already running on this node — an adoption of a peer's snapshot,
-  or another reanchor. A refusal stops nothing: the log's applier runs on.
+- `409 reanchor_refused`, with the reason in `detail`. Most refusals clear,
+  and the same call then lands: a transition already running on this node —
+  an adoption of a peer's snapshot, or another reanchor — once it finishes; a
+  live instant the broker would not give, once it answers; a positions
+  register that cannot be read, once it can be, or with `force=true`; a
+  confirmation naming another instant, sent again with the one the `GET`
+  returns; and a node that is not the most caught-up one on its stream, with
+  `force=true`. Two never clear by calling again: a peer hydrated on the live
+  stream, named — adopt its snapshot — and another reanchor's generation
+  record already holding the new generation, named by its operation — follow
+  the node that holds it by adopting a snapshot of that generation. A refusal
+  writes nothing — no row's version and no checkpoint moves — and every one of
+  them is read before the log's applier is stopped, so ordinarily the applier
+  runs throughout; one the fleet makes true only after that is met by the
+  transition itself, which starts the applier again.
 - `500 reanchor_failed` for a failure partway, which the transition's step
   order makes safe to run again.
 

@@ -1,4 +1,4 @@
-package tools_test
+package tools
 
 import (
 	"context"
@@ -10,8 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/tools"
 )
+
+// INSIDE THE PACKAGE, because one of these asserts on the surface's own
+// locks: whether the sequence is still held while a call's record is waiting
+// is not visible from outside, and a lock released before the record passes
+// every outside test that does not happen to lose that race.
 
 // seatTool is a seat-callable tool that keeps the Turn each call was handed,
 // and, when gate is set, holds its FIRST call until gate is closed.
@@ -27,12 +31,12 @@ type seatTool struct {
 func (s *seatTool) Name() string               { return s.name }
 func (s *seatTool) Description() string        { return s.name }
 func (s *seatTool) Parameters() map[string]any { return nil }
-func (s *seatTool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+func (s *seatTool) Call(ctx context.Context, args map[string]any) (Result, error) {
 	return s.CallForTurn(ctx, nil, args)
 }
 
 func (s *seatTool) CallForTurn(_ context.Context, turn *turnctx.Turn,
-	_ map[string]any) (tools.Result, error) {
+	_ map[string]any) (Result, error) {
 
 	s.mu.Lock()
 	s.handed = append(s.handed, turn)
@@ -44,7 +48,7 @@ func (s *seatTool) CallForTurn(_ context.Context, turn *turnctx.Turn,
 	if n == 1 && s.gate != nil {
 		<-s.gate
 	}
-	return tools.Result{Output: s.name}, nil
+	return Result{Output: s.name}, nil
 }
 
 // turns is every Turn a call was handed, in the order the calls started.
@@ -59,7 +63,29 @@ type sequencedTool struct{ seatTool }
 
 func (*sequencedTool) Sequenced() {}
 
-var _ tools.Sequenced = (*sequencedTool)(nil)
+var _ Sequenced = (*sequencedTool)(nil)
+
+// readTool is an ordinary tool, answering at once.
+type readTool struct{ name string }
+
+func (r readTool) Name() string               { return r.name }
+func (r readTool) Description() string        { return r.name }
+func (r readTool) Parameters() map[string]any { return nil }
+func (r readTool) Call(context.Context, map[string]any) (Result, error) {
+	return Result{Output: "ok"}, nil
+}
+
+// registered is a registry holding tools, each registered as a builtin.
+func registered(t *testing.T, tools ...Callable) *Registry {
+	t.Helper()
+	r := NewRegistry()
+	for _, tool := range tools {
+		if err := r.Register(tool, OriginBuiltin); err != nil {
+			t.Fatalf("Register(%s): %v", tool.Name(), err)
+		}
+	}
+	return r
+}
 
 // callNames are the names of calls, in order.
 func callNames(calls []ledger.Call) []string {
@@ -83,13 +109,11 @@ func callNames(calls []ledger.Call) []string {
 // this fails.
 func TestACallIsHandedEveryCallBeforeIt(t *testing.T) {
 	t.Parallel()
-	r := tools.NewRegistry()
-	mustRegister(t, r, tool("read"), tools.OriginBuiltin)
 	write := &seatTool{name: "write"}
-	mustRegister(t, r, write, tools.OriginBuiltin)
+	r := registered(t, readTool{name: "read"}, write)
 	bound := (&turnctx.Turn{RunID: "run-1"}).
 		WithEarlier([]ledger.Call{{Name: "before-the-phase"}})
-	s := tools.NewSurface("execute", r.Snapshot(), []string{"read", "write"}).
+	s := NewSurface("execute", r.Snapshot(), []string{"read", "write"}).
 		ForTurn(bound)
 
 	ctx := context.Background()
@@ -125,20 +149,18 @@ func TestACallIsHandedEveryCallBeforeIt(t *testing.T) {
 // A surface CAN run two calls at once — the MCP bridge executes each call a
 // coding agent sends as it arrives. Two writes in flight together would each
 // be handed the same earlier calls and name themselves alike, and the ledger
-// collapses the second into the first.
+// collapses the second into the first. A read is not held behind a write:
+// serialised behind one it would only be slower.
 //
-// Mutation: take the sequence lock only around the invocation rather than
-// across the record, or not at all, and the second call is handed a list
-// without the first.
+// Mutation: take no sequence lock, or take it for every tool, and this fails.
+// How far the lock reaches is [TestTheSequenceIsHeldUntilTheCallIsRecorded]'s.
 func TestTwoSequencedCallsNeverRunAtOnce(t *testing.T) {
 	t.Parallel()
-	r := tools.NewRegistry()
 	write := &sequencedTool{seatTool{
 		name: "write", entered: make(chan int, 2), gate: make(chan struct{}),
 	}}
-	mustRegister(t, r, write, tools.OriginBuiltin)
-	mustRegister(t, r, tool("read"), tools.OriginBuiltin)
-	s := tools.NewSurface("execute", r.Snapshot(), []string{"write", "read"}).
+	r := registered(t, write, readTool{name: "read"})
+	s := NewSurface("execute", r.Snapshot(), []string{"write", "read"}).
 		ForTurn(&turnctx.Turn{RunID: "run-1"})
 
 	ctx := context.Background()
@@ -162,8 +184,6 @@ func TestTwoSequencedCallsNeverRunAtOnce(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	// AN ORDINARY TOOL IS NOT HELD BEHIND A WRITE: a read serialised
-	// behind one would only be slower.
 	done := make(chan error, 1)
 	go func() {
 		_, err := s.Execute(ctx, llm.ToolCall{Name: "read"})
@@ -187,5 +207,70 @@ func TestTwoSequencedCallsNeverRunAtOnce(t *testing.T) {
 	if !slices.Contains(callNames(handed[1].Calls()), "write") {
 		t.Errorf("the second write was handed %v, without the first — it names "+
 			"itself as the first did", callNames(handed[1].Calls()))
+	}
+}
+
+// sequenceWatch is how long [TestTheSequenceIsHeldUntilTheCallIsRecorded]
+// watches for a release that must not come.
+//
+// A surface that releases before the record does so the moment the call
+// returns, so a release shows within microseconds of the gate opening, and a
+// quarter of a second is thousands of times that. A surface that holds the
+// sequence never releases while the record is blocked, however long this is.
+const sequenceWatch = 250 * time.Millisecond
+
+// A SEQUENCED CALL HOLDS THE SEQUENCE UNTIL IT IS RECORDED, not only while it
+// runs.
+//
+// The next sequenced call is handed the calls recorded before it, and this one
+// is not among them until it is recorded: a sequence released when the call
+// returns lets the next one start in between and be handed a list without it,
+// which names two writes as one. The window is a few instructions wide, so a
+// test that only runs two calls passes whether it is closed or not. This one
+// holds the surface's own state lock, which the record needs, while the call
+// returns — so the record cannot land, and a sequence that is free then was
+// released before it.
+//
+// Mutation: release the sequence after the invocation rather than after the
+// record, or take none, and the sequence is free while the record waits.
+func TestTheSequenceIsHeldUntilTheCallIsRecorded(t *testing.T) {
+	t.Parallel()
+	write := &sequencedTool{seatTool{
+		name: "write", entered: make(chan int, 1), gate: make(chan struct{}),
+	}}
+	s := NewSurface("execute", registered(t, write).Snapshot(), []string{"write"}).
+		ForTurn(&turnctx.Turn{RunID: "run-1"})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Execute(context.Background(), llm.ToolCall{Name: "write"})
+		done <- err
+	}()
+	<-write.entered
+
+	s.mu.Lock()
+	close(write.gate)
+	released := false
+	for deadline := time.Now().Add(sequenceWatch); time.Now().Before(deadline); {
+		if s.sequence.TryLock() {
+			s.sequence.Unlock()
+			released = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	recorded := len(s.called)
+	s.mu.Unlock()
+
+	if err := <-done; err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if released {
+		t.Errorf("the sequence was free while the call's record was waiting (%d "+
+			"recorded), so the next sequenced call could be handed a list "+
+			"without it", recorded)
+	}
+	if got := s.CalledNames(); !slices.Equal(got, []string{"write"}) {
+		t.Errorf("the surface recorded %v, want the one write", got)
 	}
 }

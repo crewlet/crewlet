@@ -170,7 +170,7 @@ func TestAPhaseSurfaceCarriesThatPhasesClosedRounds(t *testing.T) {
 	history := []ledger.Iteration{{Iteration: 1, Intent: "posted"}, {Iteration: 2}}
 
 	for _, ph := range []phase.Phase{phase.Execute, phase.Review} {
-		surface, err := r.surfaceWith(context.Background(), ph, 3, history,
+		surface, err := r.surfaceWith(context.Background(), ph, 3, history, nil,
 			tools.NewRegistry().Snapshot(), nil, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", ph, err)
@@ -199,7 +199,7 @@ func TestAPhaseSurfaceDoesNotAliasTheLoopsLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := []ledger.Iteration{{Iteration: 1, Intent: "posted"}}
-	surface, err := r.surfaceWith(context.Background(), phase.Execute, 2, history,
+	surface, err := r.surfaceWith(context.Background(), phase.Execute, 2, history, nil,
 		tools.NewRegistry().Snapshot(), nil, nil)
 	if err != nil {
 		t.Fatal(err)

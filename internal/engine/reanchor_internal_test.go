@@ -34,18 +34,18 @@ import (
 // checkpoint to the rebuilt stream's numbers and instant stops every OTHER
 // domain at its next boot, over a recreation that never happened to them.
 //
-// Mutations, each red here: the status read from the applier's boot identity
-// names the deleted stream; the transition handed that identity refuses the
-// live confirmation; the checkpoint committed under the old stream's instant
-// stops the relaunched applier; every domain's checkpoint moved moves the
-// pages log's; the follow skipped leaves the domain on the deleted stream's
-// instant; the audit row written without the checkpoint's instant names the
-// year one as the stream walked away from; and the audit row's record id
-// spelled apart from the op id the record was published under names a record
-// nothing published; a heartbeat that states no instant leaves every peer
-// judging this node by its generation alone; and one that states the live
-// stream's rather than the one its applier runs on tells every peer this node
-// holds the live stream's history before it has applied a record of it.
+// Mutations, each red here: the status read from the domain's identity names
+// the deleted stream; the transition handed that identity refuses the live
+// confirmation; the checkpoint committed under the old stream's instant stops
+// the relaunched applier; every domain's checkpoint moved moves the pages
+// log's; the follow skipped leaves the domain on the deleted stream's instant;
+// the audit row written without the checkpoint's instant names the year one as
+// the stream walked away from; and the audit row's record id spelled apart
+// from the op id the record was published under names a record nothing
+// published; a heartbeat that states no instant leaves every peer judging this
+// node by its generation alone; and one that states the live stream's rather
+// than the one its checkpoint counts on tells every peer this node holds the
+// live stream's history before it has applied a record of it.
 func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -133,8 +133,8 @@ func TestAReanchorFollowsTheLiveStreamAndMovesOneDomain(t *testing.T) {
 	}
 	live := rebuilt.CachedInfo().Created.UTC()
 	s.publishPositions(t.Context())
-	// THE ROW STATES THE STREAM THE APPLIER RUNS ON — the deleted one, until
-	// this node follows the live one — because that is what a peer's
+	// THE ROW STATES THE STREAM THE CHECKPOINT COUNTS ON — the deleted one,
+	// until this node follows the live one — because that is what a peer's
 	// reanchor judges this node's history by.
 	stated := func() time.Time {
 		t.Helper()
@@ -445,17 +445,20 @@ func TestAFleetWhoseStreamWasRebuiltCanReanchor(t *testing.T) {
 	}
 }
 
-// A REFUSED REANCHOR LEAVES THE DOMAIN'S APPLIER RUNNING.
+// A REFUSED REANCHOR LEAVES THE DOMAIN'S APPLIER RUNNING, AND ITS ROWS AS THEY
+// WERE.
 //
 // A refusal is the ordinary answer on a healthy fleet — a confirmation that
-// names another instant, a peer hydrated on the live stream — and a transition
-// that stopped the loop before deciding would interrupt the domain it refused:
-// every caller waiting on the loop told it stopped, the caught-up latch
-// cleared when it started again. The permission is decided while the loop
-// runs, so a refusal touches nothing.
+// names another instant, a generation another reanchor's record holds, a peer
+// hydrated on the live stream — and a transition that stopped the loop before
+// deciding would interrupt the domain it refused: every caller waiting on the
+// loop told it stopped, the caught-up latch cleared when it started again. So
+// the permission and the generation's holder are read while the loop runs, and
+// a refusal touches nothing: not the loop, and not one row's version.
 //
 // Mutation: halt the applier before the permission is decided and each
-// refusal below ends the loop it found and starts another.
+// refusal below ends the loop it found and starts another; decide the holder
+// only by the claim after the halt and the held generation does the same.
 func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -501,10 +504,38 @@ func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
 		}
 	}
 
-	created, _, err := e.ReanchorStatus(t.Context(), spec.Name)
+	created, generation, err := e.ReanchorStatus(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
+	// A ROW WITH A VERSION, which a transition's reset would raise into the
+	// next generation's number space.
+	if _, err := e.native.writer.WriteView(t.Context(), "op-view", tracker.View{
+		ID: "v-kept", Name: "Kept as it is", Type: tracker.ViewList,
+		Container: tracker.Container{Kind: tracker.ContainerWorkspace},
+	}); err != nil {
+		t.Fatalf("write a view: %v", err)
+	}
+	version := func() int64 {
+		t.Helper()
+		var v int64
+		if err := back.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT version FROM tracker_views WHERE id = 'v-kept'`).Scan(&v)
+		}); err != nil {
+			t.Fatalf("read the view's version: %v", err)
+		}
+		return v
+	}
+	waitUntil(t, 20*time.Second, "the view to apply", func() bool {
+		var n int
+		err := back.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT COUNT(*) FROM tracker_views WHERE id = 'v-kept'`).Scan(&n)
+		})
+		return err == nil && n == 1
+	})
+	kept := version()
 
 	before := loop()
 	if before == nil {
@@ -517,6 +548,32 @@ func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
 		t.Fatalf("a confirmation naming another instant = %v, want a refusal", err)
 	}
 	stillRunning("a confirmation naming another instant", before)
+
+	// ANOTHER REANCHOR'S RECORD HOLDS THE GENERATION this one would take:
+	// the claim would meet it, and the read before the halt does.
+	rival, err := tracker.NewWriter(tracker.WriterDeps{
+		Publisher: running.publisher, NodeID: "node-b",
+		Actor: "ops-b", ActorKind: tracker.AuthorOperator,
+	})
+	if err != nil {
+		t.Fatalf("build node-b's writer: %v", err)
+	}
+	if err := rival.PublishGeneration(t.Context(), generation+1,
+		statelog.ReanchorInputs{StreamCreatedAt: created}); err != nil {
+		t.Fatalf("publish node-b's generation record: %v", err)
+	}
+	_, err = e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: spec.Name, Confirm: created.Format(time.RFC3339Nano), By: "ops",
+	})
+	var elsewhere *statelog.ClaimedElsewhere
+	if !errors.Is(err, statelog.ErrReanchorRefused) || !errors.As(err, &elsewhere) {
+		t.Fatalf("a reanchor onto a generation another record holds = %v, want "+
+			"a refusal naming the holder", err)
+	}
+	stillRunning("a generation another record holds", before)
+	if got := version(); got != kept {
+		t.Errorf("the refused reanchor moved a row's version from %d to %d", kept, got)
+	}
 
 	// A PEER HYDRATED ON THE LIVE STREAM, which is what a healthy fleet's
 	// every other node is.
@@ -540,4 +597,193 @@ func TestARefusedReanchorLeavesTheApplierRunning(t *testing.T) {
 		t.Errorf("the refusal does not name the hydrated peer: %v", err)
 	}
 	stillRunning("a hydrated peer", before)
+}
+
+// A NODE THAT BOOTS OVER A REBUILT LOG STATES THE STREAM ITS CHECKPOINT COUNTS
+// ON, AND IS JUDGED — AND JUDGES ITS PEERS — BY IT.
+//
+// A node restarted after its log was rebuilt hands its applier the live
+// stream, and the applier stops on a checkpoint recorded under the deleted
+// one: it commits nothing, so every number the node states for the domain is
+// still a position on the deleted stream. Stated against the live stream
+// instead, each restarted node told every peer it had applied records off the
+// live stream — every reanchor was refused naming a peer, the register has no
+// age to clear it, and the most-caught-up comparison saw only other restarted
+// nodes. The fleet could never follow its own log.
+//
+// So the row states the checkpoint's stream, the permission's two readings are
+// taken against the two streams they are about — the highest position on the
+// stream this node's checkpoint counts on, and the peers hydrated on the live
+// one — and a reanchor moves the domain onto the live stream.
+//
+// Mutations, each red here: take the identity from the live stream at boot and
+// the row states it with a position counted on the deleted one; swap the two
+// instants in reanchorInputs and the peer that re-anchored sets the highest
+// position while the peer furthest along the deleted stream is named
+// hydrated.
+func TestANodeBootedOverARebuiltLogStatesTheStreamItsCheckpointCountsOn(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		back.Close(context.Background())
+		t.Fatalf("New: %v", err)
+	}
+	// ONCE, because the restart below needs the first node down before it
+	// opens the same files, and a failure before that point still has to
+	// release them.
+	stopFirst := sync.OnceFunc(func() {
+		e.Stop(context.Background())
+		back.Close(context.Background())
+	})
+	t.Cleanup(stopFirst)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	spec := tracker.Domain{}.Stream()
+	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
+	if !ok {
+		t.Fatal("the backends carry no broker connection to rebuild a stream on")
+	}
+	js, err := natsjs.New(q.Conn())
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	old, err := js.Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("read the running stream: %v", err)
+	}
+	was := old.CachedInfo().Created.UTC().Truncate(time.Microsecond)
+
+	// A RECORD APPLIED OFF THE OLD STREAM, so the checkpoint names it and
+	// the node has a position to state on it.
+	if _, err := e.native.writer.WriteView(t.Context(), "op-view", tracker.View{
+		ID: "v-before", Name: "Before the rebuild", Type: tracker.ViewList,
+		Container: tracker.Container{Kind: tracker.ContainerWorkspace},
+	}); err != nil {
+		t.Fatalf("write a view: %v", err)
+	}
+	var applied uint64
+	var generation uint32
+	waitUntil(t, 20*time.Second, "the checkpoint to name the old stream", func() bool {
+		at, created, found, err := statelog.CursorFor(t.Context(),
+			back.Store.Replicated(), spec.Name)
+		applied, generation = at.Seq, at.Generation
+		return err == nil && found && created.Equal(was) && at.Seq > 0
+	})
+
+	// THE REBUILD, and then the restart: the same configuration, a new
+	// creation instant, sequences counting from 1 again.
+	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {
+		t.Fatalf("delete the stream: %v", err)
+	}
+	rebuilt, err := js.CreateStream(t.Context(), old.CachedInfo().Config)
+	if err != nil {
+		t.Fatalf("rebuild the stream: %v", err)
+	}
+	live := rebuilt.CachedInfo().Created.UTC()
+	stopFirst()
+
+	back2, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends again: %v", err)
+	}
+	t.Cleanup(func() { back2.Close(context.Background()) })
+	e2, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back2})
+	if err != nil {
+		t.Fatalf("New again: %v", err)
+	}
+	t.Cleanup(func() { e2.Stop(context.Background()) })
+	s := e2.native.log
+	running := s.Domain(tracker.Domain{}.Name())
+	waitUntil(t, 10*time.Second, "the applier to stop on the old checkpoint", func() bool {
+		return errors.Is(running.runner.Stopped(), statelog.ErrStreamRecreated)
+	})
+
+	// THE ROW STATES THE DELETED STREAM, with the position counted on it.
+	if got := running.identity(); !got.Equal(was) {
+		t.Fatalf("the domain states stream %s, want the deleted %s its "+
+			"checkpoint counts on — the live %s is a stream it has applied "+
+			"nothing of", got, was, live)
+	}
+	s.publishPositions(t.Context())
+	rows, err := back2.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the positions register: %v", err)
+	}
+	var own coord.DomainPosition
+	for _, row := range rows {
+		if row.NodeID == s.nodeID {
+			own = row.Domains[tracker.Domain{}.Name()]
+		}
+	}
+	if !own.StreamCreatedAt.Equal(was) || own.AppliedThrough != applied {
+		t.Fatalf("the restarted node's row states %d applied on stream %s, want "+
+			"%d on the deleted %s — a peer reads the live stream's instant with "+
+			"a nonzero position as history a reanchor would discard",
+			own.AppliedThrough, own.StreamCreatedAt, applied, was)
+	}
+
+	// A PEER ON EACH STREAM: one further along the deleted stream, and one
+	// that re-anchored onto the live one — at a higher sequence, so a
+	// comparison against the wrong stream picks the wrong peer.
+	for _, peer := range []coord.NodePositions{
+		{NodeID: "node-deleted", At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {
+				Seq: applied + 10, AppliedThrough: applied + 10,
+				Generation: generation, StreamCreatedAt: was,
+			}}},
+		{NodeID: "node-live", At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {
+				Seq: applied + 5000, AppliedThrough: applied + 5000,
+				Generation: generation + 1, StreamCreatedAt: live,
+			}}},
+	} {
+		if err := back2.Fleet.PutPositions(t.Context(), peer); err != nil {
+			t.Fatalf("publish %s's row: %v", peer.NodeID, err)
+		}
+	}
+	in, hydrated := e2.reanchorInputs(t.Context(), running)
+	if in.Highest != applied+10 {
+		t.Errorf("the highest position on this node's stream is %d, want node-"+
+			"deleted's %d — the node that re-anchored counts on another log",
+			in.Highest, applied+10)
+	}
+	if !slices.Equal(hydrated, []string{"node-live"}) || in.PeersHydrated != 1 {
+		t.Errorf("the peers hydrated on the live stream are %v (%d), want "+
+			"[node-live]", hydrated, in.PeersHydrated)
+	}
+	if !in.StreamCreatedAt.Equal(live) || !in.PrevStreamCreatedAt.Equal(was) {
+		t.Errorf("the inputs name the live stream %s and the one walked away "+
+			"from %s, want %s and %s", in.StreamCreatedAt, in.PrevStreamCreatedAt,
+			live, was)
+	}
+
+	// AND ONCE NEITHER PEER STANDS IN ITS WAY, THIS NODE RE-ANCHORS and
+	// states the live stream from then on.
+	for _, peer := range []string{"node-deleted", "node-live"} {
+		if err := back2.Fleet.ForgetPositions(t.Context(), peer); err != nil {
+			t.Fatalf("forget %s: %v", peer, err)
+		}
+	}
+	if _, err := e2.Reanchor(t.Context(), ReanchorRequest{
+		Stream: spec.Name, Confirm: live.Format(time.RFC3339Nano), By: "ops",
+	}); err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	if got := running.identity(); !got.Equal(live) {
+		t.Fatalf("after the reanchor the domain states %s, want the live %s", got, live)
+	}
+	waitUntil(t, 10*time.Second, "the re-anchored applier to run", func() bool {
+		return running.runner.Stopped() == nil &&
+			running.runner.Committed().Generation == generation+1
+	})
 }

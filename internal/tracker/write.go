@@ -108,10 +108,22 @@ func refuseRemovedParent(ctx context.Context, tx *sql.Tx, parent string) error {
 	case !held || current.Removed == nil:
 		return nil
 	}
-	return fmt.Errorf("tracker: task %s was removed by %s at %s; restore it "+
-		"before placing anything under it", parent, current.Removed.By,
-		current.Removed.At.Format(time.RFC3339))
+	return fmt.Errorf("%w: task %s was removed by %s at %s; restore it "+
+		"before placing anything under it", errInTrash, parent,
+		current.Removed.By, current.Removed.At.Format(time.RFC3339))
 }
+
+// errInTrash refuses a write that needs another task out of the trash — the
+// parent a task is placed or restored under, the task a merge folds into —
+// while that task is in it.
+//
+// A SENTINEL as well as a message, because two callers act on it rather than
+// passing it on. A merge whose target is put in the trash after its mark gives
+// the merge up ([Writer.finishMerge]): every later step would meet the same
+// refusal, and the duty would retry it on every tick. And a restore's walk
+// passes over a descendant whose parent is in the trash on its own account
+// ([Writer.RestoreTask]), because its siblings are no less restorable for it.
+var errInTrash = errors.New("tracker: a task this write needs is in the trash")
 
 // NoIfMatch omits an update's version precondition, which MERGES the patch
 // onto whatever the task currently is. Named rather than a bare zero, because
@@ -262,8 +274,8 @@ type Writer struct {
 // these change nothing, and a record has nothing of them to replay. They ride
 // the writer for the reason [Writer.After] does: they are about this one call.
 type mergeStep struct {
-	// into is the task being folded into, refused when it has been purged
-	// or is not on this node ([mergeTargetHeld]).
+	// into is the task being folded into, refused when it has been purged,
+	// is in the trash, or is not on this node ([mergeTargetHeld]).
 	into string
 
 	// marked is the task being folded still mid-merge, refused as

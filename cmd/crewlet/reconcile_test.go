@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
@@ -179,12 +180,37 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 		t.Fatalf("%d revisions for four boots, want 1 — the seed is comparing "+
 			"ciphertext rather than the document", len(revisions))
 	}
-	// And what was stored really is sealed.
-	if !secrets.Sealed(revisions[0].Payload) {
-		t.Error("a keyring was configured and the revision was stored in plaintext")
+	// AND WHAT WAS STORED REALLY IS SEALED: the stored form is the envelope
+	// and nothing beside it, the envelope opens with the keyring to the
+	// company that was seeded, and the ciphertext inside it does not carry
+	// that document. The whole document, because a word of it could not
+	// say so: random ciphertext spells any short word now and then, and
+	// its base64 spells one far more often.
+	payload := revisions[0].Payload
+	if !secrets.Sealed(payload) {
+		t.Fatalf("a keyring was configured and the revision was stored in "+
+			"plaintext: %s", payload)
 	}
-	if bytes.Contains(revisions[0].Payload, []byte("Acme")) {
-		t.Errorf("the company name survived into the stored form: %s", revisions[0].Payload)
+	document, err := secrets.Open(cipher, payload)
+	if err != nil {
+		t.Fatalf("the stored revision does not open with the keyring that "+
+			"sealed it: %v", err)
+	}
+	if !bytes.Contains(document, []byte("Acme")) {
+		t.Fatalf("the sealed revision opens to %s, not the seeded company", document)
+	}
+	var envelope map[string]string
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("the sealed revision is not an envelope: %v", err)
+	}
+	_, blob, _ := strings.Cut(
+		strings.TrimPrefix(envelope[secrets.EnvelopeKey], secrets.EnvelopePrefix), ":")
+	ciphertext, err := base64.StdEncoding.DecodeString(blob)
+	if err != nil {
+		t.Fatalf("the envelope's ciphertext is not base64: %v", err)
+	}
+	if bytes.Contains(ciphertext, document) {
+		t.Errorf("the envelope carries the company document in the clear")
 	}
 }
 

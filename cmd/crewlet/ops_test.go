@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -471,4 +474,88 @@ func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schem
 	}
 	t.Fatalf("Pending reported no %s estate: %+v", want, schemas)
 	return store.Schema{}
+}
+
+// A STORE A RUNNING ENGINE HOLDS IS ANSWERED WITH THE COMMAND THAT WAS RUN.
+//
+// Both invocations read what is pending before anything else, so both meet
+// the lock there, and each is told to stop the engine and run itself again: a
+// `crewlet migrate` told to "re-run the check" would re-run a command that
+// applies nothing, and read the gate passing as the migration done.
+func TestALockedStoreNamesTheMigrateInvocationToRunAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		check     bool
+		want, not string
+	}{
+		{check: true, want: "re-run `crewlet migrate -check`"},
+		{check: false, want: "re-run `crewlet migrate`:", not: "-check"},
+	} {
+		remedy := pendingLockRemedy(tc.check)
+		if !strings.Contains(remedy, tc.want) || !strings.Contains(remedy, "crewlet run") {
+			t.Errorf("-check=%v: the remedy reads %q, want it to stop the engine and %s",
+				tc.check, remedy, tc.want)
+		}
+		if tc.not != "" && strings.Contains(remedy, tc.not) {
+			t.Errorf("-check=%v: the remedy names %q, which was not run: %q", tc.check, tc.not, remedy)
+		}
+	}
+}
+
+// AND runMigrate ASKS FOR THE REMEDY OF THE INVOCATION IT IS. Derived from the
+// source rather than driven through the CLI, for the reason the secret store's
+// guard gives: the refusal needs a second OS PROCESS holding the file, since
+// the lock is shared by every handle in one. What can go wrong on this side is
+// the pending read answering a lock with one invocation's remedy whatever was
+// run — which the control below proves this guard catches.
+func TestMigrateAnswersALockedPendingReadForItsOwnInvocation(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("ops.go")
+	if err != nil {
+		t.Fatalf("read ops.go: %v", err)
+	}
+	if !asksForItsOwnRemedy(t, string(src)) {
+		t.Error("runMigrate does not ask pendingLockRemedy for the invocation's own -check, so a " +
+			"locked store is answered with one invocation's remedy whatever was run")
+	}
+	mutant := strings.Replace(string(src), "pendingLockRemedy(*check)", "pendingLockRemedy(true)", 1)
+	if mutant == string(src) {
+		t.Fatal("the control found no call to turn into a fixed invocation's, so the guard is unproven")
+	}
+	if asksForItsOwnRemedy(t, mutant) {
+		t.Error("the guard passes a runMigrate that asks for a fixed invocation's remedy: it asserts nothing")
+	}
+}
+
+// asksForItsOwnRemedy reports whether runMigrate, in src, calls
+// pendingLockRemedy with its own -check flag.
+func asksForItsOwnRemedy(t *testing.T, src string) bool {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "ops.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	asked := false
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runMigrate" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "pendingLockRemedy" || len(call.Args) != 1 {
+				return true
+			}
+			if star, ok := call.Args[0].(*ast.StarExpr); ok {
+				if flag, ok := star.X.(*ast.Ident); ok && flag.Name == "check" {
+					asked = true
+				}
+			}
+			return true
+		})
+	}
+	return asked
 }

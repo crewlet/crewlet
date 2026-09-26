@@ -91,6 +91,12 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AWholeKeptInPartsIsNeverPagedOrCounted", testAWholeKeptInPartsIsNeverPagedOrCounted},
 		{"BridgedCallsPageWithACursor", testBridgedCallsPageWithACursor},
 		{"AFirstPageCarriesTheEndOfTheLog", testAFirstPageCarriesTheEndOfTheLog},
+		{"ALaunchIsCountedAndNeverReset", testALaunchIsCountedAndNeverReset},
+		{"ATurnsInstantIsTheFirstLaunchs", testATurnsInstantIsTheFirstLaunchs},
+		{"AnAnswerIsHeldOnlyForTheLaunchWaitingOnIt", testAnAnswerIsHeldOnlyForTheLaunchWaitingOnIt},
+		{"AHeldAnswerIsClaimedOnlyAsHeld", testAHeldAnswerIsClaimedOnlyAsHeld},
+		{"ARunHoldingAnAnswerIsNotWaitingForOne", testARunHoldingAnAnswerIsNotWaitingForOne},
+		{"OnlyALaunchDropsAHeldAnswer", testOnlyALaunchDropsAHeldAnswer},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1883,4 +1889,180 @@ func names(calls []sandbox.BridgeCall) []string {
 		out = append(out, call.Name)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------
+// launches counted, answers held
+// ---------------------------------------------------------------------
+
+func testALaunchIsCountedAndNeverReset(t *testing.T, s sandbox.PendingStore) {
+	// The count bounds a chain of launches across a run's resumes, so every
+	// launch raises it — the store's count, never a caller's — and nothing
+	// else in the lifecycle takes it back.
+	r := run("t1")
+	r.Launches = 9
+	mustLaunched(t, s, r)
+	if got := mustGet(t, s, "t1").Launches; got != 1 {
+		t.Fatalf("a first launch counted %d, want 1 whatever the caller passed", got)
+	}
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	park(t, s, "t1")
+	if _, err := s.ExpirePause(t.Context(), "t1"); err != nil {
+		t.Fatalf("ExpirePause: %v", err)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1").Launches; got != 3 {
+		t.Errorf("three launches counted %d", got)
+	}
+}
+
+func testATurnsInstantIsTheFirstLaunchs(t *testing.T, s sandbox.PendingStore) {
+	// Per run, as the turn it belongs to is: a relaunch carries the instant
+	// its resumed turn read off this very row, and must not move it.
+	first := run("t1")
+	first.TriggeredAt = base.Add(-time.Hour)
+	mustLaunched(t, s, first)
+	again := run("t1")
+	again.TriggeredAt = base.Add(time.Hour)
+	mustBeginLaunch(t, s, again)
+	if got := mustGet(t, s, "t1").TriggeredAt; !got.Equal(first.TriggeredAt) {
+		t.Errorf("the run's instant is %v after a relaunch, want the first launch's %v",
+			got, first.TriggeredAt)
+	}
+}
+
+// parkedHolding parks a launched run on its question and holds a reply for it.
+func parkedHolding(t *testing.T, s sandbox.PendingStore, turnID, reply string) sandbox.PendingRun {
+	t.Helper()
+	mustLaunched(t, s, run(turnID))
+	park(t, s, turnID)
+	launch := mustGet(t, s, turnID).LaunchID
+	if landed, err := s.HoldAnswer(t.Context(), turnID, sandbox.HeldAnswer{
+		Launch: launch, Text: reply, At: base,
+	}); err != nil || !landed {
+		t.Fatalf("hold %s: landed=%v err=%v", turnID, landed, err)
+	}
+	return mustGet(t, s, turnID)
+}
+
+func testAnAnswerIsHeldOnlyForTheLaunchWaitingOnIt(t *testing.T, s sandbox.PendingStore) {
+	// One answer per launch, and only while the launch waits: the first
+	// reply is the one resumed, a job that is still running has asked
+	// nothing, and a launch that replaced the asker is not the asker.
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	launch := mustGet(t, s, "t1").LaunchID
+	if landed, err := s.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{Launch: launch, Text: "early"}); err != nil || landed {
+		t.Fatalf("a reply was held on a running job: landed=%v err=%v", landed, err)
+	}
+	park(t, s, "t1")
+	if landed, err := s.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{Launch: "another", Text: "stray"}); err != nil || landed {
+		t.Fatalf("a reply for another launch was held: landed=%v err=%v", landed, err)
+	}
+	for i, reply := range []string{"first", "second"} {
+		landed, err := s.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{Launch: launch, Text: reply})
+		if err != nil || landed != (i == 0) {
+			t.Fatalf("hold %q: landed=%v err=%v, want only the first held", reply, landed, err)
+		}
+	}
+	if held, ok := mustGet(t, s, "t1").Held(); !ok || held.Text != "first" {
+		t.Errorf("the run holds %+v (%v), want the first reply", held, ok)
+	}
+	if landed, err := s.HoldAnswer(ctx, "t-missing", sandbox.HeldAnswer{Launch: launch}); err != nil || landed {
+		t.Errorf("a reply was held on a run that does not exist: landed=%v err=%v", landed, err)
+	}
+}
+
+func testAHeldAnswerIsClaimedOnlyAsHeld(t *testing.T, s sandbox.PendingStore) {
+	// An answer held for a launch is its one answer: a reply or a completion
+	// claiming the row would resume the turn on itself and strand the held
+	// one, and the held answer's own signal must not take a row holding none.
+	ctx := t.Context()
+	parkedHolding(t, s, "t1", "use main")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, won, err := s.ClaimForResume(ctx, "t1", sandbox.AnswerTail(launch)); err != nil || won {
+		t.Fatalf("a reply claimed a run holding one: won=%v err=%v", won, err)
+	}
+	claimed, won, err := s.ClaimForResume(ctx, "t1", sandbox.HeldTail(launch))
+	if err != nil || !won || claimed.ClaimedFrom != sandbox.StatusAwaiting {
+		t.Fatalf("the held reply's claim: won=%v from=%q err=%v", won, claimed.ClaimedFrom, err)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	running := mustGet(t, s, "t2").LaunchID
+	if _, took, claimErr := s.ClaimForResume(ctx, "t2", sandbox.HeldTail(running)); claimErr != nil || took {
+		t.Fatalf("a held answer's claim took a run holding none: won=%v err=%v", took, claimErr)
+	}
+	result := mustClaim(t, s, "t2")
+	release := releaseOf(result)
+	release.Held = &sandbox.HeldAnswer{Launch: result.LaunchID, Text: "done", Success: true}
+	if released, releaseErr := s.ReleaseClaim(ctx, "t2", release); releaseErr != nil || !released {
+		t.Fatalf("release holding the result: released=%v err=%v", released, releaseErr)
+	}
+	if _, took, claimErr := s.ClaimForResume(ctx, "t2", sandbox.CompletionTail(running)); claimErr != nil || took {
+		t.Fatalf("a duplicate completion claimed a run holding its result: won=%v err=%v", took, claimErr)
+	}
+	claimed, won, err = s.ClaimForResume(ctx, "t2", sandbox.HeldTail(running))
+	if err != nil || !won || claimed.ClaimedFrom != sandbox.StatusRunning {
+		t.Fatalf("the held result's claim: won=%v from=%q err=%v", won, claimed.ClaimedFrom, err)
+	}
+	if held, ok := claimed.Held(); !ok || held.Text != "done" || !held.Success {
+		t.Errorf("the claimed row holds %+v (%v), want the result the release held", held, ok)
+	}
+}
+
+func testARunHoldingAnAnswerIsNotWaitingForOne(t *testing.T, s sandbox.PendingStore) {
+	// Its question has its answer, so the next message on the thread is an
+	// ordinary one rather than a second reply to be handed to it.
+	parkedHolding(t, s, "t1", "use main")
+	if got, found, err := s.FindAwaitingByConversation(t.Context(), "swe", "slack:C1"); err != nil || found {
+		t.Errorf("a run holding its answer was found waiting for one: %+v, %v, %v", got, found, err)
+	}
+}
+
+func testOnlyALaunchDropsAHeldAnswer(t *testing.T, s sandbox.PendingStore) {
+	// Held until a launch replaces the call it answers: a resume that fails
+	// hands its claim back with the answer still held for the retry, and
+	// every other write is about the same launch.
+	ctx := t.Context()
+	parkedHolding(t, s, "t1", "use main")
+	launch := mustGet(t, s, "t1").LaunchID
+	for _, step := range []struct {
+		name  string
+		write func() error
+	}{
+		{"pause the box", func() error { return s.MarkBoxPaused(ctx, "t1", base) }},
+		{"expire the pause", func() error {
+			_, err := s.ExpirePause(ctx, "t1")
+			return err
+		}},
+		{"take ownership", func() error {
+			_, err := s.ClaimOwnership(ctx, "t1", "node-b:2", 3)
+			return err
+		}},
+		{"claim and hand back", func() error {
+			claimed, won, err := s.ClaimForResume(ctx, "t1", sandbox.HeldTail(launch))
+			if err != nil || !won {
+				return fmt.Errorf("claim: won=%v err=%w", won, err)
+			}
+			_, err = s.ReleaseClaim(ctx, "t1", releaseOf(claimed))
+			return err
+		}},
+		{"append a bridged call", func() error {
+			_, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeCall{Name: "read_page", At: base})
+			return err
+		}},
+	} {
+		if err := step.write(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if _, held := mustGet(t, s, "t1").Held(); !held {
+			t.Fatalf("%s dropped the held answer", step.name)
+		}
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.HeldAnswer != nil {
+		t.Errorf("a relaunch kept the previous job's answer: %+v", got.HeldAnswer)
+	}
 }

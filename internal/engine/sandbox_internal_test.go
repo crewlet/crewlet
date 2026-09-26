@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
@@ -1039,5 +1040,47 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	if _, found, err := store.Get(t.Context(), "t1"); err != nil || found {
 		t.Fatalf("the retired seat's run survived (found %v, %v)", found, err)
+	}
+}
+
+// A TURN'S CODING RUNS STOP AT THE EXECUTOR'S ROUND CAP, and the refusal names
+// the setting. Each run suspends the executor and its resume re-enters with a
+// fresh tool loop, so a round that relaunched on every resume would be bounded
+// by nothing the loop counts: the run's row counts the launches, and the one
+// that would pass turn_engine.max_tool_rounds is refused before any box is
+// provisioned. The launch also carries the turn's own instant onto the row, for
+// the resume that re-enters it.
+func TestATurnsCodingRunsStopAtTheExecutorsRoundCap(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe"}
+	c := &Company{
+		Org: &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
+		Config: &config.Company{
+			Roles: []config.Role{{Name: "SWE", Sandbox: &config.RoleSandbox{
+				Enabled: true, RunIn: config.PlacementE2B,
+			}}},
+			TurnEngine: config.TurnEngine{MaxToolRounds: 2},
+		},
+	}
+	e := launchReadyEngine(t, c)
+	if err := e.backends.Queue.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	triggered := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	turn := &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org, TriggeredAt: triggered}
+	l := &launcher{engine: e}
+	for launch := range 2 {
+		if _, err := l.Launch(ctx, turn, "fix the flaky test"); err != nil {
+			t.Fatalf("launch %d of 2: %v", launch+1, err)
+		}
+	}
+	if run, _, err := e.sandboxPending.Get(ctx, "t1"); err != nil || !run.TriggeredAt.Equal(triggered) {
+		t.Errorf("the row carries the turn's instant %v (%v), want %v", run.TriggeredAt, err, triggered)
+	}
+
+	_, err := l.Launch(ctx, turn, "fix the flaky test again")
+	if !errors.Is(err, sandbox.ErrLaunchCap) || !strings.Contains(err.Error(), "turn_engine.max_tool_rounds (2)") {
+		t.Fatalf("the third launch = %v, want a refusal naming turn_engine.max_tool_rounds", err)
 	}
 }

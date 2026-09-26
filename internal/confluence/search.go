@@ -39,8 +39,8 @@ import (
 // Three leaves an answer short only when more than two in three of the rows
 // the site ranked were dropped — the tolerance the native backend's
 // over-fetch gives ([github.com/crewlet/crewlet/internal/pages.SearchOverfetch])
-// — and an answer left short while the site may rank more is logged; see
-// [Searcher.Search].
+// — and an answer left short while the site ranks more is marked
+// [knowledge.Answer.Truncated] and logged; see [Searcher.Search].
 const draftOverfetch = 3
 
 // SeatClient resolves a seat's own Confluence client, reporting whether the
@@ -160,39 +160,36 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Answ
 	}
 
 	asked := q.Hits() * draftOverfetch
-	pages, err := client.Search(ctx, cql, asked)
+	page, err := client.Search(ctx, cql, asked)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the search did not complete, and its answer is marked failed")
 		return knowledge.Answer{Failed: true}
 	}
-	hits := s.hits(pages, q)
-	if shortOfTheSite(len(hits), q.Hits(), len(pages), asked) {
-		// THE SITE ANSWERED EVERY ROW ASKED FOR, so it may rank more than
-		// were fetched, and the exclusions left fewer than the limit: the
-		// pages ranked below the fetched depth are missing from this
-		// answer, and nothing on the seam's answer can say so. The log
-		// line is where it is said.
-		log.WarnContext(ctx, "confluence_search_short", "hits", len(hits),
-			"limit", q.Hits(), "ranked", len(pages),
-			"detail", "the site returned every row asked for and the draft "+
-				"exclusion dropped enough of them to leave the answer short of "+
-				"its limit, so pages the site ranked lower are missing from it")
-	}
+	hits := s.hits(page.Pages, q)
 	// NO FAN-OUT AND NO SECOND RANKER: one live query against one site, so
 	// there is nothing for a [knowledge.Partial] to count.
-	return knowledge.Answer{Hits: hits}
+	answer := knowledge.Answer{Hits: hits}
+	if shortOfTheSite(len(hits), q.Hits(), page.More) {
+		// THE SITE RANKS MORE THAN IT ANSWERED, and the exclusions left
+		// fewer hits than the limit: the pages it ranked below what it
+		// answered are missing from this one. Marked on the answer, for
+		// the reader to render, and logged for the operator.
+		answer.Truncated = true
+		log.WarnContext(ctx, "confluence_search_short", "hits", len(hits),
+			"limit", q.Hits(), "ranked", len(page.Pages),
+			"detail", "the site ranks more matches than it answered and the "+
+				"draft exclusion left the answer short of its limit, so pages "+
+				"the site ranked lower are missing from it")
+	}
+	return answer
 }
 
 // shortOfTheSite reports an answer the exclusions left short of its limit
-// while the site may rank more than it was asked for: it answered every row
-// asked for, so its ranking can go on past what was fetched.
-//
-// A site that answers fewer rows than asked has run out of matches, or capped
-// its own page below what was asked. The rows cannot tell those two apart, so
-// such an answer is not reported.
-func shortOfTheSite(hits, limit, ranked, asked int) bool {
-	return hits < limit && ranked >= asked
+// while the site ranks more than it answered — the next page it linked, which
+// is the one answer the rows cannot give: see [SearchPage.More].
+func shortOfTheSite(hits, limit int, more bool) bool {
+	return hits < limit && more
 }
 
 // query renders the CQL a search sends, or "" for one that may not run.

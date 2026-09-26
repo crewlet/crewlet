@@ -264,36 +264,107 @@ func TestMigrationMovesTheRowsAndEmptiesTheLocalTable(t *testing.T) {
 	}
 }
 
-// A NAME ALREADY ON THE FLEET IS NOT OVERWRITTEN. The local row is by
-// definition the older write — the fleet is where every rotation since has
-// landed — so copying it would resurrect a value an operator rotated away
-// from on another node.
-func TestMigrationNeverOverwritesTheFleetsValue(t *testing.T) {
+// A NAME ON BOTH SIDES KEEPS THE LATER WRITE.
+//
+// A fleet row a peer rotated after this node's local write must not be
+// overwritten — copying would resurrect a value an operator rotated away
+// from — and a local row written while the whole fleet was stopped, after
+// its last rotation, must not be dropped: it is the newest value there is,
+// and the command that wrote it reported it stored. A tie keeps the fleet's.
+// Either way the local copy goes, or it would shadow the fleet's row at every
+// boot from now on.
+//
+// Mutation: keep the fleet's value whenever it holds the name, or copy the
+// local one whenever it exists, and a case fails.
+func TestMigrationKeepsTheLaterWrite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name           string
+		local, onFleet time.Time
+		want           string
+		moved          bool
+	}{
+		{"the fleet rotated since", clock, clock.Add(time.Hour), "the-fleets", false},
+		{"written while the fleet was stopped", clock.Add(time.Hour), clock, "the-local", true},
+		{"at the same instant", clock, clock, "the-fleets", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cipher := ring(t, "k1")
+			local := localStore(t, cipher)
+			fleet, _ := fleetStore(t, cipher)
+			if err := local.Set(t.Context(), "GL", "the-local", "sam", "cli", tc.local); err != nil {
+				t.Fatal(err)
+			}
+			if err := fleet.Set(t.Context(), "GL", "the-fleets", "dana", "api", tc.onFleet); err != nil {
+				t.Fatal(err)
+			}
+
+			moved, err := fleetsecrets.Migrate(t.Context(), local, fleet,
+				clock.Add(2*time.Hour))
+			if err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			if got := len(moved) == 1; got != tc.moved {
+				t.Errorf("moved = %v, want the local row copied: %v", moved, tc.moved)
+			}
+			values, _ := fleet.All(t.Context())
+			if values["GL"] != tc.want {
+				t.Fatalf("GL = %q, want %q", values["GL"], tc.want)
+			}
+			if rows, _ := local.List(t.Context()); len(rows) != 0 {
+				t.Fatalf("the local row survived: %+v", rows)
+			}
+		})
+	}
+}
+
+// A COPIED ROW KEEPS ITS OWN WRITE TIME, and the migration's instant is only
+// its ceiling.
+//
+// The stamp is what the next node's migration compares its own local rows
+// against. Two stopped nodes each hold a local row for one name, and the one
+// written LATER boots SECOND: stamped with the first boot, the fleet's copy
+// would outrank the later write and discard it. A stamp past the migration's
+// instant — this host's clock stepped back since the write — would outrank
+// every write made on a correct clock until the clocks passed it.
+//
+// Mutation: stamp the migration's instant, or copy a future stamp as it is,
+// and this fails.
+func TestAMigratedRowKeepsItsOwnWriteTime(t *testing.T) {
 	t.Parallel()
 	cipher := ring(t, "k1")
-	local := localStore(t, cipher)
 	fleet, _ := fleetStore(t, cipher)
-	if err := local.Set(t.Context(), "GL", "the-old-token", "sam", "cli", clock); err != nil {
+	first, second := localStore(t, cipher), localStore(t, cipher)
+	if err := first.Set(t.Context(), "GL", "written-first", "sam", "cli", clock); err != nil {
 		t.Fatal(err)
 	}
-	mustSet(t, fleet, "GL", "the-rotated-token")
-
-	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet, clock)
-	if err != nil {
-		t.Fatalf("Migrate: %v", err)
+	if err := second.Set(t.Context(), "GL", "written-second", "dana", "cli",
+		clock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
 	}
-	if len(moved) != 0 {
-		t.Errorf("moved = %v, want nothing: the fleet already had it", moved)
+	if _, err := fleetsecrets.Migrate(t.Context(), first, fleet, clock.Add(time.Hour)); err != nil {
+		t.Fatalf("the first node's migration: %v", err)
+	}
+	if _, err := fleetsecrets.Migrate(t.Context(), second, fleet, clock.Add(2*time.Hour)); err != nil {
+		t.Fatalf("the second node's migration: %v", err)
 	}
 	values, _ := fleet.All(t.Context())
-	if values["GL"] != "the-rotated-token" {
-		t.Fatalf("GL = %q, want the fleet's newer value untouched", values["GL"])
+	if values["GL"] != "written-second" {
+		t.Fatalf("GL = %q, want the later write, which booted second", values["GL"])
 	}
-	// AND THE STALE LOCAL COPY IS STILL REMOVED, or it would shadow the
-	// fleet's row at every boot from now on.
-	rows, _ := local.List(t.Context())
-	if len(rows) != 0 {
-		t.Fatalf("the shadowing local row survived: %+v", rows)
+
+	ahead := localStore(t, cipher)
+	if err := ahead.Set(t.Context(), "AHEAD", "v", "sam", "cli", clock.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fleetsecrets.Migrate(t.Context(), ahead, fleet, clock); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	row, found, err := fleet.Describe(t.Context(), "AHEAD")
+	if err != nil || !found || !row.UpdatedAt.Equal(clock) {
+		t.Errorf("a row stamped past the migration landed at %v (found %v, err %v), "+
+			"want the migration's instant", row.UpdatedAt, found, err)
 	}
 }
 

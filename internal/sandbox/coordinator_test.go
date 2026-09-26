@@ -1662,7 +1662,7 @@ func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// a resume the budget would stop waits for room
+// a resume the budget has no room for holds its answer
 // ---------------------------------------------------------------------
 
 // roomSpy is a seat budget whose room a case sets, counting its reads.
@@ -1686,8 +1686,15 @@ func (r *roomSpy) set(room Room, err error) {
 	r.room, r.err = room, err
 }
 
+func (r *roomSpy) read() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
+}
+
 // budgeted is a coordinator over the rig's store, box and resumer that reads
-// the seat's budget from room before it claims a completion.
+// the seat's budget from room before it resumes a turn, and the rig's waiter
+// rebuilt to read the same room for the answers it holds.
 func (r *coordRig) budgeted(t *testing.T, room Headroom) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
@@ -1698,6 +1705,7 @@ func (r *coordRig) budgeted(t *testing.T, room Headroom) *Coordinator {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	r.waiterRig.budgeted(room)
 	return coordinator
 }
 
@@ -1714,56 +1722,112 @@ func (r *coordRig) publishedOf(eventType string) int {
 	return n
 }
 
-// A RESUME THE BUDGET WOULD STOP WAITS, AND SAYS SO ONCE.
+// ready is every held-answer signal the waiter published, with its topic.
+func (r *coordRig) ready() []publication {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	var out []publication
+	for _, p := range r.queue.published {
+		if _, ok := p.event.Data.(*types.SandboxAnswerReady); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// signalReady has the waiter tick and hands the coordinator the one signal the
+// tick raised for the answer held on turnID's run.
+func (r *coordRig) signalReady(t *testing.T, coordinator *Coordinator, turnID string) error {
+	t.Helper()
+	before := len(r.ready())
+	r.tick()
+	signals := r.ready()
+	if len(signals) != before+1 {
+		t.Fatalf("the tick raised %d held-answer signals, want one", len(signals)-before)
+	}
+	signal := signals[len(signals)-1]
+	payload := *signal.event.Data.(*types.SandboxAnswerReady)
+	if payload.TurnID != turnID {
+		t.Fatalf("the signal names %q, want %q", payload.TurnID, turnID)
+	}
+	return coordinator.OnEvent(t.Context(), signal.event)
+}
+
+// A RESULT THE BUDGET HAS NO ROOM FOR IS HELD, WITH ITS BOX PAUSED.
 //
-// The resumed turn's first round is refused before it is sent when a scope is
-// at its cap. Claimed anyway, the run was collected, its turn failed and
-// announced, the claim handed back — and the next poll's completion did it
-// again, until the cap moved. With no room the completion is left unclaimed:
-// nothing is collected, nothing resumed, nothing charged, the seat stays busy,
-// and the one announcement is the budget_exhausted that says why. Once room
-// returns, the next completion resumes the turn as any other would.
-func TestAResumeWithNoBudgetRoomWaitsWithoutCollecting(t *testing.T) {
+// The resumed turn's first round would be refused before it was sent. Left
+// unclaimed, the finished job's box would run on, polled and billed, for as
+// long as the cap held; so the completion is claimed and collected, which
+// pauses the box, charged once, and its result held on the run's row with the
+// run back in
+// running, holding its seat. The wait is announced once, and nothing polls the
+// box while it waits. The first tick that reads room signals the seat's node,
+// which resumes the turn with the held result.
+func TestAResultTheBudgetHasNoRoomForIsHeldWithItsBoxPaused(t *testing.T) {
 	rig := newCoordRig(t)
 	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
 	coordinator := rig.budgeted(t, budget)
 	launched := rig.launch("t1")
+	box := rig.provider.Box(launched.SandboxID)
 	coordinator.markBusy("swe")
-	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 90, OutputTokens: 10})
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 90, OutputTokens: 10,
+		CostUSD: 0.5, DeliveredRefs: []string{"pr-7"}})
 
 	payload, ev := rig.completion("t1")
-	for poll := range 3 {
+	for poll := range 2 {
 		if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-			t.Fatalf("poll %d: a completion left to wait was reported as a failure: %v", poll+1, err)
+			t.Fatalf("delivery %d: a held result was reported as a failure: %v", poll+1, err)
 		}
 	}
 	got := rig.get("t1")
-	if got.Status != StatusRunning || got.LaunchID != launched.LaunchID || got.Paused() {
-		t.Errorf("the waiting run reads status=%q launch-kept=%v paused=%v, want its job left "+
-			"running and its box untouched", got.Status, got.LaunchID == launched.LaunchID, got.Paused())
+	held, ok := got.Held()
+	switch {
+	case !ok || !strings.Contains(held.Text, "done") || !held.Success || held.CostUSD != 0.5:
+		t.Fatalf("the row holds %+v (held=%v), want the job's result", got.HeldAnswer, ok)
+	case got.Status != StatusRunning || !got.Charged:
+		t.Errorf("the holding run reads status=%q charged=%v, want it back in running with its "+
+			"charge recorded", got.Status, got.Charged)
+	case !box.Paused() || !got.Paused():
+		t.Error("the finished job's box was left running while its result waited")
+	}
+	if n := rig.accountant.asked(); n != 1 {
+		t.Errorf("the run was offered to the counter %d times over two deliveries, want once", n)
 	}
 	if n := len(rig.resumer.calls()); n != 0 {
 		t.Errorf("the turn was resumed %d times into a budget with no room", n)
 	}
-	if n := rig.accountant.asked(); n != 0 {
-		t.Errorf("the run was collected and charged %d times while it waited", n)
-	}
 	if !coordinator.AwaitingSandbox("swe") {
-		t.Error("the seat was freed while its run waited, so its mail would start turns the budget refuses")
+		t.Error("the seat was freed while its run's result waited, so its mail would start turns " +
+			"the budget refuses")
 	}
 	if n := rig.publishedOf("budget_exhausted"); n != 1 {
-		t.Errorf("the wait was announced %d times over three polls, want once", n)
+		t.Errorf("the wait was announced %d times, want once", n)
 	}
-	if n := len(rig.queue.topics()); n != 1 {
-		t.Errorf("the waiting run published %d events, want the one announcement", n)
+
+	for tick := range 3 {
+		rig.tick()
+		if n := len(rig.ready()); n != 0 {
+			t.Fatalf("tick %d signalled a held result with no room", tick+1)
+		}
+	}
+	if box.Keepalives() != 0 || !box.Paused() {
+		t.Errorf("the paused box was polled while its result waited (keepalives %d, paused %v): "+
+			"a reconnect boots it back up to be billed", box.Keepalives(), box.Paused())
 	}
 
 	budget.set(Room{OK: true}, nil)
-	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("the completion that found room: %v", err)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held result's resume: %v", err)
 	}
-	if n := len(rig.resumer.calls()); n != 1 {
-		t.Fatalf("resumed %d times once the budget had room, want once", n)
+	for _, p := range rig.ready() {
+		if p.topic != topics.AgentControl("swe") {
+			t.Errorf("a held-answer signal went to %q; it is a command to the seat's node alone", p.topic)
+		}
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || !strings.Contains(calls[0].Answer, "done") || !calls[0].Success ||
+		calls[0].CostUSD != 0.5 || !slices.Equal(calls[0].DeliveredRefs, []string{"pr-7"}) {
+		t.Fatalf("resumes = %+v, want the held result resumed once, whole", calls)
 	}
 	rig.finished("t1")
 	if n := rig.accountant.asked(); n != 1 {
@@ -1771,9 +1835,46 @@ func TestAResumeWithNoBudgetRoomWaitsWithoutCollecting(t *testing.T) {
 	}
 }
 
-// A COUNTER THAT CANNOT BE READ WAITS TOO: the turn's first round would be
-// refused on it as well, and a claim would buy nothing but the same loop.
-func TestAResumeWhoseBudgetCannotBeReadWaits(t *testing.T) {
+// THE BUDGET IS READ AFTER THE CHARGE. A job can spend its seat's last tokens:
+// the run's own charge takes the scope to its cap, and a turn resumed on a read
+// taken before it would have its first round refused before it was sent. The
+// one read that decides is the one after the charge, so this run's result is
+// held.
+func TestAChargeThatTakesTheBudgetToItsCapHoldsTheResult(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &chargedAway{accountant: rig.accountant}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 90, OutputTokens: 10})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("resumed %d times after the charge took the budget to its cap", n)
+	}
+	got := rig.get("t1")
+	if _, held := got.Held(); !held || !got.Charged || got.Status != StatusRunning {
+		t.Errorf("the run reads held=%v charged=%v status=%q, want its result held with the "+
+			"charge that used the budget up recorded", held, got.Charged, got.Status)
+	}
+}
+
+// chargedAway has room until the accountant has charged anything.
+type chargedAway struct{ accountant *ledgerSpy }
+
+func (c *chargedAway) Room(context.Context, string) (Room, error) {
+	if c.accountant.asked() > 0 {
+		return Room{Scope: "agent", Used: 500, Limit: 500}, nil
+	}
+	return Room{OK: true}, nil
+}
+
+// A COUNTER THAT CANNOT BE READ HOLDS THE RESULT TOO: the turn's first round
+// is refused on it as well. Nothing is announced as an exhausted budget, since
+// no scope was read at its cap.
+func TestAResultWhoseBudgetCannotBeReadIsHeld(t *testing.T) {
 	rig := newCoordRig(t)
 	budget := &roomSpy{err: errors.New("the coordination store is unreachable")}
 	coordinator := rig.budgeted(t, budget)
@@ -1784,27 +1885,81 @@ func TestAResumeWhoseBudgetCannotBeReadWaits(t *testing.T) {
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if got := rig.get("t1"); got.Status != StatusRunning || len(rig.resumer.calls()) != 0 {
-		t.Errorf("status=%q, resumes=%d: a completion on an unreadable budget was claimed",
-			got.Status, len(rig.resumer.calls()))
+	if _, held := rig.get("t1").Held(); !held || len(rig.resumer.calls()) != 0 {
+		t.Errorf("held=%v resumes=%d: a result on an unreadable budget was not held",
+			held, len(rig.resumer.calls()))
 	}
 	if n := rig.publishedOf("budget_exhausted"); n != 0 {
 		t.Errorf("an unreadable counter was announced as an exhausted budget %d times", n)
 	}
+	rig.tick()
+	if n := len(rig.ready()); n != 0 {
+		t.Errorf("the waiter signalled a held result on a counter it could not read, %d times", n)
+	}
 }
 
-// A RELAUNCH STARTS A NEW WAIT, announced again: the job the budget holds back
-// now is a different one.
+// A RESULT TOO LARGE TO HOLD STAYS IN ITS BOX. Held whole it would be past the
+// bound a run's row holds an answer within; so the row holds a reference to
+// the box, where the collect left the result, and the resume collects it again
+// — charging nothing a second time.
+func TestAResultTooLargeToHoldIsReadBackFromItsBox(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1, Limit: 1}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	whole := strings.Repeat("f", MaxHeldAnswerBytes)
+	rig.runner.Finish(Result{Success: true, Text: whole, InputTokens: 10})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	held, ok := rig.get("t1").Held()
+	if !ok || !held.InBox || held.Text != "" {
+		t.Fatalf("the row holds %+v, want a reference to the box and no text", held)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held result's resume: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || !strings.Contains(calls[0].Answer, whole) {
+		t.Fatalf("resumed %d times, want once with the whole result read back from the box", len(calls))
+	}
+	if n := rig.accountant.asked(); n != 1 {
+		t.Errorf("the run was charged %d times, want once: the second collect charges nothing", n)
+	}
+}
+
+// A RELAUNCH THAT WAITS IS ANNOUNCED AGAIN: the job the budget holds back now
+// is a different one, and its hold is its own.
 func TestARelaunchThatWaitsIsAnnouncedAgain(t *testing.T) {
 	rig := newCoordRig(t)
 	budget := &roomSpy{room: Room{Scope: "agent", Used: 500, Limit: 500}}
 	coordinator := rig.budgeted(t, budget)
 	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "first"})
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	rig.launch("t1")
+	// The resumed turn calls run_sandbox again, and that job finishes while
+	// the budget is spent once more.
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("the relaunch: %v", err)
+		}
+		budget.set(Room{Scope: "agent", Used: 500, Limit: 500}, nil)
+	}
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the first job's resume: %v", err)
+	}
+	rig.resumer.during = nil
+	rig.suspend("t1")
 	payload, ev = rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -1814,11 +1969,138 @@ func TestARelaunchThatWaitsIsAnnouncedAgain(t *testing.T) {
 	}
 }
 
-// AN ANSWER THE BUDGET WOULD STOP IS NOT HANDED OVER. The parked run is not
-// claimed and not resumed, so it goes on waiting for that answer, and the
-// answer stays the caller's to deliver again; the wait is announced once. Once
-// the budget has room, the same answer resumes the turn.
-func TestAnAnswerWithNoBudgetRoomIsNotHandedOver(t *testing.T) {
+// A HELD ANSWER WHOSE RESUME FAILS STAYS HELD for the retry, which the next
+// signal takes: the release hands the claim back with the answer where it was.
+func TestAHeldAnswerWhoseResumeFailsIsHeldForTheRetry(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+	if err := rig.signalReady(t, coordinator, "t1"); err == nil {
+		t.Fatal("a failed resume of a held answer was acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("the handed-back run reads %q, want running for the retry", got.Status)
+	} else if _, held := got.Held(); !held {
+		t.Fatal("the answer was dropped by the release that handed the claim back")
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "done") {
+		t.Fatalf("resumes = %+v, want the retry resumed with the held result", calls)
+	}
+	rig.finished("t1")
+}
+
+// A SIGNAL FOR AN ANSWER ALREADY RESUMED IS A DUPLICATE, and the row says so
+// before the budget is read: it claims nothing, resumes nothing, and asks the
+// budget no question about a turn that is not waiting.
+func TestASignalForAnAnswerAlreadyResumedReadsNoBudget(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the resume: %v", err)
+	}
+
+	stale := rig.ready()[0].event
+	reads := budget.read()
+	if err := coordinator.OnEvent(t.Context(), stale); err != nil {
+		t.Fatalf("a stale signal: %v", err)
+	}
+	if n := len(rig.resumer.calls()); n != 1 {
+		t.Errorf("a stale signal resumed the turn again: %d resumes", n)
+	}
+	if n := budget.read() - reads; n != 0 {
+		t.Errorf("a stale signal read the budget %d times", n)
+	}
+}
+
+// A SIGNAL THAT FINDS THE ROOM GONE LEAVES THE ANSWER HELD, quietly: the room
+// the poll read went before the signal arrived, and the next tick that reads
+// room signals it again.
+func TestASignalThatFindsTheRoomGoneLeavesTheAnswerHeld(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	budget.set(Room{OK: true}, nil)
+	rig.tick()
+	signal := rig.ready()[0].event
+	budget.set(Room{Scope: "org", Used: 9, Limit: 9}, nil)
+
+	if err := coordinator.OnEvent(t.Context(), signal); err != nil {
+		t.Fatalf("a signal with the room gone: %v", err)
+	}
+	got := rig.get("t1")
+	if _, held := got.Held(); !held || got.Status != StatusRunning || len(rig.resumer.calls()) != 0 {
+		t.Errorf("held=%v status=%q resumes=%d: the answer was taken with no room for its turn",
+			held, got.Status, len(rig.resumer.calls()))
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 1 {
+		t.Errorf("the wait was announced %d times, want once, when it began", n)
+	}
+}
+
+// A COMPLETION FOR A RUN THAT IS OVER READS NO BUDGET. It claims nothing, and
+// a budget read for it would say a turn waits that does not exist.
+func TestACompletionForARunThatIsOverReadsNoBudget(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	payload, ev := rig.completion("t1")
+	budget.set(Room{OK: true}, nil)
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.finished("t1")
+
+	budget.set(Room{Scope: "org", Used: 9, Limit: 9}, nil)
+	reads := budget.read()
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("a duplicate completion: %v", err)
+	}
+	if n := budget.read() - reads; n != 0 {
+		t.Errorf("a completion for a run that is over read the budget %d times", n)
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 0 {
+		t.Errorf("a completion for a run that is over announced a wait %d times", n)
+	}
+}
+
+// AN ANSWER THE BUDGET HAS NO ROOM FOR IS HELD, AND HANDLED.
+//
+// Left with its delivery it would be redelivered until its delivery budget was
+// spent and then dead-lettered, with the run still parked on a question
+// somebody had answered. Held on the row, the delivery is acknowledged, the wait
+// announced once, and a later message on the conversation is an ordinary one:
+// the question has its answer. Once the budget has room the turn resumes with
+// the held reply, framed by what the run's box is then.
+func TestAnAnswerWithNoBudgetRoomIsHeldAndResumedOnceThereIsRoom(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
@@ -1829,28 +2111,114 @@ func TestAnAnswerWithNoBudgetRoomIsNotHandedOver(t *testing.T) {
 	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
 	coordinator := rig.budgeted(t, budget)
 
-	for attempt := range 2 {
-		handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
-		if handled || !errors.Is(err, ErrNoBudgetRoom) {
-			t.Fatalf("attempt %d: TryResumeFromAnswer = %v, %v, want the answer left with the "+
-				"caller naming the budget", attempt+1, handled, err)
-		}
+	reply := events.New(types.ExternalNotification{Body: "use main"}, events.TraceContext{TraceID: "tr-answer"})
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", reply)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer held and handled", handled, err)
 	}
-	if got := rig.get("t1"); got.Status != StatusAwaiting || len(rig.resumer.calls()) != 0 {
-		t.Fatalf("status=%q resumes=%d: a run whose turn the budget would stop was claimed",
-			got.Status, len(rig.resumer.calls()))
+	got := rig.get("t1")
+	held, ok := got.Held()
+	if !ok || held.Text != "use main" || got.Status != StatusAwaiting || len(rig.resumer.calls()) != 0 {
+		t.Fatalf("the run reads status=%q held=%+v (%v), resumes=%d: want the reply held on the "+
+			"parked run", got.Status, held, ok, len(rig.resumer.calls()))
 	}
 	if n := rig.publishedOf("budget_exhausted"); n != 1 {
-		t.Errorf("the wait was announced %d times over two answers, want once", n)
+		t.Errorf("the wait was announced %d times, want once", n)
+	}
+	if coordinator.AwaitingSandbox("swe") {
+		t.Error("a held reply parked the seat; the run waits on nothing the seat does")
+	}
+
+	if handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1",
+		"also, thanks", nil); err != nil || handled {
+		t.Errorf("a later message on the answered thread = %v, %v, want it handled as an "+
+			"ordinary one", handled, err)
 	}
 
 	budget.set(Room{OK: true}, nil)
-	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
-	if err != nil || !handled {
-		t.Fatalf("TryResumeFromAnswer with room = %v, %v, want it handed over", handled, err)
+	var busy bool
+	rig.resumer.during = func(context.Context, PendingRun) { busy = coordinator.AwaitingSandbox("swe") }
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held reply's resume: %v", err)
 	}
-	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
-		t.Fatalf("resumes = %+v, want the answer resumed once", calls)
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") ||
+		!strings.Contains(calls[0].Answer, "which branch?") {
+		t.Fatalf("resumes = %+v, want the held reply resumed once, framed with its question", calls)
+	}
+	if calls[0].Trigger == nil || calls[0].Trigger.TraceID != "tr-answer" {
+		t.Errorf("the resumed turn names %+v as what woke it, want the reply's own event",
+			calls[0].Trigger)
+	}
+	if busy {
+		t.Error("the seat was busy through the resume; it is freed immediately before it")
+	}
+}
+
+// tooLargeToHold is a store whose record refuses a held reply as too large, as
+// one would that already carries a question at its own bound.
+type tooLargeToHold struct{ PendingStore }
+
+func (tooLargeToHold) HoldAnswer(context.Context, string, HeldAnswer) (bool, error) {
+	return false, fmt.Errorf("sandbox: update run t1: %w", coord.ErrTooLarge)
+}
+
+// A REPLY THE RECORD REFUSES BESIDE WHAT IT CARRIES IS REFUSED, NAMING THE
+// RECORD'S CEILING, and left with its delivery: within its own bound, the
+// store's ceiling is what answered, and the reply is kept nowhere else.
+func TestAReplyTheRecordRefusesIsRefusedNamingItsCeiling(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: tooLargeToHold{rig.pending}, Manager: rig.manager,
+		Resume: rig.resumer, Headroom: &roomSpy{room: Room{Scope: "org", Used: 9, Limit: 9}},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if handled || !errors.Is(err, coord.ErrTooLarge) ||
+		!strings.Contains(err.Error(), strconv.Itoa(coord.MaxRecordBytes)) {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want a refusal naming the record's ceiling", handled, err)
+	}
+}
+
+// A REPLY PAST THE HOLD'S BOUND IS REFUSED, NAMING IT, and left with its
+// delivery: it is kept nowhere else, so it is neither cut to fit nor dropped,
+// and a redelivery that finds room hands it over whole.
+func TestAReplyPastTheHoldsBoundIsRefusedNamingIt(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
+	coordinator := rig.budgeted(t, budget)
+
+	long := strings.Repeat("m", MaxHeldAnswerBytes)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, nil)
+	if handled || err == nil || !strings.Contains(err.Error(), "MaxHeldAnswerBytes") ||
+		!strings.Contains(err.Error(), strconv.Itoa(MaxHeldAnswerBytes)) {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want a refusal naming the bound", handled, err)
+	}
+	if _, held := rig.get("t1").Held(); held {
+		t.Fatal("a reply past the bound was held")
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", long, nil); err != nil || !handled {
+		t.Fatalf("the redelivery with room = %v, %v, want the reply handed over", handled, err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, long) {
+		t.Fatal("the redelivered reply was not handed over whole")
 	}
 }
 
@@ -2291,8 +2659,11 @@ func TestTheResumeAnswerIsRedacted(t *testing.T) {
 	}
 }
 
-// An unreadable store must not swallow an ordinary message.
-func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
+// A LOOKUP THAT FAILS HANDS THE DELIVERY BACK. Whether a run is parked on the
+// conversation is unknown, and handled as an ordinary message the reply would
+// start a turn that knows nothing of the question while the run went on
+// waiting for it — which is why the lookup raises rather than answering empty.
+func TestAnUnreadableAnswerLookupHandsTheDeliveryBack(t *testing.T) {
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
@@ -2301,11 +2672,8 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "hello", nil)
-	if err != nil {
-		t.Fatalf("TryResumeFromAnswer: %v", err)
-	}
-	if handled {
-		t.Fatal("an unreadable store swallowed an ordinary message")
+	if handled || err == nil || !strings.Contains(err.Error(), "store unreachable") {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the lookup's failure handed back", handled, err)
 	}
 }
 
@@ -2317,8 +2685,71 @@ func (brokenStore) FindAwaitingByConversation(context.Context, string, string) (
 	return PendingRun{}, false, fmt.Errorf("store unreachable")
 }
 
+// parkedByAnOlderBuild is a run parked on a question by a build that predates
+// the index of runs waiting on an answer: its row says awaiting, and no entry
+// names it.
+func parkedByAnOlderBuild(t *testing.T, fleet *memory.Fleet) {
+	t.Helper()
+	raw, err := json.Marshal(PendingRun{
+		TurnID: "t-old", AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		ConversationKey: "chat:C1", Status: StatusAwaiting, LaunchID: "launch-old",
+		Question: "which branch?", CodingAgent: "claude-code",
+		ExecuteState: map[string]any{"version": float64(2)}, CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if created, err := fleet.CreateSandboxRun(t.Context(), "t-old", raw); err != nil || !created {
+		t.Fatalf("CreateSandboxRun = %v, %v", created, err)
+	}
+}
+
+// A RUN AN OLDER BUILD PARKED IS FOUND BY ITS ANSWER ONCE A LISTING INDEXES IT
+// — through each of the two listings that do, driven as the node drives them:
+// the completion poll's tick, and the recovery of a node taking the seat. Until
+// one has, the answer is not matched to it, which is the premise.
+func TestARunAnOlderBuildParkedIsAnsweredOnceAListingIndexesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		index func(t *testing.T, rig *coordRig)
+	}{
+		{"the completion poll's tick", func(t *testing.T, rig *coordRig) {
+			t.Helper()
+			rig.tick()
+		}},
+		{"the recovery of a node taking the seat", func(t *testing.T, rig *coordRig) {
+			t.Helper()
+			if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:2", 3); err != nil {
+				t.Fatalf("RecoverSeat: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fleet := memory.NewFleet()
+			rig := newCoordRigOn(t, fleet)
+			parkedByAnOlderBuild(t, fleet)
+			if handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1",
+				"use main", nil); err != nil || handled {
+				t.Fatalf("the premise: an unindexed run was matched (%v, %v)", handled, err)
+			}
+
+			tc.index(t, rig)
+			handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+			if err != nil || !handled {
+				t.Fatalf("after the listing, the answer = %v, %v, want it handed to the parked run",
+					handled, err)
+			}
+			if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Run.TurnID != "t-old" ||
+				!strings.Contains(calls[0].Answer, "use main") {
+				t.Fatalf("resumes = %+v, want the older build's run resumed with the answer", calls)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------
 // restart recovery
+
 // ---------------------------------------------------------------------
 
 // The waiter then drives the recovered job to completion.

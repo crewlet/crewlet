@@ -729,3 +729,131 @@ func TestAMergeEndedByAnotherWriterIsNotClosedOverIt(t *testing.T) {
 		t.Error("the duplicate was cancelled by a merge somebody else had ended")
 	}
 }
+
+// removeNow puts a task in the trash on its own — no subtree — and applies it
+// on this node, which is what a removal published by a colleague looks like
+// to the next snapshot taken here.
+func removeNow(t *testing.T, r *roundTrip, id string) {
+	t.Helper()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove-"+id, id, "ENG",
+		false, nil); err != nil {
+		t.Fatalf("remove %s: %v", id, err)
+	}
+	r.drain()
+}
+
+// A MERGE INTO AN ITEM IN THE TRASH WRITES NOTHING, AND SAYS TO RESTORE IT.
+//
+// The mark reads its target in the snapshot it is decided from. A target in
+// the trash is refused there — before the marker exists for anything to
+// finish — because every subtask the merge moves would be placed under it,
+// which is refused on every attempt, and a duplicate closed as merged into it
+// would point at an item nobody can see. Admitted, the merge left its marker
+// on the duplicate and a caller told the tracker duty would complete it.
+//
+// Mutation: drop the removed check from mergeTargetHeld and the mark lands.
+func TestAMergeIntoAnItemInTheTrashWritesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent := "dup"
+	kid := newTask("kid")
+	kid.Key, kid.Parent, kid.Depth = "ENG-kid", &parent, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	removeNow(t, r, "keep")
+	before := r.consumed
+
+	_, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		true, nil)
+	if err == nil || !strings.Contains(err.Error(), "restore it before merging into it") {
+		t.Fatalf("a merge into an item in the trash answered %v, want it refused "+
+			"naming the restore", err)
+	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("the refused merge appended %d record(s)", r.consumed-before)
+	}
+	if dup := r.task(t, "dup"); dup.Task.Merging || len(dup.Task.Relations) != 0 {
+		t.Errorf("the refused merge left the duplicate merging=%v with relations "+
+			"%+v", dup.Task.Merging, dup.Task.Relations)
+	}
+	if got := parentOf(r.task(t, "kid")); got != "dup" {
+		t.Errorf("the subtask's parent is %q after a refused merge", got)
+	}
+}
+
+// A MERGE WHOSE TARGET GOES IN THE TRASH PART-WAY IS GIVEN UP, NOT LEFT
+// MARKED.
+//
+// Every step after the mark reads the target in its own snapshot, and a
+// target in the trash refuses them all alike: the next subtask's move as a
+// parent in the trash, and the close as a merge target in it. Neither clears
+// with time, so the merge is given up as it is for a purged target — the
+// marker cleared and the duplicate left open — and the answer names the
+// restore. Retried instead, the merge kept its marker and every sweep of the
+// tracker duty met the same refusal, stopping at it before any abandoned merge
+// that sorted after it.
+//
+// Mutation: give up on a purged target alone and the duplicate is left marked
+// mid-merge.
+func TestAMergeWhoseTargetIsRemovedPartWayIsGivenUp(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// after is the append the removal lands straight after.
+		after string
+		// kidParent is where the subtask ends: still under the
+		// duplicate when the removal landed before its move, and under
+		// the target — a removal moves nothing — when it landed after.
+		kidParent string
+	}{
+		{"after the mark, before the subtasks move", "op-merge.mark", "dup"},
+		{"after the subtasks moved, before the close", "op-merge.c/kid", "keep"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, hooked := newHookedRoundTrip(t)
+			r.applyWhileWriting()
+			filedTask(t, r, "keep")
+			filedTask(t, r, "dup")
+			parent := "dup"
+			kid := newTask("kid")
+			kid.Key, kid.Parent, kid.Depth = "ENG-kid", &parent, 1
+			if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+				t.Fatalf("CreateTask kid: %v", err)
+			}
+			r.drain()
+			hooked.arm(func(_, opID string) bool { return opID == tc.after },
+				func() { removeNow(t, r, "keep") })
+
+			_, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup",
+				"keep", true, nil)
+			if !hooked.didFire() {
+				t.Fatal("the removal never landed, so this case is not the shape " +
+					"it names")
+			}
+			var stopped *tracker.PartialError
+			if err == nil || errors.As(err, &stopped) ||
+				!strings.Contains(err.Error(), "given up") ||
+				!strings.Contains(err.Error(), "restore") {
+				t.Fatalf("a merge whose target went in the trash part-way "+
+					"answered %v, want it given up naming the restore", err)
+			}
+			r.drain()
+			dup := r.task(t, "dup")
+			if dup.Task.Merging || dup.Task.Status == tracker.StatusCancelled {
+				t.Errorf("the duplicate reads merging=%v and status %q, want the "+
+					"marker cleared and the task left open", dup.Task.Merging,
+					dup.Task.Status)
+			}
+			if got := parentOf(r.task(t, "kid")); got != tc.kidParent {
+				t.Errorf("the subtask's parent is %q, want %q", got, tc.kidParent)
+			}
+		})
+	}
+}

@@ -264,5 +264,8 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		Reply:           l.turn.Reply,
 		TraceID:         runTrace.TraceID, SpanID: runTrace.SpanID,
 		Depth: l.turn.Depth, Chain: l.turn.Chain,
+		// The instant the turn's ids can first have been minted, which the
+		// turn the completion re-enters derives again and cannot re-read.
+		TriggeredAt: l.turn.TriggeredAt,
 	}
 }
