@@ -38,7 +38,7 @@ creates the project, on every node, with no gesture from anybody.
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
 assignee, a thread, a history, subtasks, tags, typed custom fields,
-and saved views in three shapes. The line is between **structure a
+and saved views in five shapes. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
 hides a field from a role, and no configuration screen standing between a

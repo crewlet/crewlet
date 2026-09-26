@@ -2845,8 +2845,9 @@ opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
-Copies this node's durable state — its store file, and every JetStream stream
-and coordination bucket — into `?dir=`, a directory **on the engine's host**.
+Copies this node's durable state — both of its store files, and every
+JetStream stream and coordination bucket — into `?dir=`, a directory **on the
+engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -2859,10 +2860,13 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "finished_at": "2026-08-30T18:00:01.412Z",
   "node_id": "node-0",
   "engine_version": "v0.1.0",
-  "store": {
-    "file": "store.db", "source": "/data/company.db",
-    "bytes": 258048, "migrations": ["0001_events.sql", "…"]
-  },
+  "stores": [
+    {"estate": "node", "file": "store.db", "source": "/data/company.db",
+     "bytes": 258048, "sha256": "…", "migrations": ["0001_events.sql", "…"]},
+    {"estate": "replicated", "file": "store-replicated.db",
+     "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
+     "migrations": ["0001_tracker.sql", "…"]}
+  ],
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
      "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}

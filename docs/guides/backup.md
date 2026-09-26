@@ -34,7 +34,7 @@ at the cluster (`nats account backup`) from the same moment.
 
 ## What state exists, and where
 
-A deployment's durable state lives in four estates:
+A deployment's durable state lives in five places:
 
 | Estate | Where | What it holds |
 |---|---|---|
