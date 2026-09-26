@@ -3,7 +3,10 @@ package api
 import (
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The org projection: the company's identity and its seat and unit tree, as
@@ -27,11 +30,15 @@ import (
 // an anonymous reader only by being written into one of these types on
 // purpose. Everything else stays behind the guarded `config` query, which is
 // where the dashboard reads it. Configured work that has a read surface of its
-// own is not repeated here either: schedules are described by /schedules and a
-// seat's token cap by /budgets, each under the same read posture as this one.
-// TestEveryOrgFieldIsClassified fails the day config.Role or config.Unit gains
-// a field nobody has classified, so a new field needs a decision rather than
-// defaulting to either side.
+// own is not repeated here either: schedules are described by /schedules. A
+// token budget IS carried, as the ceilings the document writes, beside the
+// /budgets meters that say how much of each window is spent: a ceiling is a
+// statement of what the company may spend, not an account or a credential,
+// and a seat's page that could show the meter and not the rule behind it
+// would be answering "how close" without "to what".
+// TestEveryOrgFieldIsClassified fails the day config.Company, config.Role or
+// config.Unit gains a field nobody has classified, so a new field needs a
+// decision rather than defaulting to either side.
 //
 // # Authored values, not effective ones
 //
@@ -46,6 +53,26 @@ import (
 // want to tell apart, so [OrgProjection.Timezone] carries the clock the engine
 // resolved rather than leaving a client to default an empty string — which a
 // browser does to ITS OWN zone.
+//
+// # Resolved values: what a seat runs on and what it can reach
+//
+// Two seat fields are RESOLVED rather than authored, and both for the reason
+// the derived hierarchy is: the rule is one a second implementation gets
+// wrong. [OrgSeat.LLM] is every phase's provider chain as a turn resolves it
+// ([phase.Resolve], the function the turn's own chain goes through) — a seat
+// can write `llm` in three shapes, override any phase with a flat
+// `llm_<phase>` field, or write nothing and land on the company's `default`
+// provider or its first — so the authored fields alone would leave a reader
+// to re-run four levels of precedence. [OrgSeat.ToolSources] is the servers
+// the seat is GRANTED ([config.MCPServer.Grants], the rule the engine starts
+// a seat's children by), which depends on the company's server list and on
+// credentials the seat may inherit from its unit.
+//
+// Neither carries anything a reader could act with. A provider KEY is the
+// label a document gives a model entry (`fast`, `review`), never the model's
+// account, endpoint or key, and a server NAME is the label its tools are
+// already prefixed with in every prompt; the entries they name, and every
+// credential under `mcp_env`, stay guarded.
 
 // OrgProjection is the anonymous view of a company.
 //
@@ -67,6 +94,12 @@ type OrgProjection struct {
 	// It says where a company keeps its hours, which its every timestamp
 	// already does; it names no account, no credential and nothing to dial.
 	Timezone string `json:"timezone,omitempty"`
+
+	// TokenBudget is the company's own ceiling per calendar window, as the
+	// document writes it: the windows it caps and nothing for the ones it
+	// leaves open. PUBLIC for the reason the package doc gives; how much of
+	// each window is spent is the /budgets answer.
+	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
 	Roles []OrgSeat `json:"roles,omitempty"`
 	Units []OrgUnit `json:"units,omitempty"`
@@ -104,6 +137,52 @@ type OrgSeat struct {
 	BehavioralGuidelines []string `json:"behavioral_guidelines,omitempty"`
 	Manages              []string `json:"manages,omitempty"`
 	Availability         string   `json:"availability,omitempty"`
+
+	// TokenBudget is this seat's own ceilings, as written; a window it does
+	// not name is capped only by the company's.
+	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
+
+	// LLM is RESOLVED (see the package doc): each phase's provider chain,
+	// keyed by the phase's wire name, the first key the model it runs on and
+	// every later one a fallback in the order they are tried. Every phase is
+	// present on an agent seat of a company with a provider, and the field
+	// is absent on a human seat, which runs no model, and on a company that
+	// configures none.
+	LLM map[string][]string `json:"llm,omitempty"`
+
+	// ToolSources is RESOLVED (see the package doc): where this seat's tools
+	// come from, in the registry's own origin grammar — `builtin` first, then
+	// `mcp:<server>` for each server it is granted, in the order the company
+	// declares them. What the seat is GRANTED, not what is running: a server
+	// that failed to start is still listed, and the node heartbeat's MCP
+	// report is what says it failed. Absent on a human seat.
+	ToolSources []string `json:"tool_sources,omitempty"`
+}
+
+// OrgTokenBudget is a token budget on the wire: the most one scope may spend
+// in each calendar window on the company clock, a window with no ceiling
+// absent. Its own type rather than config.TokenBudget, for the reason OrgSeat
+// spells its enums as strings.
+type OrgTokenBudget struct {
+	Day   *int `json:"day,omitempty"`
+	Week  *int `json:"week,omitempty"`
+	Month *int `json:"month,omitempty"`
+}
+
+// orgTokenBudget copies an authored budget, nil when it caps nothing so the
+// field is omitted rather than written as `{}`.
+func orgTokenBudget(b config.TokenBudget) *OrgTokenBudget {
+	if b.Day == nil && b.Week == nil && b.Month == nil {
+		return nil
+	}
+	clone := func(v *int) *int {
+		if v == nil {
+			return nil
+		}
+		n := *v
+		return &n
+	}
+	return &OrgTokenBudget{Day: clone(b.Day), Week: clone(b.Week), Month: clone(b.Month)}
 }
 
 // OrgUnit is the public half of one unit, nesting to any depth.
@@ -139,26 +218,41 @@ func orgProjection(company func() *config.Company) OrgProjection {
 		return OrgProjection{}
 	}
 	derived := config.Derive(c).WithoutPaths()
+	b := orgBuilder{
+		asRun:     c.SeatsAsRun(),
+		providers: c.Providers.ProviderOrder(),
+		servers:   c.MCPServers,
+	}
 	return OrgProjection{
-		Name:     c.Name,
-		Mission:  c.Mission,
-		Vision:   c.Vision,
-		Policies: slices.Clone(c.Policies),
-		Timezone: c.Location().String(),
-		Roles:    orgSeats(c.Roles),
-		Units:    orgUnits(c.Units),
-		Derived:  &derived,
+		Name:        c.Name,
+		Mission:     c.Mission,
+		Vision:      c.Vision,
+		Policies:    slices.Clone(c.Policies),
+		Timezone:    c.Location().String(),
+		TokenBudget: orgTokenBudget(c.TokenBudget),
+		Roles:       b.seats(c.Roles),
+		Units:       b.units(c.Units),
+		Derived:     &derived,
 	}
 }
 
-func orgSeats(roles []config.Role) []OrgSeat {
+// orgBuilder carries what a seat's resolved fields are resolved against.
+type orgBuilder struct {
+	// asRun is each authored seat's running form ([config.Company.SeatsAsRun]).
+	asRun map[*config.Role]*org.Role
+	// providers is providers.llm's keys in config order.
+	providers []string
+	servers   []config.MCPServer
+}
+
+func (b orgBuilder) seats(roles []config.Role) []OrgSeat {
 	if len(roles) == 0 {
 		return nil
 	}
 	out := make([]OrgSeat, 0, len(roles))
 	for i := range roles {
 		r := &roles[i]
-		out = append(out, OrgSeat{
+		seat := OrgSeat{
 			Name:                 r.Name,
 			Kind:                 string(r.Kind),
 			Handle:               r.Handle,
@@ -168,12 +262,41 @@ func orgSeats(roles []config.Role) []OrgSeat {
 			BehavioralGuidelines: slices.Clone(r.BehavioralGuidelines),
 			Manages:              slices.Clone(r.Manages),
 			Availability:         r.Availability,
-		})
+			TokenBudget:          orgTokenBudget(r.TokenBudget),
+		}
+		if run := b.asRun[r]; run != nil && run.IsAgent() {
+			seat.LLM = b.llm(run)
+			seat.ToolSources = b.toolSources(run)
+		}
+		out = append(out, seat)
 	}
 	return out
 }
 
-func orgUnits(units []config.Unit) []OrgUnit {
+// llm is every phase's resolved chain, nil for a company with no provider.
+func (b orgBuilder) llm(seat *org.Role) map[string][]string {
+	if len(b.providers) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(phase.All))
+	for _, ph := range phase.All {
+		out[ph.String()] = phase.Resolve(seat, ph, b.providers)
+	}
+	return out
+}
+
+// toolSources is the builtins, then each granted server in declaration order.
+func (b orgBuilder) toolSources(seat *org.Role) []string {
+	out := []string{tools.OriginBuiltin}
+	for i := range b.servers {
+		if b.servers[i].Grants(seat) {
+			out = append(out, tools.Origin(b.servers[i].Name))
+		}
+	}
+	return out
+}
+
+func (b orgBuilder) units(units []config.Unit) []OrgUnit {
 	if len(units) == 0 {
 		return nil
 	}
@@ -188,8 +311,8 @@ func orgUnits(units []config.Unit) []OrgUnit {
 			Goals:     slices.Clone(u.Goals),
 			Channel:   u.Channel,
 			Knowledge: slices.Clone(u.Knowledge),
-			Roles:     orgSeats(u.Roles),
-			Children:  orgUnits(u.Children),
+			Roles:     b.seats(u.Roles),
+			Children:  b.units(u.Children),
 		})
 	}
 	return out

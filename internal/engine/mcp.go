@@ -506,9 +506,10 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 
 // seatSpecs is every per-role child this seat needs.
 //
-// Keyed off the seat's own mcp_env: a `shared: false` server the seat declares
-// no credentials for gets no child, because a template with nobody's identity
-// in it is a server nobody can act through.
+// Keyed off [config.MCPServer.Grants], the rule the org projection publishes
+// too: a `shared: false` server the seat declares no credentials for gets no
+// child, because a template with nobody's identity in it is a server nobody
+// can act through.
 //
 // A template whose ${VAR} references do not resolve into a launchable spec
 // comes back as an outcome instead, so the heartbeat reports it failed rather
@@ -517,13 +518,12 @@ func seatSpecs(c *Company, seat *org.Role, env *config.Resolver) ([]mcp.Spec, []
 	var out []mcp.Spec
 	var unconfigured []mcpOutcome
 	for _, server := range c.Config.MCPServers {
-		if server.IsShared() {
+		// The epoch runs the shared ones; a template this seat is not
+		// granted has nobody's identity to run as.
+		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}
-		values, declared := seat.MCPEnv[server.Name]
-		if !declared {
-			continue
-		}
+		values := seat.MCPEnv[server.Name]
 		spec, err := serverSpec(server, mcp.InstanceName(server.Name, seat.Name), env, values)
 		if err != nil {
 			log.Error("mcp_server_unconfigured", "server", server.Name, "seat", seat.Handle(),

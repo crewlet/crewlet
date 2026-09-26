@@ -26,6 +26,26 @@ func (c *Company) Organization() (*org.Organization, error) {
 	return o, nil
 }
 
+// SeatsAsRun maps each seat the document authors to the seat the engine runs
+// for it: normalized exactly as a running node normalizes it, so a unit's
+// shared tool credentials are already layered under its agent members and a
+// flat llm_<phase> field has already won over the mapping form.
+//
+// Keyed by the AUTHORED seat's address inside c — &c.Roles[i], or the same
+// inside a unit — because that is what a reader walking the document holds,
+// and the handle cannot key it: the problems a document can have include two
+// seats deriving one. Not validated, for the reason [Derive] is not.
+func (c *Company) SeatsAsRun() map[*Role]*org.Role {
+	o, index := c.organization()
+	out := make(map[*Role]*org.Role, len(index.authored))
+	for r := range o.AllRoles() {
+		if authored := index.authored[r]; authored != nil {
+			out[authored] = r
+		}
+	}
+	return out
+}
+
 // organization builds and normalises without validating, so [Company.Validate]
 // can report the org's failures alongside its own rather than stopping at
 // the first. It also returns where each seat and unit of the result was
