@@ -308,9 +308,6 @@ func New(opts Options) (*App, error) {
 	// answering one question from two implementations is how they end up
 	// disagreeing with nobody noticing.
 	sources := opts.Sources
-	if sources.Health == nil {
-		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
-	}
 	if sources.State == nil {
 		sources.State = state
 	}
@@ -612,7 +609,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		// can carry a database path, and none of them has a reader.
 		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
 	case errors.Is(err, queries.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
+		// WITH THE REFUSAL'S OWN HINT, which the frame's
+		// `retry_after_seconds` is computed from exactly as the REST
+		// header is (see [stream.RetryAfterSeconds]).
+		return nil, &stream.UnavailableError{What: what, Hint: queries.RetryAfter(err)}
 	default:
 		return nil, err
 	}
@@ -665,19 +665,9 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// a few seconds, and an empty 200 would tell a person the company
 		// has no work.
 		//
-		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
-		// how far behind this node is over how fast it is actually
-		// draining — and five seconds otherwise. A flat hint is wrong in
-		// both directions on one fleet. The fallback is what an
-		// unreachable coordination store gets, since there is no drain to
-		// derive from, and it is the shared health tick's own cadence
-		// ([stream.HealthInterval]): a client that waits it out asks again
-		// having seen at most one newer health frame, which is the soonest
-		// it could learn the store is back.
-		after := int(stream.HealthInterval / time.Second)
-		if hint := queries.RetryAfter(err); hint > 0 {
-			after = max(1, int(hint.Round(time.Second)/time.Second))
-		}
+		// THE HINT IS THE REFUSAL'S OWN where it has one, through the one
+		// helper the socket's error frame is computed by too.
+		after := stream.RetryAfterSeconds(queries.RetryAfter(err))
 		w.Header().Set("Retry-After", strconv.Itoa(after))
 		writeJSON(w, http.StatusServiceUnavailable,
 			map[string]string{"error": stream.CodeUnavailable})

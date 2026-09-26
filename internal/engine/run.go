@@ -396,6 +396,15 @@ type Engine struct {
 	// two loops publishing one fleet's floor.
 	retention *retention
 
+	// alarms is the retention loop's alarm tracker, published for the API's
+	// health envelope ([Engine.Alarms]). ATOMIC and never cleared, because it
+	// is read from every health request and push tick on goroutines this
+	// engine does not own, while the loop that writes it starts and stops
+	// on the engine's own: a plain field read against startRetention's write
+	// is a data race, and nil-ing it on a stop would turn the last reading a
+	// draining node took into "no evaluation has ever run".
+	alarms atomic.Pointer[statelog.Tracker]
+
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter

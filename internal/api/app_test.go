@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,11 +63,29 @@ func runSuite(m *testing.M) int {
 // fakeRuntime is the engine's answers, fixed.
 type fakeRuntime struct {
 	state api.RuntimeState
+	fleet api.FleetState
 	tools []api.ToolInfo
+
+	// presenceHangs makes Fleet's presence read one that never returns on
+	// its own, the way a wedged broker's key scan does: it answers only
+	// when its context ends, with the in-memory alarms and no count.
+	presenceHangs bool
+	// fleetReads counts every Fleet call, so a probe that must not scan the
+	// fleet can be shown not to.
+	fleetReads atomic.Int32
 }
 
 func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
 func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
+
+func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
+	f.fleetReads.Add(1)
+	if f.presenceHangs {
+		<-ctx.Done()
+		return api.FleetState{Alarms: f.fleet.Alarms}
+	}
+	return f.fleet
+}
 
 // ShuttingDown answers from the same state Snapshot does, which is the
 // contract: one fact, two ways to read it.

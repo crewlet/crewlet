@@ -22,9 +22,9 @@ const alarmGauge = metrics.AlarmActive
 //
 // # Why a transition and not a level
 //
-// An alarm evaluated on a fifteen-second heartbeat is true for as long as the
+// An alarm evaluated on a ten-second heartbeat is true for as long as the
 // condition is, which is minutes or days. Logging the level would write the
-// same line four times a minute for a week and make the log useless for
+// same line six times a minute for a week and make the log useless for
 // finding when it STARTED — which is the one thing an operator needs and the
 // one thing a level cannot say. So entry and exit are each logged once,
 // carrying how long the alarm was up.
@@ -36,14 +36,20 @@ const alarmGauge = metrics.AlarmActive
 // dashboard, and "no data" is indistinguishable from a node that stopped
 // reporting.
 //
-// A Tracker is safe for concurrent use: the trim tick and the heartbeat both
-// evaluate, on different goroutines and different cadences.
+// A Tracker is safe for concurrent use: one loop evaluates, and the health
+// envelope reads [Tracker.Standing] from every request and push tick.
 type Tracker struct {
 	rec *metrics.Recorder
 	now func() time.Time
 
 	mu     sync.Mutex
 	firing map[Kind]firing
+
+	// order is the kinds the latest evaluation reported, in the order it
+	// reported them — the table's own — and observed whether any
+	// evaluation has run at all. Both are for [Tracker.Standing].
+	order    []Kind
+	observed bool
 }
 
 // firing is one alarm currently up.
@@ -79,6 +85,11 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.observed = true
+	t.order = t.order[:0]
+	for _, a := range alarms {
+		t.order = append(t.order, a.Kind)
+	}
 	for _, a := range alarms {
 		if _, already := t.firing[a.Kind]; already {
 			// Still up. The detail may have moved — a lag grows — and
@@ -111,6 +122,37 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		}
 	}
 	return alarms
+}
+
+// Standing reports the kinds the latest evaluation found firing, the
+// LONGEST-STANDING first, and false before any evaluation has run.
+//
+// For the fourth surface, the health envelope every node pushes to every tab,
+// which carries a count and ONE name rather than the table: the name a health
+// card can afford is the condition that has gone unanswered longest. Not the
+// table's order, which is the order the reference reads in and asserts no
+// ranking — a table sorted by severity would be a second opinion about each
+// alarm beside the threshold that already decides it. How long something has
+// been wrong is a fact this tracker holds and nothing else does, and the table's
+// order breaks a tie only between alarms raised by one evaluation.
+//
+// FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
+// yet — mid-boot, or running no state log at all — cannot say, and an empty
+// list here would tell a health card it is healthy.
+func (t *Tracker) Standing() ([]Kind, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.observed {
+		return nil, false
+	}
+	out := slices.Clone(t.order)
+	if out == nil {
+		out = []Kind{}
+	}
+	slices.SortStableFunc(out, func(a, b Kind) int {
+		return t.firing[a].since.Compare(t.firing[b].since)
+	})
+	return out, true
 }
 
 // Firing reports how long each alarm currently up has been up.

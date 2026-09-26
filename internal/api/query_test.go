@@ -151,7 +151,6 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 		{"events", url.Values{"actor": {"Lead"}}, map[string]any{"actor": "Lead"}},
 		{"trace", url.Values{"trace_id": {"tr-1"}}, map[string]any{"trace_id": "tr-1"}},
 		{"tokens", nil, nil},
-		{"stream", nil, nil},
 	} {
 		status, restBody := overREST(t, a, tc.what, tc.rest)
 		if status != http.StatusOK {

@@ -64,6 +64,22 @@ import (
 // would make the alarm coarser for no saving that matters at this cost.
 const RetentionInterval = 15 * time.Minute
 
+// AlarmInterval is how often this node evaluates its alarm table.
+//
+// THE POSITION HEARTBEAT, and deliberately not [RetentionInterval]. The table
+// used to be evaluated only on the trim's tick, so `apply_lag` — which fires at
+// a one-minute [statelog.StallGrace] and whose own remedy promises a stopped
+// node is "named within a minute" — was named up to sixteen minutes after it
+// stopped, and every surface fed by the evaluation (the gauge, the log line,
+// the health envelope's count) lagged the condition by the same quarter hour
+// while `work_retention`, assembled per request, already showed it. Faster than
+// the heartbeat buys nothing: the fastest input, this node's lag behind the
+// log, is measured against positions the heartbeat publishes, so a tighter
+// loop would re-evaluate the same facts. What an evaluation costs is one
+// report's reads, a handful of round trips per domain, on a node that already
+// writes its position at this cadence.
+const AlarmInterval = PositionHeartbeat
+
 // retentionDutyName is the fleet singleton the trim claims.
 const retentionDutyName = "retention"
 
@@ -119,13 +135,14 @@ type retention struct {
 	// coverAt, coverFraction and coverKnown are the last coverage
 	// measurement and when it was taken.
 	//
-	// CACHED FOR ONE TICK, because the measurement is a scan of the whole
-	// source corpus and a report is assembled on every operator request
-	// and every dashboard poll — where the trim's own inputs are read once
-	// per tick by construction. One [RetentionInterval] is also the
-	// resolution every other alarm input here has, so a fresher coverage
-	// number would be the only one on the reading that could disagree with
-	// its neighbours about which tick it describes.
+	// CACHED FOR ONE TRIM TICK, because the measurement is a scan of the
+	// whole source corpus and a report is assembled on every alarm
+	// evaluation ([AlarmInterval]), every operator request and every
+	// dashboard poll. One [RetentionInterval] is the resolution the
+	// condition it feeds is about — a corpus's vector coverage moves as
+	// the embedding duty works through it, over minutes and hours — so a
+	// scan every ten seconds would be paid for a number that has not
+	// moved.
 	coverAt       time.Time
 	coverFraction float64
 	coverKnown    bool
@@ -177,6 +194,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
 	e.retention = r
+	e.alarms.Store(r.alarms)
 	go r.run(loop)
 }
 
@@ -202,29 +220,58 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 	return e.retention.Report(ctx), true
 }
 
+// Alarms is this node's standing alarms as its latest evaluation found them,
+// the longest-standing first ([statelog.Tracker.Standing]), and false where no
+// evaluation has run: a node mid-boot, or one running no state log, which has
+// no alarm table to evaluate.
+//
+// THE EVALUATION THE GAUGE AND THE LOG WERE FED, never a fresh report. The
+// health envelope reads this on every probe and every push tick, and a report
+// assembled there would be a second evaluation per caller — the cost scaling
+// with how many tabs are open, and the count on the screen able to disagree
+// with the alarm line the log just wrote.
+func (e *Engine) Alarms() ([]statelog.Kind, bool) {
+	tracker := e.alarms.Load()
+	if tracker == nil {
+		return nil, false
+	}
+	return tracker.Standing()
+}
+
 // run ticks until the context ends.
 //
 // IT TICKS IMMEDIATELY, which matters more here than the usual reason: the
 // published floor is what every other surface reads a blocked trim from, and a
 // fleet that had just started would otherwise answer "no floor published" for
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
+//
+// AND THE ALARM TABLE ON ITS OWN, FASTER CADENCE ([AlarmInterval]) between
+// trims. ONE GOROUTINE for both, so an evaluation and a trim never run at
+// once. Only the evaluation takes the faster ticker: [retention.capacity]
+// stays on the trim's, the cadence its pool-wait delta and backup walk are
+// defined at.
 func (r *retention) run(ctx context.Context) {
 	defer close(r.done)
-	ticker := time.NewTicker(RetentionInterval)
-	defer ticker.Stop()
+	trim := time.NewTicker(RetentionInterval)
+	defer trim.Stop()
+	alarms := time.NewTicker(AlarmInterval)
+	defer alarms.Stop()
+	if ctx.Err() != nil {
+		// CHECKED BEFORE THE FIRST TICK: a loop started under a context
+		// that is already done would otherwise take one tick on the way
+		// out and log a duty claim failing during a shutdown that is
+		// going fine.
+		return
+	}
+	r.tick(ctx)
 	for {
-		if ctx.Err() != nil {
-			// CHECKED BEFORE THE TICK, not only after: a loop started
-			// under a context that is already done would otherwise
-			// take one tick on the way out and log a duty claim
-			// failing during a shutdown that is going fine.
-			return
-		}
-		r.tick(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-trim.C:
+			r.tick(ctx)
+		case <-alarms.C:
+			r.evaluate(ctx)
 		}
 	}
 }
@@ -240,6 +287,23 @@ func (r *retention) tick(ctx context.Context) {
 	// duty holder's health as the fleet's, and the wedged node would be the
 	// one nobody hears from. It is also what makes this loop useful on a
 	// node that never wins the lease at all.
+	//
+	// THE HARDWARE MEASUREMENT RIDES THIS TICK AND NOT THE ALARM TICKER
+	// ([AlarmInterval]). The pool-wait delta is one observation per
+	// interval, and the `pool_wait` alarm's day-long p95 is a statement
+	// about intervals of THIS length — the fifth-worst quarter hour — so
+	// measuring it ninety times as often would change what the alarm
+	// means without anybody deciding it should. The backup gauges walk
+	// the coordination register and every manifest this node announced,
+	// and log an unreadable directory at WARN each time they do: at the
+	// alarm's cadence that is a line every ten seconds for as long as the
+	// fault the `backup_age` alarm already names persists. Neither input
+	// moves faster than this tick, and the reading the alarms are
+	// evaluated against measures the storage it needs directly
+	// ([retention.space]), so nothing on the faster cadence is stale for
+	// want of it. Measured BEFORE the evaluation beside it, because the
+	// reading reads the pool-wait window back.
+	r.capacity(ctx)
 	r.evaluate(ctx)
 	if r.claim != nil {
 		mine, err := r.claim(ctx)
@@ -270,14 +334,12 @@ func (r *retention) tick(ctx context.Context) {
 	}
 }
 
-// evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware.
+// evaluate observes this node's alarms against a fresh reading.
 //
-// THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
-// against reads three of these back: a tick that observed before it measured
-// would evaluate the previous tick's disk against this tick's log.
+// IT MEASURES NOTHING OF ITS OWN: it runs every [AlarmInterval] and on every
+// trim tick, and the hardware measurement that feeds the gauges belongs to the
+// trim tick alone — see [retention.tick] for why.
 func (r *retention) evaluate(ctx context.Context) {
-	r.capacity(ctx)
 	if r.alarms == nil {
 		return
 	}

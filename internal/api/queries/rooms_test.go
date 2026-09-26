@@ -87,7 +87,6 @@ func everySeam(t *testing.T) queries.Sources {
 		State:    &livestate.LiveState{},
 		Events:   eventfan.Solo("node-a", &store.EventLog{}),
 		Usage:    &store.DB{},
-		Health:   func(context.Context) any { return nil },
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),

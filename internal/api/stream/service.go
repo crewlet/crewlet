@@ -29,19 +29,16 @@ import (
 // is a socket that is gone, not a company that is quiet.
 const HealthInterval = 5 * time.Second
 
-// Health is what the shared tick carries.
+// HealthFunc reports the current health, for the shared tick and the snapshot.
 //
-// InFlight and ShuttingDown are always present, and a zero is a real zero: the
-// API is served beside the engine in every node that serves it, so both are
-// always known.
-type Health struct {
-	Status       string `json:"status"`
-	InFlight     int    `json:"in_flight"`
-	ShuttingDown bool   `json:"shutting_down"`
-}
-
-// HealthFunc reports the current health, for the shared tick.
-type HealthFunc func() Health
+// THE WHOLE BODY, which is `api.Health` — returned as `any` for the reason
+// [Options.Org] is: its shape is an explicit public type owned by package api,
+// which imports this one, so naming it here would be an import cycle, and this
+// service carries it to the wire without reading into it. The push used to be a
+// three-field type declared HERE, which is how a node refusing every inbound
+// webhook for want of a configuration pushed a frame identical to a healthy idle
+// one's, and how five screens came to poll a query for the rest of the body.
+type HealthFunc func() any
 
 // Service turns the engine's event stream into the pushes a dashboard mirrors.
 //
@@ -374,7 +371,7 @@ func (s *Service) Broadcast(kind Kind, data any) {
 	s.hub.Broadcast(Push(kind, data, s.now()))
 }
 
-func (s *Service) currentHealth() Health { return s.health() }
+func (s *Service) currentHealth() any { return s.health() }
 
 // StartHealthTicks runs the shared tick until the context is cancelled or
 // [Service.Stop] is called.

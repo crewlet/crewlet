@@ -616,6 +616,21 @@ export function configValueKind(
 }
 
 /**
+ * How many nodes the fleet has, as the health push counted them — or that the
+ * count is not known.
+ *
+ * `nodes` is ABSENT when the engine could not read the fleet's presence, and
+ * on an older node that predates the field; it is never 0, because the node
+ * answering is itself one. So an absence is said as an absence rather than
+ * guessed at: "0 nodes" beside a page this node is serving is false, and "1
+ * node" is a guess that hides a coordination plane nobody can reach.
+ */
+export function nodeCountLabel(nodes: number | null | undefined): string {
+  if (nodes == null || !Number.isFinite(nodes) || nodes <= 0) return "node count unavailable";
+  return plural(nodes, "node");
+}
+
+/**
  * How far back the event log can be read, as a sentence, from what the engine
  * REPORTED.
  *

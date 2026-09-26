@@ -4,7 +4,7 @@
  * still draw the revision before it.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -148,7 +148,7 @@ describe("what the strip says", () => {
 
 describe("in the builder", () => {
   async function save(engine: Engine, query: (what: string) => unknown) {
-    mountBuilder({ engine, query });
+    const { store } = mountBuilder({ engine, query });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await screen.findByText("No problems");
@@ -156,14 +156,15 @@ describe("in the builder", () => {
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
+    return store;
   }
 
+  // THIS NODE'S EPOCH ARRIVES ON THE HEALTH PUSH — the strip asks for nothing
+  // to learn it, so the tick moving it is what resolves the strip.
   test("the strip follows the saved revision and offers the diff", async () => {
     const engine = new Engine(company());
-    let applied = 1;
-    await save(engine, (what) =>
-      what === "stream" ? { status: "ok", applied_epoch: applied } : null,
-    );
+    const store = await save(engine, () => null);
+    act(() => store.applyHealth({ status: "ok", applied_epoch: 1 }));
     expect(await screen.findByText("The engine is applying it.")).toBeDefined();
     expect(screen.getByText("r-saved")).toBeDefined();
     // What the save changed is the saved revision against the one it was
@@ -172,9 +173,9 @@ describe("in the builder", () => {
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
       "#/admin/config?lens=diff&revision=r-saved&against=r1",
     );
-    applied = 2;
-    expect(await screen.findByText("Applied.", {}, { timeout: 8000 })).toBeDefined();
-  }, 12_000);
+    act(() => store.applyHealth({ status: "ok", applied_epoch: 2 }));
+    expect(await screen.findByText("Applied.")).toBeDefined();
+  });
 
   test("Copy as YAML reads the company as YAML rather than as a refusal", async () => {
     const engine = new Engine(company());
@@ -216,11 +217,12 @@ describe("the read lenses", () => {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
     location.hash = "#/company";
     const store = new Store();
-    store.applyHealth({ status: "ok" });
+    // The health push, which is where this node's applied epoch comes from.
+    store.applyHealth({ status: "ok", applied_epoch: appliedEpoch });
     store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
     const socket = new LiveSocket(store);
-    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      Promise.resolve(what === "stream" ? { status: "ok", applied_epoch: appliedEpoch } : null);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
+      Promise.resolve(null);
     return render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>

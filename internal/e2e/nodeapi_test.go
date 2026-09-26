@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -191,10 +192,30 @@ func wireAPI(
 	// has ended, which is exactly when a cancelled stop would do nothing.
 	stops = append(stops, func() { projector.Stop(context.WithoutCancel(ctx)) })
 
+	// AND THE HISTORY BEHIND IT, seeded as cmd/crewlet seeds it: after the
+	// subscription so nothing falls into the gap, before the listener so the
+	// first socket sees the seeded snapshot. A harness without it served a
+	// node `crewlet run` never produces — one whose envelope carries no
+	// `seeded_from` and whose feed starts at boot — and every case reading
+	// either proved the harness rather than the node. FAILED here rather than
+	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
+	// was just built beside is a broken case, not a degraded node.
+	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
+	err = observe.Seed(seedCtx, e.History(), company().AgentRoles(), app.Stream().State())
+	cancelSeed()
+	if err != nil {
+		return fail("seed the live projection", err)
+	}
+
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
 }
+
+// seedBudget bounds the harness's boot seed, at cmd/crewlet's
+// projectionSeedBudget: the same read, over the same fan-out, against a fleet
+// that is booting just as a real one is.
+const seedBudget = 5 * time.Second
 
 // stopInReverse runs a teardown in the reverse of the order it was built.
 func stopInReverse(stops []func()) {

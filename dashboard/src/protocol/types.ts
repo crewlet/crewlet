@@ -1302,29 +1302,6 @@ export interface ScheduleRunsAnswer {
 // Health and fleet
 // ---------------------------------------------------------------------------
 
-/**
- * What the 5-second `health` push carries — and ONLY that.
- *
- * The richer `api.Health` (node identity, applied epoch, posture, queue,
- * version, whether a company config is even active) is answered by the
- * `stream` query, and typed as `EngineHealth` in `contract/health.ts`. The
- * two are deliberately different names so a query can never collide with a
- * push kind; they are also deliberately different
- * shapes, and reading a `stream` field off a `health` push is how an engine
- * with NO ACTIVE CONFIG — refusing every inbound webhook — came to render
- * identically to a healthy idle one.
- */
-export interface HealthPush {
-  status: string;
-  /**
-   * Both are always on the wire. They stay optional here because the client
-   * holds one health value that is NOT a push: the `{status: "unknown"}` it
-   * falls back to while the socket is down, which asserts no count at all.
-   */
-  in_flight?: number;
-  shutting_down?: boolean;
-}
-
 export interface FleetNode {
   id: string;
   roles: string[];
@@ -3208,7 +3185,7 @@ export interface Snapshot {
   sandboxes?: SandboxEntry[];
   org?: OrgProjection;
   tools?: ToolRow[];
-  health?: HealthPush;
+  health?: EngineHealth;
   tokens?: Rollup;
   budget?: OrgBudget;
   schedules?: ScheduleRow[];
@@ -3220,6 +3197,12 @@ export interface Frame {
   id?: number;
   what?: string;
   error?: string;
+  /**
+   * How long to wait before asking again, on an `unavailable` error frame and
+   * nowhere else — the socket's `Retry-After`, computed by the same engine
+   * helper as the REST 503's header.
+   */
+  retry_after_seconds?: number;
   ts?: string;
 }
 
@@ -3688,7 +3671,6 @@ export interface QueryMap {
   phases: PhasesPage;
   tokens: Rollup;
   token_series: TokenSeries;
-  stream: EngineHealth;
   fleet: FleetAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;

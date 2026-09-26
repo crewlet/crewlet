@@ -153,7 +153,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId });
-  const { data: engine } = useEngineHealth();
+  const engine = useEngineHealth();
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -350,7 +350,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
 export function EventPeek({ eventId }: { eventId: string }) {
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
-  const { data: engine } = useEngineHealth();
+  const engine = useEngineHealth();
 
   // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
   // from a row — the search box takes one — so an id that resolves to nothing

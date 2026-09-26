@@ -83,11 +83,14 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you two ways, and they are the same table evaluated once: a
-` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, and a named
-` + "`WARN`" + ` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — alarms are evaluated on ticks
-the engine already runs.
+An alarm reaches you three ways, and they are the same table evaluated once,
+every ten seconds on every node: a ` + "`crewlet.alarm.active{kind}`" + ` gauge your
+collector scrapes, a named ` + "`WARN`" + ` line when it starts and another when it
+clears, carrying how long it was up, and a count on the node's health envelope
+(` + "`GET /health`" + ` and the dashboard's health push carry ` + "`alarms: {count, worst}`" + `,
+where ` + "`worst`" + ` is the alarm that has been firing longest). Nothing has to be
+polled for any of them — alarms are evaluated on the node's own position
+heartbeat, so a condition with a one-minute grace is named within that minute.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table

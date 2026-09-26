@@ -23,6 +23,15 @@ func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Cli
 	return s, c
 }
 
+// health stands in for `api.Health`, which this package carries to the wire
+// without reading into — so any value the function returns is what reaches the
+// tab, and a case can assert it came through untouched.
+type health struct {
+	Status       string
+	InFlight     int
+	ShuttingDown bool
+}
+
 // buildService fills every required function a case leaves unset with the
 // answer a node with no company gives, so a case names only what it is about.
 func buildService(t *testing.T, opts stream.Options) *stream.Service {
@@ -31,7 +40,7 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Now = func() time.Time { return clock }
 	}
 	if opts.Health == nil {
-		opts.Health = func() stream.Health { return stream.Health{Status: "ok"} }
+		opts.Health = func() any { return health{Status: "ok"} }
 	}
 	if opts.Handles == nil {
 		opts.Handles = func() map[string]string { return map[string]string{} }
@@ -416,7 +425,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
 	s := buildService(t, stream.Options{
-		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: 3} },
+		Health: func() any { return health{Status: "ok", InFlight: 3} },
 	})
 
 	a, b := stream.NewClient(), stream.NewClient()
@@ -432,8 +441,8 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 			if env.Kind != stream.KindHealth {
 				t.Errorf("%s received %q, want a health tick", name, env.Kind)
 			}
-			health, ok := env.Data.(stream.Health)
-			if !ok || health.InFlight != 3 {
+			got, ok := env.Data.(health)
+			if !ok || got.InFlight != 3 {
 				t.Errorf("%s health = %#v", name, env.Data)
 			}
 		case <-time.After(3 * stream.HealthInterval):
@@ -448,13 +457,13 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 	// that connects mid-drain sees the drain at once rather than on the
 	// next tick.
 	s, _ := newService(t, stream.Options{
-		Health: func() stream.Health {
-			return stream.Health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
+		Health: func() any {
+			return health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	health, _ := s.Snapshot()["health"].(stream.Health)
-	if health.Status != "shutting_down" || health.InFlight != 2 || !health.ShuttingDown {
-		t.Errorf("health = %#v, want the engine's own answer", health)
+	got, _ := s.Snapshot()["health"].(health)
+	if got.Status != "shutting_down" || got.InFlight != 2 || !got.ShuttingDown {
+		t.Errorf("health = %#v, want the engine's own answer", got)
 	}
 }
 

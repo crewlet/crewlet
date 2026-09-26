@@ -76,12 +76,6 @@ type Sources struct {
 	// `tokens` window empty.
 	Usage usage.Estate
 
-	// Health answers the stream question, which is deliberately not called
-	// health: a query must never share a name with a push kind, or a
-	// reader of the protocol has to know which direction a frame was
-	// travelling to know what it means.
-	Health func(ctx context.Context) any
-
 	// Company reads the CURRENT epoch, for the questions answered from
 	// configuration rather than from a store. A function, not a value: an
 	// apply replaces the epoch, and an answer bound to the one this
@@ -382,9 +376,6 @@ func Register(r *Registry, s Sources) {
 		// reader widened the range is a seam across the one comparison the
 		// screen exists to make.
 		r.Register("token_series", s.tokenSeries)
-	}
-	if s.Health != nil {
-		r.Register("stream", s.stream)
 	}
 	if s.Coord != nil {
 		// OPERATOR-ONLY, like every other answer the Admin workspace
@@ -705,11 +696,6 @@ func (s Sources) roleOf(id string) string {
 		return role.Name
 	}
 	return id
-}
-
-// stream answers the engine's health.
-func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
-	return s.Health(ctx), nil
 }
 
 // events answers a page of the log.

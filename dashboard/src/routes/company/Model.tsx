@@ -85,7 +85,7 @@ const PHASES = [
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
-  const { data: engine } = useEngineHealth();
+  const engine = useEngineHealth();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");

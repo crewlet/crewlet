@@ -60,7 +60,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
-| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence. It never reads the fleet's presence or alarm counts, which decide nothing here |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
@@ -197,7 +197,7 @@ policies, and a browser enforces both.
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
-`sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
+`sandbox_runs`, `budgets`, `integrations`, `webhooks`,
 `dashboard`, `health`);
 `webhooks` and `/config/*` keep a stable external contract, while the
 read/stream surface is free to evolve since the dashboard is its only
@@ -1428,8 +1428,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
 
 ```json
 {
-  "health":    { /* status, in_flight and shutting_down, from the
-                      health envelope described below */ },
+  "health":    { /* the whole health envelope described below */ },
   "agents":    [ { /* /agents row: activity (working | needs | stopped |
                       idle) + stopped_reason (paused | unplaced | budget |
                       provider, or null) + budget meter + live_call (the
@@ -1470,12 +1469,20 @@ read back as a success.
 
 ### The health envelope
 
-One builder (`App.health`, `internal/api/health.go`) answers `GET /health` and
-the socket's `stream` query, so the two cannot disagree about whether the
-engine is healthy. The 5-second `health` push and the snapshot's `health`
-section are cut from the same read but carry only `status`, `in_flight` and
-`shutting_down`, which is what every open tab receives on every tick; a screen
-that needs the rest of the envelope asks the `stream` query for it.
+One builder (`App.health`, `internal/api/health.go`) answers `GET /health`,
+the snapshot's `health` section and the 5-second `health` push, and all three
+carry the **whole** envelope, so no two of them can disagree about whether the
+engine is healthy. There is no query for it: a screen reads the push. (The
+push once carried three fields while a `stream` query answered the rest, and
+five screens polled that query at cadences of their own, so the rail and the
+panel in front of it could disagree for fifteen seconds about whether a
+revision had applied.)
+
+The envelope is **public** — `GET /health` is an unguarded probe and the push
+reaches an anonymous tab — which is why the fleet and the alarm table appear on
+it as counts (`nodes`, `alarms`) and never as their rows. Which node holds what
+is the operator-only [`fleet`](#get-fleet) answer, and what each alarm measured is
+`work_retention`'s.
 
 ```json
 {
@@ -1487,12 +1494,22 @@ that needs the rest of the envelope asks the `stream` query for it.
   "queue": "jetstream-embedded",
   "clients": 3,
   "event_history_seconds": 2592000,
+  "spend_history_seconds": 15638400,
   "in_flight": 2,
   "shutting_down": false,
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
-  "unproven_seconds": {"eng": 312.5}
+  "unproven_seconds": {"eng": 312.5},
+  "nodes": 3,
+  "alarms": {"count": 1, "worst": "backup_age"},
+  "seeded_from": {
+    "nodes": [
+      {"id": "core-1", "answered": true, "error": ""},
+      {"id": "core-2", "answered": true, "error": ""}
+    ],
+    "complete": true
+  }
 }
 ```
 
@@ -1505,13 +1522,17 @@ that needs the rest of the envelope asks the `stream` query for it.
 | `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this node. |
-| `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health` and the `stream` query; neither the 5-second push nor the snapshot's `health` section repeats it, because those two carry `status`, `in_flight` and `shutting_down` only, and this one does not change. |
+| `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. |
+| `spend_history_seconds` | How far back a **named** spend window can reach: the replicated `usage` domain's own history (181 days, [ADR-0020](../../adr/0020-a-nodes-own-day-is-a-compacted-domain.md)), which is not the event log's. A spend chart states this floor and never `event_history_seconds` — the two answer "can I still chart that month" and "can I still open that turn". |
 | `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
+| `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it), and on a node older than the field; never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
+| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one a health card names. From the **same** evaluation the `crewlet.alarm.active` gauge and the `alarm_raised` / `alarm_cleared` log lines come from, which runs every ten seconds on every node. **Absent** before that evaluation first runs and on a node running no state log: neither has looked, and `{count: 0}` would read as healthy. |
+| `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed, the live spend window and each seat's last turn that every screen starts from — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those screens a node short, and this is where that stays visible after the log line has scrolled away. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped or
@@ -1865,9 +1886,9 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
-| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | `{ status, in_flight, shutting_down }`, cut from the [health envelope](#the-health-envelope)'s read. The whole envelope is the `stream` query. |
+| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1921,7 +1942,6 @@ REST route calls, so the two surfaces cannot diverge:
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
-| `stream` | `{}` | The [health envelope](#the-health-envelope), from the builder `GET /health` answers with. Named `stream` rather than `health` so a query never shares a name with a push kind: the `health` push carries three of those fields, and a reader of the protocol should not have to know which direction a frame travelled to know what it holds |
 | `config` | `{}` | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |

@@ -95,6 +95,12 @@ type Envelope struct {
 	ID    int64  `json:"id,omitempty"`
 	What  string `json:"what,omitempty"`
 	Error string `json:"error,omitempty"`
+
+	// RetryAfterSeconds is how long to wait before asking again, on an
+	// `unavailable` error and nowhere else: the socket's Retry-After, from
+	// [RetryAfterSeconds] — the helper the REST 503's header comes from, so
+	// a screen waits the same time whichever transport refused it.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.

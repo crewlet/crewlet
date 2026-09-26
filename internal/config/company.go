@@ -1097,6 +1097,27 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	}
 }
 
+// AgentRoles is the name of every seat the engine runs a turn for — every role
+// in the company, in a unit or at the root, bar the human ones, which have no
+// turn. Nil on a nil company (no active revision).
+//
+// HERE rather than beside its first caller, because the live projection's boot
+// seed is keyed by it and two wirings build that seed — `crewlet run` and the
+// end-to-end harness that has to wire a node the way it does. Two copies of
+// "which seats have turns" are two answers to which seats a screen seeds.
+func (c *Company) AgentRoles() []string {
+	if c == nil {
+		return nil
+	}
+	var out []string
+	for role := range c.EachRole() {
+		if role.Name != "" && role.Kind != org.KindHuman {
+			out = append(out, role.Name)
+		}
+	}
+	return out
+}
+
 // EachRole yields EVERY seat in the company, with the path an operator typed:
 // the top-level `roles:` and every seat inside `units:`, to any depth.
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -76,6 +77,49 @@ var (
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
+
+// UnavailableError is [ErrUnavailable] carrying the wait its refusal derived.
+//
+// A TYPE RATHER THAN A WRAPPED SENTINEL ALONE, because the socket's error frame
+// has to say how long to wait and the text of an error is no place to carry a
+// number. Hint is the refusal's own — how far behind this node is over how fast
+// it is actually draining — and zero where the refusal derived none; the
+// seconds on the wire are [RetryAfterSeconds] of it, never the hint itself.
+type UnavailableError struct {
+	What string
+	Hint time.Duration
+}
+
+func (e *UnavailableError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrUnavailable, e.What)
+}
+
+// Unwrap makes an UnavailableError an [ErrUnavailable] to errors.Is.
+func (e *UnavailableError) Unwrap() error { return ErrUnavailable }
+
+// RetryAfterSeconds is how long a caller told `unavailable` should wait, in
+// the whole seconds both transports carry it in.
+//
+// ONE HELPER FOR BOTH — the REST 503's `Retry-After` header and the socket
+// error frame's `retry_after_seconds` — because a hint computed twice is two
+// hints: the socket used to send the bare code, so a screen that fell back to
+// REST waited what the node asked and one on the socket waited whatever it had
+// hard-coded.
+//
+// THE REFUSAL'S OWN HINT where it has one, rounded and never below a second,
+// and [HealthInterval] otherwise. The fallback is what an unreachable
+// coordination store gets, since there is no drain to derive from, and it is
+// the shared health tick's cadence: a client that waits it out asks again
+// having seen at most one newer health frame, which is the soonest it could
+// learn the store is back. A flat hint is wrong in both directions on one
+// fleet — too early for a node grinding through a bulk apply, too late for one
+// that caught up in milliseconds.
+func RetryAfterSeconds(hint time.Duration) int {
+	if hint > 0 {
+		return max(1, int(hint.Round(time.Second)/time.Second))
+	}
+	return int(HealthInterval / time.Second)
+}
 
 // Query answers one client question.
 //
@@ -325,7 +369,14 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
 		client.send(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
-		client.send(queryError(req, CodeUnavailable))
+		refusal := queryError(req, CodeUnavailable)
+		var hint time.Duration
+		var unavailable *UnavailableError
+		if errors.As(err, &unavailable) {
+			hint = unavailable.Hint
+		}
+		refusal.RetryAfterSeconds = RetryAfterSeconds(hint)
+		client.send(refusal)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket

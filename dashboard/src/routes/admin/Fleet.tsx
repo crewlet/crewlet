@@ -71,6 +71,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
@@ -638,18 +639,15 @@ export function NodePeek({ id }: { id: string }) {
  * The build version, which is the one fact here that belongs to a PROCESS
  * rather than to a lease row.
  *
- * `stream` answers about the node that served the socket and says so — it has
- * a `node` field — so it is asked only when the object being read IS that
+ * The health push describes the node that served the socket and says so — it
+ * has a `node` field — so it is read only when the object being read IS that
  * node, and the fact renders as an honest dash on every other. Painting this
  * dashboard's own version onto a peer would answer "is the fleet mid-upgrade"
  * with "no" on exactly the fleet that is.
  */
 function useNodeVersion(id: string, thisNode?: string): string | undefined {
-  const engine = useQuery("stream", undefined, {
-    enabled: id !== "" && thisNode === id,
-    pollMs: POLL_MS,
-  });
-  return engine.data?.node === id ? engine.data.version : undefined;
+  const engine = useEngineHealth();
+  return id !== "" && thisNode === id && engine?.node === id ? engine.version : undefined;
 }
 
 /**

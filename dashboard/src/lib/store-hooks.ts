@@ -18,7 +18,7 @@
  */
 
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
-import { useQuery } from "./useQuery.ts";
+import type { EngineHealth } from "~/contract/health.ts";
 import type {
   Slice,
   StoreState,
@@ -152,28 +152,17 @@ export function useConnection() {
 }
 
 /**
- * How often the engine's own health is re-read, in milliseconds.
+ * The engine's own health: the `health` push, `api.Health` WHOLE — or null
+ * while it is not known (the socket is down, or no frame has arrived yet).
  *
- * FIVE SECONDS, because that is the cadence the engine PUSHES at: the socket
- * ticks `{status, in_flight, shutting_down}` every five seconds, and the query
- * below fetches the rest of the same body. Read at any other interval the two
- * halves of one readout disagree by the difference — which is what the shell
- * and the screens that poll this separately do today at 15 seconds, so the
- * rail can say the engine is configured while a panel open in front of it says
- * it is not, for as long as fifteen seconds after a revision applied.
+ * READ FROM THE SLICE, never asked for. The push used to carry three fields
+ * while a `stream` query answered the rest, and five places polled that query
+ * at 5 s and 15 s of their own — so the rail could say a revision had applied
+ * while the panel in front of it said it had not. The snapshot and every
+ * five-second tick carry the whole body now, and there is no query to ask.
  */
-export const HEALTH_POLL_MS = 5_000;
-
-/**
- * The engine's own health: ONE read, shared by everything that shows it.
- *
- * `stream` rather than `health` because a query name may never collide with a
- * push kind, and the query answers the whole body where the push carries three
- * fields of it — including `event_history_seconds`, the read floor three
- * screens used to restate as literal copy.
- */
-export function useEngineHealth() {
-  return useQuery("stream", undefined, { pollMs: HEALTH_POLL_MS });
+export function useEngineHealth(): EngineHealth | null {
+  return useSlice(["health"], (s) => (s.health.status === "unknown" ? null : s.health));
 }
 
 export type { QueryMap, QueryName };

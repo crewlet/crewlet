@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -1681,6 +1682,28 @@ func (e *Engine) liveNodes(ctx context.Context) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// LiveNodes is how many nodes hold a presence lease now — the fleet's size as
+// every fan-out on this node sees it ([Engine.liveNodes]).
+//
+// AN ERROR IS A READ THAT DID NOT HAPPEN, never zero nodes: the health envelope
+// leaves its count out on one, because "0 nodes" beside a page this node is
+// serving is a claim nobody could act on, and the plane being unreachable is
+// already the posture's to say.
+//
+// THE CALLER BOUNDS IT: this is a key-iterating scan the NATS client's per-API
+// timeout does not cover, so it lasts as long as ctx does. The health envelope
+// hands it [ProbeReadBudget].
+func (e *Engine) LiveNodes(ctx context.Context) (int, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return 0, errors.New("engine: no coordination backend to read the fleet's presence from")
+	}
+	nodes, err := e.liveNodes(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(nodes), nil
 }
 
 // reportSearch counts what one answer covered.

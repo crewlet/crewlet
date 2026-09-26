@@ -47,8 +47,9 @@ import {
 } from "./workspaces/sidebars.tsx";
 import { Avatar, SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
 import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
-import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { nodeCountLabel } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
@@ -213,7 +214,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
 
-  const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  const engine = useEngineHealth();
   const inbox = useQuery(
     "work_inbox",
     viewer.handle ? { handle: viewer.handle, limit: 50 } : undefined,
@@ -391,6 +392,7 @@ export function Shell({ children }: { children: ReactNode }) {
               connected={connected}
               authRejected={authRejected}
               configured={engine?.configured}
+              nodes={engine?.nodes}
               inFlight={health.in_flight ?? 0}
               theme={theme}
               setTheme={setTheme}
@@ -530,6 +532,7 @@ function EngineFooter({
   connected,
   authRejected,
   configured,
+  nodes,
   inFlight,
   theme,
   setTheme,
@@ -540,6 +543,8 @@ function EngineFooter({
   connected: boolean;
   authRejected: boolean;
   configured: boolean | undefined;
+  /** The fleet's size off the health push; absent when it could not be read. */
+  nodes: number | undefined;
   inFlight: number;
   theme: ThemeChoice;
   setTheme: (t: ThemeChoice) => void;
@@ -562,7 +567,14 @@ function EngineFooter({
       {/* A LINK TO THIS NODE'S PAGE, not a modal. The engine's own state is an
           object with a page like every other, and a panel that could only be
           reached from here was the one surface with no address. */}
-      <a className="rail-engine" href="#/admin/fleet" title={`Engine ${word}`}>
+      <a
+        className="rail-engine"
+        href="#/admin/fleet"
+        // THE FLEET'S SIZE rides the health push, so the rail can say it with
+        // no read of its own — and says "node count unavailable" rather than
+        // a number when the engine could not count.
+        title={connected ? `Engine ${word} · ${nodeCountLabel(nodes)}` : `Engine ${word}`}
+      >
         {/* The dot is the shape half and the word beside it is the state —
             which is exactly StatusDot's contract, so it is `aria-hidden` and
             a screen reader reads the word once rather than twice. */}

@@ -1367,22 +1367,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // exists to stop.
 const apiShutdownGrace = 5 * time.Second
 
-// agentRoles is the name of every seat the engine runs a turn for — every role
-// in the company, in a unit or at the root, bar the human ones, which have no
-// turn. Nil with no active revision.
-func agentRoles(company *config.Company) []string {
-	if company == nil {
-		return nil
-	}
-	var out []string
-	for role := range company.EachRole() {
-		if role.Name != "" && role.Kind != org.KindHuman {
-			out = append(out, role.Name)
-		}
-	}
-	return out
-}
-
 // seedPauses puts every paused seat on the live projection, named by the role
 // the projection keys seats by. A pause whose seat the company no longer has
 // is skipped: the apply that removed the seat clears it.
@@ -1844,7 +1828,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// published, so a seed read from this one alone showed a restarted node
 	// only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
-	err = observe.Seed(seedCtx, e.History(), agentRoles(companyConfig(e)), app.Stream().State())
+	err = observe.Seed(seedCtx, e.History(), companyConfig(e).AgentRoles(), app.Stream().State())
 	if err != nil {
 		// NOT FATAL, and said out loud rather than swallowed: what a
 		// failed seed costs is a feed, a spend window and a seat's last
@@ -2866,14 +2850,13 @@ func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) knowle
 	return s.Search(ctx, q)
 }
 
-// nativeRetention is this node's retention answer, or nil where there is none.
+// nativeRetention is this node's retention answer, or nil on a node that runs
+// no state log.
 //
 // NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
 // follows: a process running no state log has no applier, no stream and no
 // floor, and a report of zeros would claim a fleet whose log is perfectly
 // trimmed. The question is simply unregistered instead.
-// nativeRetention is the retention half of the API's node runtime, or nil on a
-// node that runs no state log.
 //
 // IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
 // probe is a coordination read, so on a node whose store cannot be reached it

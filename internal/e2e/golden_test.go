@@ -163,6 +163,31 @@ func (c *capture) lastRollup(t *testing.T) map[string]any {
 	return out
 }
 
+// lastHealth reports the newest health body the socket carried — a snapshot's
+// or a tick's, since both carry the whole envelope.
+func (c *capture) lastHealth(t *testing.T) map[string]any {
+	t.Helper()
+	var out map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string         `json:"kind"`
+			Data map[string]any `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil {
+			continue
+		}
+		switch env.Kind {
+		case "snapshot":
+			if health, ok := env.Data["health"].(map[string]any); ok {
+				out = health
+			}
+		case "health":
+			out = env.Data
+		}
+	}
+	return out
+}
+
 // eventTypes reports the type of every `event` frame, in order.
 func (c *capture) eventTypes(t *testing.T) []string {
 	t.Helper()
@@ -404,6 +429,82 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	if model, _ := calls[len(calls)-1]["model"].(string); model != "claude-golden" {
 		t.Errorf("the live call names model %q, not the one that served it", model)
+	}
+
+	// --- THE ENGINE'S OWN HEALTH, WHOLE ----------------------------------- //
+	// The push carries the envelope GET /health answers, so a screen reads
+	// the applied epoch, the posture and the fleet's size off the socket
+	// rather than polling for them. It carried three fields once, and every
+	// other fact on the body was a second request at a cadence of its own.
+	health := frames.lastHealth(t)
+	if health == nil {
+		t.Fatal("no health body reached the dashboard")
+	}
+	// PRESENT rather than positive: this harness seeds its company from a
+	// file, which is active before the control plane has minted an epoch,
+	// and the body says 0 for exactly that. What must never happen is the
+	// field missing, which is the push narrowed back to a few fields.
+	if _, present := health["applied_epoch"].(float64); !present {
+		t.Errorf("the pushed health carries no applied epoch: %v", health)
+	}
+	if health["configured"] != true {
+		t.Errorf("the pushed health says configured = %v on a configured node",
+			health["configured"])
+	}
+	if health["posture"] != "serve" {
+		t.Errorf("the pushed health's posture is %v, want serve", health["posture"])
+	}
+	if nodes, _ := health["nodes"].(float64); nodes != 1 {
+		t.Errorf("the pushed health counts %v nodes on a one-node company, want 1",
+			health["nodes"])
+	}
+	// THE ALARM COUNT THROUGH THE REAL RUNTIME, not a fake one. The API's
+	// own tests hand the envelope a runtime that states its alarms, which
+	// proves the body and nothing about whether the engine's evaluation
+	// reaches it. This company has never taken a backup, so the retention
+	// loop's first evaluation — which runs at boot, before any turn — has
+	// `backup_age` standing, and a count of zero or an absent field is the
+	// wiring between the two dropped.
+	alarms, _ := health["alarms"].(map[string]any)
+	if alarms == nil {
+		t.Errorf("the pushed health carries no alarm count on a node whose "+
+			"alarm table has been evaluated: %v", health)
+	} else if count, _ := alarms["count"].(float64); count < 1 {
+		t.Errorf("the pushed health counts %v alarms on a company that has "+
+			"never taken a backup, want backup_age among them", alarms["count"])
+	} else if worst, _ := alarms["worst"].(string); worst == "" {
+		t.Errorf("the pushed health counts %v alarms and names none of them "+
+			"worst: %v", count, alarms)
+	}
+	for _, floor := range []string{"event_history_seconds", "spend_history_seconds"} {
+		if seconds, _ := health[floor].(float64); seconds <= 0 {
+			t.Errorf("the pushed health's %s is %v", floor, health[floor])
+		}
+	}
+	// THE BOOT SEED'S COVERAGE THROUGH THE REAL ENGINE. The API's test seeds
+	// a LiveState by hand, which proves the field is rendered and nothing
+	// about whether `crewlet run`'s seed reaches it: absent here is the seed
+	// never running (a live screen booted empty) or its coverage dropped on
+	// the way to the envelope, and this node missing from it, or unanswered,
+	// is a seed that read its own store over the fan-out and failed.
+	self, _ := health["node"].(string)
+	seeded, _ := health["seeded_from"].(map[string]any)
+	if seeded == nil {
+		t.Errorf("the pushed health carries no seeded_from on a node whose live "+
+			"state was seeded at boot: %v", health)
+	} else {
+		answered := false
+		nodes, _ := seeded["nodes"].([]any)
+		for _, raw := range nodes {
+			node, _ := raw.(map[string]any)
+			if node["id"] == self && node["answered"] == true {
+				answered = true
+			}
+		}
+		if self == "" || !answered {
+			t.Errorf("the boot seed's coverage %v does not name this node (%q) as "+
+				"answered", seeded, self)
+		}
 	}
 
 	// --- and what the turn cost ---------------------------------------- //

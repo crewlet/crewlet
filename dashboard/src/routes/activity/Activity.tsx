@@ -93,7 +93,7 @@ export function dayKey(ts: string): string {
 export function Activity() {
   const { socket } = useClient();
   const liveEvents = useEvents();
-  const { data: engine } = useEngineHealth();
+  const engine = useEngineHealth();
   const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
