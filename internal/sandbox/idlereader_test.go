@@ -53,12 +53,23 @@ func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 		t.Fatal("the request was cancelled while the stream was still delivering")
 	}
 
-	// Well inside the package constant and well past the budget asked for:
-	// only a reset that honoured the parameter fires here.
-	time.Sleep(150 * time.Millisecond)
+	// WAITED FOR rather than sampled, because firing is the direction a slow
+	// machine helps: a single look after a fixed sleep asserted that the
+	// timer's goroutine had been SCHEDULED by then, which is a claim about
+	// the machine, and it went red under a race-enabled suite on a loaded
+	// box with the reader behaving perfectly. The deadline only has to sit
+	// far inside the package constant — minutes — for a reset that reached
+	// for the constant to fail here; how soon inside it the timer fires is
+	// the scheduler's business.
+	const deadline = 10 * time.Second
+	waited := time.Now()
+	for !cancelled.Load() && time.Since(waited) < deadline {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if !cancelled.Load() {
 		t.Errorf("an idle stream was not abandoned %s after its last byte, "+
-			"so the reset used something other than the 30ms budget", 150*time.Millisecond)
+			"so the reset used something other than the 30ms budget — the "+
+			"package constant is %s", deadline, e2bStreamIdleTimeout)
 	}
 }
 
