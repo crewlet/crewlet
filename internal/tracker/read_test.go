@@ -336,6 +336,37 @@ func TestAScopelessReadIsAboutTheWholeDomain(t *testing.T) {
 	}
 }
 
+// THE EVERYTHING LEVEL IS ABOUT EVERY PROJECT.
+//
+// It reads the tasks of every project, so a record deferred in any one of them
+// is about it. Its closure used to be the workspace CONTAINER — where objects
+// with no project live — which covers no task at all, so a board holding an
+// undecodable record in one project reported itself complete.
+func TestTheEverythingLevelIsAboutEveryProject(t *testing.T) {
+	t.Parallel()
+	everything := tracker.ReadScope(tracker.Query{
+		Scope: tracker.Scope{Workspace: true},
+	})
+	for _, project := range []string{"ENG", "OPS", tracker.WorkspaceContainer} {
+		task := statelog.ScopeSet{Paths: []string{tracker.ScopeTerm{
+			Kind: tracker.TermObject, Container: project, ID: "a-task",
+		}.Path()}}
+		if !everything.Intersects(task) {
+			t.Errorf("the Everything level's scope %v does not cover a task in "+
+				"%s", everything.Paths, project)
+		}
+	}
+	// AND NOTHING BESIDE THE CONTAINERS: a record about one person is not
+	// about every board, or one undecodable profile edit would flag them all.
+	person := statelog.ScopeSet{Paths: []string{tracker.ScopeTerm{
+		Kind: tracker.TermFamily, ID: string(tracker.KindPerson),
+	}.Path()}}
+	if everything.Intersects(person) {
+		t.Errorf("the Everything level's scope %v covers the people family",
+			everything.Paths)
+	}
+}
+
 // A REMOVED TASK IS OUT OF EVERY ANSWER BUT THE TWO THAT ARE ABOUT REMOVALS.
 //
 // ONE predicate for a removed task's whole life, at any age — which is what

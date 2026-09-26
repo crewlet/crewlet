@@ -69,9 +69,17 @@ func ReadScope(q Query) statelog.ScopeSet {
 			Kind: TermContainer, ID: q.Scope.Project,
 		}.Path())
 	case q.Scope.Workspace:
-		paths = append(paths, ScopeTerm{
-			Kind: TermContainer, ID: WorkspaceContainer,
-		}.Path())
+		// THE EVERYTHING LEVEL IS EVERY CONTAINER, not the workspace
+		// container. [WorkspaceContainer] is where an object with no
+		// project lives, and the Everything board reads the tasks of
+		// every project — so a closure naming only it probed a container
+		// no task is filed in, and a board holding a deferred record in
+		// any project reported itself complete. The container level
+		// itself is the tightest term that covers every project and
+		// nothing else the tracker files: the families (the catalogue,
+		// the people) sit beside it, and a board that names a field
+		// adds the catalogue below.
+		paths = append(paths, join(pathDomain, pathContainer))
 	default:
 		paths = append(paths, pathDomain)
 	}
