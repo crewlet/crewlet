@@ -177,7 +177,7 @@ func TestBootstrapRoundTripsThroughYAML(t *testing.T) {
 	original, err := ParseBootstrap([]byte(`
 node:
   id: node-eu-1
-  roles: [seats, workers]
+  roles: [data, seats, workers]
   labels: {zone: eu}
 store: {path: /var/lib/crewlet/crewlet.db, max_open_conns: 6}
 stream: {type: embedded, store_dir: /var/lib/crewlet/stream}

@@ -391,7 +391,95 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.validateTopology())
+	p.wrap(b.ValidateRoles())
 	return p.err()
+}
+
+// ValidateRoles refuses the settings a node's roles contradict.
+//
+// EXPORTED FOR THE ONE CALLER THAT CHANGES THE ROLES AFTER [Bootstrap.Validate]
+// HAS RUN: `crewlet run -roles` is applied to a loaded file, and a flag that
+// turned a data node's roles into `seats` would otherwise boot a node that
+// believes itself stateless on a store it has not agreed to lose.
+//
+// A NODE WITHOUT `data` KEEPS NO DURABLE STATE, and every rule below is one
+// way of holding some. Its store is scratch, deleted at every boot; an
+// embedded stream joins the fleet as a leaf, holding no replica and voting in
+// no quorum; and it runs no role that reads this node's own copy of the
+// replicated estate, because it has none. A node WITH `data` is the opposite
+// on each: a member, never a leaf, and never scratch. Each is refused naming
+// the field to change, because each is otherwise a node that boots and then
+// either loses the company's history or reads an estate that is not there.
+func (b *Bootstrap) ValidateRoles() error {
+	var p problems
+	roles, err := b.Node.RoleSet()
+	if err != nil {
+		//nolint:nilerr // Node.validate reports it, naming the field, and
+		// the -roles flag parsed it before calling; every rule below keys
+		// on the set, so none of them can be judged without one.
+		return nil
+	}
+	embedded := b.Stream.Type != StreamNATS
+	if roles.Has(placement.RoleData) {
+		if b.Store.Scratch {
+			p.add(field("store.scratch"), ErrConflict,
+				"this node holds data, and a scratch store is deleted at every "+
+					"boot — the company's tracker, pages and this node's record "+
+					"of its own turns with it. Remove it, or drop %q from "+
+					"node.roles", placement.RoleData)
+		}
+		if b.Stream.Leaf.Joins() {
+			p.add(field("stream.leaf.urls"), ErrConflict,
+				"a node that holds data is a MEMBER of the fleet's broker, and "+
+					"stream.leaf.urls joins it as a leaf holding nothing. Remove "+
+					"them, or drop %q from node.roles", placement.RoleData)
+		}
+		return p.err()
+	}
+	for _, role := range []placement.NodeRole{placement.RoleWorkers, placement.RoleIngress} {
+		if !roles.Has(role) {
+			continue
+		}
+		p.add(field("node.roles"), ErrConflict,
+			"%q needs %q: %s", role, placement.RoleData, needsData[role])
+	}
+	if !b.Store.Scratch {
+		p.add(field("store.scratch"), ErrMissing,
+			"a node without %q keeps no durable state, so its store is "+
+				"deleted at every boot — set store.scratch: true to say so, "+
+				"since it is the one setting here that deletes something",
+			placement.RoleData)
+	}
+	if b.Store.ReplicatedPath != "" || b.Store.SnapshotDir != "" {
+		p.add(field("store"), ErrConflict,
+			"replicated_path and snapshot_dir are where a node keeps its copy "+
+				"of the replicated estate, and a node without %q holds none",
+			placement.RoleData)
+	}
+	if embedded {
+		if !b.Stream.Leaf.Joins() {
+			p.add(field("stream.leaf.urls"), ErrMissing,
+				"a node without %q runs its embedded broker as a LEAF of the "+
+					"fleet's — no JetStream, no replica, no vote — and has to be "+
+					"told which members' leaf listeners to join", placement.RoleData)
+		}
+		if b.Stream.Leaf.Port != 0 {
+			p.add(field("stream.leaf.port"), ErrConflict,
+				"a leaf listener is a MEMBER's, where stateless nodes join; a "+
+					"node without %q is one of those nodes", placement.RoleData)
+		}
+	}
+	return p.err()
+}
+
+// needsData is why each role a stateless node cannot run needs `data`.
+var needsData = map[placement.NodeRole]string{
+	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
+		"embedding pass, the maintenance sweep, the scheduler — read and " +
+		"write this node's own copy of the replicated estate directly",
+	placement.RoleIngress: "the API's tracker, knowledge-base and operator " +
+		"surfaces — the retention report, capacity, reanchor, eviction and " +
+		"backup — read this node's own estate and act on its own state log",
 }
 
 // validateTopology refuses slot combinations that cannot work.
@@ -417,7 +505,16 @@ func (b *Bootstrap) validateTopology() error {
 	if b.Stream.Type != StreamNATS {
 		peers = len(b.Stream.Cluster.Peers)
 	}
-	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded
+	// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so
+	// the broker it reaches is always somebody else's members. And so is a
+	// member that OPENS a leaf listener, even one with no peers: the nodes
+	// that join it claim seats and hold presence leases, and a lease kept
+	// in this process is one they can never see — each would read the
+	// fleet as having no data node and claim every seat for itself.
+	leaf := b.Stream.Type != StreamNATS && b.Stream.Leaf.Joins()
+	servesLeaves := b.Stream.Type != StreamNATS && b.Stream.Leaf.Port != 0
+	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
+		leaf || servesLeaves
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
 		p.add(field("coordination.type"), ErrConflict,
@@ -456,7 +553,11 @@ func (b *Bootstrap) validateTopology() error {
 	// engine.attachCoordination) — so a deployment that ran three brokers
 	// for availability kept its seat mailboxes and every lease on whichever
 	// single server happened to hold them, and lost them with it.
-	if b.Stream.Type != StreamNATS && b.Stream.Replicas > 1 && peers == 0 {
+	//
+	// NOR A LEAF: it provisions the fleet's streams on the members it
+	// reaches, so its replica count is the fleet's, and this file names none
+	// of those members.
+	if b.Stream.Type != StreamNATS && !leaf && b.Stream.Replicas > 1 && peers == 0 {
 		p.add(field("stream.replicas"), ErrConflict,
 			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
 	}
@@ -498,16 +599,21 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: ingress, seats,
+	// Roles is what this process is willing to do: data, ingress, seats,
 	// workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
+	//
+	// `data` is the one role that is a promise about the DISK rather than
+	// about work: a node without it keeps nothing that has to outlive it,
+	// which is what a small, disposable agent node wants — see
+	// [Bootstrap.ValidateRoles] for everything it then requires.
 	//
 	// Subtracting a role subtracts it from THIS node, never from the
 	// company: a fleet with no workers node runs no scheduler and no
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: ingress, seats, workers. Omit for all three."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state: it needs store.scratch, and an embedded stream joins the fleet through stream.leaf.urls."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -537,6 +643,7 @@ type Node struct {
 // It is derived from the placement package rather than restated, so the
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
+	string(placement.RoleData),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),
@@ -732,6 +839,21 @@ type Store struct {
 	// and so is the replacement connection a pinned writer draws after a
 	// transaction that did not end. See internal/store's writequeue.go.
 	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."`
+
+	// Scratch declares this node's store DISPOSABLE: the engine deletes
+	// whatever is at `path` every time it boots, under the store's own
+	// lock, before opening it fresh.
+	//
+	// REQUIRED on a node without the `data` role and REFUSED on one with
+	// it, so the deletion is never a surprise in either direction: a node
+	// that holds no durable state writes its seats' memory, its working
+	// rows and its record of its own turns here only for as long as it
+	// runs, and everything that matters travels on the broker; while a
+	// node holding data would lose the company's history to a restart.
+	// Explicit rather than derived from the roles because it is the one
+	// setting here that deletes something, and an operator who removes
+	// `data` from a node that had it must say so twice.
+	Scratch bool `yaml:"scratch,omitempty" json:"scratch,omitempty" desc:"Delete this node's store at every boot. Required on a node without the data role, refused on one with it."`
 }
 
 func (s *Store) validate(path Path) error {
@@ -848,6 +970,10 @@ type Stream struct {
 	// Cluster makes the embedded server join peers, which is the fleet
 	// topology: every node embeds a member of one cluster.
 	Cluster StreamCluster `yaml:"cluster,omitempty" json:"cluster,omitzero"`
+
+	// Leaf is how a node that holds no data reaches the fleet's broker,
+	// and where a member lets such nodes in. See [StreamLeaf].
+	Leaf StreamLeaf `yaml:"leaf,omitempty" json:"leaf,omitzero"`
 
 	// Replicas is the stream replica count: 1 solo, 3 in a fleet, where it
 	// is what makes a publish quorum-durable before it returns.
@@ -1135,6 +1261,117 @@ type StreamCluster struct {
 	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port peers should dial for this member, when it differs from what it binds."`
 }
 
+// StreamLeaf is the embedded broker's side of a LEAF link: a node without
+// the `data` role joins through it, and a member opens it for them.
+//
+// ONE BLOCK, TWO SIDES, decided by the node's roles: `urls` is how a
+// stateless node dials in and is refused on a member, and `port` is a
+// member's listener and is refused on a stateless node — each side of the
+// link is exactly one of them. A stateless node's broker runs no JetStream,
+// holds no replica and is in no quorum; everything its clients ask of the
+// fleet crosses this link.
+type StreamLeaf struct {
+	// URLs are the leaf listeners of the members this node may join, any
+	// of which will do. A node WITHOUT the `data` role on an embedded
+	// stream requires them.
+	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members a node without the data role joins through, e.g. nats-leaf://data-a.internal:7422. Any one that answers will do."`
+
+	// Port is the leaf listener a MEMBER opens for the fleet's stateless
+	// nodes. Zero opens none.
+	//
+	// It accepts any connection that reaches it, exactly as the route
+	// port does and for the same reason: the fleet is one trust domain on
+	// a network its operator controls. Put both there and nowhere else.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port."`
+
+	// Host is the interface the leaf listener binds, empty for every one
+	// of them — the same exposure [StreamCluster.Host] names.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface."`
+
+	// Advertise is the address leaves should dial for this member when it
+	// differs from what it binds.
+	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port leaves should dial for this member, when it differs from what it binds."`
+}
+
+// validate refuses a leaf block that is neither side of a link, or both.
+//
+// The roles decide WHICH side a node is on (see [Bootstrap.ValidateRoles]);
+// this is what either side needs on its own terms.
+func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
+	var p problems
+	if l.IsZero() {
+		return nil
+	}
+	if external {
+		p.add(path, ErrConflict,
+			"stream.leaf configures the EMBEDDED broker's leaf link, and a node "+
+				"dialling an external %q cluster is already a plain client of it: "+
+				"a node without the data role needs nothing more. Remove it, or "+
+				"set type to %q", StreamNATS, StreamEmbedded)
+		return p.err()
+	}
+	if l.Port < 0 || l.Port > 65535 {
+		p.add(at(path, "port"), ErrOutOfRange, "must be 0..65535, got %d", l.Port)
+	}
+	if l.Joins() {
+		// ONE SIDE OF THE LINK: a leaf dials, and everything a member
+		// listens or persists with is a way of holding something.
+		if l.Port != 0 || l.Host != "" || l.Advertise != "" {
+			p.add(at(path, "port"), ErrConflict,
+				"port, host and advertise are a MEMBER's leaf listener, and "+
+					"urls joins this node as a leaf — a node is one side of "+
+					"the link")
+		}
+		if !s.Cluster.IsZero() {
+			p.add(field("stream.cluster"), ErrConflict,
+				"a leaf is not a cluster member: it runs no JetStream and "+
+					"holds no replica. Remove the cluster block, or the leaf urls")
+		}
+		if s.StoreDir != "" || s.StoreMaxBytes != 0 {
+			p.add(field("stream.store_dir"), ErrConflict,
+				"a leaf runs no JetStream, so it has no stream store to keep")
+		}
+		for i, raw := range l.URLs {
+			u, err := url.Parse(strings.TrimSpace(raw))
+			if err != nil || u.Host == "" || !slices.Contains(leafSchemes, u.Scheme) {
+				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrUnknownValue,
+					"%q is not a member's leaf listener: want %s://host:port",
+					raw, leafSchemes[0])
+			}
+		}
+		return p.err()
+	}
+	if l.Port == 0 {
+		p.add(at(path, "port"), ErrMissing,
+			"is required once host or advertise is set: they describe a leaf "+
+				"LISTENER, and without a port this member opens none")
+	}
+	if l.Port != 0 && strings.TrimSpace(s.StoreDir) == "" {
+		p.add(field("stream.store_dir"), ErrMissing,
+			"a member with a leaf listener is where the nodes that join it keep "+
+				"everything — their seats' mailboxes and every record they write "+
+				"— and a stream kept in memory loses all of it at this member's "+
+				"next restart. Name a directory")
+	}
+	if l.Advertise != "" {
+		if err := validateAdvertise(l.Advertise); err != nil {
+			p.add(at(path, "advertise"), ErrShape, "%v", err)
+		}
+	}
+	return p.err()
+}
+
+// leafSchemes are the URL schemes a leaf link may be dialled with.
+var leafSchemes = []string{"nats-leaf", "nats", "tls"}
+
+// IsZero lets an unset leaf block drop out of a JSON round trip.
+func (l StreamLeaf) IsZero() bool {
+	return len(l.URLs) == 0 && l.Port == 0 && l.Host == "" && l.Advertise == ""
+}
+
+// Joins reports whether this block joins the fleet as a leaf.
+func (l StreamLeaf) Joins() bool { return len(l.URLs) > 0 }
+
 // IsZero lets an unset cluster block drop out of a JSON round trip.
 func (c StreamCluster) IsZero() bool {
 	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0 &&
@@ -1249,6 +1486,7 @@ func (s *Stream) validate(path Path) error {
 				"from a NAMED cluster, so this node would start solo and form no "+
 				"cluster at all")
 	}
+	p.wrap(s.Leaf.validate(at(path, "leaf"), s, external))
 	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
 		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
 	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,

@@ -724,8 +724,13 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// deployment it describes. A company whose tracker and knowledge base are
 	// both a vendor's starts no log at all and is unaffected, which is why
 	// the rule needs both documents.
+	//
+	// NOT A LEAF: a node without `data` keeps no stream of its own — every
+	// log it reaches lives on the members it joined, which hold the store
+	// directory — so it has nothing to lose to a restart and a store
+	// directory is refused on it outright ([StreamLeaf.validate]).
 	if company.RunsStateLog() && boot.Stream.Type != StreamNATS &&
-		strings.TrimSpace(boot.Stream.StoreDir) == "" {
+		!boot.Stream.Leaf.Joins() && strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add(field("stream.store_dir"), ErrMissing,
 			"this company runs the engine's own backends (tracker.backend: %s, "+
 				"knowledge.backend: %s), whose logs live on the stream, and an "+

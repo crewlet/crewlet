@@ -292,7 +292,7 @@ func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []placement.NodeRole{placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
+	for _, role := range []placement.NodeRole{placement.RoleData, placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
 		if !roles.Has(role) {
 			t.Fatalf("an undeclared node must run %s", role)
 		}
@@ -301,12 +301,15 @@ func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 
 func TestNodeProfileCarriesRolesAndLabels(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"), EnvOnly())
+	cfg, err := ParseBootstrap([]byte("node:\n  roles: [seats]\n  labels:\n    zone: eu\n"+
+		"store:\n  path: /tmp/n.db\n  scratch: true\n"+
+		"stream:\n  leaf:\n    urls: [nats-leaf://data-a.internal:7422]\n"+
+		"coordination:\n  type: embedded-kv\n"), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
 	profile := cfg.Node.Profile("node-7")
-	if !profile.RunsSeats() || profile.RunsIngress() {
+	if !profile.RunsSeats() || profile.RunsIngress() || profile.HoldsData() {
 		t.Fatalf("profile roles = %v", profile.Roles.Names())
 	}
 	if profile.Labels["zone"] != "eu" {

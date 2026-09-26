@@ -45,6 +45,15 @@ import (
 type NodeRole string
 
 const (
+	// RoleData holds the company's durable state: a full copy of the
+	// replicated estate, a member of the fleet's broker — stream replicas,
+	// raft groups, a vote in every quorum — and the node's own database.
+	// A node WITHOUT it keeps nothing that has to outlive it: its store is
+	// scratch, its broker is a leaf of the members' with JetStream off, and
+	// it reads and writes the company's tracker and knowledge base through
+	// a data node. It is what a small, disposable agent node runs.
+	RoleData NodeRole = "data"
+
 	// RoleIngress terminates inbound traffic: the HTTP API, the dashboard,
 	// and the webhooks every integration posts to. A fleet with none of
 	// these still runs its agents and never hears from the outside world.
@@ -66,7 +75,14 @@ const (
 // allRoles is the vocabulary, in the order a profile is written to the wire.
 // Alphabetical, so two nodes describing the same role set produce byte-equal
 // meta.
-var allRoles = []NodeRole{RoleIngress, RoleSeats, RoleWorkers}
+var allRoles = []NodeRole{RoleData, RoleIngress, RoleSeats, RoleWorkers}
+
+// Vocabulary is every role, in wire order — a fresh slice per call.
+//
+// EXPORTED SO NOTHING WRITES THE LIST AGAIN. The fleet's unmanned-role check
+// walked a copy of its own, and a copy is how a fourth role reaches every
+// node's config and no node's warning about nobody holding it.
+func Vocabulary() []NodeRole { return slices.Clone(allRoles) }
 
 // ErrUnknownRole reports a role name that is not in the vocabulary. Config
 // loading wraps it; nothing branches on it beyond refusing to boot.
@@ -268,6 +284,18 @@ func (n NodeProfile) RunsWorkers() bool { return n.Roles.Has(RoleWorkers) }
 
 // RunsIngress reports whether this node serves inbound traffic.
 func (n NodeProfile) RunsIngress() bool { return n.Roles.Has(RoleIngress) }
+
+// HoldsData reports whether this node holds the company's durable state —
+// a copy of the replicated estate and a member of the broker. A node that
+// does not is stateless: see [RoleData].
+//
+// READ OFF A PEER'S ROW, it fails the way every role read does — an unknown
+// or unreadable set is every role — which is the safe reading for most
+// questions and a NARROW one here: a peer an older build describes is
+// counted as holding data, so a fleet mid-upgrade may wait on a node's
+// position it will not report. The alternative reading would trim past a
+// member's rows, which is the one thing a trim must never do.
+func (n NodeProfile) HoldsData() bool { return n.Roles.Has(RoleData) }
 
 // Meta is the lease payload for this node's presence row, in the shape
 // [coord.AcquireOptions].Meta takes. Roles are written resolved and sorted,

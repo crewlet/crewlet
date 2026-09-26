@@ -214,6 +214,9 @@ var ErrInvalidConfig = errors.New("seat: invalid host configuration")
 // role. Every symptom is an absence — nothing fires, nothing is received,
 // nothing errors — which is why they need saying out loud.
 var unmannedHints = map[placement.NodeRole]string{
+	placement.RoleData: "no live node holds the company's durable state, so nothing " +
+		"can read or write the tracker or the knowledge base, and every node " +
+		"without the role is waiting on one that does. Give a node the 'data' role.",
 	placement.RoleIngress: "no live node serves the HTTP API, so no webhook from any " +
 		"integration reaches this company and the dashboard is down. " +
 		"Give a node the 'ingress' role.",

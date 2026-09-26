@@ -221,12 +221,12 @@ func TestParseRoles(t *testing.T) {
 		{
 			name:   "nil is every role",
 			values: nil,
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "empty is every role",
 			values: []string{},
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "one role is one role",
@@ -279,7 +279,7 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	t.Parallel()
 
 	var unset RoleSet
-	for _, role := range []NodeRole{RoleIngress, RoleSeats, RoleWorkers} {
+	for _, role := range Vocabulary() {
 		if !unset.Has(role) {
 			t.Fatalf("the unset role set must have %q", role)
 		}
@@ -289,13 +289,23 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	}
 
 	zero := NodeProfile{ID: "n1"}
-	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() {
+	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() || !zero.HoldsData() {
 		t.Fatalf("a profile with no declared roles must do everything, got %v", zero.Roles.Names())
 	}
 
 	declared := NodeProfile{ID: "api", Roles: Roles(RoleIngress)}
 	if declared.RunsSeats() {
 		t.Fatal("an ingress-only node must not run seats")
+	}
+	// AND AN OLDER PEER HOLDS DATA. A presence row an older build wrote
+	// names no `data` role, and reading it as stateless would drop a
+	// member's position out of the trim's minimum.
+	if !zero.HoldsData() {
+		t.Fatal("a profile with no declared roles must hold data")
+	}
+	stateless := NodeProfile{ID: "agent", Roles: Roles(RoleSeats)}
+	if stateless.HoldsData() {
+		t.Fatal("a seats-only node must not hold data")
 	}
 }
 

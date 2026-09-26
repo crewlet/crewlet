@@ -149,7 +149,7 @@ func runHelper(t *testing.T, path, mode string) (string, error) {
 // runLockHelper opens the database and reports what happened. Called from
 // TestMain in store_test.go, which is this binary's single entry point.
 func runLockHelper(path, mode string) int {
-	db, err := store.Open(context.Background(), path, store.Options{})
+	db, err := store.Open(context.Background(), path, store.Options{Scratch: mode == "scratch"})
 	if err != nil {
 		if errors.Is(err, store.ErrLocked) {
 			fmt.Printf("%s %v\n", lockedMarker, err)

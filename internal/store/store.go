@@ -200,6 +200,25 @@ type Options struct {
 	// giving up; 0 means defaultBusyTimeout.
 	BusyTimeout time.Duration
 
+	// Scratch makes [Open] DISCARD whatever is at the node estate's path
+	// before opening it: the file and every sidecar, under the store's own
+	// lock, so a database another process holds is refused rather than
+	// deleted underneath it — and so is one another handle in THIS process
+	// has open, because a scratch store is discarded before it is opened,
+	// never under a live handle.
+	//
+	// It is what a node without the `data` role runs: nothing it writes
+	// here has to outlive it. Set only by the engine's own open for a
+	// running node, never by a tool that opens the same file to read it.
+	Scratch bool
+
+	// NodeOnly brings up the node estate alone. [DB.Replicated] then
+	// answers nil, and every read or write through it [ErrNoEstate] — the
+	// shape a node that holds no copy of the replicated estate has, where
+	// a code path that reached for one anyway is told so rather than
+	// handed an empty database that reads as a company with nothing in it.
+	NodeOnly bool
+
 	// EmbeddingDim is the width of the vectors the active company config's
 	// embedding model produces. It is a RUNTIME property, deliberately: the
 	// Postgres schema templated it into `vector(N)` DDL, which forced the
@@ -361,9 +380,18 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if replicatedPath == path && !strings.HasPrefix(path, ":memory:") && path != "" {
 		return nil, fmt.Errorf("%w: %s", ErrOneFile, path)
 	}
+	if opts.Scratch {
+		if err := discard(path); err != nil {
+			return nil, err
+		}
+	}
 	db, err := openEstate(ctx, EstateNode, path, opts, nil)
 	if err != nil {
 		return nil, err
+	}
+	if opts.NodeOnly {
+		db.opened = opts
+		return db, nil
 	}
 	// THE REPLICATED ESTATE SECOND, and its failure closes the first. A
 	// handle on one file and not the other is a node that would apply
@@ -677,6 +705,13 @@ func (d *DB) ReplicatedPath() string {
 	}
 	if peer := d.Replicated(); peer != nil {
 		return peer.path
+	}
+	if d.opened.NodeOnly {
+		// NO REPLICATED ESTATE AT ALL, which is not the same as one
+		// that is closed: a path derived here would name a file this
+		// node never had and never will, and a caller copying or
+		// adopting into it would create one.
+		return ""
 	}
 	return ReplicatedPath(d.path, d.opened.ReplicatedPath)
 }

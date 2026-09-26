@@ -297,14 +297,18 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		tracker    config.TrackerBackend
 		knowledge  config.KnowledgeBackend
 		accept     bool
+		leaf       bool
 	}{
-		"both native on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false},
-		"a native tracker on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false},
-		"native pages on an in-memory stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"a blank store directory is none":         {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"native with a store directory":           {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true},
-		"native on an external cluster":           {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true},
-		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
+		// A LEAF KEEPS NO STREAM: every log it reaches is a member's, and
+		// the member holds the store directory.
+		"native on a leaf with no store directory": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true},
+		"both native on an in-memory stream":       {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false},
+		"a native tracker on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false},
+		"native pages on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
+		"a blank store directory is none":          {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
+		"native with a store directory":            {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, false},
+		"native on an external cluster":            {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, false},
+		"vendors for both on the same stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -312,6 +316,9 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			b.Stream.StoreDir = tc.storeDir
 			if tc.streamType == config.StreamNATS {
 				b.Stream.URL = "nats://broker.example.com:4222"
+			}
+			if tc.leaf {
+				b.Stream.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
 			}
 			c := config.DefaultCompany()
 			c.Name = "Acme"

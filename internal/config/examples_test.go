@@ -267,7 +267,7 @@ logging:
 
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [ingress, seats, workers]
+  roles: [data, ingress, seats, workers]
   labels:
     zone: eu
 

@@ -196,7 +196,7 @@
           "type": "integer"
         },
         "roles": {
-          "description": "What this node does: ingress, seats, workers. Omit for all three.",
+          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state: it needs store.scratch, and an embedded stream joins the fleet through stream.leaf.urls.",
           "items": {
             "type": "string"
           },
@@ -272,6 +272,10 @@
           "description": "Second local database, for replicated state; empty puts it beside path.",
           "type": "string"
         },
+        "scratch": {
+          "description": "Delete this node's store at every boot. Required on a node without the data role, refused on one with it.",
+          "type": "boolean"
+        },
         "snapshot_dir": {
           "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
           "type": "string"
@@ -297,6 +301,9 @@
           "description": "Event stream retention; 0 takes the queue default.",
           "minimum": 0,
           "type": "number"
+        },
+        "leaf": {
+          "$ref": "#/$defs/StreamLeaf"
         },
         "pages_log_max_bytes": {
           "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB.",
@@ -387,6 +394,33 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "StreamLeaf": {
+      "additionalProperties": false,
+      "properties": {
+        "advertise": {
+          "description": "host:port leaves should dial for this member, when it differs from what it binds.",
+          "type": "string"
+        },
+        "host": {
+          "description": "Interface the leaf listener binds. Empty binds every interface.",
+          "type": "string"
+        },
+        "port": {
+          "description": "A member's leaf listener, where nodes without the data role join. Accepts any connection that reaches it, like the route port.",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "urls": {
+          "description": "Leaf listeners of the members a node without the data role joins through, e.g. nats-leaf://data-a.internal:7422. Any one that answers will do.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"

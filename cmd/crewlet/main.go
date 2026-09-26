@@ -198,7 +198,7 @@ func usage(w io.Writer) {
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
-                              -roles ingress|seats|workers narrows what this node does
+                              -roles data|ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
@@ -2246,6 +2246,15 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 			return fmt.Errorf("-roles: %w", err)
 		}
 		boot.Node.Roles = names
+		// AND WHAT THE ROLES REQUIRE OF THE REST OF THE FILE. Whether a
+		// node holds data decides whether its store is deleted at boot
+		// and whether its broker joins as a leaf — so a flag that
+		// removed `data` from a node whose file keeps a durable store
+		// must be refused here, naming the file's setting, rather than
+		// booting a node that is neither.
+		if err := boot.ValidateRoles(); err != nil {
+			return fmt.Errorf("-roles %s: %w", strings.Join(names, ","), err)
+		}
 	}
 	if isFlagSet(fs, "api-host") {
 		boot.API.Host = apiHost

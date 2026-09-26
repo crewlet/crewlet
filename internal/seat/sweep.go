@@ -552,7 +552,7 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 // and again when it comes back — not 720 times.
 func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 	unmanned := map[placement.NodeRole]struct{}{}
-	for _, role := range []placement.NodeRole{placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
+	for _, role := range placement.Vocabulary() {
 		manned := false
 		for _, node := range live {
 			if node.Roles.Has(role) {

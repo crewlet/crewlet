@@ -431,8 +431,11 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	for _, role := range unmanned {
 		names = append(names, role.(string))
 	}
-	if len(names) != 2 {
-		t.Fatalf("unmanned = %v, want ingress and workers", names)
+	// DATA IS NAMED TOO, and it is the gravest of the three: a fleet
+	// whose only node runs seats holds no copy of the estate at all, so
+	// every tracker and page tool on it fails.
+	if want := []string{"data", "ingress", "workers"}; !slices.Equal(names, want) {
+		t.Fatalf("unmanned = %v, want %v", names, want)
 	}
 }
 
