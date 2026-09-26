@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -103,19 +105,40 @@ type Tail struct {
 	// From is the statuses the signal may claim out of. A status outside
 	// [Claimable] is never claimed, whatever this says.
 	From []string
+
+	// Held says whether the signal is about the answer held on the row for
+	// the launch ([PendingRun.HeldAnswer]): true takes only a row holding
+	// one, and false only a row holding none.
+	//
+	// BOTH DIRECTIONS, because an answer held for a launch is that launch's
+	// one answer. A completion or a person's reply that claimed a row
+	// holding one would resume the turn on itself and leave the held answer
+	// behind on a row that has moved on, read by nothing; and the signal
+	// that the held answer may be resumed must not take a row holding none,
+	// which it would resume with nothing.
+	Held bool
 }
 
 // CompletionTail is what a completion of one job claims: that job, while it
-// is running. The poll only fires on a running row, so a completion that
-// finds its job in any other status is a duplicate of one that already took
-// it.
+// is running and holds no answer. The poll only fires on a running row, so a
+// completion that finds its job in any other status is a duplicate of one
+// that already took it, and one that finds its job's result held is a
+// duplicate of the completion that held it.
 func CompletionTail(launch string) Tail {
 	return Tail{Launch: launch, From: []string{StatusRunning}}
 }
 
-// AnswerTail is what an answer claims: the job that asked, while it waits.
+// AnswerTail is what an answer claims: the job that asked, while it waits and
+// holds no answer already.
 func AnswerTail(launch string) Tail {
 	return Tail{Launch: launch, From: Awaiting}
+}
+
+// HeldTail is what the signal that a held answer may be resumed claims: the
+// launch it was held for, in whichever status it was held in — running for a
+// job's result, one of [Awaiting] for a person's reply.
+func HeldTail(launch string) Tail {
+	return Tail{Launch: launch, From: Claimable, Held: true}
 }
 
 // Release is how a claimed tail is handed back for its signal's retry: the
@@ -144,6 +167,15 @@ type Release struct {
 	// the phase's carried spend, recorded on the row by the release itself.
 	// See [PendingRun.CarriedCounted].
 	CarriedCounted bool
+
+	// Held is an answer the release holds on the row for the claim's
+	// launch, nil for none: the result a completion collected while the
+	// seat's budget had no room for the turn it resumes (see
+	// [PendingRun.HeldAnswer]). IN THE SAME WRITE as the hand-back, so the
+	// run is never back in running, its job finished and its box paused,
+	// without the result that says so. A release carrying none leaves an
+	// answer the row already holds where it is.
+	Held *HeldAnswer
 
 	// Fence is the lease the claim was taken under.
 	Fence Fence
@@ -606,6 +638,20 @@ const MaxBridgeCalls = 200
 // what this one wrote. Renaming a field renames a key, and a key the reader
 // does not know decodes to a zero value — an emptied box reference is a
 // leaked sandbox. Add fields; never rename or repurpose one.
+//
+// A MEMBER THIS BUILD DOES NOT KNOW IS CARRIED, not dropped: every write here
+// is a read-modify-write of the whole record, so a build that decoded only its
+// own fields would erase, on its first write, everything a newer peer added —
+// a charge record, a held answer — and the newer peer would then act as
+// though it had never been written. [PendingRun.Extra] holds those members
+// through the write.
+//
+// A LAUNCH-SCOPED FACT NAMES ITS LAUNCH. A build that does not know a field
+// carries it through [PendingStore.BeginLaunch] as it carries every member it
+// does not know, so a fact about one job that did not name the job would read
+// as the next job's once such a build had relaunched the run.
+// [PendingRun.HeldAnswer] names its launch for that reason, and so must every
+// launch-scoped field added after it.
 type PendingRun struct {
 	// TurnID is the RUN this record belongs to — one execution of a turn,
 	// and this record's own key. See ADR-0017.
@@ -655,6 +701,18 @@ type PendingRun struct {
 	// build carries none, so the two still match each other and nothing
 	// else.
 	LaunchID string `json:"launch_id,omitempty"`
+
+	// Launches is how many launches this run has opened, counting the one it
+	// holds now: set to one by the launch that creates the row, raised by
+	// every [PendingStore.BeginLaunch] after it, and reset by nothing.
+	//
+	// PER RUN, NOT PER LAUNCH, because what it bounds is a chain no single
+	// launch sees. A resumed executor gets a fresh tool loop, so a round
+	// that relaunches on every resume is bounded by nothing the loop counts;
+	// [Launch] refuses a launch once this reaches the cap the launcher sets
+	// ([LaunchRequest.MaxLaunches]). Zero on a row a build that predates it
+	// wrote, and such a run counts from its next launch.
+	Launches int `json:"launches,omitempty"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
@@ -796,11 +854,41 @@ type PendingRun struct {
 	// only what no record has counted.
 	//
 	// A build that predates the field does not know it: it neither sets it
-	// nor honours it, and a write it makes to the row re-encodes the row
-	// without it. So while such a build shares the fleet, a resume one of its
-	// nodes retries counts the carried spend on each of its attempts'
-	// records, and a retry after one of its writes counts it again.
+	// nor honours it, and one that predates [PendingRun.Extra] as well
+	// re-encodes the row without it on every write it makes. So while such
+	// a build shares the fleet, a resume one of its nodes retries counts the
+	// carried spend on each of its attempts' records, and a retry after one
+	// of its writes counts it again.
 	CarriedCounted bool `json:"carried_counted,omitempty"`
+
+	// HeldAnswer is the answer to this launch's pending run_sandbox call,
+	// held on the row because the seat's budget had no room for the turn it
+	// resumes; nil when none is held. See [HeldAnswer].
+	//
+	// Cleared by [PendingStore.BeginLaunch] alone, like every launch-scoped
+	// record: a resume that fails hands its claim back with the answer still
+	// held, for the retry. And it names its launch, so one a build that does
+	// not know the field carried through a relaunch is read as nobody's
+	// ([PendingRun.Held]).
+	HeldAnswer *HeldAnswer `json:"held_answer,omitempty"`
+
+	// TriggeredAt is the instant the turn that launched this run could first
+	// have minted an operation id — the TriggeredAt of that turn's context
+	// (internal/agent/turnctx), carried in [TurnRef.TriggeredAt]. A resume
+	// re-enters that turn with no trigger to re-derive it from, so it is
+	// carried here; see [PendingRun.TriggerInstant].
+	//
+	// PER RUN: written by the launch that creates the row, and by a later
+	// launch only onto a row that has none, which is a row a build that
+	// predates the field wrote.
+	TriggeredAt time.Time `json:"triggered_at,omitzero"`
+
+	// Extra is every member of the record this build does not know, carried
+	// through each write so that a newer build's fields survive a node of
+	// this one (see the type's doc). Never set by a caller: [CoordStore]
+	// fills it on the way in, and a member this build knows is never taken
+	// from it.
+	Extra map[string]json.RawMessage `json:"-"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
@@ -827,6 +915,120 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
+// Held is the answer held on the row for the launch it holds now, and false
+// when there is none — including one held for an earlier launch, which a build
+// that does not know the field carried through a relaunch and which answers a
+// call this launch never made.
+func (r PendingRun) Held() (HeldAnswer, bool) {
+	if r.HeldAnswer == nil || r.HeldAnswer.Launch != r.LaunchID {
+		return HeldAnswer{}, false
+	}
+	return *r.HeldAnswer, true
+}
+
+// TriggerInstant is the earliest instant this run's turn can have minted an
+// operation id, for the turn a resume re-enters: the earlier of
+// [PendingRun.TriggeredAt] and the run's first launch.
+//
+// THE FIRST LAUNCH ALONE bounds only what the turn minted after it, and a
+// resumed turn names again what it named before its first launch: a write it
+// made before the suspend and makes again after the resume derives the same
+// id, which the node that decides it compares against the instant carried
+// here. So the turn's own instant is carried, and the launch is the fallback
+// for a row that has none — one a build that predates the field wrote, or
+// rewrote without carrying the members it does not know — since every write
+// the turn makes after the launch is still bounded by it. The
+// EARLIER of the two when both are known, because an instant too early costs
+// an answer its caller retries and one too late has a write decided twice.
+func (r PendingRun) TriggerInstant() time.Time {
+	switch {
+	case r.TriggeredAt.IsZero():
+		return r.CreatedAt
+	case r.CreatedAt.IsZero() || r.TriggeredAt.Before(r.CreatedAt):
+		return r.TriggeredAt
+	}
+	return r.CreatedAt
+}
+
+// HeldAnswer is the answer to a launch's pending run_sandbox call, held on
+// the run's row because the seat's token budget had no room for the turn it
+// resumes: that turn's first round would be refused before it was sent.
+//
+// HELD RATHER THAN LEFT WITH ITS SENDER, and the two senders are why. A job's
+// completion left unclaimed would keep its box running, and billed, polled
+// every tick for as long as the cap held; so the coordinator collects the
+// job, which pauses its box, charges it and holds its result here. A person's
+// reply left with the queue would be redelivered with backoff and
+// dead-lettered once its delivery budget was spent, with the run still parked
+// on a question somebody had answered; so it is held here and its delivery
+// acknowledged. Either way the
+// run keeps the status it had — running for a job's result, holding its seat,
+// and waiting on its question for a person's reply, which frees it — and the
+// completion poll, which reads the budget on every tick, signals the seat's
+// node when there is room (a sandbox_answer_ready on the seat's control topic,
+// [Waiter.Tick]). That node claims the held answer ([HeldTail]) and resumes
+// the turn with it ([Coordinator.OnAnswerReady]).
+//
+// ONE PER LAUNCH, written only onto a row holding none for the launch, so the
+// answer resumed is the first one given; and it is kept until a launch
+// replaces it, so a resume that fails hands its claim back with the answer
+// still held for the retry.
+type HeldAnswer struct {
+	// Launch is the [PendingRun.LaunchID] whose call this answers. The row's
+	// own launch has to match it for the answer to be read ([PendingRun.Held]).
+	Launch string `json:"launch"`
+
+	// Text is what the call is answered with. For a person's reply it is the
+	// reply as it arrived, framed at the resume by what the run's box is
+	// then; for a job's result it is the reply already framed, with its
+	// secrets redacted, when the collect held it.
+	//
+	// Empty when InBox is set.
+	Text string `json:"text,omitempty"`
+
+	// InBox says the job's result is not on the row: held with it, the row
+	// would have been past [MaxHeldAnswerBytes]. The result is where the
+	// collect read it, in the files the job left in its paused box, and the
+	// resume collects it again from there; its tokens are already charged
+	// ([PendingRun.Charged]). A person's reply is never held this way —
+	// there is nowhere else it is kept — and one past the bound is refused.
+	InBox bool `json:"in_box,omitempty"`
+
+	// Success, CostUSD and DeliveredRefs are what the job reported, for the
+	// resumed phase's record, as a completion resumed at once hands them
+	// over ([ResumeRequest]). Zero for a person's reply, and when InBox is
+	// set, since the resume reads them back from the box with the text.
+	Success       bool     `json:"success,omitempty"`
+	CostUSD       float64  `json:"cost_usd,omitempty"`
+	DeliveredRefs []string `json:"delivered_refs,omitempty"`
+
+	// Trigger is the event that delivered the answer — the completion, or
+	// the person's message — which the resumed turn names as what woke it.
+	// Nil when it could not be held with the answer, and the resumed turn
+	// then names none.
+	Trigger *events.Event `json:"trigger,omitempty"`
+
+	// At is when the answer was held.
+	At time.Time `json:"at"`
+}
+
+// MaxHeldAnswerBytes is the most a held answer may weigh on its run's row, in
+// bytes, encoded.
+//
+// HALF OF THE ROW'S LIFECYCLE ROOM ([lifecycleBytes]), and the question is the
+// other half ([MaxQuestionBytes]), because a person's reply is held on the
+// row beside the question it answers: the row keeps its suspension within
+// [rowBytes], and what the lifecycle writes after it has to fit in the rest of
+// one record together. Measured on the encoding, since escaping makes what a
+// text costs a property of its bytes rather than of its length.
+//
+// A PERSON'S REPLY PAST IT IS REFUSED, naming this bound, and left with its
+// delivery: the reply is kept nowhere else, so it is neither cut nor dropped,
+// and the redelivery hands it over once the budget has room. A JOB'S RESULT
+// PAST IT is held without its text ([HeldAnswer.InBox]), because the whole of
+// it is still in the job's paused box.
+const MaxHeldAnswerBytes = lifecycleBytes / 2
+
 // PendingStore is the persistence surface for detached runs.
 //
 // ONE IMPLEMENTATION, [CoordStore], on the fleet's coordination store, whose
@@ -840,9 +1042,11 @@ type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
 	// clearing the previous job's suspended conversation, the question
-	// it was parked on, the record of its charge and the record that its
-	// carried spend was counted, while keeping the row's identity and its
-	// box. Either way the launch gets a new [PendingRun.LaunchID].
+	// it was parked on, the answer held for it, the record of its charge
+	// and the record that its carried spend was counted, while keeping the
+	// row's identity and its box. Either way the launch gets a new
+	// [PendingRun.LaunchID] and is counted in [PendingRun.Launches], which
+	// nothing resets.
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
 	// run_sandbox call in one turn presents the same turn id as the first
@@ -856,7 +1060,8 @@ type PendingStore interface {
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
 	// ClaimForResume atomically flips a run to resumed, when it holds the
-	// tail's launch in one of the tail's statuses.
+	// tail's launch in one of the tail's statuses, holding an answer for it
+	// exactly when the tail says so ([Tail.Held]).
 	//
 	// Reports the row IFF THIS CALL WON: the at-most-once tail guard, and
 	// the reason a claim names its launch (see [Tail]). The returned row
@@ -875,7 +1080,10 @@ type PendingStore interface {
 	// The claim's charge, and whether a record counted the carried spend,
 	// are recorded IN THE SAME WRITE, and never cleared by one: a run is
 	// reopened to a retry with its records or not at all (see
-	// [PendingRun.Charged] and [PendingRun.CarriedCounted]).
+	// [PendingRun.Charged] and [PendingRun.CarriedCounted]). So is an
+	// answer the release holds for the launch ([Release.Held]), which
+	// replaces nothing: a release carrying none leaves a held answer where
+	// it is.
 	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
@@ -884,6 +1092,15 @@ type PendingStore interface {
 
 	// MarkAwaiting parks a run on a question, freeing the seat.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
+
+	// HoldAnswer holds a person's reply on a run parked on the question its
+	// launch asked, reporting whether THIS call held it: only while the run
+	// waits on that launch ([Awaiting] and held.Launch) and holds no answer
+	// for it. See [HeldAnswer].
+	//
+	// FALSE IS NOT AN ERROR: the run was claimed, relaunched, ended or
+	// answered since it was read, and whichever did so has the run.
+	HoldAnswer(ctx context.Context, turnID string, held HeldAnswer) (bool, error)
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.
 	// A run whose epoch is already higher is not stolen.
@@ -1056,10 +1273,15 @@ type PendingStore interface {
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
 	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked: the newest of the seat's runs parked on that conversation,
-	// found through the index [PendingStore.MarkAwaiting] files ([coord.AwaitingRuns]),
-	// every entry confirmed against its run's record. A read that fails is an
-	// error, never "nothing is parked here".
+	// that asked: the newest of the seat's runs parked on that conversation
+	// and holding no answer already, found through the index
+	// [PendingStore.MarkAwaiting] files ([coord.AwaitingRuns]), every entry
+	// confirmed against its run's record. A read that fails is an error,
+	// never "nothing is parked here".
+	//
+	// A run holding an answer is not waiting for one: its question has been
+	// answered, and the next message on the conversation is not a reply to
+	// it.
 	FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error)
 
 	// IndexAwaiting brings that index into line with runs: a listing of

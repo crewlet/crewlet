@@ -425,11 +425,20 @@ serve, which is correct.
 The engine detects this from the stream's own **creation instant**, which the
 broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
-than resuming — the log line names both instants and this verb — the node's
-reads refuse `stalled` with that reason, its seats move to a peer, and
-`crewlet retention status` shows the domain as stopped. A checkpoint past the
-log's end is caught the same way, as `wrong_stream`, because a position the
-log has never reached is a position on another stream.
+than resuming — the log line names both instants and this verb — and the
+position heartbeat, which runs at boot and every ten seconds after, names the
+rebuild too: the node's reads refuse `wrong_stream` (`stalled`, on the stop,
+until that first beat), its seats move to a peer, and `crewlet retention
+status` shows the log as deleted and rebuilt. A checkpoint past the log's end
+is caught the same way, as `wrong_stream`, because a position the log has never
+reached is a position on another stream.
+
+Until it follows the live stream, the node goes on **stating the deleted one**
+in the positions register, beside the position it reached on it: that is the
+stream its checkpoint counts on, whether the node kept running through the
+rebuild or restarted over it, and a restarted node applies nothing of the live
+stream before it follows. Peers judge it by that — which is what lets a fleet
+whose log was rebuilt re-anchor at all (below).
 
 **A rebuild under a node that never restarts is caught too**, on the position
 heartbeat: it reads the stream's state every ten seconds anyway, and the
@@ -474,7 +483,7 @@ own:
 
 | Log | What a reanchor writes |
 |---|---|
-| `CREWLET_TRACKER_LOG` | every object row's version reset to the new generation, a generation record on the new stream, and an audit row naming both streams' creation instants and the record |
+| `CREWLET_TRACKER_LOG` | a generation record on the new stream, every object row's version reset to the new generation, and an audit row naming both streams' creation instants and the record |
 | `CREWLET_PAGES_LOG` | a generation record on the new stream, whose apply writes the audit row on every node that applies it |
 | `CREWLET_TRACKER_VECTORS` | the checkpoint alone: the vectors claim no identity, so there is no record for another node to meet |
 
@@ -485,29 +494,34 @@ applier starts again on the live stream, so its reads stop refusing
 the node is adopting a peer's snapshot, or running another reanchor: each of
 those rewrites the same estate with appliers halted.
 
-The generation record is a **claim**. The first node to publish it holds the
-new generation; a second node re-anchoring the same log is refused, naming the
-operation that holds it, before any checkpoint of its own moves; and a
-reanchor interrupted after its record landed is simply run again — the re-run
-finds its own record there and finishes.
+The generation record is a **claim**, and it is published before anything
+else the reanchor writes. The first node to publish it holds the new
+generation; a second node re-anchoring the same log is refused, naming the
+operation that holds it, before it has written anything — no row reset, no
+checkpoint moved; and a reanchor interrupted after its record landed is simply
+run again — the re-run finds its own record there and finishes.
 
 It refuses while any peer is hydrated on the live stream — reports a position
 on the stream the verb is about to follow, with anything applied — naming the
 peer: adopting that peer's snapshot recovers what a reanchor would discard. A
 peer is judged by the stream its position counts on, at any generation, so a
 fleet whose log was rebuilt under it is not refused on this ground: every node
-is still counting on the deleted stream until one re-anchors — the most
-caught-up one on it, unless forced — and that one is then the peer the others
-adopt from. A peer running a build that does not publish which stream it
-counts on is judged by this node's generation instead. No flag
-overrides that refusal. `-force` overrides the other two — a positions register
-that cannot be read, and a node that is not the most caught-up one on its
-stream — and what it accepts losing is every record the fleet applied above
-this node's own position.
+is still counting on the deleted stream until one re-anchors — a node restarted
+since the rebuild included — and the one permitted is the most caught-up on
+that stream, unless forced; that one is then the peer the others adopt from. A
+peer running a build that does not publish which stream it counts on is judged
+by this node's generation instead. No flag overrides that refusal. `-force`
+overrides the other two — a positions register that cannot be read, and a node
+that is not the most caught-up one on its stream — and what it accepts losing
+is every record the fleet applied above this node's own position.
 
-A refusal stops nothing: the permission is decided while the log's applier
-runs, and decided again once it has stopped for the transition, so a refused
-reanchor leaves the domain applying and serving as it was.
+**A refusal changes nothing.** The permission, and whether another reanchor's
+record already holds the new generation, are read while the log's applier
+runs, so a reanchor refused on either leaves the domain applying and serving as
+it was. Both are decided again once the applier has stopped for the
+transition, because the fleet can move in between; a refusal there starts the
+applier again, and since the claim comes before the reset, no refusal leaves a
+row's version or the checkpoint changed.
 
 **Every other node follows by restarting.** Its checkpoint on the log still
 names the old stream, so it goes on refusing reads on that log. At boot it

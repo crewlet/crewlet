@@ -46,8 +46,9 @@
 //     ([Searcher.Building]), because "nothing matched" and "not indexed yet"
 //     send a seat to opposite places. A backend with no index answers false.
 //   - A PARTIAL ANSWER SAYS SO. An answer ranked over part of what it was
-//     asked about carries [Answer.Partial], and every reader renders it:
-//     a short list with nothing beside it reads as everything that matched.
+//     asked about carries [Answer.Partial], and one its backend cut short
+//     of the ranking carries [Answer.Truncated]. A reader renders both: a
+//     short list with nothing beside it reads as everything that matched.
 package knowledge
 
 import (
@@ -166,6 +167,18 @@ type Answer struct {
 	// a whole answer. A backend that answers from one place in one call —
 	// a live vendor search — is whole whenever it answers at all.
 	Partial *Partial
+
+	// Truncated marks an answer SHORTER THAN ITS LIMIT while its backend's
+	// ranking went on past what was read: the backend read the ranking to a
+	// depth, the exclusions ([Excludes]) dropped rows from what it read, and
+	// a page ranked below that depth is missing from these hits. The hits
+	// are real; what a reader must not conclude from their number is that
+	// nothing else matched. The rest of the ranking is the backend's own —
+	// the vendor's search, or a query in more specific words, reaches it.
+	//
+	// ITS OWN FIELD rather than a [Partial], because nothing was left
+	// unsearched: the corpus was ranked whole, and only read to a depth.
+	Truncated bool
 
 	// Failed is a search that did not complete. Its hits are empty and say
 	// nothing about what the knowledge base holds; the backend's own log

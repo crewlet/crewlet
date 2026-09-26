@@ -37,8 +37,8 @@ type DomainPosition struct {
 	AppliedThrough uint64 `json:"applied_through"`
 
 	// StreamCreatedAt is the creation instant of the stream this node's
-	// applier runs on — the broker's own identity for the log these
-	// numbers were counted on.
+	// committed checkpoint was recorded under — the broker's own identity
+	// for the log these numbers were counted on.
 	//
 	// THE GENERATION CANNOT SAY IT. A stream rebuilt under a running fleet
 	// leaves every node at the generation it had, counting on a log that
@@ -47,6 +47,14 @@ type DomainPosition struct {
 	// instant is what tells the two apart. Zero from a build that does not
 	// publish it, which a reader must treat as "not stated" rather than as
 	// a stream of its own.
+	//
+	// THE CHECKPOINT'S STREAM, NOT THE LIVE ONE. After a rebuild a node
+	// goes on stating the deleted stream until it follows the live one —
+	// by a reanchor or by adopting a snapshot taken on it — whether it
+	// kept running or restarted over the rebuilt log: a node that boots
+	// there stops on its checkpoint and commits nothing, so its numbers
+	// still count on the deleted stream. Stated as the live one, those
+	// numbers read to every peer as records applied off the live stream.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its

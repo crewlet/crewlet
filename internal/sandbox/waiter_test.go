@@ -479,8 +479,8 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 // the budget
 // ---------------------------------------------------------------------
 
-// budgeted rebuilds the rig's waiter to read the seat's budget from room before
-// it raises a completion.
+// budgeted rebuilds the rig's waiter to read the seat's budget from room for
+// the answers the rig's runs hold.
 func (r *waiterRig) budgeted(room Headroom) {
 	r.t.Helper()
 	waiter, err := NewWaiter(WaiterOptions{
@@ -504,77 +504,114 @@ func (r *recorder) events() []*events.Event {
 	return out
 }
 
-// A FINISHED JOB WHOSE SEAT HAS NO BUDGET ROOM RAISES NO COMPLETION, and says so
-// once. The coordinator claims none before there is room, so a completion
-// raised anyway is declined and raised again by the next poll: one stored
-// sandbox_run_completed per poll for as long as the cap holds. The box is still
-// polled, and so kept alive, and the first poll with room raises it.
-func TestACompletionWithNoBudgetRoomIsWithheldUntilThereIsRoom(t *testing.T) {
+// A FINISHED JOB'S COMPLETION IS RAISED WHATEVER THE BUDGET. The coordinator
+// that takes it collects the job, which pauses its box, and holds the result
+// when the budget has no room for the turn; a completion withheld instead
+// would leave the box running, and billed, for the length of the wait. The
+// waiter announces nothing about the budget: the hold is what says the wait.
+func TestACompletionIsRaisedWhateverTheBudget(t *testing.T) {
 	rig := newWaiterRig(t)
 	room := &roomSpy{}
 	room.set(Room{Scope: "agent", Used: 120, Limit: 100}, nil)
 	rig.budgeted(room)
-	run := rig.launch("t1")
-	box := rig.provider.Box(run.SandboxID)
-	rig.runner.Finish(Result{Success: true})
-
-	for tick := range 3 {
-		if fired := rig.tick(); fired != 0 {
-			t.Fatalf("tick %d fired %d completions with no budget room, want none", tick, fired)
-		}
-	}
-	published := rig.queue.events()
-	if len(published) != 1 {
-		t.Fatalf("published %d events over three polls of one wait, want its one announcement: %+v",
-			len(published), published)
-	}
-	exhausted, ok := published[0].Data.(*types.BudgetExhausted)
-	if !ok {
-		t.Fatalf("the wait was announced as %T, want budget_exhausted", published[0].Data)
-	}
-	if exhausted.TurnID != "t1" || exhausted.BudgetType != types.BudgetScopeAgent ||
-		exhausted.UsedTokens != 120 || exhausted.MaxTokens != 100 {
-		t.Errorf("announcement = %+v, want the run's turn and the seat's 120 of 100", exhausted)
-	}
-	if published[0].TraceID != "tr-1" || published[0].ParentSpanID != "sp-1" {
-		t.Errorf("announcement trace = %q/%q, want the launching turn's, where its completion nests",
-			published[0].TraceID, published[0].ParentSpanID)
-	}
-	if got := box.Keepalives(); got != 3 {
-		t.Errorf("the waiting box was heart-beaten %d times over three polls, want 3: it would be "+
-			"reaped before the budget had room", got)
-	}
-
-	room.set(Room{OK: true}, nil)
-	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("fired %d once the budget had room, want the completion", fired)
-	}
-	if _, ok := rig.queue.events()[1].Data.(*types.SandboxRunCompleted); !ok {
-		t.Errorf("after the wait the waiter published %T, want the completion",
-			rig.queue.events()[1].Data)
-	}
-}
-
-// A COUNTER THAT CANNOT BE READ WITHHOLDS THE COMPLETION TOO: the resumed
-// turn's first round is refused on it as well. It announces nothing, since no
-// scope was read at its cap.
-func TestACompletionWhoseBudgetCannotBeReadIsWithheld(t *testing.T) {
-	rig := newWaiterRig(t)
-	room := &roomSpy{}
-	room.set(Room{}, errors.New("coordination store unreachable"))
-	rig.budgeted(room)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
-	if fired := rig.tick(); fired != 0 {
-		t.Fatalf("fired %d completions on a budget nobody could read, want none", fired)
-	}
-	if n := rig.queue.count(); n != 0 {
-		t.Fatalf("published %d events for an unreadable budget, want none", n)
-	}
-	room.set(Room{OK: true}, nil)
 	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("fired %d once the budget could be read and had room, want the completion", fired)
+		t.Fatalf("fired %d completions for a finished job with no budget room, want 1", fired)
+	}
+	for _, ev := range rig.queue.events() {
+		if _, ok := ev.Data.(*types.SandboxRunCompleted); !ok {
+			t.Errorf("the waiter published %T beside the completion", ev.Data)
+		}
+	}
+	if n := room.read(); n != 0 {
+		t.Errorf("the waiter read the budget %d times before raising a completion", n)
+	}
+}
+
+// holding seeds a run that holds an answer, as the coordinator leaves one: a
+// job's result on a running row with its box paused, or a person's reply on a
+// row parked on its question.
+func (r *waiterRig) holding(turnID string, parked bool) PendingRun {
+	r.t.Helper()
+	ctx := r.t.Context()
+	run := r.launch(turnID)
+	if parked {
+		r.park(turnID)
+		if landed, err := r.pending.HoldAnswer(ctx, turnID, HeldAnswer{
+			Launch: run.LaunchID, Text: "use main", At: r.now,
+		}); err != nil || !landed {
+			r.t.Fatalf("HoldAnswer = %v, %v", landed, err)
+		}
+		return r.get(turnID)
+	}
+	claimed, won, err := r.pending.ClaimForResume(ctx, turnID, CompletionTail(run.LaunchID))
+	if err != nil || !won {
+		r.t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	if err := r.pending.MarkBoxPaused(ctx, turnID, r.now); err != nil {
+		r.t.Fatalf("MarkBoxPaused: %v", err)
+	}
+	if released, err := r.pending.ReleaseClaim(ctx, turnID, Release{
+		Launch: claimed.LaunchID, To: claimed.ClaimedFrom, Charged: true,
+		Held: &HeldAnswer{Launch: claimed.LaunchID, Text: "done", Success: true, At: r.now},
+	}); err != nil || !released {
+		r.t.Fatalf("ReleaseClaim = %v, %v", released, err)
+	}
+	return r.get(turnID)
+}
+
+// A HELD ANSWER IS SIGNALLED ONLY WHEN THE BUDGET HAS ROOM, to the seat's
+// control topic alone, naming its launch; and a held result's box is not
+// polled while it waits, because a reconnect would boot the paused box back up
+// to be billed.
+func TestAHeldAnswerIsSignalledOnlyWithRoom(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parked bool
+	}{
+		{"a job's result", false},
+		{"a person's reply", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newWaiterRig(t)
+			room := &roomSpy{}
+			rig.budgeted(room)
+			run := rig.holding("t1", tc.parked)
+			box := rig.provider.Box(run.SandboxID)
+			keepalives := box.Keepalives()
+
+			for _, read := range []struct {
+				room Room
+				err  error
+			}{
+				{Room{Scope: "org", Used: 9, Limit: 9}, nil},
+				{Room{}, errors.New("coordination store unreachable")},
+			} {
+				room.set(read.room, read.err)
+				if fired := rig.tick(); fired != 0 {
+					t.Fatalf("fired %d completions for a run holding its answer", fired)
+				}
+				if n := rig.queue.count(); n != 0 {
+					t.Fatalf("published %d events with room %+v / %v, want none", n, read.room, read.err)
+				}
+			}
+
+			room.set(Room{OK: true}, nil)
+			rig.tick()
+			published := rig.queue.published
+			if len(published) != 1 || published[0].topic != topics.AgentControl("swe") {
+				t.Fatalf("published %+v, want one signal to the seat's control topic", published)
+			}
+			ready, ok := published[0].event.Data.(*types.SandboxAnswerReady)
+			if !ok || ready.TurnID != "t1" || ready.LaunchID != run.LaunchID || ready.AgentHandle != "swe" {
+				t.Errorf("the signal is %+v, want the held answer's run and launch", published[0].event.Data)
+			}
+			if got := box.Keepalives(); got != keepalives {
+				t.Errorf("the box of a run holding its answer was polled %d times", got-keepalives)
+			}
+		})
 	}
 }
 

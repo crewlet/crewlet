@@ -140,14 +140,18 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	}
 	// AND THE OPERATOR SURFACE SAYS SO rather than reporting a caught-up
 	// loop: a stopped applier has a lag of zero, and the row read as ready
-	// for as long as nobody looked at the error beside the number.
+	// for as long as nobody looked at the error beside the number. The
+	// heartbeat is what names it — its row states the stream the
+	// checkpoint counts on, which is the deleted one — so the row is read
+	// after one beat.
+	e2.native.log.publishPositions(t.Context())
 	for _, row := range e2.NativeStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
-		if row.Ready || !strings.Contains(row.Detail, "recreated") {
+		if row.Ready || !strings.Contains(row.Detail, "deleted and rebuilt") {
 			t.Fatalf("the tracker's status row is %+v, want not ready and naming "+
-				"the recreation", row)
+				"the rebuild", row)
 		}
 	}
 }

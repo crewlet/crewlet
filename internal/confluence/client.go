@@ -426,13 +426,25 @@ func (p Page) HasLabel(name string) bool {
 // knowledge base with no drafts in it.
 const expandFields = "body.storage,space,ancestors,version,metadata.labels"
 
-// Search runs one CQL query.
+// SearchPage is the first page of one CQL search's ranking.
+type SearchPage struct {
+	Pages []Page
+
+	// More says the site ranks matches past these: its answer linked a next
+	// page. The rows cannot say it — a site that ran out of matches and one
+	// that capped its page below the limit it was asked for both answer
+	// fewer rows than asked, and one whose matches ran out exactly at the
+	// limit answers every row asked for — so the link is the only answer.
+	More bool
+}
+
+// Search runs one CQL query and reads the first page of its ranking.
 //
 // The CQL is built by [BuildCQL] rather than here, so the one place that
 // decides what a seat may read is the searcher rather than the transport.
-func (c *Client) Search(ctx context.Context, cql string, limit int) ([]Page, error) {
+func (c *Client) Search(ctx context.Context, cql string, limit int) (SearchPage, error) {
 	if strings.TrimSpace(cql) == "" {
-		return nil, fmt.Errorf("confluence: empty cql")
+		return SearchPage{}, fmt.Errorf("confluence: empty cql")
 	}
 	params := url.Values{
 		"cql":    {cql},
@@ -441,15 +453,18 @@ func (c *Client) Search(ctx context.Context, cql string, limit int) ([]Page, err
 	}
 	var out struct {
 		Results []pageWire `json:"results"`
+		Links   struct {
+			Next string `json:"next"`
+		} `json:"_links"`
 	}
 	if err := c.api(ctx, http.MethodGet, "/content/search", params, nil, &out); err != nil {
-		return nil, err
+		return SearchPage{}, err
 	}
 	pages := make([]Page, 0, len(out.Results))
 	for _, row := range out.Results {
 		pages = append(pages, row.page())
 	}
-	return pages, nil
+	return SearchPage{Pages: pages, More: strings.TrimSpace(out.Links.Next) != ""}, nil
 }
 
 // PageByID reads one page whole.

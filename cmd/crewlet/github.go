@@ -70,11 +70,19 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	fleet, err := companyResolver(ctx, *sinks.bootstrap, *sinks.api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	env := fleet.env
+	// A RUN THAT WILL RECORD IS REFUSED HERE, before the check of a token
+	// that resolved empty — which, with the fleet's store unread, may be
+	// one the store holds.
+	if !*dryRun {
+		if refusal := fleet.recordable(); refusal != nil {
+			return refusal
+		}
+	}
 
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
@@ -90,7 +98,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 			"github: integrations.github.token (%q) resolved empty — this run "+
 				"registers the webhooks with it, and a token that can do that "+
 				"needs admin on each repository (or admin:org_hook for one "+
-				"organization-level hook)", cfg.Token)
+				"organization-level hook)%s", cfg.Token, fleet.unreadClause())
 	}
 	client, err := github.NewClient(github.ClientOptions{
 		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
@@ -113,11 +121,10 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		sink, openErr := sinks.open(stdout, fleet)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

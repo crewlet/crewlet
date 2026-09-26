@@ -67,17 +67,21 @@ type ReanchorRequest struct {
 // snapshot recovers that history; re-anchoring discards it. The refusal names
 // the peer — see [hydratedPeers] for what counts.
 //
-// # The permission is decided before the applier stops, and again after
+// # Every refusal is decided before the applier stops, where it can be read
 //
-// A refusal is the ordinary answer on a healthy fleet — a peer is hydrated, or
-// the confirmation names another instant — and halting the loop first would
-// make every refusal an interruption of the domain it refused: every caller
-// waiting on the loop is told it stopped (a write waiting on its own record
-// answers `pending`, every other wait refuses `behind`), and the caught-up
-// latch is cleared when the loop starts again. So the permission is decided
-// on a read taken while the loop runs, and the transition decides it again on
-// a read taken once the loop has stopped, which is the read the moved
-// checkpoint is written from.
+// A refusal is the ordinary answer on a healthy fleet — a peer is hydrated, the
+// confirmation names another instant, another reanchor's record holds the
+// generation — and halting the loop first would make every refusal an
+// interruption of the domain it refused: every caller waiting on the loop is
+// told it stopped (a write waiting on its own record answers `pending`, every
+// other wait refuses `behind`), and the caught-up latch is cleared when the
+// loop starts again. So the permission and the generation's holder are read
+// while the loop runs ([statelog.PreflightReanchor]), and the transition
+// decides both again once the loop has stopped: on a read of the permission's
+// inputs, which is the read the moved checkpoint is written from, and by its
+// claim. Either can still refuse there, when the fleet moved in between; the
+// loop is then relaunched, and nothing of the domain's has been written —
+// the transition's claim precedes its reset ([statelog.Reanchor]).
 //
 // # The domain's applier stops first and starts again last
 //
@@ -116,9 +120,9 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 	defer s.endReanchor()
 
 	guard := statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force}
-	// THE PERMISSION WHILE THE LOOP RUNS — see the doc above.
+	// THE REFUSALS WHILE THE LOOP RUNS — see the doc above.
 	in, hydrated := e.reanchorInputs(ctx, running)
-	if _, err = statelog.PermitReanchor(in, guard); err != nil {
+	if _, err = statelog.PreflightReanchor(ctx, deps, in, guard); err != nil {
 		return 0, namingPeers(err, hydrated)
 	}
 
@@ -175,6 +179,17 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 	s := e.native.log
 	deps := statelog.ReanchorDeps{Domain: running.domain, DB: e.backends.Store,
 		Now: time.Now}
+	// THE READ OF WHAT THE CLAIM WILL MEET, on the subject each domain's own
+	// generation record claims and under the op id it claims it with — so
+	// the answer is the one [statelog.Publisher.Claim] would reach, asked
+	// before anything stops.
+	heldElsewhere := func(subject func(gen uint32) statelog.Subject) func(
+		context.Context, uint32, statelog.ReanchorInputs) error {
+		return func(ctx context.Context, gen uint32, in statelog.ReanchorInputs) error {
+			return running.publisher.HeldElsewhere(ctx, subject(gen),
+				statelog.GenerationOpID(gen, in.StreamCreatedAt, s.nodeID))
+		}
+	}
 	switch running.domain.Name() {
 	case tracker.Domain{}.Name():
 		w, err := tracker.NewWriter(tracker.WriterDeps{
@@ -189,6 +204,10 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 			return tracker.ResetVersions(ctx, e.backends.Store.Replicated(), gen)
 		}
 		deps.PublishGeneration = w.PublishGeneration
+		deps.HeldElsewhere = heldElsewhere(func(gen uint32) statelog.Subject {
+			subject := tracker.GenerationSubject(gen)
+			return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
+		})
 		deps.RecordGeneration = func(ctx context.Context, tx *sql.Tx, gen uint32,
 			in statelog.ReanchorInputs) error {
 			return tracker.RecordGeneration(ctx, tx, gen, in, by, s.nodeID)
@@ -210,6 +229,10 @@ func (e *Engine) reanchorDeps(running *runningDomain, by string) (
 			in statelog.ReanchorInputs) error {
 			return kb.PublishGeneration(ctx, actor, s.nodeID, gen, in)
 		}
+		deps.HeldElsewhere = heldElsewhere(func(gen uint32) statelog.Subject {
+			subject := pages.GenerationSubject(gen)
+			return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
+		})
 	case search.Domain{}.Name():
 		// THE CHECKPOINT ALONE. The vectors claim no identity, so there is
 		// no record for a second node to meet; no kind is arbitrated, so

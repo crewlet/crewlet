@@ -141,9 +141,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain:          domain,
-			Health:          func() statelog.Health { return statelog.Health{CaughtUp: true, Lag: &lag} },
-			StreamCreatedAt: running.identity(),
+			Domain: domain,
+			Health: func() statelog.Health { return statelog.Health{CaughtUp: true, Lag: &lag} },
 		})
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")

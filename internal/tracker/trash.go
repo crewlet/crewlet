@@ -3,7 +3,9 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -148,6 +150,23 @@ func unresolved(step WriteResult, descendant string) error {
 // root was removed by that gesture and is restored by its inverse, while one
 // that was already in the trash for its own reasons stays there. That is what
 // `RemovedWith` is for, and it is why a restore can be a single argument.
+//
+// # Nothing comes back under a parent that is still in the trash
+//
+// A live task under a removed parent is the orphan a removal is ordered to
+// avoid, and [refuseRemovedParent] refuses it for a create and a re-parent.
+// A restore is the third way to make one, so each commit reads its task's
+// parent in the snapshot it is decided from ([Writer.clearTombstone]) and
+// refuses one in the trash, naming it. For the root that is the whole answer:
+// restore the parent first, and nothing has been written.
+//
+// A DESCENDANT meets it when its parent was in the trash on its own account —
+// removed by another gesture — before this root's removal took the rest. The
+// walk passes over it and restores what it can, because that descendant's
+// siblings are no less restorable for it; the ones below it are refused the
+// same way, their parent being still in the trash. The answer names the first
+// such parent: restoring it, and then running this restore again, brings the
+// rest back.
 func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	notify *Notify) (WriteResult, error) {
 
@@ -171,18 +190,56 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	if err != nil || result.Outcome == statelog.OutcomeUnknown {
 		return result, err
 	}
+	// EACH COMMIT WAITS FOR THE ONE BEFORE IT, because each reads its
+	// parent and the parent is the task an earlier commit restored — the
+	// root, or a descendant above it in this depth-ordered list. Decided
+	// from a snapshot this node's applier had not yet brought up to that
+	// commit, a child would read its parent as still in the trash and be
+	// refused for it. See [Writer.After].
+	after := result.Position
+	var stayed int
+	var firstStayed error
 	for i, descendant := range removedWith {
-		step, err := w.clearTombstone(ctx, descendantStep(opID, descendant.ID),
-			descendant.ID, descendant.Project, nil)
+		step, err := w.After(after).clearTombstone(ctx,
+			descendantStep(opID, descendant.ID), descendant.ID,
+			descendant.Project, nil)
+		if errors.Is(err, errInTrash) {
+			stayed++
+			if firstStayed == nil {
+				firstStayed = err
+			}
+			continue
+		}
 		if err == nil {
 			err = unresolved(step, descendant.ID)
 		}
 		if err != nil {
+			if firstStayed != nil {
+				return result, partial(false, "tracker: %s is out of the trash "+
+					"and %d of %d tasks removed with it followed before the walk "+
+					"stopped at %s (%w); %d it passed over stay in the trash, the "+
+					"first under a task that is in it on its own account — "+
+					"restore that task, then run this restore again to finish: %w",
+					id, i-stayed, len(removedWith), descendant.ID, err, stayed,
+					firstStayed)
+			}
 			return result, partial(true, "tracker: %s is out of the trash and "+
 				"%d of %d tasks removed with it followed; re-run the restore to "+
 				"finish, which is idempotent: %w",
 				id, i, len(removedWith), err)
 		}
+		if !step.Position.IsZero() {
+			after = step.Position
+		}
+	}
+	if firstStayed != nil {
+		// NOT A RE-RUN ALONE: the same commits meet the same parent until
+		// somebody restores it. The cause names that parent.
+		return result, partial(false, "tracker: %s is out of the trash and "+
+			"%d of %d tasks removed with it followed; %d stay in it, the first "+
+			"under a task that is in the trash on its own account — restore "+
+			"that task, then run this restore again to bring them back: %w",
+			id, len(removedWith)-stayed, len(removedWith), stayed, firstStayed)
 	}
 	return result, nil
 }
@@ -214,6 +271,18 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// that half-finished must be able to complete, and the
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
+			case current.Merging:
+				// A TASK MID-MERGE IS THE MERGE'S TO CLOSE. The merge's
+				// remaining steps are patches on this task — the close,
+				// or the give-up that clears its marker — and a removed
+				// task refuses every patch, so a tombstone landing here
+				// would leave a marker nothing can ever clear: the merge
+				// fails on every attempt, its caller's and the tracker
+				// duty's. The merge ends on its own — its caller or the
+				// duty finishes it — and the removal can follow.
+				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
+					"being merged into another; remove it once the merge has "+
+					"finished, which closes it", id)
 			}
 			decision, err := w.decide(subject, OpTombstone, ChangeRemoved, scope,
 				opID, TaskPatch{Removed: &stamp}, notify, at)
@@ -226,10 +295,16 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 	})
 }
 
-// clearTombstone publishes one task's restore.
+// clearTombstone publishes one task's restore, refusing — with [errInTrash] —
+// a task whose parent is still in the trash ([Writer.RestoreTask]).
 //
 // A ZERO TOMBSTONE is how the patch spells "clear it" — see [applyPatch]: an
 // absent field means "leave it alone", so the clear has to be a value.
+//
+// THE PARENT IS READ IN THE DECIDE, for [refusePurged]'s reason: a parent
+// restored, or removed, after a caller's own read is seen here once this node
+// has applied it. A parent this node does not hold passes, as it does for
+// [refuseRemovedParent].
 func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 	notify *Notify) (WriteResult, error) {
 
@@ -254,6 +329,18 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.
 				return statelog.Decision{}, nil
+			}
+			if current.Parent != nil && *current.Parent != "" {
+				parent, parentHeld, readErr := readTask(ctx, tx, *current.Parent)
+				switch {
+				case readErr != nil:
+					return statelog.Decision{}, readErr
+				case parentHeld && parent.Removed != nil:
+					return statelog.Decision{}, fmt.Errorf("%w: task %s is "+
+						"under %s, which was removed by %s at %s; restore %s "+
+						"first", errInTrash, id, parent.ID, parent.Removed.By,
+						parent.Removed.At.Format(time.RFC3339), parent.ID)
+				}
 			}
 			decision, err := w.decide(subject, OpRestore, ChangeRestored, scope,
 				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)

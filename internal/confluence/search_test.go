@@ -172,10 +172,11 @@ func TestAPageSaysWhetherItsChainCameBack(t *testing.T) {
 			{"id":"under","title":"d","space":{"key":"ENG"},
 			 "ancestors":[{"title":"Engineering"},{"title":"Runbooks"}]}]}`
 	})
-	got, err := client(t, inst).Search(context.Background(), `text ~ "x"`, 10)
+	page, err := client(t, inst).Search(context.Background(), `text ~ "x"`, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
+	got := page.Pages
 	for _, want := range []struct {
 		id    string
 		known bool
@@ -342,8 +343,8 @@ func TestANilSearcherIsASearchThatDidNotRun(t *testing.T) {
 }
 
 // draftRows is a site's answer of n pages, all but the last under the
-// auto-draft parent.
-func draftRows(n int) string {
+// auto-draft parent, linking a next page when more says the site ranks more.
+func draftRows(n int, more bool) string {
 	rows := make([]string, 0, n)
 	for i := range n {
 		parent := "Auto-Drafted Skills"
@@ -354,38 +355,87 @@ func draftRows(n int) string {
 			`"space":{"key":"ENG"},"ancestors":[{"title":%q}],`+
 			`"body":{"storage":{"value":"<p>deploy</p>"}}}`, i+1, i+1, parent))
 	}
-	return `{"results":[` + strings.Join(rows, ",") + `]}`
+	links := `{"base":"https://acme.example.com/wiki"}`
+	if more {
+		links = `{"base":"https://acme.example.com/wiki",` +
+			`"next":"/rest/api/content/search?cursor=raNDoM&limit=` + strconv.Itoa(n) + `"}`
+	}
+	return `{"results":[` + strings.Join(rows, ",") + `],"_links":` + links + `}`
 }
 
-// AN ANSWER THE DRAFTS LEFT SHORT IS LOGGED WHEN THE SITE MAY RANK MORE.
+// A SEARCH SAYS WHETHER THE SITE RANKS MORE, from the next page it links.
 //
-// The site answered every row it was asked for, so its ranking may go on past
-// them, and the draft exclusion left fewer than the limit: pages ranked below
-// the fetched depth are missing from the answer, and nothing on the seam's
-// answer can say so. A site that answered fewer rows than it was asked for has
-// ranked everything it matched — or capped its own page, which the rows cannot
-// tell apart — and is not reported.
+// The rows cannot say it: a site that ran out of matches and one that capped
+// its page below the limit it was asked for both answer fewer rows than
+// asked, and one whose matches ran out exactly at the limit answers every row.
+//
+// Mutation: read the rows' count instead of the link, or drop the link, and
+// one of the cases fails.
+func TestASearchSaysWhetherTheSiteRanksMore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		rows  int
+		asked int
+		more  bool
+	}{
+		{"a full page with a next link", 10, 10, true},
+		{"a page the site capped below the limit", 4, 10, true},
+		{"matches that ran out exactly at the limit", 10, 10, false},
+		{"matches that ran out below it", 3, 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inst := newInstance(t, func(string) (int, string) {
+				return 200, draftRows(tc.rows, tc.more)
+			})
+			page, err := client(t, inst).Search(context.Background(), `text ~ "x"`, tc.asked)
+			if err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			if len(page.Pages) != tc.rows || page.More != tc.more {
+				t.Errorf("the search read %d pages, more=%v; want %d, more=%v",
+					len(page.Pages), page.More, tc.rows, tc.more)
+			}
+		})
+	}
+}
+
+// AN ANSWER THE DRAFTS LEFT SHORT IS MARKED, AND LOGGED, WHEN THE SITE RANKS
+// MORE.
+//
+// The draft exclusion left fewer hits than the limit, and the site linked a
+// next page: the pages it ranked below what it answered are missing from the
+// answer, and a reader of a short list with nothing beside it takes it for
+// everything that matched. So the answer is marked for the reader and the
+// line logged for the operator — for a site that capped its page below what
+// it was asked for as much as for one that answered every row. A site that
+// linked no next page ranked everything it matched, whatever the count, and
+// the answer is left unmarked.
 //
 // Each case asks for a limit no other case in this package asks for, which is
 // how it finds its own line in the shared log.
 //
-// Mutation: drop the log line, or report every short answer whatever the site
-// returned, and one of the two cases fails.
-func TestAShortAnswerIsLoggedWhenTheSiteMayRankMore(t *testing.T) {
+// Mutation: drop the mark or the log line, mark every short answer whatever
+// the site linked, or judge by the rows' count, and a case fails.
+func TestAShortAnswerIsMarkedWhenTheSiteRanksMore(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		limit  int
 		ranked int
-		logged bool
+		more   bool
+		marked bool
 	}{
-		{"the site answered every row asked for", 11, 33, true},
-		{"the site ran out of matches", 13, 20, false},
+		{"the site answered every row asked for and ranks more", 11, 33, true, true},
+		{"the site capped its page and ranks more", 17, 20, true, true},
+		{"the site ran out of matches", 13, 20, false, false},
+		{"the site's matches ran out at the depth asked for", 19, 57, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := newInstance(t, func(string) (int, string) {
-				return 200, draftRows(tc.ranked)
+				return 200, draftRows(tc.ranked, tc.more)
 			})
 			searcher := confluence.NewSearcher(confluence.SearcherOptions{
 				Org: client(t, inst),
@@ -406,6 +456,9 @@ func TestAShortAnswerIsLoggedWhenTheSiteMayRankMore(t *testing.T) {
 				t.Fatalf("the site was asked for %d rows, want three times the "+
 					"limit of %d", asked, tc.limit)
 			}
+			if answer.Truncated != tc.marked {
+				t.Errorf("the answer is marked truncated=%v, want %v", answer.Truncated, tc.marked)
+			}
 			var mine []map[string]any
 			for _, record := range logs.records(t, "confluence_search_short") {
 				if record["limit"] == float64(tc.limit) {
@@ -413,12 +466,13 @@ func TestAShortAnswerIsLoggedWhenTheSiteMayRankMore(t *testing.T) {
 				}
 			}
 			switch {
-			case tc.logged && (len(mine) != 1 || mine[0]["hits"] != float64(1) ||
+			case tc.marked && (len(mine) != 1 || mine[0]["hits"] != float64(1) ||
 				mine[0]["ranked"] != float64(tc.ranked)):
-				t.Errorf("a short answer from a full page logged %v, want one "+
-					"line naming 1 hit of %d ranked", mine, tc.ranked)
-			case !tc.logged && len(mine) != 0:
-				t.Errorf("an answer from a site that ran out of matches logged %v", mine)
+				t.Errorf("a short answer from a site that ranks more logged %v, "+
+					"want one line naming 1 hit of %d ranked", mine, tc.ranked)
+			case !tc.marked && len(mine) != 0:
+				t.Errorf("an answer from a site that ranked everything it "+
+					"matched logged %v", mine)
 			}
 		})
 	}

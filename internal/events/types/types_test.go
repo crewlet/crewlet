@@ -51,8 +51,8 @@ func catalogue() []events.Payload {
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
 		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
-		SandboxClarificationRequested{},
+		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxAnswerReady{},
+		SandboxRunFailed{}, SandboxClarificationRequested{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// toolskill.go
@@ -99,6 +99,7 @@ var wireTypes = []string{
 	"provider_fallback",
 	"raw_webhook",
 	"reflection_completed",
+	"sandbox_answer_ready",
 	"sandbox_clarification_requested",
 	"sandbox_run_completed",
 	"sandbox_run_failed",
@@ -312,6 +313,7 @@ var wireTags = map[string][]string{
 	"reflection_completed":            {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
 	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "role", "sandbox_id", "task", "task_id", "turn_id", "work_key"},
 	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
+	"sandbox_answer_ready":            {"agent_handle", "launch_id", "turn_id"},
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},

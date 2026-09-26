@@ -38,8 +38,9 @@ func TestEveryRegisteredTypeIsPlaced(t *testing.T) {
 		t.Errorf("event types that are neither categorised nor deliberately "+
 			"excluded:\n  %s\n\nEach is published and then silently discarded "+
 			"— it reaches neither the event store nor the activity feed. Give it "+
-			"a category in observe/categories.go, or add it to `excluded` with "+
-			"the reason it must stay out.", strings.Join(unplaced, "\n  "))
+			"a category in internal/events/category.go, or add it to `excluded` "+
+			"there with the reason it must stay out, or to `unlisted` with the "+
+			"reason it is stored and never shown.", strings.Join(unplaced, "\n  "))
 	}
 }
 

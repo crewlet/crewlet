@@ -142,6 +142,56 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 	return in.Generation + 1, nil
 }
 
+// PreflightReanchor decides, with nothing stopped and nothing written, whether
+// [Reanchor] would be refused on what can be read now: [PermitReanchor]'s
+// guards, and whether another reanchor's record already holds the generation
+// this one would take ([ReanchorDeps.HeldElsewhere]).
+//
+// FOR THE CALLER THAT HAS TO STOP SOMETHING FIRST. The transition runs with the
+// domain's applier halted, and a refusal is the ordinary answer on a healthy
+// fleet; decided only after the halt, every refusal interrupts the domain it
+// refused. A refusal here costs the domain nothing. [Reanchor] decides both
+// again on its own inputs, because the fleet can move between the two.
+//
+// A READ THAT FAILS IS A FAILURE, not a refusal: whether the generation is held
+// is unknown, and the transition that would find out is not run on a guess.
+func PreflightReanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
+	guard ReanchorGuard) (uint32, error) {
+
+	gen, err := PermitReanchor(in, guard)
+	if err != nil || d.HeldElsewhere == nil {
+		return gen, err
+	}
+	if err := d.HeldElsewhere(ctx, gen, in); err != nil {
+		if refused := claimRefusal(d.Domain, gen, err); refused != nil {
+			return 0, refused
+		}
+		return 0, fmt.Errorf("statelog: read who holds generation %d on the "+
+			"live stream: %w", gen, err)
+	}
+	return gen, nil
+}
+
+// claimRefusal is the refusal a generation another reanchor holds becomes, and
+// nil for any other error.
+//
+// A REFUSAL RATHER THAN A FAILURE: no checkpoint of this node's has moved, and
+// running the transition again meets the same record. The remedy is to follow
+// the node that holds it — adopt a snapshot it or a node that followed it
+// took — which the holder's op id names.
+func claimRefusal(domain Domain, gen uint32, err error) error {
+	var elsewhere *ClaimedElsewhere
+	if !errors.As(err, &elsewhere) {
+		return nil
+	}
+	name := "the domain"
+	if domain != nil {
+		name = domain.Name()
+	}
+	return fmt.Errorf("%w: %s's generation %d is held by another reanchor's "+
+		"record: %w", ErrReanchorRefused, name, gen, err)
+}
+
 // GenerationOpID is the operation a node's generation record publishes under:
 // the generation, the stream it re-anchors onto, and the node — the last
 // because the record is a claim ([Publisher.Claim]), told from a rival's only
@@ -169,8 +219,8 @@ type ReanchorDeps struct {
 	DB *store.DB
 
 	// ResetVersions rewrites the domain's object rows' versions into the
-	// new generation, in BOUNDED, RESUMABLE transactions. Nil for a domain
-	// with nothing to reset.
+	// new generation, in BOUNDED, RESUMABLE transactions, once the
+	// generation's record holds it. Nil for a domain with nothing to reset.
 	//
 	// Bounded because half a million rows cannot be one transaction and
 	// must not hold this store's only writer for the minutes it would
@@ -183,12 +233,26 @@ type ReanchorDeps struct {
 
 	// PublishGeneration appends the one record that makes the transition
 	// fleet-visible, on the domain's NEW stream, as a claim on its own
-	// subject ([Publisher.Claim]). REQUIRED for a domain that claims
-	// identity: a second node racing the transition meets the first one's
-	// record and is refused rather than moving a checkpoint of its own, and
-	// two nodes re-anchored independently would each keep their own history
-	// under one claim.
+	// subject ([Publisher.Claim]) under [GenerationOpID]. REQUIRED for a
+	// domain that claims identity: a second node racing the transition
+	// meets the first one's record and is refused rather than moving a
+	// checkpoint of its own, and two nodes re-anchored independently would
+	// each keep their own history under one claim.
 	PublishGeneration func(ctx context.Context, gen uint32, in ReanchorInputs) error
+
+	// HeldElsewhere READS the subject PublishGeneration claims, answering
+	// [ClaimedElsewhere] when a record other than this node's own attempt
+	// holds the generation, and nil when nothing does or this node's
+	// earlier attempt does ([Publisher.HeldElsewhere]). Nil for a domain
+	// that publishes no record.
+	//
+	// A READ AND NOTHING MORE, for [PreflightReanchor]: the check the
+	// caller makes before it stops anything, so the refusal a claim would
+	// meet is answered with the domain's applier still running. The claim
+	// itself stays the arbiter — a record landing between the two is met
+	// by the claim, which is still before anything of this node's is
+	// written.
+	HeldElsewhere func(ctx context.Context, gen uint32, in ReanchorInputs) error
 
 	// RecordGeneration writes the audit row, in the SAME transaction as the
 	// cursor. Nil for a domain whose generation record's own apply is what
@@ -207,29 +271,36 @@ type ReanchorDeps struct {
 //  2. Refuse while any peer is hydrated, and — when none is — require this to
 //     be the most caught-up node.
 //  3. Derive the new generation LOCALLY.
-//  4. Reset the domain's versions, in BOUNDED transactions. A crash here
-//     leaves a partly-reset table and NEEDS NO REPAIRER: every row the reset
-//     did not reach is covered by the lazy rule, and re-running finishes it.
-//  5. Publish ONE record on the generation's own subject, as a CLAIM
+//  4. Publish ONE record on the generation's own subject, as a CLAIM
 //     ([Publisher.Claim]) under an op id that names this node
-//     ([GenerationOpID]). A crash after the append leaves the record on the
-//     stream: the re-run derives the SAME generation and op id, finds its own
-//     record holding the subject, and goes on to step 6 with nothing
-//     appended. A second node that derived the same number finds a record it
-//     did not write and is refused — [ErrReanchorRefused], carrying the
-//     [ClaimedElsewhere] that names the holder — before any checkpoint of its
-//     own moves.
+//     ([GenerationOpID]). A second node that derived the same number finds a
+//     record it did not write and is refused — [ErrReanchorRefused], carrying
+//     the [ClaimedElsewhere] that names the holder — before it has written
+//     anything. A crash after the append leaves the record on the stream: the
+//     re-run derives the SAME generation and op id, finds its own record
+//     holding the subject, and goes on to step 5 with nothing appended.
+//  5. Reset the domain's versions, in BOUNDED transactions. A crash here
+//     leaves a partly-reset table and NEEDS NO REPAIRER: every row the reset
+//     did not reach is covered by the lazy rule, and re-running finishes it —
+//     through step 4, which finds this node's own record.
 //  6. and 7. ONE transaction: the domain's cursor into the new generation, and
 //     the audit row. A crash rolls both back whole.
 //
-// The bounded step 4 and the single transaction at 6+7 are two different
+// EVERY REFUSAL COMES BEFORE THIS NODE WRITES ANYTHING. Steps 1 to 3 write
+// nothing, and step 4's refusal is the claim meeting somebody else's record —
+// which is why the claim precedes the reset: a reset ahead of it would leave a
+// refused transition's rows reset into a generation another node holds, a
+// state nothing here moves back.
+//
+// The bounded step 5 and the single transaction at 6+7 are two different
 // designs with incompatible crash matrices, and only the bounded one is
 // correct — which is true ONLY because the lazy rule makes a partial reset
 // harmless. The two are stated together for that reason.
 //
 // THE CALLER STOPS THE DOMAIN'S APPLIER FIRST and starts it again after: a
 // running loop commits its own checkpoint after every batch, over the one step
-// 6 writes, and only a loop started again reads the moved checkpoint.
+// 6 writes, and only a loop started again reads the moved checkpoint. What it
+// can decide before stopping anything is [PreflightReanchor].
 func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 	switch {
 	case d.Domain == nil:
@@ -261,29 +332,23 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 		"stream_created_at", in.StreamCreatedAt, "position", in.Position,
 		"forced", guard.Force)
 
-	// 4. THE RESET, bounded and resumable.
+	// 4. THE RECORD, a claim on the generation's own subject: this node's
+	// earlier attempt holds it as this attempt, and anybody else's refuses.
+	if d.PublishGeneration != nil {
+		if err := d.PublishGeneration(ctx, gen, in); err != nil {
+			if refused := claimRefusal(d.Domain, gen, err); refused != nil {
+				return 0, refused
+			}
+			return 0, fmt.Errorf("statelog: publish %s's generation %d: %w",
+				d.Domain.Name(), gen, err)
+		}
+	}
+
+	// 5. THE RESET, bounded and resumable.
 	if d.ResetVersions != nil {
 		if err := d.ResetVersions(ctx, gen); err != nil {
 			return 0, fmt.Errorf("statelog: reset %s's versions into generation "+
 				"%d: %w", d.Domain.Name(), gen, err)
-		}
-	}
-
-	// 5. THE RECORD, a claim on the generation's own subject: this node's
-	// earlier attempt holds it as this attempt, and anybody else's refuses.
-	if d.PublishGeneration != nil {
-		if err := d.PublishGeneration(ctx, gen, in); err != nil {
-			// ANOTHER REANCHOR HOLDS THIS GENERATION, which is a refusal
-			// rather than a failure: nothing here is retried into success,
-			// and no checkpoint of this node's has moved.
-			var elsewhere *ClaimedElsewhere
-			if errors.As(err, &elsewhere) {
-				return 0, fmt.Errorf("%w: %s's generation %d is held by another "+
-					"reanchor's record: %w", ErrReanchorRefused, d.Domain.Name(),
-					gen, err)
-			}
-			return 0, fmt.Errorf("statelog: publish %s's generation %d: %w",
-				d.Domain.Name(), gen, err)
 		}
 	}
 

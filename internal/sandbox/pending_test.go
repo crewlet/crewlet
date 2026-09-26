@@ -1680,3 +1680,200 @@ func TestASuspensionOnTheRowRefitsTheCallsViewSoAParkStillLands(t *testing.T) {
 		t.Fatalf("the run is %q, %v; want it parked on its question", got.Status, err)
 	}
 }
+
+// --- what a run's record carries between builds ------------------------------
+
+// rawMembers is a run's record as its members, straight off the store.
+func rawMembers(t *testing.T, fleet *memory.Fleet, turnID string) (map[string]json.RawMessage, uint64) {
+	t.Helper()
+	record, found, err := fleet.SandboxRun(t.Context(), turnID)
+	if err != nil || !found {
+		t.Fatalf("SandboxRun %s = %v, %v", turnID, found, err)
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(record.Value, &members); err != nil {
+		t.Fatalf("decode the record of %s: %v", turnID, err)
+	}
+	return members, record.Version
+}
+
+// writeMembers replaces a run's record with members, as a peer's write would.
+func writeMembers(t *testing.T, fleet *memory.Fleet, turnID string, members map[string]json.RawMessage, version uint64) {
+	t.Helper()
+	raw, err := json.Marshal(members)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if won, err := fleet.UpdateSandboxRun(t.Context(), turnID, raw, version); err != nil || !won {
+		t.Fatalf("UpdateSandboxRun %s = %v, %v", turnID, won, err)
+	}
+}
+
+// A MEMBER THIS BUILD DOES NOT KNOW SURVIVES EVERY WRITE IT MAKES.
+//
+// Every write to a run is a read-modify-write of its whole record, so a build
+// that decoded only its own fields would erase, on its first write, whatever a
+// newer peer added — a charge record, a held answer — and that peer would then
+// act as though it had never been written. Each write the lifecycle makes is
+// walked here, and the member a newer build wrote is on the record after it,
+// byte for byte.
+func TestAMemberThisBuildDoesNotKnowSurvivesEveryWrite(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", ConversationKey: "chat:C1",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	members, version := rawMembers(t, fleet, "t1")
+	newer := json.RawMessage(`{"launch":"l-9","counted":true}`)
+	members["a_newer_builds_fact"] = newer
+	writeMembers(t, fleet, "t1", members, version)
+
+	launch := func() string {
+		run, _, err := store.Get(ctx, "t1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		return run.LaunchID
+	}
+	var claimed sandbox.PendingRun
+	for _, step := range []struct {
+		name  string
+		write func() error
+	}{
+		{"suspend", func() error {
+			_, err := store.MarkSuspended(ctx, "t1", map[string]any{"version": 2})
+			return err
+		}},
+		{"attach a box", func() error {
+			return store.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, sandbox.Fence{})
+		}},
+		{"append a bridged call", func() error {
+			_, err := store.AppendBridgeCall(ctx, "t1", sandbox.BridgeCall{Name: "read_page"})
+			return err
+		}},
+		{"claim", func() error {
+			var err error
+			claimed, _, err = store.ClaimForResume(ctx, "t1", sandbox.CompletionTail(launch()))
+			return err
+		}},
+		{"hand the claim back", func() error {
+			_, err := store.ReleaseClaim(ctx, "t1", sandbox.Release{
+				Launch: claimed.LaunchID, To: claimed.ClaimedFrom, Charged: true,
+			})
+			return err
+		}},
+		{"pause the box", func() error { return store.MarkBoxPaused(ctx, "t1", time.Now()) }},
+		{"park on a question", func() error {
+			return store.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"})
+		}},
+		{"hold a reply", func() error {
+			_, err := store.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{Launch: launch(), Text: "main"})
+			return err
+		}},
+		{"expire the pause", func() error {
+			_, err := store.ExpirePause(ctx, "t1")
+			return err
+		}},
+		{"take ownership", func() error {
+			_, err := store.ClaimOwnership(ctx, "t1", "node-b:2", 3)
+			return err
+		}},
+		{"change status", func() error {
+			return store.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{})
+		}},
+		{"release the box", func() error { return store.ReleaseBox(ctx, "t1") }},
+		{"launch again", func() error {
+			return store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1"}, sandbox.Fence{})
+		}},
+	} {
+		if err := step.write(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		got, _ := rawMembers(t, fleet, "t1")
+		if !bytes.Equal(got["a_newer_builds_fact"], newer) {
+			t.Fatalf("%s left the newer build's member as %s, want %s", step.name,
+				got["a_newer_builds_fact"], newer)
+		}
+	}
+}
+
+// A MEMBER DECODED INTO A FIELD IS THAT FIELD'S, AND ONLY THAT FIELD'S.
+//
+// The decoder matches a member to a field case-insensitively, so a member
+// spelled "Charged" sets Charged. Carried beside the field as well, it would
+// come back on the next read whatever the field was set to since: a launch
+// clears the previous job's charge record, and the carried copy would restore
+// it, so the new job's spend would never reach the counter.
+func TestAMemberDecodedIntoAFieldIsNotCarriedBesideIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	members, version := rawMembers(t, fleet, "t1")
+	members["Charged"] = json.RawMessage(`true`)
+	writeMembers(t, fleet, "t1", members, version)
+	if run, _, err := store.Get(ctx, "t1"); err != nil || !run.Charged {
+		t.Fatalf("the premise: the member sets the field (charged=%v, %v)", run.Charged, err)
+	}
+
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if run, _, err := store.Get(ctx, "t1"); err != nil || run.Charged {
+		t.Errorf("the second launch reads charged=%v (%v): a copy of the member carried beside "+
+			"the field undid the launch's clear", run.Charged, err)
+	}
+}
+
+// AN ANSWER HELD FOR ANOTHER LAUNCH IS NOBODY'S. A build that does not know the
+// field carries it through a relaunch as it carries every member it does not
+// know, so it names its launch, and the row's own launch has to match it.
+func TestAnAnswerHeldForAnotherLaunchIsNobodys(t *testing.T) {
+	t.Parallel()
+	run := sandbox.PendingRun{LaunchID: "l-2", HeldAnswer: &sandbox.HeldAnswer{Launch: "l-1", Text: "old"}}
+	if held, ok := run.Held(); ok {
+		t.Errorf("a relaunched row reads %+v as held for its new launch", held)
+	}
+	run.HeldAnswer.Launch = "l-2"
+	if held, ok := run.Held(); !ok || held.Text != "old" {
+		t.Errorf("the row's own launch's answer reads %+v, %v", held, ok)
+	}
+}
+
+// A RESUME MINTS UNDER THE TURN'S INSTANT, NOT ITS FIRST LAUNCH'S.
+//
+// A write the turn made before its first launch and makes again after the
+// resume derives the same operation id, which the node deciding it compares
+// against the instant the resume carries: the first launch's is later than
+// that write, and reads it as newer than an adoption it predates. The earlier
+// of the two when both are known, and the launch where the row carries no
+// instant — one a build that predates the field wrote.
+func TestAResumeMintsUnderTheEarlierOfTheTurnsInstantAndItsFirstLaunch(t *testing.T) {
+	t.Parallel()
+	launched := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name      string
+		triggered time.Time
+		want      time.Time
+	}{
+		{"the turn's instant, before its launch", launched.Add(-time.Hour), launched.Add(-time.Hour)},
+		{"an instant after the launch", launched.Add(time.Minute), launched},
+		{"no instant on the row", time.Time{}, launched},
+	} {
+		run := sandbox.PendingRun{CreatedAt: launched, TriggeredAt: tc.triggered}
+		if got := run.TriggerInstant(); !got.Equal(tc.want) {
+			t.Errorf("%s: TriggerInstant = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if got := (sandbox.PendingRun{TriggeredAt: launched}).TriggerInstant(); !got.Equal(launched) {
+		t.Errorf("a row with no launch instant answers %v, want the turn's own", got)
+	}
+}

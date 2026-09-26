@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,6 +152,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// Nor is the name of the job, and it is new on every launch, the
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
+	// Nor the count, which only the store raises: a new row has opened one
+	// launch, and it holds no answer and nothing a newer build wrote.
+	run.Launches, run.HeldAnswer, run.Extra = 1, nil, nil
 	run.UpdatedAt = now
 	raw, err := encodeRun(run)
 	if err != nil {
@@ -177,6 +182,14 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		replaced = existing.LaunchID
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
+		// COUNTED, AND NEVER RESET: the count bounds the chain of launches
+		// one run makes across its resumes (see [PendingRun.Launches]).
+		existing.Launches++
+		// The turn's instant is the run's and stays as the first launch
+		// wrote it; only a row written without one takes this launch's.
+		if existing.TriggeredAt.IsZero() {
+			existing.TriggeredAt = run.TriggeredAt
+		}
 		// The previous job's suspension is not this job's. Left in place
 		// it is worse than absent: a completion claimed before the new
 		// suspension lands would resume the conversation the LAST call
@@ -207,6 +220,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// would report none of it.
 		existing.Charged = false
 		existing.CarriedCounted = false
+		// And an answer held for the previous job's call answers a call
+		// this job has not made.
+		existing.HeldAnswer = nil
 		return true
 	})
 	if err != nil || !reset || replaced == "" {
@@ -246,8 +262,9 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
 	var before string
 	run, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		_, held := run.Held()
 		if run.LaunchID != tail.Launch || !slices.Contains(tail.From, run.Status) ||
-			!slices.Contains(Claimable, run.Status) {
+			!slices.Contains(Claimable, run.Status) || held != tail.Held {
 			return false
 		}
 		before = run.Status
@@ -278,9 +295,27 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
 		run.CarriedCounted = run.CarriedCounted || release.CarriedCounted
+		if release.Held != nil {
+			held := *release.Held
+			run.HeldAnswer = &held
+		}
 		return true
 	})
 	return released, err
+}
+
+// HoldAnswer holds a person's reply on the run parked on the question its
+// launch asked. See the contract on [PendingStore].
+func (s *CoordStore) HoldAnswer(ctx context.Context, turnID string, held HeldAnswer) (bool, error) {
+	_, landed, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if _, already := run.Held(); already || run.LaunchID != held.Launch ||
+			!slices.Contains(Awaiting, run.Status) {
+			return false
+		}
+		run.HeldAnswer = &held
+		return true
+	})
+	return landed, err
 }
 
 // MarkAwaiting parks a run until a person answers.
@@ -1220,6 +1255,13 @@ func (s *CoordStore) purgeCalls(ctx context.Context, turnID, launchID string) {
 // the other half is the lifecycle's.
 const rowBytes = queue.MaxPayloadBytes / 2
 
+// lifecycleBytes is what one record holds past [rowBytes]: the room the
+// lifecycle's own writes have once a suspension is on the row. A question the
+// run parks on ([MaxQuestionBytes]) and the reply held for it
+// ([MaxHeldAnswerBytes]) are each given half, because both are on the row at
+// once.
+const lifecycleBytes = coord.MaxRecordBytes - rowBytes
+
 // rowViewFraming is what the view's two fields cost around their contents on
 // the encoded row: two keys, the list's brackets and a count, a few dozen
 // bytes, which this covers with room.
@@ -1509,9 +1551,9 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 // EVERY ENTRY IS CONFIRMED against the run's own record, because an entry is a
 // hint: it is filed before the park and dropped after the finish, so it can
 // name a run that was claimed, relaunched or ended since. Only a run of this
-// seat, on this conversation, in one of the [Awaiting] statuses is an answer's
-// run, and an entry whose run is gone is dropped here — the finish that should
-// have dropped it failed.
+// seat, on this conversation, in one of the [Awaiting] statuses and holding no
+// answer is an answer's run, and an entry whose run is gone is dropped here —
+// the finish that should have dropped it failed.
 //
 // A RUN AN OLDER BUILD PARKED HAS NO ENTRY: a build that predates the index
 // flips the row and files nothing. The entry is filed when a build that has
@@ -1538,8 +1580,10 @@ func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, con
 			s.dropAwaiting(ctx, coord.AwaitingRun{Handle: handle, Conversation: conversation, TurnID: turnID})
 			continue
 		}
-		if run.AgentHandle == handle && run.ConversationKey == conversation &&
-			slices.Contains(Awaiting, run.Status) {
+		// A run holding an answer has had its question answered, so a
+		// later message on the thread is not a reply to it.
+		if _, held := run.Held(); !held && run.AgentHandle == handle &&
+			run.ConversationKey == conversation && slices.Contains(Awaiting, run.Status) {
 			waiting = append(waiting, run)
 		}
 	}
@@ -1767,9 +1811,33 @@ func outranked(run PendingRun, fence Fence) bool {
 	return fence.Fenced() && run.OwnerEpoch > fence.Epoch
 }
 
+// encodeRun is a run's record: its fields, and every member a newer build
+// wrote that this one does not know ([PendingRun.Extra]).
+//
+// A MEMBER THIS BUILD KNOWS IS NEVER TAKEN FROM EXTRA, even one its own value
+// leaves out of the encoding: a field this build cleared — an answer a launch
+// dropped — is written absent, and a copy carried beside it would undo the
+// clear. The decoder files no known member there; this holds whatever a
+// caller put in the map.
 func encodeRun(run PendingRun) ([]byte, error) {
 	raw, err := json.Marshal(run)
 	if err != nil {
+		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
+	}
+	if len(run.Extra) == 0 {
+		return raw, nil
+	}
+	var merged map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &merged); err != nil {
+		return nil, fmt.Errorf("sandbox: encode run %s with %d members this build does not know: %w",
+			run.TurnID, len(run.Extra), err)
+	}
+	for key, value := range run.Extra {
+		if !knownRunMember(key) {
+			merged[key] = value
+		}
+	}
+	if raw, err = json.Marshal(merged); err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
 	return raw, nil
@@ -1780,9 +1848,55 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 	if err := json.Unmarshal(record.Value, &run); err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
 	}
+	// EVERY MEMBER THIS BUILD DOES NOT KNOW, kept for the write that
+	// follows: see [PendingRun.Extra].
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(record.Value, &members); err != nil {
+		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
+	}
+	for key := range members {
+		if knownRunMember(key) {
+			delete(members, key)
+		}
+	}
+	if len(members) > 0 {
+		run.Extra = members
+	}
 	// The KEY is the identity, not the field: a record whose body somehow
 	// disagrees with the key it is stored under would hand a caller a run
 	// it cannot then write back.
 	run.TurnID = record.Key
 	return run, nil
 }
+
+// knownRunMember reports whether a member of a run's record is one of
+// [PendingRun]'s own fields.
+//
+// CASE-FOLDED, as encoding/json matches a member to a field when it decodes:
+// a member it decoded into a field is that field's, and carried beside it as
+// well it would be written twice.
+func knownRunMember(key string) bool { return runMembers()[strings.ToLower(key)] }
+
+// runMembers is the member name of every field [PendingRun] encodes, folded to
+// lower case.
+//
+// READ OFF THE STRUCT'S OWN TAGS rather than listed beside it, because the
+// list and the struct are one fact: a field added to the struct and missing
+// from a list would be carried in Extra as well as in its field and encoded
+// twice, while the tags are what the encoder itself writes.
+var runMembers = sync.OnceValue(func() map[string]bool {
+	fields := reflect.TypeFor[PendingRun]()
+	out := make(map[string]bool, fields.NumField())
+	for i := range fields.NumField() {
+		field := fields.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		switch {
+		case !field.IsExported() || name == "-":
+			continue
+		case name == "":
+			name = field.Name
+		}
+		out[strings.ToLower(name)] = true
+	}
+	return out
+})

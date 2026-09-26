@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -330,10 +329,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// dropped by that read when it comes back to a free seat.
 			if unworked := d.dropWorked(ctx, handle, screening.Events); len(unworked) > 0 {
 				if handled, err := d.answered(ctx, handle, unworked); err == nil && handled {
-					// The delivery WAS the answer, and the resume it
-					// triggered has already run. Acking is what stops it
-					// being requeued behind the question it just
-					// answered.
+					// The delivery WAS the answer: the resume it
+					// triggered has already run, or the answer is held
+					// on the run's row for the resume the budget's room
+					// allows. Acking is what stops it being requeued
+					// behind the question it just answered.
 					d.recordAnswered(ctx, handle, unworked)
 					return queue.Ack()
 				}
@@ -371,7 +371,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// as the reply to whatever the run asked next on the same thread.
 	switch handled, err := d.answered(ctx, handle, surviving); {
 	case err != nil:
-		// The run asked, and its reply could not be handed over. NOT an
+		// The run asked, and its reply could not be handed over or held
+		// for it — or whether a run asked at all could not be read. NOT an
 		// ordinary turn: that would spend the answer on a turn that knows
 		// nothing of the question, and leave the run waiting for it. The
 		// redelivery offers it again.
@@ -714,12 +715,14 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 
 // answered offers a delivery to a coding run parked on a question.
 //
-// THREE-VALUED: handled, not an answer, or an answer that could not be handed
-// to its run — which each caller settles its own way, because what it would
-// otherwise do with the delivery differs. A missing seam and a partition with
-// no conversation key are not answers, and neither is a lookup the coordinator
-// could not make: that one fails open inside the coordinator, so an unreadable
-// run store never swallows an ordinary message.
+// THREE-VALUED: handled, not an answer, or a delivery whose fate could not be
+// settled — an answer that could not be handed to its run or held for it, or
+// a lookup of the runs parked on the conversation that could not be made —
+// which each caller settles its own way, because what it would otherwise do
+// with the delivery differs. A missing seam and a partition with no
+// conversation key are not answers. An answer the seat's budget has no room
+// for is HANDLED: the coordinator holds it on the run's row and resumes the
+// turn with it once there is room.
 //
 // The conversation key is the disambiguation: the coordinator matches on the
 // conversation the question was asked in, so a delivery on any other thread is
@@ -733,15 +736,7 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return false, nil
 	}
 	handled, err := d.Answer(ctx, handle, conversation, DescribeTrigger(evs), first(evs))
-	switch {
-	case errors.Is(err, sandbox.ErrNoBudgetRoom):
-		// NOT A FAILURE, and said once already: the coordinator announces
-		// a wait for budget room when it starts, and every redelivery of
-		// this answer until there is room lands here.
-		log.DebugContext(ctx, "sandbox_answer_waiting_for_budget",
-			"agent_handle", handle, "conversation_key", conversation)
-		return false, err
-	case err != nil:
+	if err != nil {
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
 			"agent_handle", handle, "conversation_key", conversation, "error", err)
 		return false, err
@@ -752,7 +747,8 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // recordAnswered records a partition that was handed to a parked run as its
 // answer, per constituent, as [Dispatcher.recordWorked] records a turn's.
 //
-// It has been worked: the run resumed on it. A copy of it that comes back —
+// It has been worked: the run resumed on it, or holds it on its row for the
+// resume the seat's budget has room for. A copy of it that comes back —
 // its ack lost to a node that stopped, say — must be dropped by the
 // completion ledger rather than run as a new turn or handed to whatever the
 // run asks next on the same thread. Best effort, like every completion write.

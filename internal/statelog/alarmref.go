@@ -61,8 +61,9 @@ var alarmMeaning = map[Kind]string{
 		"node's rows are not on: the fleet re-anchored the domain and this node " +
 		"did not follow. Every read that checks this node's health refuses, and " +
 		"a domain that gates seats gives them to a peer.",
-	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
-		"turn on this node pays it before its first token.",
+	KindPrefetchSlow: "The knowledge search in turn-start context assembly is " +
+		"over its budget at p95. A turn that runs it waits for it before its " +
+		"executor starts.",
 	KindSearchSlow: "Interactive search is over its target. The corpus has " +
 		"outgrown what one node's share of it can scan in the budget.",
 	KindSearchDegraded: "Searches are being answered without their semantic " +

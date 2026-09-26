@@ -184,10 +184,10 @@ type Turn struct {
 	// unit of work started after its triggers were published, so it is the
 	// earliest trigger's own envelope timestamp; with no work key the seed
 	// is the run, and it is the run's start. See [TriggerInstant]. A turn
-	// re-entered after a coding run carries the earliest instant that run's
-	// row records — its first launch — because the row holds neither of
-	// those; that bounds what the re-entry mints, and not an id it derives
-	// again that the dispatched turn minted earlier.
+	// re-entered after a coding run carries the instant the turn that
+	// launched it carried, which the launch writes onto the run's row, or
+	// the run's first launch where the row carries none — one a build that
+	// predates the field wrote.
 	//
 	// What reads it is the write path's mint instant, which a node that
 	// adopted a snapshot compares against the adoption: a retry stamped with

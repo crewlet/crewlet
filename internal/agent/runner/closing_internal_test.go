@@ -55,7 +55,7 @@ func TestAPanicClosingAPhasePublishesItsFailureRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := r.cfg.Registry.Snapshot()
-	surface, err := r.surfaceWith(t.Context(), phase.Execute, 1, nil, snapshot, nil, nil)
+	surface, err := r.surfaceWith(t.Context(), phase.Execute, 1, nil, nil, snapshot, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

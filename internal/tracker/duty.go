@@ -497,34 +497,63 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 		return 0, err
 	}
 
-	var finished int64
+	var finished, failed int64
+	var first error
 	for _, id := range stuck {
+		if ctx.Err() != nil {
+			// THE TICK ITSELF ENDED, which is not one merge failing:
+			// every merge after this one would fail the same way and
+			// log a line saying so.
+			return finished, ctx.Err()
+		}
 		done, err := d.finishAbandoned(ctx, id, now)
 		if err != nil {
-			return finished, err
+			// ONE MERGE THE DUTY CANNOT FINISH IS NOT THE TICK'S. The
+			// merges in this batch are independent — different
+			// duplicates, different claims, different subjects — and
+			// the batch is read in id order, so stopping here would
+			// hold every abandoned merge sorting after this one for as
+			// long as this one keeps failing. It keeps its marker, so
+			// the next sweep reads it again.
+			d.deps.Logger.WarnContext(ctx, "tracker_merge_finish_failed",
+				"task", id, "error", err)
+			failed++
+			if first == nil {
+				first = fmt.Errorf("merge of %s: %w", id, err)
+			}
+			continue
 		}
 		if done {
 			finished++
 		}
 	}
-	if finished > 0 {
+	if finished > 0 || failed > 0 {
 		// THE SWEEP'S OWN LINE, and it exists for the mark rather than
 		// for the count: the per-merge lines above already say what was
 		// completed, and nothing in them distinguishes a tick that
 		// finished every abandoned merge in the company from one that
 		// finished the first batch of thousands. WHERE THE REST WENT:
 		// still carrying `merging = 1`, which is the gate this job
-		// selects on, so the next sweep reads them.
+		// selects on, so the next sweep reads them — a merge that failed
+		// this tick among them.
 		//
-		// `finished` IS THE WHOLE OF WHAT THIS TICK CARRIED. Every
-		// iteration above counts, returns, or passes over a merge whose
-		// walk is still running, which is not abandoned and so no part of
-		// what this repair owes. A shortfall inside the batch is
-		// therefore an error the worker reports rather than a number that
-		// has to be subtracted here — unlike the one-sided repair, whose
-		// per-commit failures are deliberately swallowed.
+		// `finished` AND `failed` ARE THE WHOLE OF WHAT THIS TICK
+		// CARRIED. Every iteration above counts one or the other, or
+		// passes over a merge that is not abandoned — its walk still
+		// running, or ended before the sweep reached it — and so no part
+		// of what this repair owes.
 		d.deps.Logger.InfoContext(ctx, "tracker_abandoned_merges_finished",
-			"merges", finished, "truncated", truncated)
+			"merges", finished, "failed", failed, "truncated", truncated)
+	}
+	if first != nil {
+		// AND REPORTED, not only logged: a merge that fails on every tick
+		// is a duplicate left open and linked to the item it duplicates,
+		// and the worker's error is what an operator's view of the sweep
+		// shows. The first failure speaks for the rest, each of which has
+		// its own `tracker_merge_finish_failed` line.
+		return finished, fmt.Errorf("tracker: %d of the abandoned merges this "+
+			"sweep read could not be finished and keep their markers for the "+
+			"next; the first: %w", failed, first)
 	}
 	return finished, nil
 }
@@ -588,9 +617,9 @@ func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (b
 	// THE REST OF THE SEQUENCE ITSELF, from where its holder stopped — and
 	// whether the target is still there is read by each of its steps, in
 	// the snapshot that step is decided from, rather than by this sweep's
-	// scan, which is older than all of them. A target purged since the
-	// mark gives the merge up there, exactly as it does for a holder that
-	// is still alive ([Writer.finishMerge]).
+	// scan, which is older than all of them. A target purged or put in the
+	// trash since the mark gives the merge up there, exactly as it does for
+	// a holder that is still alive ([Writer.finishMerge]).
 	end, err := d.deps.Writer.finishMerge(ctx, opID, walk.task, walk.project,
 		walk.into, walk.reparent, statelog.Position{}, nil)
 	switch {
@@ -602,11 +631,21 @@ func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (b
 	case err != nil:
 		return false, err
 	}
-	if end.Purged != nil {
+	switch {
+	case errors.Is(end.GivenUp, ErrPurged):
 		d.deps.Logger.WarnContext(ctx, "tracker_merge_target_purged",
 			"task", id, "target", walk.into, "detail", "the task this one "+
 				"was being merged into was purged; the marker is cleared and "+
 				"the task left open with the subtasks it still has")
+		return true, nil
+	case end.GivenUp != nil:
+		// ITS OWN LINE, because the remedy differs: a purge has none, and
+		// a removal is undone by a restore, after which the merge can be
+		// asked for again.
+		d.deps.Logger.WarnContext(ctx, "tracker_merge_target_removed",
+			"task", id, "target", walk.into, "detail", "the task this one "+
+				"was being merged into is in the trash; the marker is cleared "+
+				"and the task left open with the subtasks it still has")
 		return true, nil
 	}
 	d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",

@@ -3,14 +3,17 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -126,17 +129,21 @@ func TestAResumeHandedBackSaysWhetherItCountedTheCarriedSpend(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S COORDINATOR READS THE BUDGET BEFORE IT CLAIMS. Built as a
-// running node builds it, over a company at its cap, a finished run's
-// completion is left unclaimed: the run stays running, so no box is collected
-// and no turn is resumed into a budget that would refuse its first round.
-func TestTheEnginesCoordinatorLeavesACompletionTheBudgetWouldStop(t *testing.T) {
-	t.Parallel()
+// budgetedSandboxEngine is a node's sandbox runtime as a running node builds
+// it, over one seat whose company is at its 1000-token cap, with a run parked
+// on a question on chat:C1.
+func budgetedSandboxEngine(t *testing.T) (*Engine, *org.Role, *memory.Queue) {
+	t.Helper()
 	ctx := t.Context()
 	fleet := coordmemory.NewFleet()
 	company, seat := resumableCompany(t, unavailableModel{}, 1000)
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
-	e := &Engine{backends: &Backends{Fleet: fleet, Queue: memory.New()}}
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
+	e := &Engine{backends: &Backends{Fleet: fleet, Queue: q}}
 	e.epoch.current.Store(company)
 	if err := e.buildSandboxRuntime(company); err != nil {
 		t.Fatalf("buildSandboxRuntime: %v", err)
@@ -149,27 +156,174 @@ func TestTheEnginesCoordinatorLeavesACompletionTheBudgetWouldStop(t *testing.T) 
 	store := e.sandboxPending
 	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: seat.Handle(), AgentID: id.String(), Role: seat.Name,
+		ConversationKey: "chat:C1",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if ok, err := store.MarkSuspended(ctx, "t1", map[string]any{"version": 2}); err != nil || !ok {
 		t.Fatalf("MarkSuspended = %v, %v", ok, err)
 	}
-	run, _, err := store.Get(ctx, "t1")
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	return e, seat, q
+}
+
+// THE ENGINE'S COORDINATOR READS THE BUDGET BEFORE IT RESUMES. Built as a
+// running node builds it, over a company at its cap, a person's reply to a
+// parked run is held on the run's row rather than handed to a turn whose first
+// round would be refused before it was sent.
+func TestTheEnginesCoordinatorHoldsAnAnswerTheBudgetWouldStop(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, seat, _ := budgetedSandboxEngine(t)
+
+	handled, err := e.sandboxCoordinator.TryResumeFromAnswer(ctx, seat.Handle(), "chat:C1", "use main", nil)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the reply held and handled", handled, err)
+	}
+	run, _, err := e.sandboxPending.Get(ctx, "t1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+	if held, ok := run.Held(); !ok || held.Text != "use main" || run.Status != sandbox.StatusAwaiting {
+		t.Errorf("the run reads status=%q held=%+v (%v), want the reply held on the parked run",
+			run.Status, held, ok)
+	}
+}
 
-	completion := types.SandboxRunCompleted{
-		TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: seat.Handle(), Agent: id.String(),
-		RoleName: seat.Name,
+// THE ENGINE'S WAITER READS THE SAME BUDGET before it signals a held answer:
+// with the company at its cap a tick signals nothing, and once the cap is
+// raised the next tick signals the seat's node.
+func TestTheEnginesWaiterSignalsAHeldAnswerOnlyWithRoom(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, seat, q := budgetedSandboxEngine(t)
+	if handled, err := e.sandboxCoordinator.TryResumeFromAnswer(ctx, seat.Handle(), "chat:C1",
+		"use main", nil); err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v", handled, err)
 	}
-	if err := e.sandboxCoordinator.OnCompleted(ctx, completion,
-		events.New(completion, events.TraceContext{})); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
+	// An interval no test outlives, so the loop the waiter starts never
+	// ticks on its own and every tick here is the test's.
+	if err := e.startSandboxWaiter(ctx, time.Hour); err != nil {
+		t.Fatalf("startSandboxWaiter: %v", err)
 	}
-	if got, _, _ := store.Get(ctx, "t1"); got.Status != sandbox.StatusRunning {
-		t.Errorf("status = %q, want the completion left unclaimed while the company is at its cap",
-			got.Status)
+	t.Cleanup(e.stopSandbox)
+	signals := func() int {
+		n := 0
+		for _, ev := range q.History() {
+			if _, ok := ev.Data.(*types.SandboxAnswerReady); ok {
+				n++
+			}
+		}
+		return n
+	}
+
+	if _, err := e.sandboxWaiter.Tick(ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := signals(); n != 0 {
+		t.Fatalf("the waiter signalled a held answer %d times with the company at its cap", n)
+	}
+	raised, _ := resumableCompany(t, unavailableModel{}, 5000)
+	e.epoch.current.Store(raised)
+	if _, err := e.sandboxWaiter.Tick(ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := signals(); n != 1 {
+		t.Errorf("the waiter signalled the held answer %d times once the cap was raised, want once", n)
+	}
+}
+
+// submitsThenReviewFails answers the executor with a submission and fails
+// every review with a server error, the transient kind a resume is handed back
+// for.
+type submitsThenReviewFails struct{}
+
+func (submitsThenReviewFails) Model() string { return "submits-then-review-fails" }
+
+func (submitsThenReviewFails) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	for _, def := range req.Tools {
+		if def.Name == runner.SubmitReviewTool {
+			return unavailableModel{}.Complete(ctx, req)
+		}
+	}
+	return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "s", Name: runner.SubmitWorkTool,
+		Arguments: map[string]any{"outcome": "blocked", "summary": "waiting on access",
+			"evidence": "no write tool yet"}}}}, nil
+}
+
+// A RESUME WHOSE RE-ENTERED ROUND FINISHED AND WHOSE REVIEW BROKE SAYS ITS
+// RECORD COUNTED THE CARRIED SPEND.
+//
+// The re-entered round published the record that counts what the phase billed
+// before it suspended — the finished pass's record, not a failure's — and then
+// the review broke and the turn is handed back. The retry's records must count
+// only what it bills, which the coordinator writes onto the run's row from this
+// error. For a native resume and an agent-mode one alike.
+func TestAResumeThatFinishedAndWhoseReviewBrokeSaysItCountedTheCarriedSpend(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		agent bool
+	}{
+		{"a native resume", false},
+		{"an agent-mode resume", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			company, seat := resumableCompany(t, submitsThenReviewFails{}, 0)
+			// The shipped caps, so the re-entered round has rounds to finish
+			// in and its review is reached.
+			company.Config.TurnEngine = config.DefaultTurnEngine()
+			q := memory.New()
+			if err := q.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			e, _ := resumingEngine(t)
+			e.backends = &Backends{Queue: q}
+			e.epoch.current.Store(company)
+			in := resumed("slack:C1")
+			in.Company = company
+			in.Run.AgentHandle = seat.Handle()
+			in.Run.Reply = "tool"
+			in.Turn = &turnctx.Turn{RunID: in.Run.TurnID, Seat: seat, Org: company.Org}
+			if tc.agent {
+				store := sandbox.NewCoordStore(coordmemory.NewFleet())
+				if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+					TurnID: in.Run.TurnID, AgentHandle: seat.Handle(),
+				}, sandbox.Fence{}); err != nil {
+					t.Fatalf("BeginLaunch: %v", err)
+				}
+				if ok, err := store.AppendBridgeCall(ctx, in.Run.TurnID, sandbox.BridgeCall{
+					Name: runner.SubmitWorkTool,
+					Args: `{"outcome":"blocked","summary":"waiting on access","evidence":"no write tool yet"}`,
+				}); err != nil || !ok {
+					t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+				}
+				run, _, err := store.Get(ctx, in.Run.TurnID)
+				if err != nil {
+					t.Fatalf("Get: %v", err)
+				}
+				run.Reply = "tool"
+				in.Run = run
+				e.sandboxPending = store
+				in.State = execstate.State{Version: execstate.Version, AgentRun: true, Round: 1}
+			}
+
+			err := e.resumeTurn(ctx, in)
+			if err == nil || errors.Is(err, sandbox.ErrResumeAbandoned) {
+				t.Fatalf("resumeTurn = %v, want the review's failure handed back for a retry", err)
+			}
+			if !strings.Contains(err.Error(), "review") {
+				t.Fatalf("resumeTurn = %v: the premise is a re-entered round that finished and a "+
+					"review that broke", err)
+			}
+			if !errors.Is(err, sandbox.ErrCarriedCounted) {
+				t.Errorf("the error does not say the finished round's record counted the carried "+
+					"spend, so the retry counts it again: %v", err)
+			}
+		})
 	}
 }

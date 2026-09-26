@@ -233,8 +233,8 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 // executor and the reviewer use, which is what stops onboarding drifting into
 // a second turn engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
-	snapshot := r.cfg.Registry.Snapshot()
-	surface, err := r.surfaceWith(ctx, phase.Onboarding, 0, nil, snapshot, nil, onboardingAlwaysOn)
+	snapshot := unsequenced(r.cfg.Registry.Snapshot())
+	surface, err := r.surfaceWith(ctx, phase.Onboarding, 0, nil, nil, snapshot, nil, onboardingAlwaysOn)
 	if err != nil {
 		return false, err
 	}
@@ -296,6 +296,38 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 // onboardingIteration groups the pass under the turn, before the executor's
 // round 1.
 const onboardingIteration = 0
+
+// unsequenced is the snapshot without any tool that names its writes after the
+// calls before it in the turn ([tools.Sequenced]) — the native tracker's
+// writes — which is the universe the onboarding pass may discover and call.
+//
+// KEPT OFF RATHER THAN CARRIED FORWARD. Such a write is named by its place
+// among the turn's calls, and the pass's calls are in no round the turn's
+// phases are bound to. Passing them forward would name this attempt's later
+// writes right and a redelivery's wrong: the pass runs once per seat, so the
+// redelivered turn does not run it again, and its own first write to an object
+// the pass wrote would take the pass's name, which the operation ledger
+// answers applied without writing. The pass reads, persists what it learned
+// and marks itself, none of which is a tracker write, so nothing it exists to
+// do is lost.
+func unsequenced(snapshot tools.Snapshot) tools.Snapshot {
+	out := tools.Snapshot{}
+	for _, entry := range snapshot.Entries() {
+		if _, sequenced := entry.Tool.(tools.Sequenced); sequenced {
+			continue
+		}
+		next, err := out.With(entry)
+		if err != nil {
+			// A duplicate or unnamed entry the registry would not have
+			// admitted; one lost entry must not cost the pass the rest.
+			onboardingLog.Warn("onboarding_catalogue_entry_skipped", "tool", entry.Name(),
+				"error", err.Error())
+			continue
+		}
+		out = next
+	}
+	return out
+}
 
 // calledSuccessfully reports whether a named tool ran and did not fail.
 func calledSuccessfully(surface *tools.Surface, name string) bool {

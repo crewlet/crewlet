@@ -26,6 +26,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("confluence import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bootstrapPath := bootstrapFlag(fs)
+	api := apiFlag(fs)
 	space := fs.String("space", "",
 		"the space tool-skill pages are published into; empty reads "+
 			"CREWLET_TOOL_SKILLS_SPACE, then knowledge.skills_container")
@@ -68,20 +69,11 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	fleet, err := companyResolver(ctx, *bootstrapPath, *api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
-
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	client, err := confluence.NewClient(confluence.ClientOptions{
-		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
-		Token: env.Value(cfg.Token),
-	})
+	client, err := confluenceClient(cfg, fleet)
 	if err != nil {
 		return err
 	}
@@ -101,6 +93,30 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("confluence: %d page(s) could not be written", len(res.Failed))
 	}
 	return nil
+}
+
+// confluenceClient is the org account's client, built from the company's
+// resolved values, for the two commands that read or write the instance and
+// record no credential.
+//
+// A REFUSAL NAMES AN UNREAD FLEET STORE, because it is the likelier cause of
+// an instance address or a token that resolved empty: neither command
+// records anything, so neither is refused for the store being out of reach,
+// and a value only the store holds reaches them as nothing.
+func confluenceClient(cfg *config.Confluence, fleet *fleetRead) (*confluence.Client, error) {
+	env := fleet.env
+	resolved := config.Confluence{
+		URL:     strings.TrimSpace(env.Value(cfg.URL)),
+		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
+	}
+	client, err := confluence.NewClient(confluence.ClientOptions{
+		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
+		Token: env.Value(cfg.Token),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w%s", err, fleet.unreadClause())
+	}
+	return client, nil
 }
 
 func printConfluencePlan(w io.Writer, plan *confluence.Plan) {
@@ -164,6 +180,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	space := fs.String("space", "",
 		"the skills space key; empty takes knowledge.skills_container")
 	bootstrapPath := bootstrapFlag(fs)
+	api := apiFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -186,20 +203,11 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	fleet, err := companyResolver(ctx, *bootstrapPath, *api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
-
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	client, err := confluence.NewClient(confluence.ClientOptions{
-		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
-		Token: env.Value(cfg.Token),
-	})
+	client, err := confluenceClient(cfg, fleet)
 	if err != nil {
 		return err
 	}
@@ -281,11 +289,19 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	fleet, err := companyResolver(ctx, *sinks.bootstrap, *sinks.api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	env := fleet.env
+	// A RUN THAT WILL RECORD IS REFUSED HERE, before the checks of values
+	// that resolved empty — which, with the fleet's store unread, may be
+	// ones the store holds.
+	if !*dryRun {
+		if refusal := fleet.recordable(); refusal != nil {
+			return refusal
+		}
+	}
 
 	resolved := config.Confluence{
 		URL:     strings.TrimSpace(env.Value(cfg.URL)),
@@ -295,13 +311,14 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 	if base == "" {
 		return fmt.Errorf(
 			"confluence: neither integrations.confluence.url (%q) nor cloud_id "+
-				"(%q) resolved to anything", cfg.URL, cfg.CloudID)
+				"(%q) resolved to anything%s", cfg.URL, cfg.CloudID, fleet.unreadClause())
 	}
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
 		return fmt.Errorf(
 			"confluence: integrations.confluence.token (%q) resolved empty; the "+
-				"org account is what this run reads the instance with", cfg.Token)
+				"org account is what this run reads the instance with%s",
+			cfg.Token, fleet.unreadClause())
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -320,11 +337,10 @@ func runConfluenceProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading the instance; no hook will be registered.")
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		sink, openErr := sinks.open(stdout, fleet)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 
@@ -344,13 +360,10 @@ func printConfluenceHooks(w io.Writer, res *confluence.Result) {
 			state := "converged"
 			switch {
 			case !hook.Hooked():
-				// A REACHABLE BRANCH NOW. Every failure used to return
-				// an error, so the reconcile never yielded a hook
-				// without a URL and this printed nothing ever; a refused
-				// event is recorded and the walk continues, so one
-				// bad event no longer hides the other seven. orDash for
-				// the same reason the GitHub printer has it: an empty
-				// detail would render as a dangling colon.
+				// A HOOK THE PASS DID NOT REGISTER, with the pass's own
+				// reason. orDash for the same reason the GitHub printer
+				// has it: an empty detail would render as a dangling
+				// colon.
 				state = "NOT registered: " + orDash(hook.Detail)
 			case hook.Created:
 				state = "created"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -288,4 +289,52 @@ func launchWithoutBrief() LaunchRequest {
 	req := launchReq("t1")
 	req.Brief = "   "
 	return req
+}
+
+// THE TURN'S INSTANT RIDES THE ROW. A resume re-enters the turn with no trigger
+// left to re-derive when its operation ids can first have been minted, so the
+// launch writes the instant its turn carried.
+func TestALaunchRecordsTheInstantItsTurnCouldFirstMint(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Turn.TriggeredAt = rig.now.Add(-time.Hour)
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1").TriggeredAt; !got.Equal(req.Turn.TriggeredAt) {
+		t.Errorf("the row carries %v, want the turn's %v", got, req.Turn.TriggeredAt)
+	}
+}
+
+// A TURN'S CODING RUNS ARE BOUNDED ACROSS ITS RESUMES. Each resume re-enters
+// with a fresh tool loop, so a round relaunching on every resume is bounded by
+// nothing the loop counts; the row counts the launches, and the one past the
+// bound is refused before a box is provisioned or the row is touched, naming
+// the count and the bound.
+func TestALaunchPastTheTurnsBoundIsRefusedNamingIt(t *testing.T) {
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.MaxLaunches = 2
+	for launch := range 2 {
+		if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Fatalf("launch %d of 2: %v", launch+1, err)
+		}
+	}
+	before := rig.get("t1")
+	started := len(rig.runner.Started())
+
+	_, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req)
+	var capped *LaunchCapError
+	if !errors.As(err, &capped) || !errors.Is(err, ErrLaunchCap) ||
+		capped.Launched != 2 || capped.Max != 2 {
+		t.Fatalf("the third launch = %v, want a refusal at 2 of 2", err)
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Errorf("the refusal %q does not name the bound", err)
+	}
+	after := rig.get("t1")
+	if after.LaunchID != before.LaunchID || after.Launches != 2 || len(rig.runner.Started()) != started {
+		t.Errorf("the refused launch touched the run: launch %q→%q, count %d, jobs started %d→%d",
+			before.LaunchID, after.LaunchID, after.Launches, started, len(rig.runner.Started()))
+	}
 }

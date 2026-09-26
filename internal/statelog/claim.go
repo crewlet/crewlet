@@ -92,6 +92,18 @@ func (p *Publisher) Claim(ctx context.Context, req Request) error {
 		req.Subject, req.OpID)
 }
 
+// HeldElsewhere reads whether a create-only subject is held by an operation
+// other than opID: [ClaimedElsewhere] when it is, and nil when nothing holds it
+// or opID does.
+//
+// A READ, never a claim: it is what a caller asks before it commits to
+// anything a claim would decide, and [Publisher.Claim] still arbitrates —
+// a record landing after this read is met there.
+func (p *Publisher) HeldElsewhere(ctx context.Context, subj Subject, opID string) error {
+	_, err := p.heldBy(ctx, Request{Subject: subj, OpID: opID})
+	return err
+}
+
 // heldBy reports whether req.OpID holds req.Subject: true when it does, false
 // with no error when nothing does, and [ClaimedElsewhere] when another
 // operation does.

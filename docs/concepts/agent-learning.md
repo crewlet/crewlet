@@ -297,7 +297,7 @@ Being a tool rather than a seam, it is also cheap to be honest about. A seat the
 
 ### Telemetry
 
-The turn-start `prefetch_summary` event's `relevant_knowledge_hit`, `relevant_knowledge_bytes` and `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two paths where the hit is true: a non-zero count means real pages were rendered; zero with a true hit means a sentence was rendered in place of pages: the thin-trigger gate skipped the search, the search ran and returned nothing, the search failed, or this node's index was still on its first build. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
+The turn-start `prefetch_summary` event's `relevant_knowledge_hit`, `relevant_knowledge_bytes` and `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two paths where the hit is true: a non-zero count means real pages were rendered; zero with a true hit means a sentence was rendered in place of pages: the thin-trigger gate skipped the search, the query the auxiliary model wrote was longer than a search takes (`knowledge.MaxQueryBytes`) and was refused rather than cut — logged as `prefetch_knowledge_query_refused` — the search ran and returned nothing, the search failed, or this node's index was still on its first build. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
 
 A block stuck at 0% hit rate over a representative window is almost always one of:
 

@@ -70,11 +70,19 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	fleet, err := companyResolver(ctx, *sinks.bootstrap, *sinks.api, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	env := fleet.env
+	// A RUN THAT WILL RECORD IS REFUSED HERE, before the checks of values
+	// that resolved empty — which, with the fleet's store unread, may be
+	// ones the store holds.
+	if !*dryRun {
+		if refusal := fleet.recordable(); refusal != nil {
+			return refusal
+		}
+	}
 
 	resolved := config.Jira{
 		URL:     strings.TrimSpace(env.Value(cfg.URL)),
@@ -84,13 +92,14 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	if base == "" {
 		return fmt.Errorf(
 			"jira: neither integrations.jira.url (%q) nor cloud_id (%q) "+
-				"resolved to anything", cfg.URL, cfg.CloudID)
+				"resolved to anything%s", cfg.URL, cfg.CloudID, fleet.unreadClause())
 	}
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
 		return fmt.Errorf(
 			"jira: integrations.jira.token (%q) resolved empty — the org "+
-				"account is what this run reads the instance with", cfg.Token)
+				"account is what this run reads the instance with%s",
+			cfg.Token, fleet.unreadClause())
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -113,11 +122,10 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		sink, openErr := sinks.open(stdout, fleet)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

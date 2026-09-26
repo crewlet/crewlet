@@ -404,7 +404,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			func() []ledger.Call { return calls(surface) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, history, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, round, history, nil, snapshot, submit,
 		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -658,7 +658,7 @@ func (c *closing) onPanic() {
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
-	surface, err := r.surfaceWith(ctx, phase.Review, round, history, snapshot, submit, nil)
+	surface, err := r.surfaceWith(ctx, phase.Review, round, history, nil, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -1427,8 +1427,13 @@ type phaseResult struct {
 // a resumed Execute as well as a fresh one. Injected here because this is the
 // single funnel every phase surface goes through, so a phase that lost the
 // tool mid-turn is not representable.
+//
+// earlier is the calls this phase made before the surface existed that no
+// round of history holds — a re-entered round's calls from before its suspend
+// — and the surface is bound to them as the turn's earlier calls
+// ([turnctx.Turn.Earlier]). Nil for a phase that opens a conversation.
 func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
-	history []ledger.Iteration, snapshot tools.Snapshot, submit tools.Callable,
+	history []ledger.Iteration, earlier []ledger.Call, snapshot tools.Snapshot, submit tools.Callable,
 	active []string, loaded ...string,
 ) (*tools.Surface, error) {
 	if submit != nil {
@@ -1494,7 +1499,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// through, so a resumed Execute cannot come back holding a different
 	// turn's rounds from the surface it was built beside.
 	surface = tools.NewSurface(ph.String(), snapshot, active).
-		ForTurn(r.cfg.Turn.Context.WithRounds(history))
+		ForTurn(r.cfg.Turn.Context.WithRounds(history).WithEarlier(earlier))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"

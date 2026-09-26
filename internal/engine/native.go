@@ -1576,9 +1576,9 @@ func (e *Engine) reportSearch(answer search.Answer, took time.Duration) {
 	if e.metrics == nil {
 		return
 	}
-	path := "interactive"
+	path := searchPathInteractive
 	if answer.Prefetch {
-		path = "prefetch"
+		path = searchPathPrefetch
 	}
 	rung := "lexical"
 	if answer.Hybrid {

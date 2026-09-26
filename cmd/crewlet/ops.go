@@ -73,13 +73,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 
 	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
-		// READING IS ALSO A SECOND PROCESS ON THE FILE. -check applies
-		// nothing, but it reads the store's files, and the lock admits one
-		// process at a time — so against a running engine the remedy is the
-		// apply's: stop it, and run the check again.
-		return engineHoldsTheStore(err, bootstrapPath,
-			"Stop `crewlet run` on this node and re-run the check: it reads "+
-				"the store's files, which the running engine holds.")
+		// READING IS ALSO A SECOND PROCESS ON THE FILE. Every invocation
+		// reads what is pending first, -check or not, and the lock admits
+		// one process at a time — so against a running engine the remedy is
+		// the apply's: stop it, and run the same command again.
+		return engineHoldsTheStore(err, bootstrapPath, pendingLockRemedy(*check))
 	}
 	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
 	// independent sequences, and a report that named one of them would be
@@ -143,6 +141,20 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// pendingLockRemedy is what `crewlet migrate` tells an operator when the read
+// of what is pending finds the store's files held by a running engine: the
+// command to run again once it is stopped, named as it was invoked, since the
+// read comes first on both — `-check`, which applies nothing, and the migration
+// itself, which has applied nothing yet when it is refused.
+func pendingLockRemedy(check bool) string {
+	if check {
+		return "Stop `crewlet run` on this node and re-run `crewlet migrate -check`: the check " +
+			"reads the store's files, which the running engine holds."
+	}
+	return "Stop `crewlet run` on this node and re-run `crewlet migrate`: nothing was applied, " +
+		"because reading what is pending needs the store's files, which the running engine holds."
 }
 
 // runBudgets is `crewlet budgets`.
