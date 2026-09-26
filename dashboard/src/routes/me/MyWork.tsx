@@ -680,20 +680,24 @@ function countedTab(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | 
 
 /** How many things are behind one tab, as the strip spells it. */
 function countFor(tab: Tab, mine: WorkMyWork, assignedTotal: WorkClaimTotal | undefined): string {
+  // `totals` is optional on the wire: a node from before the engine counted
+  // the blocks answers without it, and a tab with no count is honest where a
+  // page length would be a ceiling read as a total.
+  const totals = mine.totals;
   const claim =
     tab === "assigned"
       ? assignedTotal
       : tab === "priorities"
-        ? mine.totals.priorities
+        ? totals?.priorities
         : tab === "asks"
-          ? mine.totals.asked_of_me
+          ? totals?.asked_of_me
           : tab === "unblocked"
-            ? mine.totals.unblocked_recent
+            ? totals?.unblocked_recent
             : tab === "collaborating"
-              ? mine.totals.collaborating
+              ? totals?.collaborating
               : tab === "watching"
-                ? mine.totals.watching_recent
-                : mine.totals.checklist_items;
+                ? totals?.watching_recent
+                : totals?.checklist_items;
   if (claim === undefined) return "";
   return pageCount(claim.total, claim.capped === true);
 }

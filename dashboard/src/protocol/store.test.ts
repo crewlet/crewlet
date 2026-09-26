@@ -11,6 +11,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { MAX_EVENTS } from "../contract/wire.ts";
 import { MAX_PHASES, Store } from "./store.ts";
+import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
@@ -320,5 +321,91 @@ describe("seat lookup", () => {
       expect(store.agentByKey(key)?.handle, key).toBe("pm");
     }
     expect(store.agentByKey("nobody")).toBeNull();
+  });
+});
+
+describe("a peer this build was not built against", () => {
+  // A FLEET MID-UPGRADE has a node pushing what this bundle was built before.
+  // Its unknown kind must neither throw nor land in a slice by a guess — and it
+  // must not vanish either, because the same fall-through is what this build's
+  // own engine sending a kind its own client forgot looks like. The e2e replay
+  // asserts the count is zero for exactly that reason.
+  test("an unknown push kind is ignored and counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const before = JSON.stringify(store.state);
+    const woken = vi.fn();
+    store.subscribe(["agents", "events", "health", "budget"], woken);
+
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: { agents: [] } }));
+    socket.onMessage(JSON.stringify({ kind: "hologram", data: {} }));
+    socket.onMessage(JSON.stringify({ data: {} }));
+
+    expect(JSON.stringify(store.state)).toBe(before);
+    expect(woken).not.toHaveBeenCalled();
+    expect(Object.fromEntries(store.unknownPushes)).toEqual({ hologram: 2, null: 1 });
+  });
+
+  test("every kind this build dispatches is not counted", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    for (const kind of ["snapshot", "event", "agents", "seats", "sandboxes", "tokens"]) {
+      socket.onMessage(JSON.stringify({ kind, data: kind === "snapshot" ? {} : [] }));
+    }
+    for (const kind of ["budget", "schedules", "org", "tools", "health", "pong"]) {
+      socket.onMessage(JSON.stringify({ kind, data: {} }));
+    }
+    socket.onMessage(JSON.stringify({ kind: "result", id: 99, data: {} }));
+    socket.onMessage(JSON.stringify({ kind: "error", id: 99, error: "not_found" }));
+    expect(store.unknownPushes.size).toBe(0);
+  });
+
+  // EVERY FIELD THIS PR ADDED IS OPTIONAL, because an older node's snapshot
+  // does not carry it. Applying one must neither throw nor invent a value: a
+  // seat with no `activity`, a budget with no clock and a health frame with no
+  // alarm count stay absent, which is what each screen's "unknown" branch
+  // reads.
+  test("an older node's snapshot applies with this build's fields absent", () => {
+    const store = new Store();
+    store.applySnapshot({
+      agents: [{ id: "pm", role: "PM", handle: "pm" }],
+      budget: {},
+      health: { status: "ok" },
+    });
+    const [pm] = store.state.agents;
+    expect(pm?.activity).toBeUndefined();
+    expect(pm?.turn).toBeUndefined();
+    expect(pm?.paused).toBeUndefined();
+    expect(store.state.budget.timezone).toBeUndefined();
+    expect(store.state.budget.org).toBeUndefined();
+    expect(store.state.health.alarms).toBeUndefined();
+    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
+  });
+});
+
+describe("a refused query", () => {
+  // THE WAIT THE ENGINE NAMED TRAVELS WITH THE REFUSAL. The socket used to
+  // reject with the bare code, so `retry_after_seconds` reached no screen and
+  // each guessed a wait of its own.
+  test("an unavailable frame's retry hint reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("fleet");
+    socket.onMessage(
+      JSON.stringify({ kind: "error", id: 1, error: "unavailable", retry_after_seconds: 4 }),
+    );
+    const err = await asked.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(QueryError);
+    expect((err as QueryError).message).toBe("unavailable");
+    expect((err as QueryError).retryAfterSeconds).toBe(4);
+  });
+
+  test("a refusal that names no wait carries none", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("fleet");
+    socket.onMessage(JSON.stringify({ kind: "error", id: 1, error: "not_found" }));
+    const err = await asked.catch((e: unknown) => e);
+    expect((err as QueryError).retryAfterSeconds).toBeNull();
   });
 });

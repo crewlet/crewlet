@@ -23,7 +23,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Avatar,
   Button,
@@ -70,7 +70,8 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
+import { requestToken, rest, RestError } from "~/protocol/index.ts";
+import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
   INTEGRATION_TOOLS,
@@ -1639,83 +1640,38 @@ export function useSetup(): {
   loading: boolean;
   reload: () => void;
 } {
-  const [listing, setListing] = useState<SetupListing | null>(null);
-  const [guarded, setGuarded] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
-  // Every re-read a person triggers keeps it, because the two halves of this
-  // screen disagree for a moment either side of a connect and a card drawn
-  // from one of them is wrong; a background refresh has no such moment, and
-  // blanking six cards because somebody came back to the tab would be the
-  // screen reporting an absence that is not there.
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
+  // THE ONE REST LOADER, which supersedes a read that is still in flight: four
+  // things start one here — mount, a token change, the tab becoming visible
+  // and useRecheck, which fires the same read twice 700 ms apart — and before
+  // it every answer was written into state unconditionally, so whichever
+  // landed last was what the screen held.
   //
-  // Four things start one — mount, a token change, the tab becoming visible
-  // and useRecheck, which deliberately fires the same read twice 700 ms
-  // apart — so several can be in flight at once. Every answer was written
-  // into state unconditionally, and nothing polls this route, so whichever
-  // landed last is what the screen held until the operator changed tabs or
-  // set a token. A generation counter is what useQuery in this same tree
-  // already uses for exactly this, and it is why its doc argues against a
-  // second hand-rolled loader.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
-  );
-
-  const reload = useCallback((quiet = false) => {
-    generation.current++;
-    const mine = generation.current;
-    if (!quiet) setLoading(true);
-    void (async () => {
-      try {
-        const answer = (await rest.get("/setup/integrations")) as SetupListing;
-        if (generation.current !== mine) return;
-        setListing(answer);
-        setGuarded(false);
-      } catch (err) {
-        if (generation.current !== mine) return;
-        // A refusal is not an empty answer. The screen keeps every read it
-        // already has and simply offers no writes.
-        setListing(null);
-        setGuarded(err instanceof RestError && err.unauthorized);
-      } finally {
-        // ANSWERED, not answered WELL. A refusal is a state the screen can
-        // render honestly, with the banner and no buttons; waiting is not.
-        if (generation.current === mine) setLoading(false);
-      }
-    })();
-  }, []);
-
-  useEffect(reload, [reload]);
-  // A refusal here is the one the banner asks the reader to fix, so the fix
-  // has to land on this screen without a reload.
-  useEffect(() => onTokenChanged(reload), [reload]);
   // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
   // listing is the only thing that carries the roster: nothing pushes it, and
   // no answer this screen holds says when a person finished creating an app.
-  // So it is re-read when the tab comes back, which is exactly the moment a
-  // seat that offered Create needs to be offering Install instead.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
-
+  // So it is re-read when the tab comes back, quietly — a background refresh
+  // has no moment where the two halves disagree, and blanking six cards
+  // because somebody came back to the tab would report an absence that is not
+  // there. Every re-read a PERSON triggers is loud, for the reason `loading`
+  // gives.
+  const setup = useRest(
+    "/setup/integrations",
+    (signal) => rest.get("/setup/integrations", signal) as Promise<SetupListing>,
+    { refetchOnFocus: true },
+  );
+  // A REFUSAL IS NOT AN EMPTY ANSWER. The loader drops the listing on one, so
+  // the screen keeps every read the socket gave it and simply offers no
+  // writes; `guarded` is what tells a refused read from a missing one.
+  const listing = setup.data;
+  const { reload } = setup;
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.public_base_url ?? null,
-    guarded,
-    loading,
-    reload,
+    guarded: setup.error?.unauthorized ?? false,
+    // ANSWERED, not answered WELL. A refusal is a state the screen can render
+    // honestly, with the banner and no buttons; waiting is not.
+    loading: setup.loading,
+    reload: useCallback(() => void reload(), [reload]),
   };
 }
 
@@ -1978,95 +1934,56 @@ function useSetupRuns(kinds: string[]): {
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
-  // the catalogue on every render, so an effect depending on the array itself
-  // would re-read this several times a second.
+  // the catalogue on every render, so a loader keyed on the array itself
+  // would re-read this several times a second. NOTHING TO ASK IS NOT A
+  // LOADING STATE: with no kind there is no route, and a panel that spun for
+  // ever would be reporting a wait on a request nobody made.
   const key = kinds.join(",");
-  const [runs, setRuns] = useState<SetupRun[]>([]);
-  const [scope, setScope] = useState("");
-  const [guarded, setGuarded] = useState(false);
-  const [loading, setLoading] = useState(key !== "");
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST — the same
-  // generation counter [useSetup] keeps, and for the same reason: a poll tick
-  // and the re-read that follows a pass are in flight together every time one
-  // ends.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    [],
-  );
-
-  const reload = useCallback(
-    (quiet = false) => {
-      generation.current++;
-      const mine = generation.current;
-      const wanted = key === "" ? [] : key.split(",");
-      if (wanted.length === 0) {
-        // NOTHING TO ASK IS NOT A LOADING STATE. With no kind there is no
-        // route, and a panel that spun for ever would be reporting a wait on
-        // a request nobody made.
-        setRuns([]);
-        setScope("");
-        setLoading(false);
-        return;
-      }
-      if (!quiet) setLoading(true);
-      void (async () => {
-        try {
-          const answers = (await Promise.all(
-            wanted.map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`)),
-          )) as RunListing[];
-          if (generation.current !== mine) return;
-          setRuns(
-            answers
-              .flatMap((answer) => answer.runs ?? [])
-              .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
-          );
-          setScope(answers.find((answer) => answer.scope)?.scope ?? "");
-          setGuarded(false);
-        } catch (err) {
-          if (generation.current !== mine) return;
-          setRuns([]);
-          setGuarded(err instanceof RestError && err.unauthorized);
-        } finally {
-          // ANSWERED, not answered WELL — [useSetup] says the rest.
-          if (generation.current === mine) setLoading(false);
-        }
-      })();
-    },
-    [key],
-  );
-
-  useEffect(() => reload(), [reload]);
+  const [running, setRunning] = useState(false);
   // TWO CADENCES, ONE LOOP. A pass in flight ends on its own inside
   // `setup.PassDeadline` and this list is the only place that says how it
   // ended, so it is watched at [PASS_POLL_MS]; the rest of the time the
   // history still moves without this panel touching anything, which is what
-  // [PASS_IDLE_POLL_MS] is for.
+  // [PASS_IDLE_POLL_MS] is for. QUIET, both of them — the loader's polls are —
+  // since a re-read that blanked the table into its skeleton once a minute
+  // would take the row an operator was reading out from under them to say
+  // nothing new.
   //
-  // QUIET, both of them: a re-read that blanked the table into its skeleton
-  // once a minute would take the row an operator was reading out from under
-  // them to say nothing new.
-  const running = runs.some((run) => run.state === "running");
-  useEffect(() => {
-    const timer = setInterval(() => reload(true), running ? PASS_POLL_MS : PASS_IDLE_POLL_MS);
-    return () => clearInterval(timer);
-  }, [running, reload]);
   // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means leaving
   // for the third-party app and returning, and the pass that ran while the
   // reader was away is the one they came back to read — the same argument
   // [useSetup] makes for re-reading its listing, on the same event.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
+  const answer = useRest(
+    key === "" ? null : key,
+    async (signal) => {
+      const answers = (await Promise.all(
+        key
+          .split(",")
+          .map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`, signal)),
+      )) as RunListing[];
+      return {
+        runs: answers
+          .flatMap((one) => one.runs ?? [])
+          .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
+        scope: answers.find((one) => one.scope)?.scope ?? "",
+      };
+    },
+    { pollMs: running ? PASS_POLL_MS : PASS_IDLE_POLL_MS, refetchOnFocus: true },
+  );
+  const runs = answer.data?.runs ?? EMPTY_RUNS;
+  const nowRunning = runs.some((run) => run.state === "running");
+  useEffect(() => setRunning(nowRunning), [nowRunning]);
 
-  return { runs, scope, guarded, loading };
+  return {
+    runs,
+    scope: answer.data?.scope ?? "",
+    guarded: answer.error?.unauthorized ?? false,
+    loading: answer.loading,
+  };
 }
+
+/** One shared empty history, so a panel with none keeps one identity. */
+const EMPTY_RUNS: SetupRun[] = [];
 
 /**
  * ONE pass, read fresh.
@@ -2087,62 +2004,28 @@ function useSetupRun(
   kind: string,
   id: string,
 ): { run: SetupRun | null; missing: boolean; guarded: boolean; loading: boolean } {
-  const [run, setRun] = useState<SetupRun | null>(null);
-  const [missing, setMissing] = useState(false);
-  const [guarded, setGuarded] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    [],
-  );
-
-  const read = useCallback(
-    (quiet = false) => {
-      generation.current++;
-      const mine = generation.current;
-      if (kind === "" || id === "") {
-        setRun(null);
-        setMissing(false);
-        setLoading(false);
-        return;
-      }
-      if (!quiet) setLoading(true);
-      void (async () => {
-        try {
-          const answer = (await rest.get(
-            `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
-          )) as SetupRun;
-          if (generation.current !== mine) return;
-          setRun(answer);
-          setMissing(false);
-          setGuarded(false);
-        } catch (err) {
-          if (generation.current !== mine) return;
-          setRun(null);
-          setMissing(err instanceof RestError && err.status === 404);
-          setGuarded(err instanceof RestError && err.unauthorized);
-        } finally {
-          if (generation.current === mine) setLoading(false);
-        }
-      })();
-    },
-    [kind, id],
-  );
-
-  useEffect(() => read(), [read]);
   // FOLLOWED TO ITS END, and only while it is going: the row that opened this
   // may have been a pass that was running when the list answered.
-  const running = run?.state === "running";
-  useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => read(true), PASS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [running, read]);
+  const [running, setRunning] = useState(false);
+  const answer = useRest(
+    kind === "" || id === "" ? null : `${kind}/${id}`,
+    (signal) =>
+      rest.get(
+        `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
+        signal,
+      ) as Promise<SetupRun>,
+    { pollMs: running ? PASS_POLL_MS : undefined },
+  );
+  const run = answer.data;
+  const nowRunning = run?.state === "running";
+  useEffect(() => setRunning(nowRunning), [nowRunning]);
 
-  return { run, missing, guarded, loading };
+  return {
+    run,
+    missing: answer.error?.status === 404,
+    guarded: answer.error?.unauthorized ?? false,
+    loading: answer.loading,
+  };
 }
 
 /**

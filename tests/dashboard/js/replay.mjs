@@ -73,6 +73,20 @@ for (const raw of frames) socket.onMessage(raw);
 const problems = [];
 const state = store.state;
 
+// EVERY KIND THIS ENGINE PUSHED IS ONE ITS OWN CLIENT DISPATCHES. The store
+// ignores a kind it does not know, because a newer peer in a fleet mid-upgrade
+// pushes kinds this bundle was built before — and counts it, because that
+// same silent fall-through is exactly what a kind this build's engine sends
+// and this build's client forgot looks like. Here engine and client are one
+// build, so the count must be zero.
+if (store.unknownPushes.size) {
+  const seen = [...store.unknownPushes].map(([kind, n]) => `${kind} ×${n}`).join(", ");
+  problems.push(
+    `the client does not dispatch every kind the engine pushed (${seen}): each ` +
+      "of those frames fell through the socket's switch and reached no screen",
+  );
+}
+
 // The frames are one company running one turn. What the client must end up
 // holding, and what each absence would have looked like on screen:
 if (!state.agents.length) {

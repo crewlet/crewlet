@@ -1459,10 +1459,11 @@ export function ItemProps({
             label: "Hand-offs",
             value: (
               <span className="row gap-1">
-                {`${item.reassignments ?? 0} of ${detail.reassignment_budget}`}
-                {(item.reassignments ?? 0) >= detail.reassignment_budget && (
-                  <WarningGlyph size="xs" />
-                )}
+                {handoffs(item.reassignments ?? 0, detail.reassignment_budget)}
+                {detail.reassignment_budget !== undefined &&
+                  (item.reassignments ?? 0) >= detail.reassignment_budget && (
+                    <WarningGlyph size="xs" />
+                  )}
               </span>
             ),
           },
@@ -1535,6 +1536,17 @@ export function ItemProps({
  * because a team that has left the chart is something to correct rather than
  * somewhere to go.
  */
+/**
+ * The hand-off count against the engine's budget for it.
+ *
+ * THE BUDGET IS OPTIONAL ON THE WIRE — a node from before the engine served it
+ * answers without one — and a count with no ceiling beside it is still true,
+ * where "3 of undefined" is not.
+ */
+function handoffs(count: number, budget: number | undefined): string {
+  return budget === undefined ? String(count) : `${count} of ${budget}`;
+}
+
 function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
   if (unit && unit.resolved === false) {
     return (

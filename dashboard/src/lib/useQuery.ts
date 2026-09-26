@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
-import { queryErrorCode, type QueryMap, type QueryName } from "~/protocol/index.ts";
+import { QueryError, queryErrorCode, type QueryMap, type QueryName } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface QueryResult<T> {
@@ -72,18 +72,32 @@ export interface QueryOptions {
 }
 
 /**
- * How soon an `unavailable` answer is asked again.
+ * How soon a refused question is asked again, in ms — or 0 for "not on its
+ * own".
  *
- * `unavailable` is the engine saying "ask me in a moment": its projection is
- * catching up, or its coordination store did not answer. The banner for it
- * tells a person the screen fills in on its own, and a query with no poll
- * behind it never asked again, so a screen opened during a restart held that
- * banner until somebody reloaded. Five seconds is the engine's own
- * Retry-After when it has no better hint, which is its shared health tick
- * (`stream.HealthInterval`): sooner asks before anything could have changed,
- * later leaves a recovered node looking broken.
+ * ONLY WHEN THE ENGINE SAID WHEN. `unavailable` is the engine saying "ask me
+ * in a moment" — its projection is catching up, or its coordination store did
+ * not answer — and its error frame carries `retry_after_seconds`, computed by
+ * the same engine helper as the REST 503's `Retry-After`: this node's own lag
+ * over how fast it is draining, and the shared health tick where there is no
+ * drain to derive from. This hook used to wait a five-second constant of its
+ * own instead, which was that helper's fallback copied by hand — too early for
+ * a node grinding through a bulk apply, too late for one that caught up in
+ * milliseconds, and a second opinion about one refusal that the two
+ * transports disagreed on.
+ *
+ * Every other refusal is a fact about the request or the node that waiting
+ * does not change, so nothing re-asks it; and an `unavailable` that named no
+ * wait is not one this build's engine sends (it always names one), so it gets
+ * no invented wait either — the poll, a reconnect or the reader asks again.
  */
-export const UNAVAILABLE_RETRY_MS = 5_000;
+export function retryDelayMs(code: QueryErrorCode, err: unknown): number {
+  if (code !== "unavailable" || !(err instanceof QueryError)) return 0;
+  const seconds = err.retryAfterSeconds;
+  // A wait of zero is "now", which is a tight loop against a node that just
+  // said it cannot answer; the engine never sends one below a second.
+  return seconds === null ? 0 : Math.max(seconds, 1) * 1000;
+}
 
 export function useQuery<K extends QueryName>(
   what: K,
@@ -124,7 +138,7 @@ export function useQuery<K extends QueryName>(
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
 
     const run = async (): Promise<void> => {
-      let retrySoon = false;
+      let retryMs = 0;
       try {
         const data = await socket.query(what, JSON.parse(key) as Record<string, unknown>);
         if (generation.current !== mine) return;
@@ -134,7 +148,7 @@ export function useQuery<K extends QueryName>(
         // A socket rejection always carries a code; anything else that
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-        retrySoon = code === "unavailable";
+        retryMs = retryDelayMs(code, err);
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -144,13 +158,11 @@ export function useQuery<K extends QueryName>(
           error: code,
         }));
       } finally {
-        // THE SOONER OF THE TWO. A poll keeps its own cadence; an
-        // `unavailable` answer comes back within UNAVAILABLE_RETRY_MS whether
-        // or not anything polls, because a minute-long poll would leave a
+        // THE SOONER OF THE TWO. A poll keeps its own cadence; a refusal
+        // the engine named a wait for comes back after that wait whether or
+        // not anything polls, because a minute-long poll would leave a
         // recovered node looking broken for most of that minute.
-        const next = retrySoon
-          ? Math.min(pollMs ?? UNAVAILABLE_RETRY_MS, UNAVAILABLE_RETRY_MS)
-          : pollMs;
+        const next = retryMs ? Math.min(pollMs ?? retryMs, retryMs) : pollMs;
         if (generation.current === mine && next) {
           timer = setTimeout(() => void run(), next);
         }

@@ -200,12 +200,12 @@ export interface IntegrationTool {
 export interface IntegrationsAnswer {
   integrations: IntegrationRow[];
   /** One roll-up per tool in `INTEGRATION_TOOLS`, whether configured or not. */
-  tools: IntegrationTool[];
+  tools?: IntegrationTool[];
   traffic_known: boolean;
   /** The oldest delivery counted, or null when nothing was: the page is
    *  capped rather than time-bounded, so there is no fixed window to name. */
   traffic_since: string | null;
   /** Which nodes the traffic counts were read from — a delivery is stored on
    *  whichever node received it — or null when no store could be read. */
-  coverage: Coverage | null;
+  coverage?: Coverage | null;
 }

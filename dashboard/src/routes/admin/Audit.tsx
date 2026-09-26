@@ -39,7 +39,7 @@
  * is held to.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { DescriptionGlyph, ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
@@ -57,6 +57,7 @@ import { useNow } from "~/lib/clock.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
+import { useRest } from "~/lib/useRest.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
@@ -505,26 +506,18 @@ export function Audit() {
  * `?reveal`.
  */
 function useSecrets(): { rows: SecretRow[] | null } {
-  const [rows, setRows] = useState<SecretRow[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
-        if (live) setRows(body?.secrets ?? []);
-      } catch {
-        // BEST EFFORT, like every other credential read on a screen that is
-        // not about credentials: an operator without the scope for `/secrets`
-        // still has an audit of everything else, and a failed read here must
-        // not take the tracker's and the wiki's rows down with it.
-        if (live) setRows(null);
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
-  return { rows };
+  // BEST EFFORT, like every other credential read on a screen that is not
+  // about credentials: an operator without the scope for `/secrets` still has
+  // an audit of everything else, and a failed read here must not take the
+  // tracker's and the wiki's rows down with it — so its refusal is simply no
+  // rows. It re-reads when a token is set, which this read never did: an
+  // operator who set one here saw the credential rows only after leaving the
+  // screen and coming back.
+  const secrets = useRest(
+    "/secrets",
+    (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,
+  );
+  return { rows: secrets.data ? (secrets.data.secrets ?? []) : null };
 }
 
 /**
