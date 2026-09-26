@@ -447,4 +447,104 @@ var leaseCases = []testCase{
 				got, LongTTL-ShortTTL)
 		}
 	}},
+
+	// --- acquired at ---------------------------------------------------
+
+	{"acquired_at_is_the_tenures_utc_start_on_the_stores_clock", func(h *harness) {
+		// What an operator reads as "node-2 · since 08:02". Zero would
+		// render as absent — the reading reserved for a record from a
+		// build that predates the field — so a backend that forgot it
+		// passes every ownership case and tells the fleet screen that no
+		// seat's tenure is known.
+		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		if lease.AcquiredAt.IsZero() {
+			h.t.Fatal("a fresh claim carries no AcquiredAt")
+		}
+		if lease.AcquiredAt.Location() != time.UTC {
+			h.t.Fatalf("AcquiredAt is in %v, want time.UTC like ExpiresAt", lease.AcquiredAt.Location())
+		}
+		// ON THE STORE'S CLOCK, pinned against the one field already
+		// certified to be: the claim cannot have been won after the
+		// deadline it was granted began to run, and it was won within
+		// one claim's round trips of it. A backend stamping the
+		// caller's clock drifts out of this band on the first node
+		// whose clock disagrees with the store's.
+		start := lease.ExpiresAt.Add(-LongTTL)
+		if lease.AcquiredAt.After(start) {
+			h.t.Fatalf("AcquiredAt %v is after the deadline's start %v", lease.AcquiredAt, start)
+		}
+		if gap := start.Sub(lease.AcquiredAt); gap > time.Minute {
+			h.t.Fatalf("AcquiredAt %v is %v before the deadline's start — not this claim's moment",
+				lease.AcquiredAt, gap)
+		}
+	}},
+
+	{"acquired_at_is_carried_through_every_renewal", func(h *harness) {
+		// A tenure does not restart on a heartbeat. A stamp that
+		// followed the renewal would say "since a few seconds ago" about
+		// a seat that has not moved all day — on every seat, always.
+		first := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		// Time has to pass in the STORE, or a backend restamping on
+		// renew writes the same instant and passes.
+		h.lapsePast(ShortTTL)
+
+		again := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		if !again.AcquiredAt.Equal(first.AcquiredAt) {
+			h.t.Fatalf("a live holder's re-claim moved AcquiredAt %v -> %v",
+				first.AcquiredAt, again.AcquiredAt)
+		}
+		h.lapsePast(ShortTTL)
+		if !h.renew("seat:ceo", "node-a", first.Epoch, LongTTL) {
+			h.t.Fatal("renew of a live lease reported loss")
+		}
+		// Every read path, since each renders the record separately.
+		reads := map[string]*coord.Lease{"Get": h.mustHold("seat:ceo", "node-a")}
+		for _, l := range h.listOwned("node-a") {
+			reads["ListOwned"] = &l
+		}
+		for _, l := range h.listLive(coord.ClassSeat) {
+			reads["ListLive"] = &l
+		}
+		if len(reads) != 3 {
+			h.t.Fatalf("the lease was not on every read path: %v", reads)
+		}
+		for path, l := range reads {
+			if !l.AcquiredAt.Equal(first.AcquiredAt) {
+				h.t.Fatalf("%s after a renew: AcquiredAt %v, want the claim's %v",
+					path, l.AcquiredAt, first.AcquiredAt)
+			}
+		}
+	}},
+
+	{"a_new_epoch_is_a_new_tenure_with_its_own_start", func(h *harness) {
+		// AcquiredAt moves exactly when Epoch does: on a takeover, and on
+		// the same owner re-claiming after its own lapse — the gap is a
+		// gap for the operator's reading as much as for the fence.
+		first := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
+		h.lapse()
+		taken := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: ShortTTL})
+		if !taken.AcquiredAt.After(first.AcquiredAt) {
+			h.t.Fatalf("a takeover kept AcquiredAt %v (previous tenure's %v) — the new "+
+				"owner would read as holding the seat since before it took it",
+				taken.AcquiredAt, first.AcquiredAt)
+		}
+		h.lapse()
+		back := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
+		if !back.AcquiredAt.After(taken.AcquiredAt) {
+			h.t.Fatalf("re-claiming after a lapse kept AcquiredAt %v across the gap",
+				back.AcquiredAt)
+		}
+		if !h.release("seat:ceo", "node-b", back.Epoch) {
+			h.t.Fatal("release of a live lease reported not held")
+		}
+		// Store time has to move, or a backend that kept the released
+		// tenure's stamp and one that restamped at the same instant
+		// read alike.
+		h.lapsePast(ShortTTL)
+		after := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
+		if !after.AcquiredAt.After(back.AcquiredAt) {
+			h.t.Fatalf("a claim after a release kept the released tenure's AcquiredAt %v",
+				after.AcquiredAt)
+		}
+	}},
 }

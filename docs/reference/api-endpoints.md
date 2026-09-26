@@ -3041,6 +3041,14 @@ matches no live node. A lease table that could not be read answers `503`
 with a `Retry-After` rather than an empty fleet: "no node is live" is a
 claim, and a store blip is not evidence for it.
 
+Each seat row carries `acquired_at` — **since when** its node has held it,
+as an RFC 3339 UTC time on the coordination store's clock. It is the
+tenure's start, stamped when the lease's `epoch` was minted and carried
+unchanged through every renewal, so it moves exactly when `epoch` does: on
+a takeover, and on the same node re-claiming after its own lease lapsed.
+A seat held by a node of a build older than the stamp has no recorded
+start and **omits** the field rather than rendering one.
+
 ```json
 {
   "nodes": [
@@ -3052,7 +3060,7 @@ claim, and a store blip is not evidence for it.
   ],
   "seats": [
     {"handle": "ceo", "node": "core-1", "owner": "core-1:8f2a",
-     "epoch": 4, "expires_in": 41.2}
+     "epoch": 4, "expires_in": 41.2, "acquired_at": "2026-09-23T08:02:11.482Z"}
   ],
   "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41.2}],
   "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],

@@ -768,8 +768,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// An unbroken same-owner hold keeps its epoch: nothing was
 			// ever unowned, so the holder's in-flight work stayed
 			// covered. This branch is also the renew path — a claim
-			// doubles as one.
+			// doubles as one, and so it keeps the tenure's start as
+			// well as its token.
 			value.Epoch = mine.value.Epoch
+			value.AcquiredAt = mine.value.AcquiredAt
 			if opts.Preferred != "" && opts.Preferred != mine.value.Preferred {
 				// The hint moved without the tenure moving. Pin it on
 				// the persistent record FIRST, so the epoch bucket is
@@ -838,6 +840,24 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			}
 		}
 
+		// The tenure's start is the store's own timestamp on the record
+		// we just won, which the write returns only as a revision. Read
+		// it back by that revision rather than stamping the node's clock
+		// (the store's clock is the only one nodes share) or waiting for
+		// settle's read-back (that sees the COMMIT, and the committed
+		// value has to carry the stamp already or the first renewal,
+		// which copies the value, would have nothing to carry). One read
+		// per change of tenure, never per heartbeat. Before bumpEpoch, so
+		// a record already taken from us costs no token.
+		acquiredAt, taken, err := s.claimedAt(ctx, l, resource, rev)
+		if err != nil {
+			return nil, err
+		}
+		if taken {
+			continue
+		}
+		value.AcquiredAt = acquiredAt
+
 		// value.Preferred, not opts.Preferred: a claim that names no node
 		// carries forward the hint the lapsed record held, and passing that
 		// through re-pins it on the persistent record if the two ever drift.
@@ -866,6 +886,25 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
 	return nil, contended("TryAcquire", resource)
+}
+
+// claimedAt is the store's timestamp on revision rev of resource's record,
+// which this caller just wrote. taken reports that the revision is no longer
+// there — the record was written again since, which needs our claiming record
+// to have lapsed and been taken — so the claim goes round again exactly as a
+// lost CAS does.
+func (s *Store) claimedAt(ctx context.Context, l *lane, resource string, rev uint64) (time.Time, bool, error) {
+	kve, err := l.kv.GetRevision(ctx, encodeResource(resource), rev)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return time.Time{}, true, nil
+	}
+	if err != nil {
+		// The record is left in the claiming state and expires with its
+		// TTL, exactly as a lease whose owner died does. No token has been
+		// minted yet, so nothing is stranded.
+		return time.Time{}, false, unavailable("read back the claim on "+resource, err)
+	}
+	return kve.Created().UTC(), false, nil
 }
 
 // settle reads the record back and re-runs the gates.

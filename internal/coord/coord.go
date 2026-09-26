@@ -268,6 +268,26 @@ type Lease struct {
 	// clocks to decide ownership.
 	ExpiresAt time.Time
 
+	// AcquiredAt is when THIS TENURE began, on the store's clock like
+	// ExpiresAt: stamped when the epoch is minted — a takeover, a first
+	// claim, or the same owner re-claiming after its own lease lapsed — and
+	// carried unchanged through every renewal, whether by [Backend.Renew] or
+	// by a live holder's own re-claim. It moves exactly when Epoch moves,
+	// because both answer one question: since when has this holder held
+	// this without a gap. An operator reading "node-2 since 08:02" is
+	// reading a tenure, and a stamp that followed the heartbeat would say
+	// "since a few seconds ago" about a seat that has not moved all day.
+	//
+	// ZERO MEANS UNKNOWN, never "the epoch of time": a record written by a
+	// build that predates the field carries none, and its tenure began at a
+	// moment nobody wrote down. A reader renders zero as absent. A renewal
+	// does not invent one either, since the moment it would stamp is the
+	// renewal's and not the claim's.
+	//
+	// Nothing decides ownership by it. It is a fact for a person to read,
+	// and the fencing token is still Epoch alone.
+	AcquiredAt time.Time
+
 	// Preferred is a stickiness hint naming the node that last held this
 	// resource. It ORDERS claims and never gates them — the hint outlives
 	// the node that set it, so gating on it would strand a dead node's

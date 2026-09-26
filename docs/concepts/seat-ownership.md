@@ -21,7 +21,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
 
 ```
-seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
+seat:{handle}   owner=node-a:9f3c1e70   epoch=7   acquired_at=…   expires_at=…   preferred=node-a
 ```
 
 Three properties carry everything above it:
@@ -29,6 +29,8 @@ Three properties carry everything above it:
 - **The owner is a process incarnation, not a machine.** `{node_id}:{random}`, minted fresh at boot. A live lease is renewable by its own owner string, so two processes sharing an identity would both hold the seat at the same epoch — and the default node id is the shared constant `node-0`. The *stable* node id goes in `preferred`, where restart-stability is what you actually want.
 - **The epoch is a fencing token, monotonic for the resource's lifetime.** It is kept apart from the lease record, in a bucket with no age limit, because a KV deletes a key when it expires: a counter stored on the lease would restart at 1 and hand the next owner a token its predecessor is still using.
 - **A lapsed lease cannot be renewed, only re-acquired** — and re-acquiring bumps the epoch even for the same owner, because during the gap that owner's in-flight work was unprotected and must be fenced against its own past self.
+
+Beside them the record remembers **when its tenure began**. `acquired_at` is the coordination store's own timestamp on the write that won the lease, stamped when the epoch is minted and carried unchanged by every renewal — so it moves exactly when the epoch does, and "node-2 · since 08:02" on the Fleet screen means the seat has not moved since 08:02. A heartbeat restamping it would report every seat as "since a few seconds ago". It is on the store's clock for the reason `expires_at` is, and nothing decides ownership by it: it is a fact for a person, and the fence is still the epoch. A lease written by a build older than the field carries none and reads as **unknown** rather than as a time, and a renewal does not invent one — the moment it would stamp is the renewal's, not the claim's.
 
 ## Placement
 

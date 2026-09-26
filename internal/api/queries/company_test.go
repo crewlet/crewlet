@@ -392,8 +392,19 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	if labels, _ := node["labels"].(map[string]any); labels["zone"] != "eu" {
 		t.Errorf("labels = %v, want what the presence lease carries", node["labels"])
 	}
-	if seats, _ := body["seats"].([]any); len(seats) != 1 {
-		t.Errorf("%d seats, want 1", len(seats))
+	seats, _ := body["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("%d seats, want 1", len(seats))
+	}
+	// Since when the node has held it — the lease's tenure start, which
+	// is what "node-a · since 08:02" renders from.
+	held, err := backend.Get(t.Context(), coord.SeatResource("ceo"))
+	if err != nil || held == nil {
+		t.Fatalf("Get = (%v, %v)", held, err)
+	}
+	seat, _ := seats[0].(map[string]any)
+	if want := held.AcquiredAt.Format(time.RFC3339Nano); seat["acquired_at"] != want {
+		t.Errorf("acquired_at = %v, want the lease's tenure start %s", seat["acquired_at"], want)
 	}
 	if duties, _ := body["duties"].([]any); len(duties) != 1 {
 		t.Errorf("%d duties, want 1", len(duties))
@@ -710,6 +721,49 @@ func TestAnUnreadableControlPlaneDoesNotBlankTheFleet(t *testing.T) {
 	}
 	if body["target_epoch"] != float64(0) {
 		t.Errorf("target_epoch = %v, want 0 when it cannot be read", body["target_epoch"])
+	}
+}
+
+// olderBuildLeases is a lease table whose seat records came from a build that
+// predates coord.Lease.AcquiredAt: every other field is intact and the tenure
+// start is the zero time, which is exactly how such a record decodes.
+type olderBuildLeases struct{ coord.Backend }
+
+func (o olderBuildLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	leases, err := o.Backend.ListLive(ctx, class)
+	for i := range leases {
+		leases[i].AcquiredAt = time.Time{}
+	}
+	return leases, err
+}
+
+func TestAnUnrecordedTenureStartIsAbsentNotATime(t *testing.T) {
+	t.Parallel()
+	// A seat held by a node of an older build has a tenure nobody wrote
+	// down. The field is ABSENT, which the screen renders as nothing — an
+	// empty string or the zero instant would each render as a time, and
+	// "since 0001-01-01" or "since just now" both lie about a seat that
+	// may have been held all day.
+	backend := coordmemory.New()
+	if _, err := backend.TryAcquire(t.Context(), coord.SeatResource("ceo"),
+		coord.AcquireOptions{Owner: "old:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: olderBuildLeases{backend}, NodeID: "new",
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+	seats, _ := body["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("%d seats, want 1: %v", len(seats), body)
+	}
+	seat, _ := seats[0].(map[string]any)
+	if v, present := seat["acquired_at"]; present {
+		t.Fatalf("acquired_at = %q for a tenure whose start was never recorded, want absent", v)
+	}
+	if seat["handle"] != "ceo" || seat["node"] != "old" {
+		t.Fatalf("the rest of the row was lost with the stamp: %v", seat)
 	}
 }
 
