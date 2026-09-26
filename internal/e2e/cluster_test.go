@@ -403,7 +403,7 @@ func (c *cluster) hydrated(t *testing.T) {
 	t.Helper()
 	for i, n := range c.nodes {
 		waitFor(t, fmt.Sprintf("member %d's native backends to hydrate", i),
-			n.engine.NativeHydrated)
+			hydrated(t, n.engine))
 	}
 }
 

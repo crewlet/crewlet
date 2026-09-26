@@ -103,9 +103,12 @@ act through, and every other one still routes end to end.
 ## 2. Inside one node
 
 `crewlet run` is *the* node, and what it does is a config value:
-`node.roles` picks from `ingress`, `seats` and `workers`. Declaring none means
-all three, which is the single-process company — one process serving the API and
-the dashboard, running every agent, and performing the company-wide duties.
+`node.roles` picks from `data`, `ingress`, `seats` and `workers`. Declaring none
+means all four, which is the single-process company — one process holding the
+company's records, serving the API and the dashboard, running every agent, and
+performing the company-wide duties. A node without `data` holds no copy of the
+replicated estate and answers its seats' tools through a node that does; see
+[Scaling Out](scaling.md#a-node-that-holds-no-data).
 
 ```mermaid
 flowchart TB
@@ -129,10 +132,11 @@ flowchart TB
     ING --> DB
 ```
 
-That is one `crewlet run` process. `node.roles` picks from `ingress`, `seats`
-and `workers` — declare none and you get all three — and the always-on set runs
-on every node whatever it says. The three backends are opened together and
-closed together.
+That is one `crewlet run` process. `node.roles` picks from `data`, `ingress`,
+`seats` and `workers` — declare none and you get all four — and the always-on
+set runs on every node whatever it says. The three backends are opened together
+and closed together; on a node without `data` the store is scratch and holds
+the node estate alone.
 
 Three of those four groups are **inventories, not pipelines**: no box inside
 `ingress`, `workers` or the always-on set hands work to another box in the same

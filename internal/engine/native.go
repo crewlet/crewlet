@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,13 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -154,6 +153,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// the error line once logged here was printed on the way to that state.
 	if !c.Config.RunsStateLog() {
 		return nil
+	}
+	// A NODE WITHOUT `data` RUNS NONE OF WHAT FOLLOWS — no log, no index,
+	// no copy — and answers its seats' tools through a node that does.
+	if !holdsData(boot) {
+		return e.startRemote(c)
 	}
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
@@ -416,7 +420,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 // are the ones this company declared; a later revision that changes them
 // takes effect on restart, as switching a backend always has.
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
-	if e.native.Load() != nil || c == nil || !c.Config.RunsStateLog() {
+	if e.native.Load() != nil || e.remote.Load() != nil || c == nil || !c.Config.RunsStateLog() {
 		return false, nil
 	}
 	if err := e.startNative(ctx, e.boot, c); err != nil {
@@ -504,7 +508,17 @@ func (n *native) shutdown(ctx context.Context) {
 // filing a duplicate or abandoning work it was told to do. A node with no
 // native backend is trivially hydrated, which is what a company on Jira and
 // Confluence has.
-func (e *Engine) NativeHydrated() bool {
+//
+// IT TAKES A CONTEXT because on a node that holds no data the answer is a
+// request: the node that will serve the seat's tools is asked, and a sweep
+// that is shutting down must not wait on it.
+func (e *Engine) NativeHydrated(ctx context.Context) bool {
+	if r := e.remote.Load(); r != nil {
+		// ASKED OF THE NODE THAT WILL SERVE THE SEAT: a data node
+		// answers only once its own copy is established, so this is the
+		// same gate, one hop away.
+		return r.admitted(ctx)
+	}
 	n := e.native.Load()
 	if n == nil {
 		return true
@@ -512,9 +526,9 @@ func (e *Engine) NativeHydrated() bool {
 	// STRICT, because this is seat admission rather than a read: a node
 	// that is merely inside the trim floor still serves rows that are
 	// behind, and a seat attaching to one acts on them.
-	ok, refusal := n.log.Established(n.run, true)
+	ok, refusal := n.log.Established(ctx, true)
 	if !ok && refusal != "" {
-		log.DebugContext(n.run, "seat_admission_withheld",
+		log.DebugContext(ctx, "seat_admission_withheld",
 			"reason", string(refusal))
 	}
 	return ok
@@ -543,6 +557,10 @@ func (e *Engine) NativeHydrated() bool {
 // A node with no native backend is trivially serviceable, which is what a
 // company on Jira and Confluence has.
 func (e *Engine) SeatsServiceable() (bool, string) {
+	// A NODE THAT HOLDS NO COPY CANNOT HOLD A WRONG ONE. A data node that
+	// stops answering is a failed request its seats report, and admission
+	// withholds new seats until one answers — moving the seats a stateless
+	// node holds would hand them to a peer asking the same data nodes.
 	n := e.native.Load()
 	if n == nil {
 		return true, ""
@@ -780,15 +798,26 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 // company-derived input is the LEAD MAP, and that is the org chart — which
 // is exactly what an apply changes. See [Engine.reconcileNative].
 func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
-	n := e.native.Load()
-	if n == nil || c == nil {
+	if c == nil {
+		return nil, nil
+	}
+	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
+	// parser reads a record's own routing snapshot and the chart, never a
+	// row, so a node that holds no data routes a native change exactly as
+	// a data node does.
+	var runTracker, runWiki bool
+	if r := e.remote.Load(); r != nil {
+		runTracker, runWiki = r.tracker, r.wiki
+	} else if n := e.native.Load(); n != nil {
+		runTracker, runWiki = n.writer != nil, n.pages != nil
+	} else {
 		return nil, nil
 	}
 	var (
 		parsers []notify.Parser
 		prompts []notify.Prompt
 	)
-	if n.writer != nil {
+	if runTracker {
 		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
 		// record's routing snapshot, which the WRITER resolved at commit
 		// — a mention resolved at read time names whoever holds the role
@@ -796,7 +825,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
 		prompts = append(prompts, tracker.Prompt{})
 	}
-	if n.pages != nil {
+	if runWiki {
 		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
@@ -824,7 +853,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // registered until then is the honest state: the records are still there
 // and still reachable.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt time.Time) {
-	if e.native.Load() == nil {
+	if e.native.Load() == nil && e.remote.Load() == nil {
 		return
 	}
 	e.notify.mu.Lock()
@@ -1243,20 +1272,18 @@ func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 // the point: a seat offered a tool against a tracker its company does not
 // run would reach for it and fail at the call.
 func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
-	n := e.native.Load()
-	if n == nil || n.trackerReader == nil || n.writer == nil {
+	halves, ok := e.trackerHalves()
+	if !ok {
 		return builtin.WorkDeps{}
 	}
 	return builtin.WorkDeps{
-		Reader: n.trackerReader,
+		Reader: halves.reader,
 		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
 		// tracker's rule is that a writer acts as exactly one party, and
 		// the party here is the immutable seat the tool surface bound
 		// rather than anything a model can name.
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return halves.as(actor)
 		},
 		// AND THE PROJECT SETTINGS, which every surface has rather than
 		// the operator's alone: declaring a tag is open to every seat by
@@ -1265,28 +1292,20 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// `labels` argument on the tools it already holds. The authority
 		// for every other facet is resolved per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return halves.as(actor)
 		},
 		// AND THE DEPENDENCY SEQUENCE, which is the same writer in its
 		// third shape: a dependency is two commits on two subjects, so
 		// it needs the replicated estate to check its counterparties
 		// before the first of them — and this writer has one.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return halves.as(actor)
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return halves.as(actor)
 		},
 		Moves: func(actor builtin.Actor) builtin.WorkMover {
-			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
-				TurnID: actor.TurnID, Chain: actor.Chain,
-			})
+			return halves.as(actor)
 		},
 		// THE RANKED SEARCH, which reads and therefore takes no actor:
 		// the corpus is the same for everybody and there is nothing to
@@ -1322,8 +1341,61 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		Leads: liveLeads{engine: e},
 		Now:   func() time.Time { return time.Now().UTC() },
 		Zone:  c.Config.Tracker.Native.Location(),
-		Await: e.WaitCommitted,
+		Await: halves.await,
 	}
+}
+
+// trackerWriter is everything a seat's tools write to the tracker through,
+// as one party.
+type trackerWriter interface {
+	builtin.WorkWriter
+	builtin.ProjectWriter
+	builtin.WorkDepender
+	builtin.WorkMerger
+	builtin.WorkMover
+}
+
+// trackerSeams are the tracker halves a seat's tools are handed: this node's
+// own reader and writer where it holds data, a data node's otherwise.
+type trackerSeams struct {
+	reader builtin.WorkReader
+	as     func(builtin.Actor) trackerWriter
+	await  func(ctx context.Context, at statelog.Position) error
+}
+
+// trackerHalves is this node's tracker seams, or false where it runs no
+// native tracker.
+//
+// ONE PLACE DECIDES BETWEEN THE TWO, so every tool is handed the same kind of
+// half: a tool whose reader was local and whose writer was remote would read
+// its own write back from a copy that had not seen it.
+func (e *Engine) trackerHalves() (trackerSeams, bool) {
+	if r := e.remote.Load(); r != nil {
+		if !r.tracker {
+			return trackerSeams{}, false
+		}
+		return trackerSeams{
+			reader: r.client.Work(),
+			as: func(actor builtin.Actor) trackerWriter {
+				return r.client.WriterAs(remoteActor(actor))
+			},
+			// THE SESSION FLOOR IS THE WAIT: a data node applies the
+			// write itself, and what the next read needs is that whichever
+			// node answers it has applied this far.
+			await: r.client.Await,
+		}, true
+	}
+	n := e.native.Load()
+	if n == nil || n.trackerReader == nil || n.writer == nil {
+		return trackerSeams{}, false
+	}
+	return trackerSeams{
+		reader: n.trackerReader,
+		as: func(actor builtin.Actor) trackerWriter {
+			return n.writer.As(actor.Handle, actor.Kind, provenanceOf(actor))
+		},
+		await: e.WaitCommitted,
+	}, true
 }
 
 // ChartUnits is an org chart as the tracker's unit seam.
@@ -1487,13 +1559,13 @@ func UnitLeadOf(o *org.Organization, unit string) string {
 
 // pageDeps is the knowledge half, on the same terms.
 func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
-	n := e.native.Load()
-	if n == nil || n.pageReader == nil || n.pages == nil {
+	reader, writer, await, ok := e.pageHalves()
+	if !ok {
 		return builtin.PageDeps{}
 	}
 	return builtin.PageDeps{
-		Reader:   n.pageReader,
-		Writer:   n.pages,
+		Reader:   reader,
+		Writer:   writer,
 		Mentions: seatMentions{org: c.Org},
 		DefaultContainer: func(handle string) string {
 			return scopeOfSeat(e.Company().Org, handle,
@@ -1507,8 +1579,25 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		// and refused by name at the call rather than silently landing
 		// somewhere every search excludes.
 		Reserved: reservedContainers(c.Config),
-		Await:    e.WaitCommitted,
+		Await:    await,
 	}
+}
+
+// pageHalves is this node's knowledge-base seams, on the terms
+// [Engine.trackerHalves] gives: all local or all remote, never a mixture.
+func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
+	func(context.Context, statelog.Position) error, bool) {
+	if r := e.remote.Load(); r != nil {
+		if !r.wiki {
+			return nil, nil, nil, false
+		}
+		return r.client.Pages(), r.client.Pages(), r.client.Await, true
+	}
+	n := e.native.Load()
+	if n == nil || n.pageReader == nil || n.pages == nil {
+		return nil, nil, nil, false
+	}
+	return n.pageReader, n.pages, e.WaitCommitted, true
 }
 
 // reservedContainers are the containers a seat's own writes may not target.
@@ -1600,17 +1689,46 @@ func (m seatMentions) Mentions(text string) []string {
 // read is wholesale, and one re-read after N changes is the same answer as N
 // of them.
 //
-// # Why this backend needs no fleet nudge
+// # And an announcement, for the nodes that apply nothing
 //
-// Every node applies the page log itself, so every node's own projection sees
-// a skill page move and calls this. The broadcast the Confluence path needs
-// exists because a vendor webhook reaches one node; a log every node applies
-// already reaches all of them.
+// Every DATA node applies the page log itself, so every data node's own
+// applier sees a skill page move and calls this. A node without `data` runs
+// no applier, so it would hear of the move only on its periodic walk — which
+// is why this ANNOUNCES rather than merely refreshes: the fleet nudge tells
+// every such node to walk its container through a data node. Several data
+// nodes announce one edit; a hearer coalesces them into one walk.
 //
 // NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
 // moves the company's skills to Confluence, and the loop ignores a refresh
 // from a backend its source is not on.
-func (e *Engine) nudgeSkills() { e.skillSync.Refresh(string(config.KnowledgeNative)) }
+func (e *Engine) nudgeSkills() { e.skillSync.Announce(string(config.KnowledgeNative)) }
+
+// walkRemoteSkills reads the tool-skill container through a data node, for a
+// node that holds none.
+//
+// STALE, for the reason [Engine.walkNativeSkills] gives, and one hop further:
+// the walk runs because a data node APPLIED the change and announced it, and
+// the floor this node carries is its own writes' — so the answering node is
+// at or past both.
+func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skills.Page, error) {
+	r := e.remote.Load()
+	if r == nil {
+		return nil, errors.New("engine: this node reaches no data node for its skills")
+	}
+	found, err := r.client.Pages().SkillPages(ctx, container,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]skills.Page, 0, len(found))
+	for _, page := range found {
+		out = append(out, skills.Page{
+			ID: page.ID, Title: page.Title,
+			Version: page.Version, Text: page.Body,
+		})
+	}
+	return out, nil
+}
 
 // walkNativeSkills reads the tool-skill container out of this node's own page
 // projection.
@@ -1654,7 +1772,7 @@ func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skil
 func (e *Engine) awaitHydration(ctx context.Context) bool {
 	ticker := time.NewTicker(hydrationPoll)
 	defer ticker.Stop()
-	for !e.NativeHydrated() {
+	for !e.NativeHydrated(ctx) {
 		select {
 		case <-ctx.Done():
 			return false
@@ -1693,21 +1811,12 @@ func (e *Engine) searchPeers() search.Peers {
 // node the trim has to wait for, INCLUDING one that has been gone for hours,
 // while a lease expires. A dead node in the roster costs every search on this
 // node a partial answer for as long as its row survives.
+//
+// DATA NODES ONLY. A node without `data` holds no index and answers no
+// slice, so counting it would divide the buckets onto a node that never
+// answers and label every search in the fleet partial.
 func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil, nil
-	}
-	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(leases))
-	for _, lease := range leases {
-		if profile, ok := placement.FromLease(lease); ok {
-			out = append(out, profile.ID)
-		}
-	}
-	return out, nil
+	return e.dataRoster(ctx)
 }
 
 // reportSearch counts what one answer covered.

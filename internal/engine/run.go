@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -275,6 +277,21 @@ type Engine struct {
 	// monotonic nil-to-runtime transition is what lets a caller that reads
 	// it more than once rely on the later reads.
 	native atomic.Pointer[native]
+
+	// remote is the same thing on a node that holds no data: the seams its
+	// seats' tools take, answered by a data node. At most one of the two is
+	// ever set, and on the same terms — see remote.go.
+	remote atomic.Pointer[remoteNative]
+
+	// estate is a stateless node's client of the data nodes, and custody
+	// the forwarder that hands them this node's event records. Both nil on
+	// a node that holds data; built in [New] before anything publishes.
+	estate  *estate.Client
+	custody *observe.Custody
+
+	// stopEstate withdraws this data node as a server of the estate, nil
+	// where it serves none. See [Engine.serveEstate].
+	stopEstate queue.Unsubscribe
 
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
@@ -677,6 +694,24 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
 
+	// A NODE WITHOUT `data` ASKS A DATA NODE FOR EVERYTHING IT DOES NOT
+	// HOLD, and hands it the record of what it did — built before anything
+	// publishes, because the custody listener must be in place before the
+	// first turn a restarted node picks up off its durable inbox.
+	if !holdsData(opts.Bootstrap) {
+		if e.estate, err = estate.NewClient(estate.ClientOptions{
+			Queue: backends.Queue, Roster: e.dataRoster, Self: nodeID,
+		}); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, fmt.Errorf("engine: estate client: %w", err)
+		}
+		e.custody = observe.NewCustody(e.estate)
+		backends.Queue.AddPublishListener(e.custody.Listen())
+		e.custody.Start(ctx)
+	}
+
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down only once the engine is the
 	// caller's.
@@ -754,6 +789,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
 	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
+
+	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
+	// maintenance mode still answers reads and takes custody of event
+	// records, and its writers are what [Engine.estateBackend] withholds.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.serveEstate(ctx); err != nil {
+		return nil, err
+	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before
 	// the epoch below builds the chat transports, so nothing is matching an
@@ -1369,6 +1412,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// BEFORE the native backends, whose page projection its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
+	e.stopServingEstate(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
@@ -1383,9 +1427,31 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
+	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last records they
+	// wrote are in the buffer, and BEFORE the broker closes under the
+	// shipment.
+	e.stopCustody(ctx)
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
+}
+
+// custodyStopBudget is how long an orderly stop waits for a data node to take
+// the event records this node still holds.
+//
+// TEN SECONDS: two ordinary shipments to a node that is up, and short enough
+// that a stop with no data node reachable is not held for a request budget per
+// node — what it could not ship is logged as lost.
+const custodyStopBudget = 10 * time.Second
+
+// stopCustody flushes and ends the event custody. Nil-safe.
+func (e *Engine) stopCustody(ctx context.Context) {
+	if e.custody == nil {
+		return
+	}
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), custodyStopBudget)
+	defer cancel()
+	e.custody.Stop(bounded)
 }
 
 // StallLag is how far behind the worst live watched duty is.

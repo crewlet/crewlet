@@ -146,7 +146,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -215,7 +215,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if got := running.runner.StreamCreatedAt(); statelog.IdentityOf(live, got, true) != statelog.StreamSame {
 		t.Fatalf("the runner is keyed to %s, want the rebuilt stream's %s", got, live)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
+	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != next {
 		t.Fatalf("a write after the adoption: %+v, %v — want it applied in generation %d",
@@ -236,7 +236,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||

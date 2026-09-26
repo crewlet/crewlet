@@ -373,7 +373,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("New: %v", err)
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		e.Stop(context.Background())
@@ -634,7 +634,7 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend — there is no "+

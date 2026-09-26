@@ -393,16 +393,18 @@ type liveLeases interface {
 // question: which nodes are still reaching the fleet. The trim counts such a
 // node at position zero until its first heartbeat; the gate refuses to evict
 // one.
+//
+// DATA NODES ONLY. A node without `data` applies no log and publishes no
+// position, so the trim that counted it at zero would never advance again,
+// and the gate has no copy of it to fence.
 func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence, error) {
-	held, err := leases.ListLive(ctx, coord.ClassNode)
+	ids, err := dataNodes(ctx, leases)
 	if err != nil {
 		return nil, fmt.Errorf("list the live nodes: %w", err)
 	}
-	out := make([]statelog.Presence, 0, len(held))
-	for _, lease := range held {
-		if id, ok := coord.NodeID(lease.Resource); ok {
-			out = append(out, statelog.Presence{NodeID: id})
-		}
+	out := make([]statelog.Presence, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, statelog.Presence{NodeID: id})
 	}
 	return out, nil
 }

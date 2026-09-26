@@ -476,3 +476,38 @@ func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schem
 	t.Fatalf("Pending reported no %s estate: %+v", want, schemas)
 	return store.Schema{}
 }
+
+// AN OFFLINE COMMAND AGAINST A SCRATCH STORE IS REFUSED, AND CREATES NOTHING.
+// The store is deleted at the node's next boot, so a revision, a secret or a
+// migration written into it would be lost without a word — and opening it at
+// all would create the replicated estate a node without `data` must not have.
+func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
+	dir := t.TempDir()
+	body := fmt.Sprintf("node:\n  id: agent-1\n  roles: [seats]\nstore:\n  path: %s\n"+
+		"  scratch: true\nstream:\n  leaf:\n    urls: [\"nats-leaf://data-a.example.com:7422\"]\n"+
+		"coordination:\n  type: embedded-kv\n",
+		filepath.Join(dir, "index.db"))
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"migrate", "-config", cfg},
+		{"config", "show", "-config", cfg},
+		{"search", "eval", "-config", cfg},
+	} {
+		_, _, err := cli(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "store.scratch") {
+			t.Errorf("%v: err = %v, want a refusal naming store.scratch", args, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "config.yaml" {
+			t.Errorf("a refused command left %s behind", entry.Name())
+		}
+	}
+}

@@ -192,6 +192,37 @@ type scriptedModel struct {
 	// assertions elsewhere are written against a one-round executor.
 	searchQuery string
 	searched    bool
+
+	// calls are tool calls the executor makes, one per round, before it
+	// submits — the scripted half of a turn whose subject is what a tool
+	// did rather than what the model said.
+	scripted []scriptedCall
+}
+
+// scriptedCall is one tool call the executor makes.
+type scriptedCall struct {
+	tool  string
+	input map[string]any
+}
+
+// callOnExecute makes the next executor rounds call a tool, once each, in the
+// order given, before the round that submits.
+func (m *scriptedModel) callOnExecute(tool string, input map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scripted = append(m.scripted, scriptedCall{tool: tool, input: input})
+}
+
+// nextCall is the executor's next scripted call, if one is left.
+func (m *scriptedModel) nextCall() (scriptedCall, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.scripted) == 0 {
+		return scriptedCall{}, false
+	}
+	call := m.scripted[0]
+	m.scripted = m.scripted[1:]
+	return call, true
 }
 
 // engageOnExecute makes the next turn's executor call a tool.
@@ -277,6 +308,11 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			"final_artifact": "Three PRs merged, one incident, zero regressions.",
 		})
 	case offered["submit_work"]:
+		if call, ok := m.nextCall(); ok {
+			saw("execute")
+			reply = toolUse(call.tool, call.input)
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
@@ -587,4 +623,11 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 		t.Logf("state when %q timed out: %s", what, d())
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// hydrated is [engine.Engine.NativeHydrated] as the condition a wait polls,
+// under the test's own context.
+func hydrated(t *testing.T, e *engine.Engine) func() bool {
+	t.Helper()
+	return func() bool { return e.NativeHydrated(t.Context()) }
 }

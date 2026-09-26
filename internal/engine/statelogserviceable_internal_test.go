@@ -68,7 +68,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// AND FOR THE APPLIER'S OWN DRAIN, which is a separate instant from a
 	// lag of zero: the loop learns the log is empty on the fetch AFTER it
 	// commits the last record, up to [statelog.FetchWait] later. Halting
@@ -120,7 +120,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// claims, because a seat attaching here would act on rows that are
 	// behind; serviceability keeps what is held, because rows that are
 	// behind catch up and dropping the work would be pure loss.
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Error("the node admits new seats with a record unapplied, so a seat " +
 			"attaches to a copy that is behind and answers \"there is no such " +
 			"item\" about work it was just handed")

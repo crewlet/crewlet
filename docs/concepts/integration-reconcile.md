@@ -125,7 +125,7 @@ Three separate things stop a node running it, and a reader debugging *"why is no
 
 **The duty outlives one pass, deliberately.** Its TTL is derived from the deadline a single pass may take rather than from the tick interval, because a pass is allowed minutes and a tick is fifteen seconds: a short TTL lapsed mid-sweep, a peer claimed it, and both nodes swept the surfaces the other had not reached. Nothing unsafe followed — the *surface's* own lease is what stops two writers at one third-party app — but the sweep stopped being deterministic. The cost is on the other side and is worth knowing: a node that dies holding the duty leaves it unclaimable for that long rather than for three ticks.
 
-The status itself lives on the **coordination store**, not in the node's own database, because the node that reads it is usually not the node that wrote it: `-roles ingress` puts the API and the seats on separate hosts on purpose.
+The status itself lives on the **coordination store**, not in the node's own database, because the node that reads it is usually not the node that wrote it: `-roles data,ingress` puts the API and the seats on separate hosts on purpose.
 
 ```mermaid
 flowchart LR

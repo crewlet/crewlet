@@ -255,6 +255,13 @@ type Syncer struct {
 	walkDue bool
 	pending map[string]Change
 
+	// announce asks the loop to tell the fleet its container moved, before
+	// it walks — see [Syncer.Announce]. Published from the loop rather than
+	// the caller because the caller is an applier's post-commit hook, and a
+	// publish there would hold every later record behind a broker round
+	// trip.
+	announce string
+
 	// synced is whether the last walk of this generation succeeded, and
 	// failures how many walks have failed in a row. A registry that has not
 	// synced is not trusted to converge one page at a time: only a
@@ -457,6 +464,29 @@ func (s *Syncer) Refresh(backend string) {
 	s.signal()
 }
 
+// Announce is [Syncer.Refresh] for a node that is an authority on the change,
+// and TELLS THE FLEET: every node that holds no copy of the backend — and so
+// runs nothing that would notice — walks its container on hearing it.
+//
+// The native knowledge base's appliers call this: each one that holds a copy
+// sees the change itself, and a node that holds none hears it only from them.
+// Every applier announces, so a fleet with several data nodes sends several
+// nudges for one edit; a hearer coalesces them into one walk, and the event is
+// deliberately not a row (see its category), so the duplicates cost a
+// broadcast each and nothing else.
+func (s *Syncer) Announce(backend string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.source.walkable() && strings.EqualFold(s.source.Backend, backend) {
+		s.walkDue = true
+		s.announce = backend
+	}
+	s.mu.Unlock()
+	s.signal()
+}
+
 // PageChanged records a page change this node heard from the backend, and
 // tells the fleet.
 //
@@ -491,6 +521,24 @@ func (s *Syncer) PageChanged(ctx context.Context, change Change) error {
 	return nil
 }
 
+// announceWalk tells the fleet a container moved. Best effort, like every
+// nudge: a node that misses it converges on its periodic walk.
+func (s *Syncer) announceWalk(ctx context.Context, backend, container string) {
+	if s.stream == nil {
+		return
+	}
+	ev := events.New(types.ToolSkillPageChanged{
+		Backend: backend, Container: container, Walk: true,
+	}, tracing.TraceOf(ctx))
+	ev.Source = s.node
+	if err := s.stream.Publish(ctx, nudgeTopic, ev); err != nil {
+		log.WarnContext(ctx, "tool_skill_announce_failed", "backend", backend,
+			"container", container, "error", err.Error(),
+			"detail", "nodes holding no copy of the knowledge base pick the "+
+				"change up on their next periodic walk")
+	}
+}
+
 // hear is the fleet nudge's handler.
 func (s *Syncer) hear(ctx context.Context, _ string, ev *events.Event) {
 	if ev == nil || (s.node != "" && ev.Source == s.node) {
@@ -502,6 +550,13 @@ func (s *Syncer) hear(ctx context.Context, _ string, ev *events.Event) {
 		log.DebugContext(ctx, "tool_skill_nudge_undecodable", "event", ev.ID.String(),
 			"detail", "the nudge carried no page, so it is ignored and the "+
 				"periodic walk covers whatever it was about")
+		return
+	}
+	if payload.Walk {
+		// THE CONTAINER MOVED and nobody could say which page: a walk,
+		// on the terms Refresh gives it — a nudge for a backend this
+		// node's source is not on asks for nothing.
+		s.Refresh(payload.Backend)
 		return
 	}
 	change := Change{
@@ -585,6 +640,12 @@ func (s *Syncer) drain(ctx context.Context) (time.Duration, bool) {
 		s.mu.Lock()
 		src, generation := s.source, s.generation
 		switch {
+		case s.announce != "":
+			backend := s.announce
+			s.announce = ""
+			s.mu.Unlock()
+			s.announceWalk(ctx, backend, src.Container)
+
 		case s.walkDue && src.walkable():
 			s.walkDue = false
 			// EVERY PAGE CHANGE NOTED SO FAR IS COVERED by a walk that

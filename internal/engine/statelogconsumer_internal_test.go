@@ -109,7 +109,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	waitUntil(t, 10*time.Second, "the node whose rows went backwards to hydrate "+
 		"again — its consumers had acknowledged every record it is missing, and "+
 		"a consumer the broker was told is done never hands them over",
-		second.NativeHydrated)
+		hydrated(t, second))
 	for name, head := range heads {
 		running := second.native.Load().log.Domain(name)
 		if got := running.runner.Committed().Seq; got < head {

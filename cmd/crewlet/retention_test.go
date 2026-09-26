@@ -869,7 +869,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	node := []string{"-url", base, "-token", "a-test-token"}
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.NativeHydrated(t.Context()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never established its state log")
 		}

@@ -25,13 +25,14 @@ configured per node.
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
-  roles: [ingress, seats, workers]   # the default; omit the key
+  roles: [data, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
   max_concurrent: 32                 # agent turns this process runs at once
 ```
 
 | Role | What it does |
 |---|---|
+| `data` | Holds the company's durable state: a full copy of the replicated estate, a member's share of the broker's replicas and a vote in its quorums, and the event log. `ingress` and `workers` read this node's own copy directly, so they require it. A node without it is [stateless](#a-node-that-holds-no-data) |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node does that at start and on each apply |
@@ -39,9 +40,9 @@ node:
 ```mermaid
 flowchart TB
     subgraph fleet["The fleet"]
-        N1["node-a<br/><i>ingress · seats · workers</i>"]
-        N2["node-b<br/><i>ingress · seats · workers</i>"]
-        N3["sat-eu<br/><i>seats</i> · zone=eu"]
+        N1["node-a<br/><i>data · ingress · seats · workers</i>"]
+        N2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        N3["sat-eu<br/><i>seats</i> · zone=eu · no data"]
     end
     subgraph shared["Shared state — the company · one NATS estate"]
         KV[("Coordination KV<br/>leases · config epochs<br/>counters · ledgers")]
@@ -62,11 +63,26 @@ replicate between them (`stream.cluster.*`, `stream.replicas: 3`) — and
 somebody else runs. One estate either way, carrying both slots — see
 [what the fleet shares](#what-the-fleet-shares).
 
-**Every node is a full replica, and there is no thin-node role.** A node that
-runs the native tracker holds the whole corpus — every task, page, comment and
-turn the company has ever recorded — in its own database, applied from the same
-ordered log as every other node's. There is no cache tier, no thin replica, and
-no way to run a node that holds part of it.
+**Every data node is a full replica.** A node with the `data` role that runs
+the native tracker holds the whole corpus — every task, page, comment and turn
+the company has ever recorded — in its own database, applied from the same
+ordered log as every other data node's. There is no cache tier, no thin
+replica, and no way to run a node that holds part of it.
+
+### A node that holds no data
+
+The other shape is a node that holds **none** of it. A node without `data`
+keeps a scratch store (deleted at every boot, with no replicated estate at
+all), joins an embedded fleet as a **leaf** of the members' broker — no
+JetStream, no replica, no vote — and runs `seats` only. Its seats' tools read
+and write the tracker and the knowledge base through a data node over the
+broker, carrying the node's own writes as a floor so whichever data node
+answers has applied them, and what it publishes about its turns is kept in a
+data node's event log. It is never counted as a copy: the trim, the eviction
+gate, the search fan-out and the capacity handshake all read the role off the
+presence lease. This is the shape for an agent host you want small and
+disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
+and [ADR-0018](https://github.com/crewlet/crewlet/blob/main/adr/0018-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
 
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a
@@ -80,8 +96,8 @@ says so. See [Search](../guides/search.md).
 That is a deliberate trade and it is the reason the read path is simple: every
 answer can be served locally, a search scans one node's complete tables, and
 there is no routing decision to get wrong. What it costs is that the corpus is
-held N times, so the storage forecast scales with the fleet — see
-[Retention](../guides/retention.md).
+held once per data node, so the storage forecast scales with the data nodes
+rather than with the fleet — see [Retention](../guides/retention.md).
 
 **The node id must be distinct and stable across restarts.** It comes from the
 deployment (`CREWLET_NODE_ID`, or `node.id` in the Tier A file) rather than

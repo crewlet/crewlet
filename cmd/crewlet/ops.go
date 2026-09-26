@@ -74,6 +74,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err = refuseScratchStore(boot, "crewlet migrate",
+		"There is nothing to migrate: `crewlet run` creates it fresh, at this "+
+			"binary's schema, every time it starts."); err != nil {
+		return err
+	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),

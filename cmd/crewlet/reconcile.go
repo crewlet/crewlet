@@ -336,12 +336,36 @@ func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstr
 	if file != nil {
 		return opts, nil
 	}
+	// A SCRATCH STORE IS NOT READ: what it holds is the previous run's, it is
+	// deleted as the engine opens it, and opening it here would create the
+	// replicated estate a node without `data` must not have. Such a node
+	// boots unconfigured and its reconciler fetches the fleet's active
+	// revision off the coordination store before any seat is claimed.
+	if boot.Store.Scratch {
+		return opts, nil
+	}
 	company, activatedAt, err := companyFromStore(ctx, bootstrapPath)
 	if err != nil {
 		return engine.Options{}, err
 	}
 	opts.Company, opts.ActivatedAt = company, activatedAt
 	return opts, nil
+}
+
+// refuseScratchStore refuses an OFFLINE command against a node whose store is
+// scratch, naming what to do instead.
+//
+// The store such a node keeps is deleted at its next boot, so anything written
+// into it offline is lost without a word, and a read answers about a previous
+// run nobody is running. Opening it would also create the replicated estate a
+// node without `data` must not have.
+func refuseScratchStore(boot *config.Bootstrap, command, instead string) error {
+	if boot == nil || !boot.Store.Scratch {
+		return nil
+	}
+	return fmt.Errorf("%s: this node's store is scratch (store.scratch) — it holds "+
+		"no data and is deleted at every boot, so nothing written into it offline "+
+		"survives the next start. %s", command, instead)
 }
 
 // companyFromStore is the epoch a node with no Tier B file boots on.

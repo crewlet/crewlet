@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"path/filepath"
-	"sync/atomic"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 // A FAILED BOOT MUST LEAVE NOTHING RUNNING — THE SAME RULE ONE FRAME UP.
@@ -72,11 +74,15 @@ roles:
 type servedQueue struct {
 	*jetstream.Queue
 
-	served    atomic.Int64
-	withdrawn atomic.Int64
+	mu        sync.Mutex
+	served    map[string]int
+	withdrawn map[string]int
 }
 
-// Serve registers for real and wraps the withdrawal so it can be counted.
+// Serve registers for real and wraps the withdrawal so it can be counted, per
+// subject: a search answerer and the estate server are different claims on
+// the fleet, and a count of both together would let one leak while the other
+// was withdrawn twice.
 func (q *servedQueue) Serve(ctx context.Context, subject string,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
@@ -84,11 +90,25 @@ func (q *servedQueue) Serve(ctx context.Context, subject string,
 	if err != nil {
 		return nil, err
 	}
-	q.served.Add(1)
+	q.mu.Lock()
+	if q.served == nil {
+		q.served, q.withdrawn = map[string]int{}, map[string]int{}
+	}
+	q.served[subject]++
+	q.mu.Unlock()
 	return func(ctx context.Context) error {
-		q.withdrawn.Add(1)
+		q.mu.Lock()
+		q.withdrawn[subject]++
+		q.mu.Unlock()
 		return stop(ctx)
 	}, nil
+}
+
+// counts is what was served and withdrawn on one subject.
+func (q *servedQueue) counts(subject string) (served, withdrawn int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.served[subject], q.withdrawn[subject]
 }
 
 func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
@@ -126,17 +146,30 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"native start, so move it to whatever step now does")
 	}
 
-	if got := watched.served.Load(); got != 1 {
+	served, withdrawn := watched.counts(search.SliceSubject)
+	if served != 1 {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
 			"failed before the native runtime was up, so this case is no "+
-			"longer testing what it says", got)
+			"longer testing what it says", served)
 	}
-	if got := watched.withdrawn.Load(); got != 1 {
+	if withdrawn != 1 {
 		t.Errorf("the boot failed and its search answerer was withdrawn %d "+
 			"times, want 1: this node is still claiming bucket ranges its "+
 			"peers count as answered, and the runtime behind them — the apply "+
 			"loops, the position heartbeat, the donor, the indexer — is still "+
-			"running against a store the caller is free to close", got)
+			"running against a store the caller is free to close", withdrawn)
+	}
+	// AND THE ESTATE SERVER, registered before the native start: a data
+	// node whose boot failed must not stay on the fleet's stateless nodes'
+	// list of who to ask, answering from a runtime that is being torn down.
+	nodeID, err := config.ResolveNodeID(&b, nil)
+	if err != nil {
+		t.Fatalf("resolve the node id: %v", err)
+	}
+	served, withdrawn = watched.counts(estate.Subject(nodeID))
+	if served != 1 || withdrawn != 1 {
+		t.Errorf("the estate server was registered %d time(s) and withdrawn %d, "+
+			"want once each", served, withdrawn)
 	}
 
 	admissions, err := back.Fleet.Admissions(context.Background())

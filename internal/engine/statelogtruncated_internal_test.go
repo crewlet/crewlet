@@ -61,7 +61,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
 	eb.native.Load().log.publishPositions(t.Context())
 	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
@@ -106,7 +106,7 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
+	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
 	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
 	eb.native.Load().log.publishPositions(t.Context())
 	err := running.runner.Truncated()
@@ -285,7 +285,7 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	js := jetStreamOn(t, back)
 
 	s := e.native.Load().log
@@ -384,7 +384,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())

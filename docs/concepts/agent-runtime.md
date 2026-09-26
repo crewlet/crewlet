@@ -348,7 +348,7 @@ you opted into by sending the second signal.
 
 **Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it.
 
-A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Fleet** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
+A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Fleet** screen stops listing it rather than showing it draining. On a split deployment a `-roles data,ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 
 The drain is available programmatically up to the moment the listener closes:
 

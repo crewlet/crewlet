@@ -470,6 +470,34 @@ stream:
                                     #   behind a NAT is unreachable or somebody
                                     #   else's. A bare host keeps this member's
                                     #   own route port
+  # leaf:                           # the LEAF LINK, and a node is on exactly
+                                    #   one side of it, decided by its roles.
+  #   urls:                         #   A node WITHOUT `data` dials the members'
+  #     - "nats-leaf://node-1:7422" #   leaf listeners here — any one that
+  #     - "nats-leaf://node-2:7422" #   answers will do — and its embedded
+                                    #   broker runs NO JetStream: no replica, no
+                                    #   vote, no stream store (`store_dir` and
+                                    #   `cluster` are refused beside it). Every
+                                    #   stream and bucket its clients use is a
+                                    #   member's, reached across this link.
+                                    #   REQUIRED on such a node on an embedded
+                                    #   stream, refused on a node with `data`
+  #   port: 7422                    #   A MEMBER's listener, where those nodes
+                                    #   join. Refused on a node without `data`.
+                                    #   A member that opens one must persist
+                                    #   (`store_dir` is required): the nodes that
+                                    #   join it keep nothing, so it keeps
+                                    #   everything they do. And it is in a fleet
+                                    #   even with no peers, so it needs
+                                    #   `coordination.type: embedded-kv`
+  #   host: 10.0.0.11               #   the interface the listener binds. Like
+                                    #   the route port it accepts any connection
+                                    #   that reaches it: the fleet is one trust
+                                    #   domain on a network its operator
+                                    #   controls, so bind it there
+  #   advertise: "node-1.internal:7422"
+                                    #   what leaves should dial for this member,
+                                    #   when it differs from what it binds
   # sync: always                    # what an acknowledged publish has actually
                                     #   reached. `always` (the default, at every
                                     #   replica count) fsyncs every write before
@@ -653,6 +681,19 @@ store:
                                     #   a copy of this one alone; separate it
                                     #   only to put it on a different disk, and
                                     #   never onto the same file as `path`
+  # scratch: false                  #   DELETE this node's store at every boot,
+                                    #   under the store's own lock, and open it
+                                    #   with no replicated estate at all.
+                                    #   REQUIRED on a node without the `data`
+                                    #   role and REFUSED on one with it, so the
+                                    #   deletion is never a surprise either way.
+                                    #   Explicit rather than derived from the
+                                    #   roles because it is the one setting here
+                                    #   that deletes something. The offline
+                                    #   `migrate`, `config`, `secrets` and
+                                    #   `search eval` commands refuse a scratch
+                                    #   store: what they wrote would be gone at
+                                    #   the next boot
   # max_open_conns: 0               #   connection-pool bound; 0 takes the
                                     #   store's own default, which is four
                                     #   readers plus one pinned connection per

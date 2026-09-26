@@ -437,7 +437,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
@@ -850,17 +850,27 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id),
 			coord.AcquireOptions{
 				Owner: id + ":1", TTL: time.Minute,
-				Meta: map[string]any{"roles": []string{"seats"}},
+				Meta: map[string]any{"roles": []string{"data", "seats"}},
 			}); err != nil {
 			t.Fatalf("register %s: %v", id, err)
 		}
+	}
+	// AND ONE THAT IS ALIVE AND HOLDS NOTHING. It has no index to scan
+	// and answers no slice, so a roster that counted it would hand it a
+	// range nobody scans on every search, exactly as a dead node would.
+	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("agent-1"),
+		coord.AcquireOptions{
+			Owner: "agent-1:1", TTL: time.Minute,
+			Meta: map[string]any{"roles": []string{"seats"}},
+		}); err != nil {
+		t.Fatalf("register the stateless node: %v", err)
 	}
 	// AND ONE THAT IS GONE. Its lease has expired, so it is not a
 	// participant — where the positions register would still name it.
 	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
 		coord.AcquireOptions{
 			Owner: "node-dead:1", TTL: time.Nanosecond,
-			Meta: map[string]any{"roles": []string{"seats"}},
+			Meta: map[string]any{"roles": []string{"data", "seats"}},
 		}); err != nil {
 		t.Fatalf("register the dead node: %v", err)
 	}

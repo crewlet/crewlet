@@ -315,7 +315,7 @@ var wireTags = map[string][]string{
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
-	"tool_skill_page_changed":         {"backend", "container", "page_id"},
+	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
 }
 

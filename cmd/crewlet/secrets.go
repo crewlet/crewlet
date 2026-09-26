@@ -316,6 +316,11 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 // openSecretValues opens the store a loaded bootstrap names, under its
 // keyring. The caller has already established that a keyring exists.
 func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
+	if err := refuseScratchStore(boot, "crewlet secrets",
+		"Use the API of a node that holds data: /secrets writes the company's "+
+			"credential store, which every node reads."); err != nil {
+		return nil, nil, err
+	}
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)

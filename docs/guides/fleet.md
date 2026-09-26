@@ -118,18 +118,19 @@ before starting any node.
 
 ## Node roles
 
-Every process declares what it is willing to do. The default is all three
+Every process declares what it is willing to do. The default is all four
 — that is the single-node deployment, and no existing config changes.
 
 ```yaml
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [ingress, seats, workers]   # the default; omit the key
+  roles: [data, ingress, seats, workers]   # the default; omit the key
 ```
 
 | Role | What it does |
 |---|---|
+| `data` | Holds the company's durable state: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), a member's share of the broker's replicas and a vote in its quorums, and the event log. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
@@ -145,6 +146,47 @@ role has nobody doing it, and `fleet_role_manned` when it comes back.
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
 other node's share and strand the difference.
+
+### Nodes that hold no data
+
+A node without `data` keeps nothing that has to outlive it. Its store is
+**scratch** — deleted at every boot, and opened with no copy of the replicated
+estate at all — and on an embedded stream its broker joins the fleet as a
+**leaf** of the members': no JetStream, no replica, no vote in any quorum. It
+is the shape for an agent host you want small and disposable, and
+[Running One Agent Somewhere Else](satellite-nodes.md) walks through one.
+
+What it can run is `seats` alone. `ingress` and `workers` read and write a
+node's own copy of the estate directly — the API's tracker and knowledge
+surfaces, the retention report, the scheduler, the trim — so Tier A refuses
+either without `data`, naming the field. Its seats use exactly the tools a data
+node's seats do, and each of those tools asks a data node over the broker:
+
+- **Reads and writes** go to one data node the asking node picks, and move to
+  the next if it does not answer — except a knowledge-base write, which has no
+  operation id a repeat could be collapsed on and is reported as unknown
+  rather than sent twice.
+- **Its own writes are visible to its next read** on whichever data node
+  answers it: every request carries the furthest position the node has been
+  told landed, and a data node that has not applied that far says so rather
+  than answer from before it.
+- **Its audit trail is kept by a data node.** What it publishes about its
+  turns is handed to a data node's event log, where `GET /events` on that node
+  shows it.
+- **It is never counted as a copy.** The trim waits on the positions of data
+  nodes only, the search fan-out divides its buckets between data nodes only,
+  and a capacity operation asks data nodes only to acknowledge — a stateless
+  node publishes to no state log.
+
+Seat admission on a stateless node asks a data node whether its copy is
+established, so a stateless node claims no seat until one is. While no data
+node answers, its seats' tracker and knowledge tools fail saying so, and
+`fleet_role_unmanned` names `data` if no live node holds it.
+
+The members that stateless nodes join open a leaf listener
+(`stream.leaf.port`) and must persist (`stream.store_dir`), and every node of
+such a fleet runs `coordination.type: embedded-kv`: the leases a stateless
+node holds are the fleet's, reached over the same link.
 
 ### How `workers` is enforced
 
@@ -170,8 +212,8 @@ an operator's pass from the dashboard, a tick of the reconcile loop, a
 disconnect's teardown. That is not company-wide work somebody has to be
 elected for; it is work a node has already been asked to do, at whichever node
 happens to be serving the API. Refusing it on the role does not decline the
-work, it makes the work impossible: on `-roles ingress` — the split that puts
-the dashboard on a node with no worker role — every Connect answered *"another
+work, it makes the work impossible: on `-roles data,ingress` — the split that
+puts the dashboard on a node with no worker role — every Connect answered *"another
 pass for this integration is running"* over a surface where nothing was
 running, and every Disconnect *"being provisioned right now; try again in a
 moment"*, permanently. It now gates on the coordination store alone.
@@ -205,13 +247,15 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # Ingress split out: two ingress nodes behind a load balancer, three
 # running the seats and the duties. Every node runs the engine, so the
 # ingress nodes hold the stream and a store of their own like the rest.
-node: {id: "${CREWLET_NODE_ID}", roles: [ingress]}
-node: {id: "${CREWLET_NODE_ID}", roles: [seats, workers]}
+node: {id: "${CREWLET_NODE_ID}", roles: [data, ingress]}
+node: {id: "${CREWLET_NODE_ID}", roles: [data, seats, workers]}
 ```
 
 ```yaml
-# A satellite: agents only, no duties, no inbound traffic. Runs seats
-# pinned to it, in a network zone the rest of the fleet is not in.
+# A satellite: agents only, no duties, no inbound traffic, and no data —
+# a scratch store and a leaf of the members' broker (see the satellite
+# guide for the rest of its file). Runs seats pinned to it, in a network
+# zone the rest of the fleet is not in.
 node: {id: sat-eu-1, roles: [seats], labels: {zone: eu}}
 ```
 

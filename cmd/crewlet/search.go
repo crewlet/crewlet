@@ -88,6 +88,11 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err := refuseScratchStore(boot, "crewlet search eval",
+			"Run it on a node that holds data, or pass -store with a copy of "+
+				"the replicated estate from a backup."); err != nil {
+			return err
+		}
 		path = store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath)
 	}
 

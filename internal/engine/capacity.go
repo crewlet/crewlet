@@ -853,14 +853,16 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
-		leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
+		// DATA NODES ONLY: a node without `data` publishes to no state
+		// log — its seats write through a data node, which is the
+		// publisher this handshake is about — so it has no request to
+		// retire and nothing to acknowledge.
+		ids, err := dataNodes(ctx, e.backends.Coord)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
 		}
-		for _, lease := range leases {
-			if id, ok := coord.NodeID(lease.Resource); ok {
-				seen[id] = true
-			}
+		for _, id := range ids {
+			seen[id] = true
 		}
 	}
 	// AND THIS NODE, which is in a maintenance mode and therefore holds

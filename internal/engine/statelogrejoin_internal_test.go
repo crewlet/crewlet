@@ -155,7 +155,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
+	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	if ok, domain := e.SeatsServiceable(); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
@@ -712,7 +712,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
@@ -791,4 +791,11 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	if back.Store.Replicated() == nil {
 		t.Fatal("the restore left the estate closed")
 	}
+}
+
+// hydrated is [Engine.NativeHydrated] as the condition a wait polls, under the
+// test's own context.
+func hydrated(t *testing.T, e *Engine) func() bool {
+	t.Helper()
+	return func() bool { return e.NativeHydrated(t.Context()) }
 }

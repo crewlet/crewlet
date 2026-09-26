@@ -107,7 +107,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, and it ticks
 	// immediately at boot: its first conclusion is `blocked_by
 	// backup_floor` at zero, which lands on top of the floor published
@@ -181,7 +181,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node replaying up to the floor refuses reads as %q, want %q — "+
 			"the records are on the log and it clears on its own", got, statelog.RefuseBehind)
 	}
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the published floor")
 	}
 	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
@@ -220,7 +220,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node below the log refuses reads as %q, want %q", got,
 			statelog.RefuseBelowFloor)
 	}
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
 	if ok, _ := e.SeatsServiceable(); ok {
@@ -288,7 +288,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// The trim is the other thing that purges this log; stopped, every
 	// purge below is this test's own.
 	e.stopRetention()

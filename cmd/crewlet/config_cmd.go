@@ -227,6 +227,11 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 	if err != nil {
 		return nil, nil, err
 	}
+	if err = refuseScratchStore(boot, "crewlet config",
+		"Use the API of a node that holds data: PUT /config stores the revision "+
+			"and activates it on every node, this one included."); err != nil {
+		return nil, nil, err
+	}
 	// A NIL CIPHER IS VALID HERE, unlike for `secrets`: company_config
 	// supports a plaintext mode so pre-encryption deployments keep working,
 	// and secrets.Open passes an unsealed payload straight through.

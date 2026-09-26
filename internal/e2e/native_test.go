@@ -59,7 +59,7 @@ func pageOperator() pages.Actor {
 func TestADefaultCompanyHasATrackerAndAWiki(t *testing.T) {
 	t.Parallel()
 	n := start(t)
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	if n.engine.TrackerWriter() == nil || n.engine.Tracker() == nil {
 		t.Fatal("a company that declares no tracker got no native one")
@@ -87,7 +87,7 @@ func TestADefaultCompanyHasATrackerAndAWiki(t *testing.T) {
 func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	t.Parallel()
 	n := start(t)
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	task := newTask("ENG", "the deploy hangs on rollback")
 	task.Body = "reproduces on every second run"
@@ -161,7 +161,7 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 func TestAPageBecomesSearchable(t *testing.T) {
 	t.Parallel()
 	n := start(t)
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
 		Container: "ENG", Title: "Rollback runbook",
@@ -211,7 +211,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 	t.Parallel()
 	n := start(t)
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	written, err := operator(t, n).CreateTask(t.Context(), "e2e-create-2",
 		newTask("OPS", "rotate the signing key"), nil)

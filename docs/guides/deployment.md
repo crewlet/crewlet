@@ -603,10 +603,10 @@ only the ingress node should bind one:
 
 ```bash
 # Terminal 1: the agents and the fleet duties, no HTTP
-crewlet run -config crewlet.yaml -roles seats,workers -api-port 0
+crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 0
 
 # Terminal 2: the webhook receiver and the dashboard
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
@@ -621,9 +621,10 @@ observable step rather than a side effect of startup.
 
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
-- **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
-- **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
+- **`data`** holds the company's durable state — a copy of the replicated estate and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
+- **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
+- **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
+- **`workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
@@ -846,6 +847,15 @@ what it published. The dashboard reads the node it is served by. A deployment
 that wants one queryable history across a fleet exports to an external sink
 over OTLP rather than pointing the nodes at one database, which the exclusive
 file ownership rules out by construction.
+
+**A node without the `data` role writes none of its own.** Its store is
+deleted at every boot, so rows written there would be gone at its next restart
+with nothing able to read them in between (the API runs only where the data
+is). It hands every record it would have written to a data node instead —
+batched, idempotent on the record's identity, retried while a data node is
+away and dropped (and logged as `event_custody_dropped`) only when its buffer
+fills — and that data node's event log holds them beside its own, where its
+`GET /events` reads them. An orderly stop flushes what is still buffered.
 
 #### What gets stored, and under which category
 

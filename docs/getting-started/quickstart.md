@@ -474,16 +474,63 @@ work that waited runs.
 
 ## Split deployment (optional)
 
-Run ingress as its own node when you want webhooks to keep arriving while
-you restart the agents, or the two on different hosts. Same command, given
-different roles:
+Run the agents as their own node when you want webhooks to keep arriving
+while you restart them, or the agents on a host of their own. The API, the
+duties and the company's data stay on the node you already have; the agents
+move to a node that **holds no data** — it keeps nothing that has to outlive
+it, and restarts in seconds whatever the company's size.
 
-```bash
-crewlet run -roles seats,workers -api-port 0   # terminal 1
-crewlet run -roles ingress -api-port 8000      # terminal 2
+Two changes to the `crewlet.yaml` above make it the data node: it becomes a
+member other nodes can join, and its leases become the fleet's rather than its
+own.
+
+```yaml
+# crewlet.yaml — the data node, as above plus:
+node:
+  id: data-1
+  roles: [data, ingress, workers]   # everything but the agents
+stream:
+  store_dir: "./acme-data/stream"
+  leaf:
+    host: 127.0.0.1
+    port: 7422                      # where the agents node joins
+coordination:
+  type: embedded-kv                 # leases the agents node can see
 ```
 
-The ingress node exposes the same REST endpoints, webhook handlers
+The agents node gets a Tier A of its own. It needs no `company.yaml`, no API
+port and no stream directory — it fetches the company from the data node, and
+its store is deleted every time it starts:
+
+```yaml
+# agents.yaml — the agents node
+node:
+  id: agents-1
+  roles: [seats]
+store:
+  path: "./acme-agents/agents.db"
+  scratch: true
+stream:
+  leaf:
+    urls: ["nats-leaf://127.0.0.1:7422"]
+coordination:
+  type: embedded-kv
+# and the same `secrets:` block as crewlet.yaml, if you configured one:
+# this node decrypts the company document and the secret store itself
+```
+
+```bash
+crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
+crewlet run -config agents.yaml -api-port 0       # terminal 2
+```
+
+The agents node claims the seats once the data node answers that its copy of
+the company's records is established, and its seats' tracker and knowledge
+tools read and write through it. See
+[Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
+node without data can and cannot do.
+
+The data node exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
 `/webhooks/gitlab`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see

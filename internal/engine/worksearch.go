@@ -87,7 +87,17 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // ONE FUNCTION FOR BOTH CALLERS. It was two — an unexported one here and a
 // one-line exported wrapper around it — which is two places for the typed-nil
 // rule above to be stated and one of them to stop matching.
+//
+// ON A NODE THAT HOLDS NO DATA it is a data node's search, asked over the
+// estate — the same verb over the same fleet-wide index, answered by a node
+// that has one.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
+	if r := e.remote.Load(); r != nil {
+		if !r.tracker {
+			return nil
+		}
+		return r.client.Work()
+	}
 	if s := e.WorkSearch(); s != nil {
 		return s
 	}

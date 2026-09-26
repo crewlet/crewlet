@@ -92,7 +92,7 @@ type Config struct {
 	// now. Nil always admits. It gates the CLAIM only — see
 	// [seat.Config.Ready] for why it is neither the seat list nor the
 	// acquire hook.
-	SeatsAdmitted func() bool
+	SeatsAdmitted func(ctx context.Context) bool
 
 	// SeatsServiceable reports whether this node may KEEP the seats it
 	// holds, and names what stopped it when the answer is no. Nil keeps

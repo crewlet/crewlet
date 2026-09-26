@@ -269,7 +269,7 @@ live-editable company document in the store that can be
 
 ```bash
 crewlet run                                   # boot; seeds the store from company.yaml
-crewlet run -roles ingress                    # API + webhooks only (split deployments)
+crewlet run -roles data,ingress               # API + webhooks only (split deployments)
 crewlet validate                              # check both tiers before booting
 crewlet schema company                        # JSON Schema (editors, CI, agents)
 

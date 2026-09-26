@@ -78,6 +78,13 @@ func (e *Engine) admit(ctx context.Context, streams []string) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
 		return nil
 	}
+	if !holdsData(e.boot) {
+		// NO STATE-LOG PUBLISHER TO ADMIT: this node's seats write through
+		// a data node, which is admitted in its own right. An admission
+		// here would be a publisher a capacity operation waited on for
+		// ever.
+		return nil
+	}
 	admission := coord.Admission{
 		NodeID: e.id, Incarnation: e.incarnation, At: time.Now().UTC(),
 	}
@@ -139,7 +146,8 @@ func (e *Engine) withdraw(ctx context.Context) error {
 // barrier filters on the mode, and the participant set is read from the same
 // place.
 func (e *Engine) acknowledge(ctx context.Context, streams []string) {
-	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal {
+	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal ||
+		!holdsData(e.boot) {
 		return
 	}
 	for _, stream := range streams {

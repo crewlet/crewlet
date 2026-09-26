@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -969,5 +971,47 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 				t.Errorf("the refusal is no longer named:\n%v", err)
 			}
 		})
+	}
+}
+
+// A NODE THAT HOLDS NO DATA IS NOT A PARTICIPANT, AND ADMITS NOTHING. It
+// publishes to no state log — its seats write through a data node, which is
+// the publisher this handshake is about — so a participant set that named it
+// would wait for an acknowledgement it has no reason to give, and an admission
+// it wrote would be a publisher a capacity operation waited on for ever.
+func TestAStatelessNodeHasNoPartInACapacityOperation(t *testing.T) {
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
+	backend := coordmem.New()
+	e.backends.Coord = backend
+	for id, roles := range map[string][]string{
+		"data-a": {"data", "seats"}, "agent-1": {"seats"},
+	} {
+		if _, err := backend.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":boot-1", TTL: time.Minute, Meta: map[string]any{"roles": roles},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := e.capacityParticipants(ctx)
+	if err != nil {
+		t.Fatalf("capacityParticipants: %v", err)
+	}
+	if want := []string{"data-a", "node-coordinator"}; !slices.Equal(got, want) {
+		t.Fatalf("participants = %v, want %v", got, want)
+	}
+
+	stateless, _ := capacityFixture(t, "agent-1", statelog.ModeNormal)
+	stateless.backends.Fleet = fleet
+	stateless.boot = &config.Bootstrap{Node: config.Node{Roles: []string{"seats"}}}
+	if err := stateless.admit(ctx, []string{"CREWLET_TRACKER_LOG"}); err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	admissions, err := fleet.Admissions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(admissions) != 0 {
+		t.Fatalf("a node that publishes to no state log recorded %+v", admissions)
 	}
 }

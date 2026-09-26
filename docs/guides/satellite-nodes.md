@@ -13,11 +13,26 @@ exactly where it is. This shape is called a **satellite**: a node that
 runs agents, holds no company-wide duty, and terminates no inbound
 traffic.
 
+A satellite comes in two shapes, and the difference is the `data` role:
+
+| | `roles: [seats]` — **stateless** | `roles: [data, seats]` — **holds data** |
+|---|---|---|
+| Its store | Scratch: deleted at every boot, and no copy of the tracker or knowledge base | Its own full copy of the replicated estate |
+| Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster member, holding replicas |
+| Disk it needs | Its seats' memory and working rows, nothing else | The whole company's history |
+| Its seats' tools | Read and write through a data node, over the broker | Read and write its own copy |
+| Replacing it | Delete it and start another — it keeps nothing | A member leaving and joining |
+
+**Stateless is what you want for an agent host you intend to keep small and
+disposable**: it can be rebuilt from its Tier A file alone, holds no raft
+state, and restarts in seconds whatever the company's size. Its price is that
+its seats need a data node to answer — see
+[what a satellite still needs](#what-a-satellite-still-needs).
+
 > A satellite is a normal `crewlet run` with roles subtracted, not a
-> lighter agent-only binary. It still needs to reach the database and
-> the broker. If that is not possible from where you want the agent,
-> this is not the mechanism you want — see
-> [what a satellite still needs](#what-a-satellite-still-needs).
+> lighter agent-only binary. Either shape still needs to reach the fleet's
+> broker. If that is not possible from where you want the agent, this is
+> not the mechanism you want.
 
 ---
 
@@ -48,8 +63,8 @@ Slack message routed to that agent works exactly as before.
 ```mermaid
 flowchart LR
     subgraph core["Core network"]
-        C1["node-a<br/><i>ingress · seats · workers</i>"]
-        C2["node-b<br/><i>ingress · seats · workers</i>"]
+        C1["node-a<br/><i>data · ingress · seats · workers</i>"]
+        C2["node-b<br/><i>data · ingress · seats · workers</i>"]
         KV[("Coordination<br/>leases · ledgers")]
         MQ[("Event stream")]
     end
@@ -75,30 +90,56 @@ Three steps: say what the node is, say where the role belongs, start it.
 ### 1. Give the satellite a Tier A config
 
 Only the Tier A file lives on the satellite. The company itself (roles,
-prompts, providers, integrations) comes from the database, so there is
-no company YAML to copy or keep in sync.
+prompts, providers, integrations) comes from the fleet, so there is no
+company YAML to copy or keep in sync.
+
+A **stateless** satellite on an embedded fleet:
 
 ```yaml
 # crewlet.yaml, on the satellite host
 node:
   id: "${CREWLET_NODE_ID}"        # distinct and stable — sat-eu-1
-  roles: [seats]                  # agents only: no API, no duties
+  roles: [seats]                  # agents only: no data, no API, no duties
   labels:
     zone: eu                      # what a role will select on
   max_concurrent: 4               # this host runs one or two seats, not a
                                   #   company's worth — see below
 
 store:
-  path: "/var/lib/crewlet/sat-eu-1.db"   # this node's own file, not shared
+  path: "/var/lib/crewlet/sat-eu-1.db"
+  scratch: true                   # deleted at every boot — required without
+                                  #   the data role, and it says so twice
 
 stream:
-  type: nats
-  url: "${CREWLET_STREAM_URL}"
+  leaf:
+    urls:                         # any member's leaf listener will do
+      - "nats-leaf://node-a.internal:7422"
+      - "nats-leaf://node-b.internal:7422"
 
 coordination:
   type: embedded-kv               # the fleet's replicated KV, reached over
-                                  #   the same NATS cluster
+                                  #   the same link
 ```
+
+The members open that listener with `stream.leaf.port`, and a member that
+opens one must persist (`stream.store_dir`): the nodes that join it keep
+nothing, so it keeps everything they do.
+
+```yaml
+# on node-a and node-b — alongside their existing cluster block
+stream:
+  store_dir: /var/lib/crewlet/stream
+  leaf:
+    port: 7422                    # where stateless nodes join
+```
+
+On an **external** NATS cluster there is no leaf to configure: a stateless
+node dials the cluster as every node does, and keeps `store.scratch: true`
+and `roles: [seats]`.
+
+A satellite that **holds data** is the same file with `roles: [data, seats]`,
+a durable store (no `scratch`) and a cluster member's `stream.cluster` block
+instead of `stream.leaf` — see [Running a Fleet](fleet.md).
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
@@ -138,18 +179,29 @@ process, and it strands the seat when that particular process is gone.
 
 ### 3. Start it
 
-Both commands run **on the satellite**, against the Tier A file above:
+On a **stateless** satellite there is one command:
+
+```bash
+crewlet run                     # roles come from the file
+```
+
+Its store is created fresh, at the binary's own schema, every time it starts,
+so there is nothing to migrate — `crewlet migrate` refuses a scratch store and
+says so, and so do the offline `config`, `secrets` and `search eval` commands,
+because anything they wrote into it would be gone at the next boot. Configure
+the company through the API of a node that holds data.
+
+A satellite that **holds data** is migrated on the satellite first:
 
 ```bash
 crewlet migrate                 # this host's own store file
-crewlet run                     # roles come from the file
+crewlet run
 ```
 
 `crewlet migrate` is **per node, not per fleet**. There is no shared database
 to migrate from elsewhere: it applies the pending schema migrations to the one
-local store file its Tier A config names (`/var/lib/crewlet/sat-eu-1.db`
-above), and every node owns its file exclusively. A new satellite is migrated
-on the satellite.
+local store file its Tier A config names, and every node owns its file
+exclusively.
 
 Or, if you would rather not put roles in the file:
 
@@ -196,6 +248,16 @@ the dependency surface before choosing a host for it:
   live there. A network so restricted that neither is reachable cannot
   host a satellite. Its own store file is local, so that one costs
   nothing.
+- **For a stateless satellite, a data node that answers.** Its seats' tracker
+  and knowledge-base tools, their knowledge search and its tool-skill walks
+  are each a request to a data node over the broker — no inbound port, the
+  same link. It is admitted to claim seats only once a data node answers
+  that its own copy is established, and while none answers its tools fail
+  saying so rather than answering from nothing. What it publishes about its
+  own turns is handed to a data node's event log (the audit trail cannot live
+  in a store deleted at its next boot), so `GET /events` on that data node
+  shows it; its seats' memory rides the compacted changelog every seat's
+  memory does and is rehydrated after a restart.
 - **Whatever its LLM provider needs.** Usually outbound HTTPS to the
   provider. A network with no egress at all can still work if the role
   uses a [subscription CLI backend](../concepts/subscription-llm-backends.md)

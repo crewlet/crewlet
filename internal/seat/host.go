@@ -154,7 +154,7 @@ type Config struct {
 	//
 	// It runs on the sweep path and must not block: read a flag, do not
 	// query a store.
-	Ready func() bool
+	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
 	// and names what stopped it when the answer is no.
@@ -208,7 +208,7 @@ type Host struct {
 	owner   string
 	nodeID  string
 	seats   func() []placement.Seat
-	ready   func() bool
+	ready   func(ctx context.Context) bool
 	// serviceable is Config.Serviceable — whether held seats may stay.
 	serviceable func() (bool, string)
 	profile     placement.NodeProfile

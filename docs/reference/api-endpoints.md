@@ -2,7 +2,7 @@
 
 The Crewlet API is served by any node with the `ingress` role (`api.port > 0`
 in the Tier A config). By default a node has every role, so it runs alongside
-the agents in one process; a node with `-roles ingress` serves only these
+the agents in one process; a node with `-roles data,ingress` serves only these
 routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
@@ -1387,7 +1387,9 @@ listed and counted once, in either order: the stream can deliver it before
 the read, and the read can find a row the publishing node wrote inline before
 the stream delivered it. History is ordered behind the live rows it predates.
 On a fleet the seed is what
-**this node** published (the event store is per node), while everything
+**this node** published (the event store is per node — plus what any node
+holding no data handed it, see
+[Deployment → The event store](../guides/deployment.md#the-event-store)), while everything
 after the boot is the whole company's. A read that fails is logged as
 `live_projection_not_seeded` and costs the history, never the start-up:
 `GET /events` and the `tokens` query still read the store directly.
@@ -3416,7 +3418,7 @@ The body is read **whole even when the request will be refused**, and bounded at
 ## Running
 
 ```bash
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 The API is read-only against the database, and the one thing it publishes is inbound webhook deliveries, onto `crewlet.notifications.inbound`. It does not run agents — the engine process handles that.

@@ -507,7 +507,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		}},
 		{"an adoption", func(t *testing.T) (*Engine, func()) {
 			e, back, q := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 			quietHeartbeat(e.native.Load().log)
 			return e, func() {
 				running, at, last := pushBelowTheFloor(t, e, q)
@@ -523,7 +523,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		}},
 		{"the restore of an estate a failed adoption left closed", func(t *testing.T) (*Engine, func()) {
 			e, back, _ := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 			quietHeartbeat(e.native.Load().log)
 			return e, func() {
 				s := e.native.Load().log

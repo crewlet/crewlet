@@ -235,7 +235,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 
 	// FIRST BOOT: history on the tracker's log.
 	e, back := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
@@ -324,7 +324,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 		return running.runner.Stopped() == nil && running.runner.StreamIdentity() == nil &&
 			running.runner.Committed().Generation == gen
 	})
-	waitUntil(t, 20*time.Second, "the node to admit seats again", e2.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats again", hydrated(t, e2))
 	res, err := e2.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write after the reanchor: %+v, %v — the domain was re-anchored "+
@@ -366,7 +366,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 
 	// THIRD BOOT: every applier comes up on its own stream.
 	e3, _ := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", e3.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats after a restart", hydrated(t, e3))
 	for _, name := range e3.native.Load().log.order {
 		runner := e3.native.Load().log.Domain(name).runner
 		// THE CHECKPOINT ITS OWN ROW HOLDS, which is what loading it means
@@ -421,7 +421,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 
 	// FIRST BOOT: a project and a task — and then the copy is taken.
 	e, back := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	at := time.Now().UTC()
 	mustApply(t, "the project", func() (tracker.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-project",
@@ -452,7 +452,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 
 	// SECOND BOOT: the tail the copy never had.
 	e2, back2 := bootNode(t, &b, cfg)
-	waitUntil(t, 20*time.Second, "the node to admit seats again", e2.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats again", hydrated(t, e2))
 	mustApply(t, "the edit after the copy", func() (tracker.WriteResult, error) {
 		title, done := "after the copy", tracker.StatusDone
 		return e2.native.Load().writer.UpdateTask(t.Context(), "op-edit-2", "t-1", "ENG",

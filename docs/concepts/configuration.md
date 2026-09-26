@@ -77,20 +77,21 @@ systemd, the host name.
 
 #### `node.roles`
 
-What this process is willing to do. Three roles, and the default is all
-three — one process running a whole company, which is every single-node
+What this process is willing to do. Four roles, and the default is all
+four — one process running a whole company, which is every single-node
 deployment:
 
 ```yaml
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [seats]              # a satellite: agents only
+  roles: [seats]              # a stateless satellite: agents only, no data
   labels:
     zone: eu
 ```
 
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
+| `data` | Holds the company's durable state: a copy of the replicated estate, a member's share of the broker, and the event log. `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
@@ -102,6 +103,13 @@ getting it wrong is an absence — so the engine checks it against live
 node presence and logs `fleet_role_unmanned` when nobody is doing a job.
 A node that does not run seats is also left out of the denominator its
 peers divide the seats by; counting it would strand the difference.
+
+**`data` is the one role that is a promise about the disk rather than about
+work.** A node without it keeps nothing that has to outlive it, and Tier A
+holds it to that: `store.scratch: true` is required (its store is deleted at
+every boot), an embedded stream joins the fleet as a leaf through
+`stream.leaf.urls`, and `ingress` or `workers` beside it is refused. See
+[Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data).
 
 #### `node.labels`
 

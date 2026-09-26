@@ -139,7 +139,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	// still give back seats it holds beyond its share, or a fleet whose
 	// newest member is mid-hydration cannot rebalance onto it and its
 	// oldest member stays over-subscribed for as long as that takes.
-	withheld := !draining && (unfit || !h.admits())
+	withheld := !draining && (unfit || !h.admits(ctx))
 	if !draining && !withheld {
 		h.mu.Lock()
 		// Undead seats count against capacity: this process may still be
@@ -714,7 +714,7 @@ func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
 // because a status function paniced once would be a worse failure than the
 // one the gate was added to prevent. The panic is logged where it can be
 // found.
-func (h *Host) admits() (ok bool) {
+func (h *Host) admits(ctx context.Context) (ok bool) {
 	if h.ready == nil {
 		return true
 	}
@@ -728,7 +728,7 @@ func (h *Host) admits() (ok bool) {
 			ok = true
 		}
 	}()
-	return h.ready()
+	return h.ready(ctx)
 }
 
 // unserviceable asks [Config.Serviceable] whether held seats may stay.

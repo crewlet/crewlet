@@ -138,7 +138,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
 
@@ -485,6 +485,13 @@ crewlet migrate -check                   # report pending work, apply nothing
 |------|-------------|
 | `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`). Name it **once**: a second positional, or a positional alongside `-config`, is refused rather than resolved — the two would have to agree and nothing checks that they do. |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
+
+**A node without `data` has nothing to migrate.** Its store is `store.scratch`
+— created fresh, at the binary's own schema, every time `crewlet run` starts —
+so `migrate` refuses it and says so. The offline `config`, `secrets` and
+`search eval` commands refuse a scratch store for the same reason: what they
+wrote into it would be gone at the next boot. Use the API of a node that holds
+data instead.
 
 Rolling out N nodes at once means N processes opening the same database and
 racing to apply the same files. That race is safe — one transaction per

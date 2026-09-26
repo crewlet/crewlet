@@ -257,7 +257,15 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	// still keeps a record of its turns. The other half of the pipeline —
 	// feeding a live projection — is the API's, and is a broadcast
 	// subscription for reasons observe.Projector states.
-	out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
+	//
+	// ONLY WHERE THE STORE OUTLIVES THE PROCESS. A node without `data`
+	// deletes its store at every boot, so rows written into it would be
+	// gone at its next restart with nothing able to read them in between
+	// — it hands them to a data node instead ([observe.Custody], armed by
+	// [New] once the estate client exists).
+	if holdsData(b) {
+		out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
+	}
 	return out, nil
 }
 
@@ -289,6 +297,17 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 		// both take a pooled write transaction now, which reaches the
 		// same lock through the same queue.
 		PinnedWriters: len(registeredDomains()),
+	}
+	// A NODE WITHOUT `data` HOLDS NO COPY OF THE REPLICATED ESTATE and keeps
+	// nothing that has to outlive it. Its node estate is discarded and
+	// recreated at every boot, and the replicated one is not opened at
+	// all — so a path that reaches for it is told [store.ErrNoEstate]
+	// rather than handed an empty database that reads as a company with
+	// nothing in it. And no apply loop runs here to pin a writer.
+	if !holdsData(b) {
+		opts.Scratch = b.Store.Scratch
+		opts.NodeOnly = true
+		opts.PinnedWriters = 0
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -344,11 +363,20 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		ClusterPort:      b.Stream.Cluster.Port,
 		ClusterHost:      b.Stream.Cluster.Host,
 		ClusterAdvertise: b.Stream.Cluster.Advertise,
-		ServerName:       nodeID,
-		Replicas:         b.Stream.Replicas,
-		Credentials:      b.Stream.Credentials,
-		Token:            b.Stream.Token,
-		TLS:              streamTLS(b.Stream.TLS),
+		// THE LEAF LINK, from whichever side of it this node is: a node
+		// without `data` dials the members' listeners and runs no
+		// JetStream of its own, and a member opens one for them. Tier A
+		// has already refused a node that is both, or neither where it
+		// has to be one — see [config.Bootstrap.ValidateRoles].
+		LeafURLs:      b.Stream.Leaf.URLs,
+		LeafPort:      b.Stream.Leaf.Port,
+		LeafHost:      b.Stream.Leaf.Host,
+		LeafAdvertise: b.Stream.Leaf.Advertise,
+		ServerName:    nodeID,
+		Replicas:      b.Stream.Replicas,
+		Credentials:   b.Stream.Credentials,
+		Token:         b.Stream.Token,
+		TLS:           streamTLS(b.Stream.TLS),
 
 		// The BROKER's own verbosity, which is not the engine's — see
 		// jetstream.Config.Debug. Read by the embedded branch only; the
@@ -616,6 +644,26 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 // A topology question rather than a replica count: an external NATS is
 // somebody else's cluster, and an embedded member that names one is clustered
 // whatever replica count it asks for — see [jsprovision.Clustered].
+//
+// A LEAF IS CLUSTERED TOO: it holds nothing of its own, so every object it
+// provisions is a replicated create on the members it reaches, and the solo
+// budget would fail it against peers that are themselves still forming.
 func clusteredStream(b *config.Bootstrap) bool {
-	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != ""
+	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != "" ||
+		b.Stream.Leaf.Joins()
+}
+
+// holdsData reports whether this node holds the company's durable state.
+//
+// Through the profile, which is the one parse of `node.roles`: an unreadable
+// role list has already been refused by Tier A, and every other reader of the
+// roles asks the same accessor.
+//
+// A NIL BOOTSTRAP IS EVERY ROLE, on the rule an unset role list follows: an
+// engine assembled without one declares nothing to subtract.
+func holdsData(b *config.Bootstrap) bool {
+	if b == nil {
+		return true
+	}
+	return b.Node.Profile("").HoldsData()
 }

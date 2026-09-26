@@ -270,6 +270,10 @@ func (e *Engine) Knowledge() knowledge.Searcher {
 	if native := e.NativeSearcher(); native != nil {
 		return native
 	}
+	if r := e.remote.Load(); r != nil && r.wiki {
+		// A NODE THAT HOLDS NO INDEX searches through one that does.
+		return r.client.Knowledge()
+	}
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
 	if e.notify.confluence.searcher == nil {
