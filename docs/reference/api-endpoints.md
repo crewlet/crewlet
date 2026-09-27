@@ -37,7 +37,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, the `/objects/*` gestures, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
@@ -91,11 +91,15 @@ node means nothing was done.
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per hour or day, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are placed. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
+| `POST` | `/objects/out/{node}` | Take a data node out of the [object store's](../concepts/object-store.md) placement map: nothing new is placed on it, and its share is copied to the other members while it keeps serving what it holds. `?confirm=` repeats the node id; `?reason=` is recorded beside the operator. **Operator-only**, and absent on a node running no object store (see [Gestures on the placement map](#gestures-on-the-placement-map)) |
+| `POST` | `/objects/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
+| `POST` | `/objects/hold` | Hold the placement map for `?for=` (a duration, at most `24h`, required): no member is removed however long it is gone. `?reason=` is recorded |
+| `POST` | `/objects/release` | End a hold |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -2751,8 +2755,7 @@ claim, and a store blip is not evidence for it.
     {
       "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
       "owner": "core-1:8f2a", "protocol": 3, "seats": 4, "expires_in": 41.2,
-      "config_epoch": 7, "config_status": "ok", "config_error": "",
-      "object_weight": 1
+      "config_epoch": 7, "config_status": "ok", "config_error": ""
     }
   ],
   "seats": [
@@ -2764,11 +2767,58 @@ claim, and a store blip is not evidence for it.
   "unmanned_roles": [],
   "this_node": "core-1",
   "objects": {
-    "available": true, "placed": true, "epoch": 3, "replicas": 3, "copies": 3,
+    "state": "placed", "generation": "5b0c1f7e-9c1d-4f5e-8a3b-2d7c6e1f0a9b",
+    "epoch": 7, "replicas": 2, "copies": 2, "pgs": 256,
+    "failure_domain": "zone", "distinct_domains": 3, "domain_limited": false,
+    "hold": {"until": "2026-09-01T14:00:00Z", "by": "founder",
+             "reason": "kernel upgrade", "at": "2026-09-01T12:00:00Z"},
+    "degraded_groups": 154,
+    "balance": {"epoch": 7, "deviation_percent": 1.5, "tolerance_percent": 2,
+                "converged": true, "rounds": 6},
     "members": [
-      {"node": "core-1", "weight": 1},
-      {"node": "core-2", "weight": 1, "absent_since": "2026-09-01T12:00:00Z"},
-      {"node": "core-3", "weight": 2}
+      {"node": "data-a", "weight": 2, "domain": "eu-1", "out": false,
+       "share_percent": 41.40625, "live": true,
+       "health": {"state": "ok", "used_percent": 41.5},
+       "repair": {"epoch": 7, "completed": true, "placed": 900, "held": 900,
+                  "pending": 0, "unreachable": 0, "missing": 0,
+                  "at": "2026-09-01T12:04:00Z"},
+       "scrub": {"cycle_started": "2026-08-30T12:00:00Z", "progress": 0.25,
+                 "verified": 300, "rotten": 0, "unreadable": 2},
+       "strays": 0},
+      {"node": "data-b", "weight": 1, "domain": "eu-2", "out": false,
+       "absence": {"ticks": 12, "out_after_ticks": 40, "present": 3,
+                   "clear_after_ticks": 40, "since": "2026-09-01T12:00:00Z",
+                   "reason": "absent"},
+       "share_percent": 30.078125, "live": false},
+      {"node": "data-c", "weight": 1, "domain": "eu-3", "out": false,
+       "share_percent": 28.515625, "live": true,
+       "health": {"state": "nearfull", "detail": "88.2% of the volume is in use",
+                  "used_percent": 88.2},
+       "repair": {"epoch": 6, "completed": false, "placed": 430, "held": 410,
+                  "pending": 20, "unreachable": 20, "missing": 0,
+                  "at": "2026-09-01T12:01:00Z"}},
+      {"node": "data-d", "weight": 1, "domain": "eu-3", "out": true,
+       "out_by": "founder", "out_reason": "decommission",
+       "out_at": "2026-09-01T12:00:00Z", "share_percent": 0, "live": true,
+       "health": {"state": "ok", "used_percent": 12},
+       "repair": {"epoch": 7, "completed": true, "placed": 0, "held": 0,
+                  "pending": 0, "unreachable": 0, "missing": 0,
+                  "at": "2026-09-01T12:04:00Z"},
+       "strays": 14},
+      {"node": "data-f", "weight": 1, "domain": "eu-2", "out": false,
+       "probation": {"present": 12, "placed_after_ticks": 40,
+                     "removed_at": "2026-09-01T11:00:00Z", "reason": "absent"},
+       "share_percent": 0, "live": true,
+       "health": {"state": "ok", "used_percent": 23},
+       "repair": {"epoch": 7, "completed": true, "placed": 0, "held": 0,
+                  "pending": 0, "unreachable": 0, "missing": 0,
+                  "at": "2026-09-01T12:04:00Z"},
+       "strays": 37}
+    ],
+    "removed": [
+      {"node": "data-e", "at": "2026-09-01T12:00:00Z", "reason": "unhealthy",
+       "detail": "probe: read-only filesystem", "gone": 6,
+       "forget_after_ticks": 40, "placed_after_ticks": 40}
     ]
   }
 }
@@ -2777,15 +2827,154 @@ claim, and a store blip is not evidence for it.
 **`objects` is where the company's files are placed** — the
 [object store's](../concepts/object-store.md) placement map, read from the
 coordination store like the rest of this answer, so every node reports the
-same one. `replicas` is how many copies of each chunk the fleet asks for and
-`copies` how many it holds now: fewer while it has fewer data nodes than
-that, which is a shortfall the screen says in words. A member with
-`absent_since` is one the map is still counting while it is gone; its share
-moves to the others ten minutes after that instant. Three states are named
-apart rather than drawn as an empty list: `available: false` (the store did
-not answer), `placed: false` (no map yet, so no file can be stored) and
-`unreadable: true` (a newer build wrote it). Each node row's `object_weight`
-is the share that node offers, absent on a node that holds no data.
+same one, and joined with each data node's own **objects lease**. It is absent
+on a node that reads no map.
+
+`state` names four things apart rather than drawing any of them as an empty
+list: `unavailable` (the store did not answer), `no_map` (no data node has
+joined, so no file can be stored), `unreadable` (a newer build wrote it) and
+`placed`. Only a placed map carries the other fields, and it carries every one
+of them — a count whose zero is a reading, like `degraded_groups`, is never
+omitted.
+
+The example is the engine's own rendering, not a sketch of one: a test holds
+its `objects` block to what the renderer writes for that map, so every number in
+it — `copies`, the shares, `degraded_groups` — is one the engine can produce.
+Here two copies are placed over the three members that take them (`data-d` is
+out and `data-f` on probation, so neither takes any, and the shares of the
+other three sum to 100), and 154 of the 256 groups have a copy on `data-b`,
+which holds no objects lease.
+
+| Field | What it is |
+|---|---|
+| `generation` | The map's lineage: a map recreated after its key was lost is a new one, whose epochs start again |
+| `epoch` | How many times placement has changed |
+| `replicas` / `copies` | The copies of every chunk the company asks for (`objects.replicas`), and how many the map places — fewer while it has fewer placeable members, a shortfall the screen says in words |
+| `pgs` | How many placement groups the slots are divided into |
+| `failure_domain` / `distinct_domains` / `domain_limited` | The node label copies are spread across (`objects.failure_domain`, absent for none), how many of its values the placeable members span, and whether that is fewer than `copies` — so some groups keep two copies in one domain |
+| `hold` | An operator's hold in force now — absent when there is none or it has expired |
+| `degraded_groups` | Groups with a copy on a member that holds no objects lease or whose store reports itself failed right now: each is a copy short until it returns or the map moves it |
+| `balance` | How evenly the map spreads the copies over the members' weights, as last measured: the `epoch` measured (one behind `epoch` for the tick after a split, which is measured then), `deviation_percent` — the largest difference between any placeable member's copies and its target, as a percentage of that target — against the `tolerance_percent` a balance aims within, whether it is `converged` there, and the `rounds` the balance that set the shares ran (at most 60, fewer only on converging or where no share could move; `0` when a split's placement was measured close enough to leave as it was). `converged: false` is a fleet whose weights are intents rather than promises — a crowded failure domain, or members too light for their targets to be counted in whole copies; see [the object store](../concepts/object-store.md#weights-and-the-shares-a-balance-finds). Absent for a map nothing has measured |
+| `members` | One row per member, in node order |
+| `removed` | Nodes the map removed for being gone, remembers, and has not seen back: `gone` counts the consecutive ticks since it was last seen, and `forget_after_ticks` of them forget it, after which it joins as any new node would. Seen back present and healthy before that, it is a member again at once, **on probation** — listed on its member row, not here — and placed on after `placed_after_ticks` ticks in a row |
+
+A member row is the map's view of it — `weight`, `domain`, `out` with who took
+it out and why (`out_by`, `out_reason`, `out_at`), its `probation` if it is on
+one, and its open run of `absence` — beside `share_percent`, its **measured**
+share of every copy the stored map places (computed once per map, not per
+request; 0 for a member out or on probation), and what its objects lease says:
+`live`, whether it holds one; `health`, its store's state (`ok`, `nearfull`,
+`full` or `failed`) and how full its volume is; `repair`, its last pass — the
+map `epoch` it placed by, whether it `completed`, and the chunks still
+`pending` after it; `scrub`, where its verification cycle is and what this
+cycle found — `verified`, `rotten`, `unreadable` (chunks the disk would not
+return, stepped past rather than stopped on, so a count that keeps rising is a
+disk failing chunk by chunk) and `error`, what stopped it last, absent while it
+runs — reported even before a first cycle has begun, with no `cycle_started`,
+when the disk refused the scrub's very first walk; and `strays`, the referenced copies it holds beyond what the map places
+on it, which a member taken out must bring to zero before it is stopped and a
+member on probation **keeps**, for when the map places on it again. **Absent is
+not zero**: a member that reported no health, repair or scrub has none of those
+keys, never a zero one. `strays` in particular is absent until a collection
+that walked every slot has run at the map epoch the member places by — a count
+from a pass that stopped short never looked at most of the disk, and one from
+before the map moved was taken against a placement that no longer stands. Every
+node runs that collection once the fleet has settled at the epoch, so it starts
+within about half a minute of the last member finishing its repair rather than
+on the hourly schedule.
+
+An absence is **counted in the maintainer's ticks**, never timed:
+`ticks` of `out_after_ticks` removes the member while no hold is in force and
+another member that takes copies is present to take its share, and it is
+cleared only once the member has been back `clear_after_ticks` ticks in a row —
+`present` counts them — so a member that flaps is removed in the end. `since` is
+for display only.
+
+A **probation** is counted the same way. A node the map removed and has seen
+back is a member again at once — at the tail of every group's ranking, so a
+reader and a repair find what it held when it went — and placed on nothing
+until it has been present and healthy `placed_after_ticks` ticks in a row
+(`present` so far). A tick that misses it removes it again at once, and a hold
+does not keep it. `removed_at`, `reason` and `detail` are the absence that
+removed it. A member can be `out` and on `probation` at once: the one is an
+operator's to lift, the other the map's.
+
+A node row carries no object share: a data node's membership in the object
+store is its own lease, not its presence.
+
+### Gestures on the placement map
+
+```
+POST /objects/out/{node}?confirm={node}&reason=
+POST /objects/in/{node}?confirm={node}
+POST /objects/hold?for={duration}&reason=
+POST /objects/release
+```
+
+The operator's gestures on the map, through a running node because the map is
+one record in the coordination store — which on the default topology is the
+engine's own embedded broker and binds no socket. `crewlet objects out`, `in`,
+`hold` and `release` are clients of these routes. **Operator-only**, refused
+during a [drain](#during-a-drain), and **absent** (`404 no_route`) on a node that
+runs no object store: there is no map for it to change.
+
+- **out** takes a member out: the map places nothing on it, and its share is
+  copied to the other members while it keeps serving what it holds — so taking
+  a node away is a copy rather than a recovery. Stop it once no member has a
+  chunk `pending` and it holds no `strays`.
+- **in** puts it back, and its share moves back to it. It also vouches for a
+  node the map removed, rather than waiting for it to prove itself stable: a
+  member on `probation` is placed on at once, and a node in the `removed` list
+  is forgotten, so it is placed on the next time the maintainer sees it present
+  and healthy.
+- **hold** holds the map for `for` — a duration such as `30m` or `2h`, at most
+  `24h`, and required: no member is removed for being gone until the hold ends
+  or is released, while its absence keeps being counted — a member on probation
+  excepted, which holds no share for a hold to protect. A hold always ends by
+  itself, because one forgotten would pin a dead member's groups a copy short.
+- **release** ends the hold.
+
+Each is a read of the stored map, a pure change and a compare-and-set, retried
+a bounded number of times against the maintainer's own writes. So the answer
+is not "done" but whether the map **now says** what was asked:
+
+```json
+{"landed": true, "epoch": 8, "node": "data-a",
+ "member": {"node": "data-a", "weight": 2, "domain": "eu-1", "out": true,
+            "out_by": "founder", "out_reason": "disk swap",
+            "out_at": "2026-09-01T12:00:00Z"}}
+```
+
+`epoch` is the map's after the gesture — out and in move it, a hold and a
+release do not, since neither changes where anything is placed. `member` is the
+member as the map now describes it, absent for a node the map does not hold
+(an `in` of a removed node, whose `hint` says when it is placed on). `hold` is
+the hold in force, on every answer. `landed: false` is a gesture that lost every
+race to another writer: nothing it asked is in the map, the rest of the answer
+is the map as it stands, and `hint` says to make the gesture again if it still
+applies. A request that went unanswered is safe to send again, and what the
+resend does depends on the gesture. An **out**, an **in** or a **release** the
+map already says changes nothing and is answered as landed with nothing written
+— a second `out` of a member already out keeps the first one's `out_by`,
+`out_reason` and `out_at`. A **hold** always writes: sent again it replaces the
+hold in force, and its length is counted from the resend, so a hold retried
+twenty minutes later ends twenty minutes later than first asked — read the map
+before re-sending one.
+
+Every refusal carries `detail` and `hint`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `confirm_required` | `?confirm=` does not repeat the node id |
+| `400` | `invalid_hold` | `?for=` is missing, is not a duration, or is not more than nothing and at most `24h` |
+| `403` | `operator_required` | The request carries no operator identity |
+| `404` | `unknown_member` | For `out`, the node is not a member of the map; for `in`, it is neither a member nor in the map's `removed` list |
+| `409` | `removed_member` | `out` of a node in the map's `removed` list: the map places nothing on it, so there is nothing to take out — `in` is the gesture that names it. A member on `probation` is a member and can be taken out |
+| `409` | `objects_refused` | Taking it out would leave no member present on the latest tick to write to |
+| `409` | `objects_newer_map` | A newer build wrote the map, and this one must not rewrite it — make the gesture through a node running that build |
+| `503` | `no_object_map` | No data node has joined yet, so there is no map to change |
+| `503` | `objects_unavailable` | The coordination store did not answer; whether the map changed is unknown, and asking again is safe — with a hold's resend restarting its length, as above |
+| `500` | `objects_failed` | The gesture failed on this node before the map was written — a map this build could not encode again. Nothing changed; this node's log (`api_objects_gesture_failed`) has the reason |
 
 ### `GET /sandbox-runs`
 

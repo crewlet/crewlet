@@ -159,6 +159,10 @@ func wireAPI(
 		// an upload on one member and a download from another cross the
 		// object store the way a deployment's do.
 		Files: api.EngineFiles(e),
+		// THE OBJECT STORE'S GESTURES, through the adapter `crewlet run`
+		// uses, so a case taking a member out crosses the same seam a
+		// deployment's does.
+		Objects: api.EngineObjects(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

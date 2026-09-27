@@ -82,6 +82,11 @@ type App struct {
 	// with no native tracker or no object store.
 	files ProjectFiles
 
+	// objects makes the operator's gestures on the object store's
+	// placement map. Nil leaves the routes unmounted, on a node that runs
+	// no object store.
+	objects ObjectsControl
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
@@ -231,6 +236,11 @@ type Options struct {
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
 
+	// Objects makes the operator's gestures on the object store's
+	// placement map. Nil leaves the routes unmounted — see
+	// [ObjectsControl].
+	Objects ObjectsControl
+
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
@@ -332,6 +342,7 @@ func New(opts Options) (*App, error) {
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.files = opts.Files
 	a.capacity = opts.Capacity
+	a.objects = opts.Objects
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -354,6 +365,11 @@ func New(opts Options) (*App, error) {
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
 	a.mountFiles(mux)
+	// The object store's gestures: taking a data node out of the placement
+	// map, putting it back, holding the map through planned maintenance.
+	// POSTs for the retention gestures' reason — moving a member's share
+	// across the fleet is not a read. See objects.go.
+	a.mountObjects(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,
 	// and it is why the verb can run at all on a topology whose broker

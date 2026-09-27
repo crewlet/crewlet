@@ -37,6 +37,9 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 			Publisher: memory.New(),
 		},
 		Sources: queries.Sources{Company: active()},
+		// THE OBJECT STORE'S GESTURES, mounted over a map this fake holds,
+		// so their entries below are held against real routes.
+		Objects: newFakeObjects(),
 	})
 	return a
 }
@@ -67,13 +70,13 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // startsWork is every kind of request the gate refuses, one of each route
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the operator writes and the operator MCP
-// surface.
+// credential writes, the setup pass, the operator writes, the object store's
+// gestures and the operator MCP surface.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all sixteen — and it is
+// what makes the refusal case above meaningful for all twenty — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom
@@ -103,6 +106,10 @@ var startsWork = []struct {
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
 	{http.MethodPost, "/work/ENG-1/purge", false},
+	{http.MethodPost, "/objects/out/data-a?confirm=data-a", true},
+	{http.MethodPost, "/objects/in/data-a?confirm=data-a", true},
+	{http.MethodPost, "/objects/hold?for=1h", true},
+	{http.MethodPost, "/objects/release", true},
 	{http.MethodPost, "/operator/mcp", false},
 }
 

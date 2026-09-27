@@ -1716,6 +1716,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// read and write chunks through this node's object client and
 		// the rows through its tracker, attributed to the operator.
 		Files: api.EngineFiles(e),
+		// THE OBJECT STORE'S GESTURES — taking a data node out of the
+		// placement map, putting it back, holding the map through planned
+		// maintenance — made through this node because the map lives in
+		// the coordination store its broker holds. Nil, and the routes
+		// unmounted, on a node that runs no object store.
+		Objects: api.EngineObjects(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.

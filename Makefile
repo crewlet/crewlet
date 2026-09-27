@@ -175,7 +175,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -555,6 +555,16 @@ derived: ## regenerate internal/config/testdata/derived/*.derived.json from the 
 gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
+
+# internal/api/testdata/objects_answer.json is the object store's renderings —
+# the fleet view's placement block in each of its states, every gesture answer
+# and every refusal — written by the renderers /fleet and the /objects routes
+# answer through, for `gate-answer`'s reason: the dashboard's fleet screen suite
+# loads the SAME file as its fixture, so a change to the rendering fails on
+# both sides until each follows it. Read the diff before committing it.
+objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the object store's renderers
+	CREWLET_REGENERATE_OBJECTS_ANSWER=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheObjectsAnswerMatchesItsGoldenFile
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.
