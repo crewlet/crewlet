@@ -269,8 +269,8 @@ func (s *Service) postRank(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		named++
-		neighbour, ok := s.readTask(w, r, ref, tracker.DetailWants{})
-		if !ok {
+		neighbour, found := s.readTask(w, r, ref, tracker.DetailWants{})
+		if !found {
 			return
 		}
 		if neighbour.Task.Project != item.Task.Project {
@@ -334,7 +334,7 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stored := detail.Comments[0]
-	if _, ok := s.decide(w, r, authz.ActionWorkCommentEdit, authz.Object{
+	if _, ok = s.decide(w, r, authz.ActionWorkCommentEdit, authz.Object{
 		Kind: authz.KindTask, Container: detail.Task.Project, Author: stored.Author,
 	}); !ok {
 		return

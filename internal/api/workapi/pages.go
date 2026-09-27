@@ -1,6 +1,7 @@
 package workapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -110,8 +111,8 @@ func (s *Service) postPageRename(w http.ResponseWriter, r *http.Request) {
 	}
 	quiet, _ := args["quiet"].(bool)
 	s.pageGesture(w, r, authz.ActionPageRename,
-		func(actor pages.Actor, id string) (pages.Written, error) {
-			return s.store.Rename(r.Context(), actor, id, title, quiet)
+		func(ctx context.Context, actor pages.Actor, id string) (pages.Written, error) {
+			return s.store.Rename(ctx, actor, id, title, quiet)
 		})
 }
 
@@ -120,20 +121,14 @@ func (s *Service) deletePage(w http.ResponseWriter, r *http.Request) {
 	if args, ok := readArgs(w, r); !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageTrash,
-		func(actor pages.Actor, id string) (pages.Written, error) {
-			return s.store.Trash(r.Context(), actor, id)
-		})
+	s.pageGesture(w, r, authz.ActionPageTrash, s.store.Trash)
 }
 
 func (s *Service) postPageRestore(w http.ResponseWriter, r *http.Request) {
 	if args, ok := readArgs(w, r); !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageRestore,
-		func(actor pages.Actor, id string) (pages.Written, error) {
-			return s.store.Restore(r.Context(), actor, id)
-		})
+	s.pageGesture(w, r, authz.ActionPageRestore, s.store.Restore)
 }
 
 // postPagePurge destroys a page permanently.
@@ -222,15 +217,17 @@ func (s *Service) deletePageComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageGesture is the shape of the three row-decided page verbs: read the page,
-// decide the verb on its container, act, answer.
+// decide the verb on its container, act, answer. act is handed the request's
+// context, the one every other step here reads under.
 func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
-	action authz.Action, act func(pages.Actor, string) (pages.Written, error)) {
+	action authz.Action,
+	act func(context.Context, pages.Actor, string) (pages.Written, error)) {
 
 	detail, ok := s.readPage(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	if _, ok := s.decide(w, r, action, authz.Object{
+	if _, ok = s.decide(w, r, action, authz.Object{
 		Kind: authz.KindPage, Container: detail.Page.Container,
 	}); !ok {
 		return
@@ -243,7 +240,7 @@ func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	written, err := act(actor, detail.Page.ID)
+	written, err := act(r.Context(), actor, detail.Page.ID)
 	if err != nil {
 		failErr(w, err, key)
 		return
