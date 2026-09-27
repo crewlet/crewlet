@@ -324,8 +324,8 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runtime := s.runtimeAllowed(r)
-	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get("kind")))
-	unheld := r.URL.Query().Get("unheld") == "true"
+	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get(KindParam)))
+	unheld := r.URL.Query().Get(UnheldParam) == "true"
 	if unheld && s.held == nil {
 		// THE FILTER CANNOT BE ANSWERED, so it is REFUSED rather than
 		// applied to an empty directory. A node running no identity
@@ -348,7 +348,11 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		if kind != "" && seat.Kind != kind {
 			continue
 		}
-		if unheld && s.held(seat.Handle) {
+		// ASKED BY THE SEAT'S IDENTITY, the handle it was created under,
+		// exactly as the report asks: a binding names that (ADR-0020), so
+		// asked by the handle it answers to now, a renamed seat somebody
+		// holds was listed as one nobody does.
+		if unheld && s.held(seat.Origin()) {
 			continue
 		}
 		seats = append(seats, viewOfSeat(seat, runtime))

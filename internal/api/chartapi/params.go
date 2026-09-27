@@ -33,9 +33,22 @@ func freshnessParams(r *http.Request) tracker.Params {
 // LimitParam is how many rows a listing route was asked for.
 const LimitParam = "limit"
 
+// KindParam and UnheldParam are the seat listing's two filters: seats of one
+// kind, and the seats nobody in the identity directory holds — the question an
+// invite screen asks before it knows who to send a link to.
+const (
+	KindParam   = "kind"
+	UnheldParam = "unheld"
+)
+
 // chartParams are the keys this surface reads that the freshness grammar does
 // not, so an unknown one can be refused on the same terms.
-var chartParams = []string{RuntimeParam, LimitParam}
+//
+// EVERY KEY A HANDLER READS IS HERE, because the refusal runs first: the seat
+// listing read `kind` and `unheld` while this list held neither, so the
+// documented `GET /chart/seats?kind=human&unheld=true` was answered 400 as an
+// unknown parameter and neither filter was reachable at all.
+var chartParams = []string{RuntimeParam, LimitParam, KindParam, UnheldParam}
 
 // refuseUnknownParams reports the first query key neither this surface nor
 // the freshness grammar reads.

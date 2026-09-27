@@ -295,6 +295,91 @@ func TestTheStrippedPostureIsServedByDefault(t *testing.T) {
 	}
 }
 
+// servedSeats stands the surface up over company with held as its directory
+// seam, and answers the handles GET path lists.
+func servedSeats(t *testing.T, company chart.Chart, held chartapi.Held,
+	path string, want int) []string {
+
+	t.Helper()
+	svc, err := chartapi.New(chartapi.Options{
+		Reader: &reader{chart: company},
+		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer {
+			return &writer{}
+		},
+		Principal: resolved(func() iam.Principal { return leadOf(iam.GrantStateRead) }),
+		Chart:     leads(),
+		Held:      held,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	body := getJSON(t, mux, path, want)
+	seats, _ := body["seats"].([]any)
+	listed := []string{}
+	for _, s := range seats {
+		seat, _ := s.(map[string]any)
+		handle, _ := seat["handle"].(string)
+		listed = append(listed, handle)
+	}
+	return listed
+}
+
+// THE SEAT LISTING'S FILTERS ARE REACHABLE, and they filter.
+//
+// The surface refuses a parameter nobody reads BEFORE the handler runs, and
+// `kind` and `unheld` were never on the list it refuses against — so the
+// documented `GET /chart/seats?kind=human&unheld=true` answered 400 as an
+// unknown parameter, and neither filter could be asked at all.
+func TestTheSeatListingFiltersByKindAndByWhoHoldsASeat(t *testing.T) {
+	t.Parallel()
+	company := chart.Chart{Seats: []chart.Seat{
+		{Handle: "designer", Kind: chart.SeatHuman},
+		{Handle: "sre", Kind: chart.SeatAgent},
+		{Handle: "writer", Kind: chart.SeatHuman},
+	}}
+	held := func(seat string) bool { return seat == "writer" }
+
+	if got := servedSeats(t, company, held, "/chart/seats?kind=human",
+		http.StatusOK); !slices.Equal(got, []string{"designer", "writer"}) {
+		t.Errorf("kind=human listed %v, want designer and writer", got)
+	}
+	if got := servedSeats(t, company, held, "/chart/seats?kind=human&unheld=true",
+		http.StatusOK); !slices.Equal(got, []string{"designer"}) {
+		t.Errorf("kind=human&unheld=true listed %v, want only designer", got)
+	}
+	// AND A NODE THAT CANNOT READ THE DIRECTORY REFUSES THE FILTER rather
+	// than applying it to an empty one, which would list every human seat.
+	servedSeats(t, company, nil, "/chart/seats?unheld=true",
+		http.StatusServiceUnavailable)
+}
+
+// THE UNHELD FILTER ASKS A RENAMED SEAT BY ITS IDENTITY.
+//
+// A binding names the seat by the handle it was created under (ADR-0020), so
+// the directory holds `cto` for a seat now called `chief-tech`. The report
+// asked by that identity; the filter asked by the current handle, so a renamed
+// seat somebody holds was listed as one nobody does — an operator sent to
+// invite a person who is already signed in.
+func TestTheUnheldFilterAsksARenamedSeatByItsIdentity(t *testing.T) {
+	t.Parallel()
+	company := chart.Chart{Seats: []chart.Seat{
+		{Handle: "chief-tech", OriginHandle: "cto", Kind: chart.SeatHuman,
+			FormerHandles: []string{"cto"}},
+		{Handle: "designer", Kind: chart.SeatHuman},
+	}}
+	held := func(seat string) bool { return seat == "cto" }
+
+	if got := servedSeats(t, company, held, "/chart/seats?unheld=true",
+		http.StatusOK); !slices.Equal(got, []string{"designer"}) {
+		t.Errorf("the unheld filter listed %v, want only designer — "+
+			"chief-tech is held under its identity cto", got)
+	}
+}
+
 // AND ASKING FOR IT WITHOUT THE GRANT IS STILL STRIPPED, NOT REFUSED.
 //
 // The rows a caller asked for are rows they may read; a 403 over a field they
