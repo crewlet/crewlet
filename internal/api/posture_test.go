@@ -98,8 +98,24 @@ func TestThePostureMatrix(t *testing.T) {
 	sources := queries.Sources{Company: active(t), Coord: coordmemory.New()}
 	store := postureSecrets(t)
 	machine := postureTokens(t)
+	// A SESSION COOKIE IS THE THIRD CREDENTIAL SHAPE, through the guard's
+	// real session arm over rows this fixture states: the reader a person
+	// signed in with `state:read` is, and a person holding every grant
+	// whose proof of who they are is two hours old — past `step_up`, so
+	// every write the deployment's controls and its credentials take must
+	// ask them to confirm, while every read serves them.
+	//
+	// EACH PROOF IS DATED ON THE WALL CLOCK, because that is the clock the
+	// route's step-up check reads (internal/authz's router decides at
+	// time.Now()): dated on this suite's fixed clock, months behind it, the
+	// fresh proof would read as stale too and the stale column would pass
+	// for a reason other than its proof's age.
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	cookies := newCookieArm(t, &b)
+	reader := cookies.person(t, []iam.Grant{iam.GrantStateRead}, time.Now())
+	stale := cookies.person(t, iam.AllGrants, time.Now().Add(-2*time.Hour))
 	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources,
-		Secrets: store, Tokens: machine.arm})
+		Secrets: store, Tokens: machine.arm, Sessions: cookies.arm})
 	devApp := newApp(t, api.Options{
 		Bootstrap: &b, DevPrincipal: dev, Sources: sources, Secrets: store,
 	})
@@ -114,56 +130,66 @@ func TestThePostureMatrix(t *testing.T) {
 	}
 
 	// The credential shapes, in the order every row states them. A
-	// session is deliberately absent: no route in this fixture mints one,
-	// so a column for it would assert a shape nothing here can produce.
-	// A MACHINE TOKEN is here, read through the guard's real arm from
-	// rows this fixture holds — which is the shape `crewlet iam token`
-	// hands a pipeline as CREWLET_API_TOKEN.
+	// MACHINE TOKEN is here, read through the guard's real arm from rows
+	// this fixture holds — which is the shape `crewlet iam token` hands a
+	// pipeline as CREWLET_API_TOKEN — and so is a SESSION COOKIE, the shape
+	// a signed-in browser presents, whose writes carry the `Origin` a
+	// browser always sends.
 	type shape struct {
 		name   string
 		app    *api.App
 		header string
+		cookie *http.Cookie
 	}
 	shapes := [...]shape{
-		{"nothing at all", plain, ""},
+		{"nothing at all", plain, "", nil},
 		// A CREDENTIAL THAT IS PRESENT AND WRONG IS NOT ANONYMOUS:
 		// sending one says you meant to be somebody, and quietly
 		// serving you as nobody is how a revoked token goes on
 		// appearing to work.
-		{"a credential this node refuses", plain, "Bearer not-one-of-the-five"},
+		{"a credential this node refuses", plain, "Bearer not-one-of-the-five", nil},
 		// THE NARROW TOKEN IS THE READER `allow_anonymous_read` was
 		// replaced by.
-		{"a Tier A token carrying state:read alone", plain, "Bearer " + narrow},
+		{"a Tier A token carrying state:read alone", plain, "Bearer " + narrow, nil},
 		// RESOLVED AND ABLE TO READ NONE OF THE COMPANY'S STATE.
-		{"a Tier A token carrying config:read alone", plain, "Bearer " + blind},
+		{"a Tier A token carrying config:read alone", plain, "Bearer " + blind, nil},
 		// THE MOST AUTHORITY A CALLER CAN HAVE AND STILL BE REFUSED the
 		// deployment's controls, which is what makes each refusal about
 		// the rule rather than about a caller who holds nothing.
-		{"a Tier A token carrying every grant but fleet:operate", plain, "Bearer " + notFleet},
+		{"a Tier A token carrying every grant but fleet:operate", plain, "Bearer " + notFleet, nil},
 		// AND THE OPPOSITE: an SRE who runs the deployment and reads
 		// nothing of the company's.
-		{"a Tier A token carrying fleet:operate alone", plain, "Bearer " + fleetOnly},
-		{"a Tier A token carrying every grant", plain, "Bearer " + wide},
+		{"a Tier A token carrying fleet:operate alone", plain, "Bearer " + fleetOnly, nil},
+		{"a Tier A token carrying every grant", plain, "Bearer " + wide, nil},
 		// THE DEVELOPMENT PRINCIPAL carries the deployment's ceiling and
 		// no more — which here is everything, because this fixture's
 		// ceiling is. `api.auth.disabled` granted everything REGARDLESS,
 		// which is the difference.
-		{"no credential, on a -dev-principal node", devApp, ""},
+		{"no credential, on a -dev-principal node", devApp, "", nil},
 		// AND A WRONG CREDENTIAL IS STILL WRONG THERE. The development
 		// principal covers an ABSENT credential only, or it would hide
 		// the typo somebody is about to spend an afternoon on.
-		{"a refused credential, on a -dev-principal node", devApp, "Bearer not-one-of-the-five"},
+		{"a refused credential, on a -dev-principal node", devApp, "Bearer not-one-of-the-five", nil},
 		// A PERSONAL ACCESS TOKEN MINTED CARRYING state:read, whose
 		// owner holds every grant: it reaches what the TOKEN carries,
 		// never what its owner could.
-		{"a personal access token carrying state:read", plain, "Bearer " + machine.pat},
+		{"a personal access token carrying state:read", plain, "Bearer " + machine.pat, nil},
 		// A SERVICE ACCOUNT'S TOKEN, a machine carrying fleet:operate:
 		// the SRE's column, reached through a directory row rather than
 		// the configuration file.
-		{"a service account's token carrying fleet:operate", plain, "Bearer " + machine.service},
+		{"a service account's token carrying fleet:operate", plain, "Bearer " + machine.service, nil},
 		// AND A REVOKED ONE is a credential this node refuses, on every
 		// guarded route — never the owner, and never a 503.
-		{"a revoked personal access token", plain, "Bearer " + machine.revoked},
+		{"a revoked personal access token", plain, "Bearer " + machine.revoked, nil},
+		// A PERSON SIGNED IN HOLDING state:read, proved a moment ago:
+		// the Tier A reader's column, reached through a cookie.
+		{"a person's session carrying state:read", plain, "", reader},
+		// A PERSON HOLDING EVERY GRANT WHOSE PROOF IS TWO HOURS OLD:
+		// every read serves them, and every write that operates the
+		// deployment or holds its credentials asks them to confirm who
+		// they are first — `403 step_up_required`, never the grant's
+		// refusal, because they hold the grant.
+		{"a person's session carrying every grant, proved two hours ago", plain, "", stale},
 	}
 
 	const (
@@ -174,6 +200,11 @@ func TestThePostureMatrix(t *testing.T) {
 		absent = http.StatusNotFound
 		down   = http.StatusServiceUnavailable
 		broken = http.StatusInternalServerError
+		// stepUp is a 403 that says `step_up_required`: the caller may
+		// take the verb and has not proved who they are recently enough.
+		// Its own cell, because a 403 for a grant the caller lacks and a
+		// 403 for a proof that went stale are opposite fixes.
+		stepUp = 1000 + http.StatusForbidden
 	)
 	// The routes, each named by what reaching it discloses or does rather
 	// than by its grant — so a row that moves to a different grant still
@@ -193,67 +224,67 @@ func TestThePostureMatrix(t *testing.T) {
 		want [len(shapes)]int
 	}{
 		{"the exempt probe", "GET", "/health", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the dashboard shell", "GET", "/dashboard", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the company's working state", "GET", "/query/stream", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
 		{"an agent's transcripts", "GET", "/query/events", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
 		{"the map of what is not configured", "GET", "/query/integrations", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
 		{"the deployment's own shape", "GET", "/query/fleet", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, ok}},
 		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
 		// kind takes on the socket rather than by being resolved at all.
 		{"the roster mirror", "GET", "/agents", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
 		{"the whole snapshot", "GET", "/stream/snapshot", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
 
 		// --- the deployment's own controls: fleet:operate ------------ //
 		{"clearing a spend ceiling", "POST", "/budgets/reset", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		{"copying the node's durable state", "POST", "/backup?dir=/srv/posture", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 404: this fixture runs no domain log, so the
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
 			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath, forbd, stepUp}},
 		// ADMITTED AS A 503: this fixture runs no tracker to write the
 		// gate with.
 		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath, forbd, stepUp}},
 		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath, forbd, stepUp}},
 		// ADMITTED AS A 400: no target named.
 		{"resizing a stream", "POST", "/work/retention/capacity", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
 		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
 			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath, forbd, broken, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath, forbd, broken, unath, forbd, broken}},
 		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
 		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
 		{"the value a reanchor must echo", "GET",
 			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath, forbd, absent}},
 		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
 
 		// --- the company's credentials ------------------------------- //
 		{"which credentials the company holds", "GET", "/secrets", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
 		// THE VALUE TAKES config:read AND secrets:read, so the reader
 		// holding the first alone is refused the second.
 		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, stepUp}},
 		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, stepUp}},
 	} {
 		t.Run(row.method+" "+row.path, func(t *testing.T) {
 			t.Parallel()
@@ -266,12 +297,30 @@ func TestThePostureMatrix(t *testing.T) {
 				if s.header != "" {
 					req.Header.Set("Authorization", s.header)
 				}
+				if s.cookie != nil {
+					req.AddCookie(s.cookie)
+					if !auth.IsRead(row.method) {
+						req.Header.Set("Origin", b.API.ExternalBase())
+					}
+				}
 				rec := httptest.NewRecorder()
 				s.app.ServeHTTP(rec, req)
-				if rec.Code != row.want[i] {
+				want := row.want[i]
+				if want == stepUp {
+					want = http.StatusForbidden
+				}
+				if rec.Code != want {
 					t.Errorf("%s reaching %s (%s %s): %d, want %d\n%s",
 						s.name, row.name, row.method, row.path, rec.Code,
-						row.want[i], rec.Body.String())
+						want, rec.Body.String())
+					continue
+				}
+				if row.want[i] == stepUp && !strings.Contains(rec.Body.String(),
+					`"step_up_required"`) {
+					t.Errorf("%s reaching %s (%s %s): 403 %s, want "+
+						"step_up_required — the caller holds the grant and "+
+						"only its proof is stale", s.name, row.name,
+						row.method, row.path, rec.Body.String())
 				}
 			}
 		})
