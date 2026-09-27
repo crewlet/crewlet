@@ -1141,41 +1141,228 @@ export interface FleetNode {
   draining?: boolean;
   started_at?: string;
   posture?: string;
-  /**
-   * The share of the object store this node offers to hold, off its own
-   * presence. ABSENT on a node that holds none — a node without the `data`
-   * role — never a 0 that would read as a data node offering nothing.
-   */
-  object_weight?: number;
-}
-
-/** One member of the object store's placement map. */
-export interface FleetObjectMember {
-  node: string;
-  weight: number;
-  /** When the map's maintainer first saw it gone; absent while it is live. */
-  absent_since?: string;
 }
 
 /**
- * The object store's placement map, as `internal/api/queries/fleet.go`
+ * The object store's placement block on the fleet answer, and the gesture
+ * routes' answers — `queries.FleetObjects` and `api.ObjectsAnswer`.
+ *
+ * THE ENGINE'S OWN RENDERING IS THIS SCREEN'S FIXTURE: the fleet suite reads
+ * `internal/api/testdata/objects_answer.json`, which the Go renderers write,
+ * so a field renamed on either side fails a test until the other follows it.
+ */
+
+/** Which of the four things the stored map was when the fleet view read it. */
+export type ObjectMapState = "unavailable" | "no_map" | "unreadable" | "placed";
+
+/**
+ * A member's open run of absence, COUNTED IN THE MAINTAINER'S TICKS — never
+ * timed, so a clock that moved cannot stretch or skip it. `ticks` of
+ * `out_after_ticks` removes the member while no hold is in force; `present` of
+ * `clear_after_ticks` clears the run, and a member back for fewer keeps every
+ * tick it counted, which is what eventually removes one that flaps.
+ */
+export interface ObjectAbsence {
+  ticks: number;
+  out_after_ticks: number;
+  present: number;
+  clear_after_ticks: number;
+  /** When the run began, as the duty holder of the time read its clock — display only. */
+  since: string;
+  /** `absent` or `unhealthy`, kept a string so a newer engine's reason is shown. */
+  reason: string;
+  detail?: string;
+}
+
+/**
+ * A member's probation: a node the map removed for absence and has seen back,
+ * COUNTED IN TICKS as an absence is. It is read from and repaired from at once
+ * and placed on nothing until it has been present and healthy
+ * `placed_after_ticks` ticks in a row (`present` so far); a tick that misses it
+ * removes it again, however far it had got.
+ */
+export interface ObjectProbation {
+  present: number;
+  placed_after_ticks: number;
+  /** When the map removed it — display only — and the absence that did. */
+  removed_at: string;
+  reason: string;
+  detail?: string;
+}
+
+/** One member as the MAP alone describes it — what a gesture's answer carries. */
+export interface ObjectMapMember {
+  node: string;
+  weight: number;
+  /** Its value of the map's failure-domain label; absent when it has none. */
+  domain?: string;
+  /** Taken out: placed on nothing while it still serves what it holds. */
+  out: boolean;
+  out_by?: string;
+  out_reason?: string;
+  out_at?: string;
+  /**
+   * On probation, absent while it is not: placed on nothing, like an out
+   * member, but the maintainer's to end rather than an operator's — a member
+   * can be both.
+   */
+  probation?: ObjectProbation;
+  absence?: ObjectAbsence;
+}
+
+/** A member's store health, as its objects lease reports it. */
+export interface ObjectHealth {
+  /** `ok`, `nearfull`, `full` or `failed` — a string, so a newer state is shown. */
+  state: string;
+  detail?: string;
+  used_percent: number;
+}
+
+/**
+ * A member's last repair pass. `pending` is what the map places on it that it
+ * still did not hold when the pass ended — a zero that means anything only at
+ * the map's own `epoch`, and only when the pass `completed`.
+ */
+export interface ObjectRepair {
+  epoch: number;
+  completed: boolean;
+  placed: number;
+  held: number;
+  pending: number;
+  unreachable: number;
+  missing: number;
+  at?: string;
+}
+
+/**
+ * Where a member's scrub is in its cycle, and what this cycle found: chunks
+ * intact, `rotten` (no longer matching their names) and `unreadable` (bytes the
+ * disk would not return). The scrub steps past every one, so a count of
+ * unreadable chunks that keeps rising is a disk failing chunk by chunk rather
+ * than a scrub that stopped; `error` is what stopped it last, absent while it
+ * runs.
+ */
+export interface ObjectScrub {
+  cycle_started?: string;
+  /** How far through the slots this cycle is, 0..1. */
+  progress: number;
+  verified: number;
+  rotten: number;
+  unreadable: number;
+  error?: string;
+}
+
+/**
+ * One member as the fleet view renders it. `health`, `repair`, `scrub` and
+ * `strays` are ABSENT when the member reported none — never zero, which would
+ * read as a reading.
+ */
+export interface FleetObjectMember extends ObjectMapMember {
+  /** Its measured share of every group copy the stored map places, 0..100. */
+  share_percent: number;
+  /** Whether it holds a live objects lease — what the maintainer counts presence by. */
+  live: boolean;
+  health?: ObjectHealth;
+  repair?: ObjectRepair;
+  scrub?: ObjectScrub;
+  /**
+   * Referenced copies it holds beyond what the map places on it — shed by a
+   * member taken out, KEPT by one on probation for when it is placed on again.
+   */
+  strays?: number;
+}
+
+/**
+ * The map's last measurement of how evenly it spreads the copies over its
+ * members' weights. `deviation_percent` is the largest difference between any
+ * placeable member's copies and its target, as a percentage of that target;
+ * `converged` whether that is within `tolerance_percent`. `rounds` is how many
+ * layouts the balance that set the shares ran, at most 60 — fewer only on
+ * converging or where no share could move — and 0 when no balance ran: a
+ * split's placement, measured close enough to leave as it was. `epoch` is the
+ * placement measured, one behind the map's for the tick after a split.
+ */
+export interface ObjectBalance {
+  epoch: number;
+  deviation_percent: number;
+  tolerance_percent: number;
+  converged: boolean;
+  rounds: number;
+}
+
+/** An operator's hold: no member is removed however long it is gone, until `until`. */
+export interface ObjectHold {
+  until: string;
+  by: string;
+  reason?: string;
+  at: string;
+}
+
+/**
+ * A node the map removed for absence, remembers, and has not seen back. Seen
+ * present and healthy, it is a member again at once, on probation, and placed
+ * on after `placed_after_ticks` ticks in a row; gone `forget_after_ticks` ticks
+ * in a row (`gone` so far), it is forgotten and joins as any new node would.
+ */
+export interface ObjectRemoval {
+  node: string;
+  at: string;
+  reason: string;
+  detail?: string;
+  gone: number;
+  forget_after_ticks: number;
+  placed_after_ticks: number;
+}
+
+/** A placed map, every field present. */
+export interface PlacedObjects {
+  state: "placed";
+  generation: string;
+  epoch: number;
+  /** The copies the company asks for, and how many the map places — fewer while short. */
+  replicas: number;
+  copies: number;
+  /** How many placement groups the slots are divided into. */
+  pgs: number;
+  failure_domain?: string;
+  distinct_domains: number;
+  /** Fewer failure domains than copies: some groups keep two copies in one. */
+  domain_limited: boolean;
+  /** A hold in force now; absent when there is none or it has expired. */
+  hold?: ObjectHold;
+  /** Groups with a copy on a member that is absent or whose store has failed. */
+  degraded_groups: number;
+  /** Absent for a map nothing has measured — never a zero that reads as perfectly even. */
+  balance?: ObjectBalance;
+  members: FleetObjectMember[];
+  /** Removed and not seen back — a node back on probation is on its member row instead. */
+  removed: ObjectRemoval[];
+}
+
+/**
+ * The object store's placement map, as `internal/api/queries/objects.go`
  * reads it from the store every node reads it from.
  *
- * THREE STATES NAMED APART rather than folded into an empty member list: a
- * store that would not answer (`available: false`), a fleet with no map yet
- * (`placed: false`, where no upload can land), and a map a newer build wrote
- * that this one cannot read (`unreadable`).
+ * FOUR STATES NAMED APART rather than folded into an empty member list: a
+ * store that would not answer, a fleet with no map yet (where no upload can
+ * land), a map a newer build wrote that this one cannot read, and a map.
  */
-export interface FleetObjects {
-  available: boolean;
-  placed?: boolean;
-  unreadable?: boolean;
-  epoch?: number;
-  /** The replica count asked for. */
-  replicas?: number;
-  /** How many members hold each chunk now — fewer while the fleet is short. */
-  copies?: number;
-  members?: FleetObjectMember[];
+export type FleetObjects = { state: Exclude<ObjectMapState, "placed"> } | PlacedObjects;
+
+/**
+ * What a gesture on the placement map answered: whether the stored map now
+ * says what was asked, and the map as it stands.
+ */
+export interface ObjectsGestureAnswer {
+  /** False only when every attempt lost its race: nothing asked is in the map. */
+  landed: boolean;
+  epoch: number;
+  node?: string;
+  /** The member as the map now describes it; absent for a node it does not hold. */
+  member?: ObjectMapMember;
+  hold?: ObjectHold;
+  /** What to do next, where there is something — in no surface's vocabulary. */
+  hint?: string;
 }
 
 /**

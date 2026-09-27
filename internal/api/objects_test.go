@@ -20,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -684,5 +685,38 @@ func TestNoObjectsHintNamesACommandLineFlag(t *testing.T) {
 					name, flag, hint)
 			}
 		}
+	}
+}
+
+// EVERY HOLD LENGTH THE DASHBOARD OFFERS IS ONE THE ENGINE ACCEPTS, AND THE
+// LONGEST IS ITS CEILING.
+//
+// A length past upkeep.MaxHold is a choice the route answers `invalid_hold`
+// on every press; a list that stopped short of it hides the day-long hold a
+// long maintenance needs. The copy exists because the dashboard is its own
+// build — see internal/clientsource — so this side holds it.
+func TestTheDashboardOffersHoldLengthsTheEngineAccepts(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Declaration(clientsource.Tree(t),
+		`export const HOLD_LENGTHS = \[([^\]]*)\] as const;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lengths := clientsource.Strings(body)
+	if len(lengths) == 0 {
+		t.Fatal("the dashboard declares no hold lengths at all, so this gate certifies nothing")
+	}
+	longest := time.Duration(0)
+	for _, l := range lengths {
+		d, err := time.ParseDuration(l)
+		if err != nil || d <= 0 || d > upkeep.MaxHold {
+			t.Errorf("the dashboard offers a hold of %q, which the engine refuses: it "+
+				"takes more than nothing and at most %s", l, upkeep.MaxHold)
+		}
+		longest = max(longest, d)
+	}
+	if longest != upkeep.MaxHold {
+		t.Errorf("the dashboard's longest hold is %s and the engine's ceiling %s",
+			longest, upkeep.MaxHold)
 	}
 }
