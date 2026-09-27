@@ -524,3 +524,39 @@ func TestAUnitRemovalNeedsNoDirectory(t *testing.T) {
 			"business asking: %v", err)
 	}
 }
+
+// A MOVE DOES NOT CLEAR THE UNIT'S LEAD.
+//
+// The published edge is FULL POST-STATE for the unit's structure, and a move
+// states a parent and no lead — so an edge built from the operation alone
+// carries an empty lead, and the apply takes the unit's authored lead away as
+// a side effect of moving it: `chart_leads` loses the row, every escalation
+// from the team reaches the parent's lead instead, and nothing says why. The
+// lead comes from the working copy, as a set_lead's parent does.
+func TestMovingAUnitKeepsItsLead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	h.must(place("op-seed",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "product"}},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+			Parent: "engineering", Lead: "sarah-chen"}))
+
+	edges, _, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		op(chart.OpMove, chart.KindUnit, "platform", "product"),
+	}})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(edges) != 1 || edges[0].Parent != "product" || edges[0].Lead != "sarah-chen" {
+		t.Fatalf("the move published %+v, want platform under product and still "+
+			"led by sarah-chen — an edge is full post-state, so a lead read from "+
+			"the operation rather than from the chart is an empty one", edges)
+	}
+	h.must(place("op-move", edges...))
+	if got := h.column(`SELECT handle FROM chart_leads WHERE unit_key = 'platform'`); !slices.Equal(
+		got, []string{"sarah-chen"}) {
+		t.Errorf("after the move the unit's lead edge is %v, want [sarah-chen]", got)
+	}
+}

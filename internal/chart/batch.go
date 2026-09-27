@@ -292,6 +292,11 @@ type working struct {
 	// walk can tell a unit's parent from a seat's.
 	kinds map[string]ObjectKind
 
+	// leads maps a unit's composed reference to its AUTHORED lead, empty
+	// where it inherits one, so an edge the batch publishes for a unit
+	// carries the lead it has rather than the one the operation named.
+	leads map[string]string
+
 	// removed is what this batch has taken out, so a later operation on it
 	// is refused rather than applied against a row the applier will delete.
 	removed map[string]bool
@@ -372,17 +377,17 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 			edge := byObject[key]
 			edge.Object = ObjectRef{
 				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)}
-			switch op.Kind {
-			case OpSetLead:
-				edge.Lead = NormalizeKey(op.Lead)
-				// THE PARENT COMES FROM THE WORKING COPY, not from
-				// the operation: a set_lead states no parent, and
-				// an edge is FULL POST-STATE — so publishing a
-				// zero parent here would move the unit to the org
-				// root as a side effect of naming its lead.
-				edge.Parent = state.parents[key]
-			default:
-				edge.Parent = NormalizeKey(op.Parent)
+			// BOTH HALVES OF A UNIT'S PLACEMENT COME FROM THE WORKING
+			// COPY, whichever one the operation named: an edge is FULL
+			// POST-STATE, so a set_lead publishing the zero parent
+			// would move the unit to the org root as a side effect of
+			// naming its lead, and a move publishing the zero lead
+			// would take its authored lead away as a side effect of
+			// moving it. [working.apply] has already written what this
+			// operation changed into the copy.
+			edge.Parent = state.parents[key]
+			if op.Object.Kind == KindUnit {
+				edge.Lead = state.leads[key]
 			}
 			if _, held := byObject[key]; !held {
 				order = append(order, key)
@@ -536,7 +541,11 @@ func (w *working) apply(index int, op Operation) *RefusalError {
 		if op.Object.Kind != KindUnit {
 			return refuse(RuleUnknownKind, "only a unit has a lead")
 		}
-		return w.checkPresent(refuse, key, id)
+		if err := w.checkPresent(refuse, key, id); err != nil {
+			return err
+		}
+		w.leads[key] = NormalizeKey(op.Lead)
+		return nil
 
 	case OpRemoveObject:
 		if err := w.checkPresent(refuse, key, id); err != nil {
@@ -551,6 +560,7 @@ func (w *working) apply(index int, op Operation) *RefusalError {
 			}
 		}
 		delete(w.parents, key)
+		delete(w.leads, key)
 		w.removed[key] = true
 		return nil
 	}
@@ -700,15 +710,16 @@ func readWorking(ctx context.Context, tx *sql.Tx) (*working, error) {
 	state := &working{
 		parents:    map[string]string{},
 		kinds:      map[string]ObjectKind{},
+		leads:      map[string]string{},
 		removed:    map[string]bool{},
 		identities: map[string]string{},
 	}
 	if err := scanInto(ctx, tx,
-		`SELECT key, parent_key FROM chart_units`, KindUnit, state); err != nil {
+		`SELECT key, parent_key, lead FROM chart_units`, KindUnit, state); err != nil {
 		return nil, err
 	}
 	if err := scanInto(ctx, tx,
-		`SELECT handle, unit_key FROM chart_seats`, KindSeat, state); err != nil {
+		`SELECT handle, unit_key, '' FROM chart_seats`, KindSeat, state); err != nil {
 		return nil, err
 	}
 	// THE RENAMED OBJECTS' IDENTITIES, because a create onto one would be a
@@ -789,13 +800,16 @@ func scanInto(ctx context.Context, tx *sql.Tx, query string, kind ObjectKind,
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, parent string
-		if err := rows.Scan(&id, &parent); err != nil {
+		var id, parent, lead string
+		if err := rows.Scan(&id, &parent, &lead); err != nil {
 			return fmt.Errorf("chart: read a %s row: %w", kind, err)
 		}
 		key := refKey(ObjectRef{Kind: kind, ID: id})
 		state.parents[key] = parent
 		state.kinds[key] = kind
+		if kind == KindUnit && lead != "" {
+			state.leads[key] = lead
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("chart: read the %s structure: %w", kind, err)
