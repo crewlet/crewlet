@@ -30,12 +30,23 @@ type stepUpRig struct {
 
 func newStepUpRig(t *testing.T, row session.Row) *stepUpRig {
 	t.Helper()
+	return newStepUpRigWith(t, row, nil, false)
+}
+
+// newStepUpRigWith is [newStepUpRig] with further fakes replaced, and — where
+// restricted — a presented session that may only enrol a second factor,
+// marked as a sign-in marks one: on its bearer and on its row.
+func newStepUpRigWith(t *testing.T, row session.Row,
+	replace func(*authapi.Options), restricted bool) *stepUpRig {
+
+	t.Helper()
 	absolute := clock.Add(72 * time.Hour)
 	carried := []iam.Grant{iam.GrantWorkWrite}
 	identity := session.Identity{
 		Applied: ^uint64(0) >> 1, Generation: 2,
 		Session: session.LineageRow{Found: true, Epoch: 3,
-			ProvedAt: clock.Add(-2 * time.Hour), GroupGrants: carried},
+			ProvedAt: clock.Add(-2 * time.Hour), GroupGrants: carried,
+			EnrolmentOnly: restricted},
 		Person: session.PersonRow{Found: true, Epoch: 3,
 			Stage: iam.StageActive, Login: "jane.doe"},
 	}
@@ -44,6 +55,9 @@ func newStepUpRig(t *testing.T, row session.Row) *stepUpRig {
 	}
 	r := newSignInRigWith(t, func(o *authapi.Options) {
 		o.Sessions = rows{identity}
+		if replace != nil {
+			replace(o)
+		}
 	})
 	lineage := uuid.Must(uuid.NewV7())
 	millis := clock.Add(-2 * time.Hour).UnixMilli()
@@ -53,6 +67,7 @@ func newStepUpRig(t *testing.T, row session.Row) *stepUpRig {
 	cookie, err := fixtureSigner(t).Mint(session.Mint{
 		Lineage: lineage, Person: r.estate.person.ID, StartPosition: 1,
 		Epoch: 3, Generation: 2, AbsoluteExpiresAt: absolute,
+		EnrolmentOnly: restricted,
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

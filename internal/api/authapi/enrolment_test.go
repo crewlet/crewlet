@@ -281,42 +281,58 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 // ONLY A SIGN-IN THAT PROVED A PASSWORD AND NOTHING ELSE IS RESTRICTED.
 //
 // Every way this surface opens a session on a password — the sign-in, the
-// founding, an invitation's redemption — opens one that may only enrol where a
-// second factor is required and none was proved. A sign-in that PROVED one is
-// whole, and so is a provider's, whose second factor is the provider's own and
-// invisible here — asking for one on top would be a factor on top of a factor
-// the engine cannot see. Mutation: restrict on the deployment's setting alone
-// and the second-factor and provider rows are restricted; skip any of the
-// three password routes and its row is whole.
+// founding, an invitation's redemption, and a password step-up — opens one that
+// may only enrol where a second factor is required and none was proved, and
+// SAYS so in its answer's `status`, which is how a client learns to render the
+// enrolment rather than a broken first screen. The step-up matters most: it is
+// one of the four routes an enrolment-only session reaches, and it opens a
+// replacement — which, left whole, would turn a password alone into a whole
+// session in one request. A sign-in that PROVED a factor is whole, and so is a
+// provider's, whose second factor is the provider's own and invisible here —
+// asking for one on top would be a factor on top of a factor the engine cannot
+// see. Mutation: restrict on the deployment's setting alone and the
+// second-factor and provider rows are restricted; skip any of the four
+// password routes — `if how.stepUp { return false }` in enrolmentOnly
+// included — and its row is whole; answer `signed_in` whatever was opened and
+// the restricted rows' statuses are wrong.
 func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 	t.Parallel()
 	required := func(o *authapi.Options) { requiring(o, iam.SecondFactorRequired) }
 	for _, tc := range []struct {
-		name       string
-		opened     func(t *testing.T) []iamdomain.SessionStart
+		name string
+		// opened is every session the gesture opened and the `status`
+		// its answer carried — nil for an answer that is a redirect.
+		opened     func(t *testing.T) ([]iamdomain.SessionStart, any)
 		restricted bool
 	}{
-		{"a password sign-in", func(t *testing.T) []iamdomain.SessionStart {
+		{"a password sign-in", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			r := newSignInRigWith(t, required)
 			passwordOnly(r.estate)
-			r.login(t, "jane.doe", password, "")
-			return r.estate.starts
+			rec := r.signIn(t, "jane.doe", password, "")
+			return r.estate.starts, statusOf(rec)
 		}, true},
-		{"a sign-in that proved an app code", func(t *testing.T) []iamdomain.SessionStart {
+		{"a sign-in that proved an app code", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			r := newSignInRigWith(t, required)
-			r.login(t, "jane.doe", password, appCode(t, clock))
-			return r.estate.starts
+			rec := r.signIn(t, "jane.doe", password, appCode(t, clock))
+			return r.estate.starts, statusOf(rec)
 		}, false},
-		{"the founding", func(t *testing.T) []iamdomain.SessionStart {
+		{"a password step-up from an enrolment-only session",
+			func(t *testing.T) ([]iamdomain.SessionStart, any) {
+				r := newStepUpRigWith(t, session.RowValid, required, true)
+				passwordOnly(r.estate)
+				rec := r.stepUp(t)
+				return r.estate.starts, statusOf(rec)
+			}, true},
+		{"the founding", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			writer := &recordingWriter{}
 			mux := bootstrapSurfaceWith(t, []iamdomain.BootstrapCode{{
 				ID: codeID(), MintedBy: "node-a", ExpiresAt: clock.Add(time.Hour),
 				MintedAt: clock.Add(-time.Minute),
 			}}, writer, true, required)
-			bootstrapOnce(t, mux, "founder.one")
-			return writer.opened()
+			rec := postBootstrap(t, mux, theCode, "founder.one")
+			return writer.opened(), statusOf(rec)
 		}, true},
-		{"an invitation's redemption", func(t *testing.T) []iamdomain.SessionStart {
+		{"an invitation's redemption", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			writer := &recordingWriter{}
 			mux := http.NewServeMux()
 			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
@@ -325,12 +341,12 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 				o.Sealer = stubSealer{address: "dana@example.com"}
 				o.Writer = writer
 			}).Routes(mux)
-			postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
+			rec := postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
 				"secret": invitationSecret, "login": "dana.sre", "name": "Dana",
 				"password": "a-perfectly-fine-passphrase"})
-			return writer.opened()
+			return writer.opened(), statusOf(rec)
 		}, true},
-		{"a provider sign-in", func(t *testing.T) []iamdomain.SessionStart {
+		{"a provider sign-in", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			idp := newProvider(t)
 			b := bootstrapFor(t)
 			b.API.Auth.Backend = config.AuthBackendOIDC
@@ -340,18 +356,30 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 				required(o)
 				o.Writer = recorder
 			})
-			return recorder.opened()
+			// A REDIRECT, which a browser follows rather than reads: the
+			// session it opened is what says whether it is whole.
+			return recorder.opened(), nil
 		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			starts := tc.opened(t)
+			starts, status := tc.opened(t)
 			if len(starts) != 1 {
 				t.Fatalf("opened %d sessions, want 1", len(starts))
 			}
 			if got := starts[0].EnrolmentOnly; got != tc.restricted {
 				t.Errorf("the session opened enrolment-only %v, want %v", got,
 					tc.restricted)
+			}
+			if status == nil {
+				return
+			}
+			want := "signed_in"
+			if tc.restricted {
+				want = string(httpjson.CodeSecondFactorEnrolmentRequired)
+			}
+			if status != want {
+				t.Errorf("the answer's status is %v, want %s", status, want)
 			}
 		})
 	}
