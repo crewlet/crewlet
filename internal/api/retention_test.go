@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,7 +39,15 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 // PER-STREAM GENERATIONS, because that is the estate a reanchor produces: the
 // verb names one stream, so a fleet that has re-anchored its tracker and not
 // its pages log stands at two different generations at once.
+//
+// SAFE FOR CONCURRENT REQUESTS, because every app a fixture builds without one
+// is handed a fresh one of these and a case's parallel subtests share that app:
+// the posture matrix's rows reach the acknowledgement and the reanchor read at
+// once, and each writes what it was asked. A case reads the fields after its
+// own synchronous request has answered.
 type fakeStateLog struct {
+	mu sync.Mutex
+
 	generations map[string]uint32
 	asked       string
 
@@ -54,6 +63,8 @@ type fakeStateLog struct {
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 	time.Time, uint32, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
@@ -64,6 +75,8 @@ func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 }
 
 func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reanchor = req
 	return 0, errors.New("not exercised here")
 }
@@ -71,6 +84,8 @@ func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest) (
 	coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.capacity = req
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
@@ -95,6 +110,8 @@ func (g *fakeNodeGate) ReadmitNode(_ context.Context, _, _ string, by iam.Actor)
 func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor) (
 	coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.abandoned = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
@@ -102,6 +119,8 @@ func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor
 func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 	by iam.Actor) (coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.excluded = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
