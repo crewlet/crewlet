@@ -268,15 +268,13 @@ func (b txBook) holder(ctx context.Context, kind ObjectKind, key string) (
 		if unit, found, err := readUnit(ctx, b.tx, key); err != nil || found {
 			return unit.Key, heldAs(found, heldAsKey), err
 		}
-		unit, match, err := byRetiredAddress(ctx, b.tx, "chart_units", key,
-			DecodeUnit, Unit.Origin)
+		unit, match, err := byRetiredAddress(ctx, b.tx, unitRows, key, Unit.Origin)
 		return unit.Key, retiredHolding(match), err
 	case KindSeat:
 		if seat, found, err := readSeat(ctx, b.tx, key); err != nil || found {
 			return seat.Handle, heldAs(found, heldAsKey), err
 		}
-		seat, match, err := byRetiredAddress(ctx, b.tx, "chart_seats", key,
-			DecodeSeat, Seat.Origin)
+		seat, match, err := byRetiredAddress(ctx, b.tx, seatRows, key, Seat.Origin)
 		return seat.Handle, retiredHolding(match), err
 	}
 	return "", heldByNothing, nil

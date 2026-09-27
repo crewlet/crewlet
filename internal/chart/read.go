@@ -389,8 +389,7 @@ func resolveUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error
 	if err != nil || found {
 		return unit, found, err
 	}
-	unit, match, err := byRetiredAddress(ctx, tx, "chart_units", key,
-		DecodeUnit, Unit.Origin)
+	unit, match, err := byRetiredAddress(ctx, tx, unitRows, key, Unit.Origin)
 	return unit, match != retiredNone, err
 }
 
@@ -400,8 +399,7 @@ func resolveSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, er
 	if err != nil || found {
 		return seat, found, err
 	}
-	seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", handle,
-		DecodeSeat, Seat.Origin)
+	seat, match, err := byRetiredAddress(ctx, tx, seatRows, handle, Seat.Origin)
 	return seat, match != retiredNone, err
 }
 
@@ -421,8 +419,7 @@ func seatByIdentity(ctx context.Context, tx *sql.Tx, identity string) (Seat, boo
 	if found && seat.Origin() == identity {
 		return seat, true, nil
 	}
-	seat, match, err := byRetiredAddress(ctx, tx, "chart_seats", identity,
-		DecodeSeat, Seat.Origin)
+	seat, match, err := byRetiredAddress(ctx, tx, seatRows, identity, Seat.Origin)
 	return seat, match == retiredOrigin, err
 }
 
@@ -460,25 +457,25 @@ const (
 // object IS and the alias only what somebody once called it — and nothing
 // this build writes can produce the pair any more, since a rename onto an
 // address that resolves is refused ([refuseCreate]).
-func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table, key string,
-	decode func([]byte) (T, error), origin func(T) string) (T, retiredMatch, error) {
+func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table objectRows[T],
+	key string, origin func(T) string) (T, retiredMatch, error) {
 
 	var zero T
 	rows, err := tx.QueryContext(ctx,
-		`SELECT former_keys_json, document FROM `+table+
+		`SELECT former_keys_json, `+table.columns+` FROM `+table.name+
 			` WHERE former_keys_json <> '[]'`)
 	if err != nil {
 		return zero, retiredNone, fmt.Errorf("chart: scan %s for a retired "+
-			"address %q: %w", table, key, err)
+			"address %q: %w", table.name, key, err)
 	}
 	defer func() { _ = rows.Close() }()
 	alias, aliased := zero, false
 	for rows.Next() {
 		var raw string
-		var document []byte
-		if err := rows.Scan(&raw, &document); err != nil {
+		dest, decode := table.row()
+		if err := rows.Scan(append([]any{&raw}, dest...)...); err != nil {
 			return zero, retiredNone, fmt.Errorf("chart: read a %s row: %w",
-				table, err)
+				table.name, err)
 		}
 		var former []string
 		if err := json.Unmarshal([]byte(raw), &former); err != nil {
@@ -489,7 +486,7 @@ func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table, key string,
 			continue
 		}
 		named := slices.Contains(former, key)
-		out, err := decode(document)
+		out, err := decode()
 		if err != nil {
 			if named {
 				// THE ROW DOES ANSWER TO IT, so an unreadable
@@ -507,7 +504,7 @@ func byRetiredAddress[T any](ctx context.Context, tx *sql.Tx, table, key string,
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return zero, retiredNone, fmt.Errorf("chart: scan %s: %w", table, err)
+		return zero, retiredNone, fmt.Errorf("chart: scan %s: %w", table.name, err)
 	}
 	if aliased {
 		return alias, retiredAlias, nil
@@ -523,9 +520,7 @@ func readUnits(ctx context.Context, tx *sql.Tx) ([]Unit, error) {
 
 func readUnitsWhere(ctx context.Context, tx *sql.Tx, where string, args ...any) (
 	[]Unit, error) {
-	return readDocuments(ctx, tx,
-		`SELECT document FROM chart_units WHERE `+where+` ORDER BY key`,
-		args, DecodeUnit)
+	return readRowsWhere(ctx, tx, unitRows, where, args)
 }
 
 func readSeats(ctx context.Context, tx *sql.Tx) ([]Seat, error) {
@@ -534,44 +529,102 @@ func readSeats(ctx context.Context, tx *sql.Tx) ([]Seat, error) {
 
 func readSeatsWhere(ctx context.Context, tx *sql.Tx, where string, args ...any) (
 	[]Seat, error) {
-
-	query := `SELECT document, version FROM chart_seats WHERE ` + where +
-		` ORDER BY handle`
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("chart: read %q: %w", query, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Seat
-	for rows.Next() {
-		var document []byte
-		var version int64
-		if err := rows.Scan(&document, &version); err != nil {
-			return nil, fmt.Errorf("chart: read a seat row: %w", err)
-		}
-		seat, err := DecodeSeat(document)
-		if err != nil {
-			return nil, err
-		}
-		seat.HasContent = version > 0
-		out = append(out, seat)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("chart: read %q: %w", query, err)
-	}
-	return out, nil
+	return readRowsWhere(ctx, tx, seatRows, where, args)
 }
 
-// readDocuments decodes one table's stored documents, in the query's own order.
+// objectRows is how one object table's rows are read: the columns a read
+// selects and how one row of them becomes the object.
+//
+// ONE PER TABLE, and every reader of a row goes through it — the direct read
+// ([readRow]), the listing ([readRowsWhere]) and the scan for a retired address
+// ([byRetiredAddress]) — because a row is more than its document: a document an
+// earlier build wrote may not carry what a column beside it does, and a reader
+// that decoded the document alone answered a different object from one that
+// read the row.
+type objectRows[T any] struct {
+	// name is the table.
+	name string
+
+	// key is the column the table's address is in.
+	key string
+
+	// columns is the select list, in the order row's destinations take it.
+	columns string
+
+	// row is one row's scan destinations and the decode that reads them
+	// once the scan has filled them.
+	row func() (dest []any, decode func() (T, error))
+}
+
+// unitRows reads a unit: its document is the whole of it.
+var unitRows = objectRows[Unit]{
+	name:    "chart_units",
+	key:     "key",
+	columns: "document",
+	row: func() ([]any, func() (Unit, error)) {
+		var document []byte
+		return []any{&document}, func() (Unit, error) { return DecodeUnit(document) }
+	},
+}
+
+// seatRows reads a seat: its document, its `kind` column where the document
+// names none ([Seat.Kind]), and whether a content record has filled it
+// ([Seat.HasContent]).
+var seatRows = objectRows[Seat]{
+	name:    "chart_seats",
+	key:     "handle",
+	columns: "document, kind, version",
+	row: func() ([]any, func() (Seat, error)) {
+		var document []byte
+		var kind string
+		var version int64
+		return []any{&document, &kind, &version}, func() (Seat, error) {
+			seat, err := DecodeSeat(document)
+			if err != nil {
+				return Seat{}, err
+			}
+			if seat.Kind == "" {
+				seat.Kind = SeatKind(kind)
+			}
+			seat.HasContent = version > 0
+			return seat, nil
+		}
+	},
+}
+
+// readRow reads the one object answering to key as its live address.
+func readRow[T any](ctx context.Context, tx *sql.Tx, table objectRows[T], key string) (
+	T, bool, error) {
+
+	var zero T
+	dest, decode := table.row()
+	err := tx.QueryRowContext(ctx, `SELECT `+table.columns+` FROM `+table.name+
+		` WHERE `+table.key+` = ?`, key).Scan(dest...)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return zero, false, nil
+	case err != nil:
+		return zero, false, fmt.Errorf("chart: read %s %s: %w", table.name, key, err)
+	}
+	out, err := decode()
+	if err != nil {
+		return zero, false, fmt.Errorf("chart: decode %s %s: %w", table.name, key, err)
+	}
+	return out, true, nil
+}
+
+// readRowsWhere reads one table's objects, in the order of their addresses.
 //
 // ORDERED BY THE ADDRESS in every caller, not because a surface needs it but
 // because an unordered read of a set is one whose answer depends on the
 // planner: two nodes that hold identical rows would hand a caller two
 // different lists, and nothing above them could tell that from a chart that
 // had actually changed.
-func readDocuments[T any](ctx context.Context, tx *sql.Tx, query string,
-	args []any, decode func([]byte) (T, error)) ([]T, error) {
+func readRowsWhere[T any](ctx context.Context, tx *sql.Tx, table objectRows[T],
+	where string, args []any) ([]T, error) {
 
+	query := `SELECT ` + table.columns + ` FROM ` + table.name + ` WHERE ` +
+		where + ` ORDER BY ` + table.key
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("chart: read %q: %w", query, err)
@@ -579,11 +632,11 @@ func readDocuments[T any](ctx context.Context, tx *sql.Tx, query string,
 	defer func() { _ = rows.Close() }()
 	var out []T
 	for rows.Next() {
-		var document []byte
-		if err := rows.Scan(&document); err != nil {
-			return nil, fmt.Errorf("chart: read a row: %w", err)
+		dest, decode := table.row()
+		if err := rows.Scan(dest...); err != nil {
+			return nil, fmt.Errorf("chart: read a %s row: %w", table.name, err)
 		}
-		value, err := decode(document)
+		value, err := decode()
 		if err != nil {
 			return nil, err
 		}

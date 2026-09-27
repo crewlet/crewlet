@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -498,14 +497,11 @@ func restampUnit(ctx context.Context, tx *sql.Tx, at applyContext, unit Unit) (i
 
 // restampSeat is [restampUnit] for a seat.
 //
-// A SEAT WHOSE DOCUMENT NAMES NO KIND IS AN AGENT'S, because that is what its
-// column says: a stub an earlier build placed carried an empty kind in its
-// document and `agent` in its column, and now that this statement writes the
-// column from the document, reading the empty one through would blank it.
+// IT WRITES THE `kind` COLUMN FROM THE DOCUMENT, which is safe because every
+// seat it is handed was read through [seatRows]: a stub an earlier build placed
+// names no kind in its document, and the reader has already taken the
+// column's.
 func restampSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (int, error) {
-	if seat.Kind == "" {
-		seat.Kind = SeatAgent
-	}
 	document, err := EncodeSeat(seat)
 	if err != nil {
 		return 0, err
@@ -655,43 +651,14 @@ func retire(keys []string, former string) []string {
 
 // --- the rows -------------------------------------------------------------- //
 
-// readUnit reads one unit's stored document out of this transaction.
+// readUnit reads one unit's row out of this transaction.
 func readUnit(ctx context.Context, tx *sql.Tx, key string) (Unit, bool, error) {
-	var document []byte
-	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM chart_units WHERE key = ?`, key).Scan(&document)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return Unit{}, false, nil
-	case err != nil:
-		return Unit{}, false, fmt.Errorf("chart: read unit %s: %w", key, err)
-	}
-	unit, err := DecodeUnit(document)
-	if err != nil {
-		return Unit{}, false, fmt.Errorf("chart: decode unit %s: %w", key, err)
-	}
-	return unit, true, nil
+	return readRow(ctx, tx, unitRows, key)
 }
 
-// readSeat reads one seat's stored document out of this transaction.
+// readSeat reads one seat's row out of this transaction, through [seatRows].
 func readSeat(ctx context.Context, tx *sql.Tx, handle string) (Seat, bool, error) {
-	var document []byte
-	var version int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, version FROM chart_seats WHERE handle = ?`, handle).
-		Scan(&document, &version)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return Seat{}, false, nil
-	case err != nil:
-		return Seat{}, false, fmt.Errorf("chart: read seat %s: %w", handle, err)
-	}
-	seat, err := DecodeSeat(document)
-	if err != nil {
-		return Seat{}, false, fmt.Errorf("chart: decode seat %s: %w", handle, err)
-	}
-	seat.HasContent = version > 0
-	return seat, true, nil
+	return readRow(ctx, tx, seatRows, handle)
 }
 
 // writeUnit upserts one unit's row from its document.

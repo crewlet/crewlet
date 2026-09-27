@@ -1,6 +1,7 @@
 package chart_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"slices"
@@ -272,4 +273,101 @@ func TestAStubAnEarlierBuildPlacedKeepsItsKind(t *testing.T) {
 	if got := h.seat("ana").Kind; got != chart.SeatAgent {
 		t.Errorf("the stub's document says %q, want agent", got)
 	}
+}
+
+// earlierBuildStub drops the kind from a seat's document, which is the row an
+// earlier build placed: an empty kind in the document and `agent` in the
+// column beside it.
+func earlierBuildStub(t *testing.T, db interface {
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+}, handle string) {
+	t.Helper()
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE chart_seats SET document = json_remove(document, '$.kind')
+			 WHERE handle = ?`, handle)
+		return err
+	}); err != nil {
+		t.Fatalf("write the earlier build's document: %v", err)
+	}
+}
+
+// A STUB AN EARLIER BUILD PLACED IS FILLED BY A CONTENT RECORD, AS AN AGENT'S.
+//
+// Every reader of a seat row takes the `kind` column where the document names
+// none. A content apply read the document alone, so a version-2 content record
+// on such a stub wrote its empty kind back into the column — and a node that had
+// replayed the placement on a later build held `agent` in both, so the two
+// estates parted. The content write's own decide refused the seat outright,
+// validating the empty kind as "not a seat kind this build serves", so a seat an
+// earlier build placed could never be filled on a node that held it that way.
+func TestAStubAnEarlierBuildPlacedIsFilledAsAnAgents(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the apply", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		h.must(v1(place("op-stub", chart.Edge{
+			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"}})))
+		earlierBuildStub(t, h.db.Replicated(), "ana")
+
+		h.must(seatRecord("op-content", "ana", "", nil))
+		if got := h.one(`SELECT kind FROM chart_seats WHERE handle = 'ana'`); got != "agent" {
+			t.Errorf("the column says %q after a content record, want agent", got)
+		}
+		if got := h.seat("ana").Kind; got != chart.SeatAgent {
+			t.Errorf("the document says %q after a content record, want agent", got)
+		}
+	})
+
+	t.Run("the write", func(t *testing.T) {
+		t.Parallel()
+		r := newWriteRig(t)
+		r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "ana", ""))
+		earlierBuildStub(t, r.db.Replicated(), "ana")
+
+		if _, err := r.seat("op-content", chart.SeatContent{
+			Handle: "ana", Name: "Ana Lopez"}); err != nil {
+			t.Fatalf("a content write on a seat an earlier build placed was "+
+				"refused: %v", err)
+		}
+		if got := r.column(`SELECT kind FROM chart_seats WHERE handle = 'ana'`); !slices.Equal(
+			got, []string{"agent"}) {
+			t.Errorf("the column says %v after the write, want [agent]", got)
+		}
+		if got := r.mustSeat("ana"); got.Kind != chart.SeatAgent || got.Name != "Ana Lopez" {
+			t.Errorf("the seat reads kind %q named %q, want an agent's named "+
+				"Ana Lopez", got.Kind, got.Name)
+		}
+	})
+
+	// AND BY A RETIRED ADDRESS, which reads the row through the scan for one
+	// rather than the direct lookup: the seat the identity directory resolves
+	// a binding through is the same seat the chart's own read answers.
+	t.Run("a retired address", func(t *testing.T) {
+		t.Parallel()
+		r := newWriteRig(t)
+		r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "ana", ""))
+		r.applySeatRekey("op-rename", "ana-lopez", "ana")
+		earlierBuildStub(t, r.db.Replicated(), "ana-lopez")
+
+		for name, read := range map[string]func() (chart.Seat, error){
+			"by its identity": func() (chart.Seat, error) {
+				return r.reader().SeatByIdentity(t.Context(), "ana", session())
+			},
+			"by its former handle": func() (chart.Seat, error) {
+				got, err := r.reader().Seat(t.Context(), "ana", session())
+				return got.Seat, err
+			},
+		} {
+			got, err := read()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got.Kind != chart.SeatAgent {
+				t.Errorf("%s the seat reads kind %q, want agent — the column's",
+					name, got.Kind)
+			}
+		}
+	})
 }

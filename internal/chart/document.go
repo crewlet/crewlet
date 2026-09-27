@@ -142,6 +142,14 @@ type Seat struct {
 	// anchor of anything durable.
 	OriginHandle string `json:"origin_handle,omitempty"`
 
+	// Kind is what holds the seat — structure, which a `create_seat` states
+	// and a `set_kind` changes.
+	//
+	// EVERY READER OF A ROW TAKES THE COLUMN'S WHERE THE DOCUMENT NAMES NONE
+	// ([seatRows]): a stub an earlier build placed carried an empty kind in
+	// its document and `agent` in its column, so a reader that took the
+	// document alone blanked the column on the next write that wrote the row
+	// back, and refused every content write to the seat for naming no kind.
 	Kind SeatKind `json:"kind"`
 
 	Name  string `json:"name,omitempty"`

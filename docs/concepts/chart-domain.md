@@ -271,6 +271,10 @@ record, which left a hire's seat with no kind at all between its create and its
 content — an agent by omission, which a node would claim. A seat's edge carries
 its kind as part of its structural post-state, an import's included. Making a
 person's seat an agent's is refused while somebody holds it, as a removal is.
+A seat an earlier build placed and nothing has filled names no kind in its
+stored document and `agent` in the row's `kind` column, and every read of the
+row takes the column's — so such a seat is an agent's to every reader, and its
+first content write fills it as one.
 
 **A seat nothing has filled is incomplete.** A hire is two records, and the
 second may be late or never arrive: until a content record lands the seat has a
