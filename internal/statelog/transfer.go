@@ -473,10 +473,14 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest,
 		return nil, fmt.Errorf("statelog: flush the offer request: %w", err)
 	}
 
-	deadline := time.Now().Add(window)
+	// THE WINDOW IS BOUNDED BY THE CALLER TOO. It used to wait on a clock
+	// of its own, so a node told to stop while it looked for a snapshot sat
+	// in the collection until the window closed.
+	collecting, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
 	var out []Offer
-	for time.Now().Before(deadline) {
-		msg, err := sub.NextMsg(time.Until(deadline))
+	for {
+		msg, err := sub.NextMsgWithContext(collecting)
 		if err != nil {
 			break
 		}
@@ -485,6 +489,12 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest,
 			continue
 		}
 		out = append(out, o)
+	}
+	// THE WINDOW CLOSING IS HOW A COLLECTION ENDS; the caller's own
+	// cancellation is not, and it is answered as itself rather than with
+	// whatever arrived before it.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("statelog: collect offers: %w", err)
 	}
 	return rankOffers(out, seed), nil
 }

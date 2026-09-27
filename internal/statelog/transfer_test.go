@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,6 +157,33 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 		t.Fatalf("the artefact's checksum is %s and the manifest says %s — a "+
 			"transfer that reorders or drops a chunk arrives looking exactly "+
 			"like one that did not", got, h.manifest.SHA256)
+	}
+}
+
+// A JOINER TOLD TO STOP STOPS ASKING.
+//
+// Collecting offers waits out a window for donors to answer, and it waited out
+// the whole of it whatever its caller said: a node shutting down while it
+// looked for a snapshot sat in the collection until the window closed, and
+// then reported the offers as though nothing had happened. A cancelled caller
+// is answered at once, with the cancellation.
+func TestCollectingOffersStopsWhenItsCallerDoes(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	const window = 10 * time.Second
+	started := time.Now()
+	offers, err := statelog.CollectOffers(ctx, h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, window)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled collection answered %d offer(s) and %v, want the "+
+			"cancellation", len(offers), err)
+	}
+	if waited := time.Since(started); waited >= window/2 {
+		t.Errorf("a cancelled collection took %v of its %v window", waited, window)
 	}
 }
 
