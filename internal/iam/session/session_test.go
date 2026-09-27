@@ -181,24 +181,35 @@ func (c *chartView) Position(context.Context) (uint64, time.Duration, error) {
 // cookies, so a browser would be signed in on whichever node its request
 // happened to reach and signed out on the next one — with nothing in the
 // config looking wrong.
+//
+// And the refusal names the FIELD to edit, by the name Tier A spells it: it
+// named `secrets.active_key`, a key no configuration has, so an operator
+// grepping their file for it found nothing. Mutation: misspell the field in
+// errNoActiveKey and the active-id rows go red.
 func TestANilKeyIsRefused(t *testing.T) {
 	t.Parallel()
-	for name, material := range map[string]runtoken.Material{
-		"an empty keyring": {},
-		"an active id naming nothing": {
+	for name, tc := range map[string]struct {
+		material runtoken.Material
+		says     string
+	}{
+		"an empty keyring": {runtoken.Material{}, "the keyring is empty"},
+		"an active id naming nothing": {runtoken.Material{
 			ActiveID: "k9",
 			Keys:     []runtoken.KeyMaterial{{ID: "k1", Material: "m"}},
-		},
-		"keys with no active id": {
+		}, "`secrets.active_key_id` names \"k9\""},
+		"keys with no active id": {runtoken.Material{
 			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "m"}},
-		},
+		}, "`secrets.active_key_id` names \"\""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			signer, err := session.New(session.Options{Material: material})
+			signer, err := session.New(session.Options{Material: tc.material})
 			if !errors.Is(err, session.ErrNoKeyring) {
 				t.Fatalf("New returned (%v, %v), want %v", signer, err,
 					session.ErrNoKeyring)
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not say %q: %v", tc.says, err)
 			}
 			if signer != nil {
 				t.Error("a signer was returned beside the refusal, so a caller " +
