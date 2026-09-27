@@ -799,6 +799,49 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 	})
 }
 
+// THE GROUP WARNINGS COME OUT IN ONE ORDER, run after run.
+//
+// They were read off a map, whose iteration order Go randomises, so
+// `crewlet validate` over one unchanged file printed them in a different order
+// each time and a CI step diffing its output saw a change nobody made. Eight
+// groups and twenty reads, because a map of eight iterates from one of eight
+// starting points: a shuffled order survives twenty reads by luck roughly one
+// time in a quintillion.
+//
+// Mutation: range over the map again and the order differs between reads.
+func TestTheGroupWarningsComeOutInOneOrder(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	b.API.Auth.Backend = AuthBackendOIDC
+	grants := map[string][]iam.Grant{}
+	var want []string
+	for _, group := range []string{"alpha", "bravo", "charlie", "delta",
+		"echo", "foxtrot", "golf", "hotel"} {
+		grants[group] = []iam.Grant{iam.GrantSecretRead}
+		want = append(want, "api.auth.oidc.group_grants."+group+"."+
+			string(iam.GrantSecretRead))
+	}
+	b.API.Auth.OIDC = &APIOIDC{
+		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+		Scopes: []string{ScopeOpenID, ScopeOfflineAccess}, GroupsClaim: "groups",
+		GroupGrants: grants,
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	for range 20 {
+		var got []string
+		for _, w := range b.Warnings() {
+			if strings.Contains(w.Path, "group_grants") {
+				got = append(got, w.Path)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("group warnings = %v\nwant the groups' own order %v", got, want)
+		}
+	}
+}
+
 // AND THE COUNTERFACTUAL: a deployment doing none of those warns about none
 // of them. Without this the table above would pass on a build that warned
 // unconditionally, which is the same as a build that warns about nothing.

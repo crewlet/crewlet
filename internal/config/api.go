@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -1400,7 +1401,13 @@ func (a API) warnings() []Warning {
 		// grants read and write the company's own credentials — so a
 		// mapping that confers them hands the secret store to a
 		// membership change nobody here reviews.
-		for group, grants := range oidc.GroupGrants {
+		//
+		// IN THE GROUPS' OWN ORDER, sorted, and never the map's: ranging
+		// over the map printed these in a different order on every run of
+		// `crewlet validate`, so two runs over one unchanged file differed
+		// and a CI step diffing the output reported a change nobody made.
+		for _, group := range slices.Sorted(maps.Keys(oidc.GroupGrants)) {
+			grants := oidc.GroupGrants[group]
 			for _, g := range grants {
 				if g != iam.GrantSecretRead && g != iam.GrantSecretWrite {
 					continue
