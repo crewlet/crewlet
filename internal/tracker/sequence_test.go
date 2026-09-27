@@ -294,20 +294,3 @@ func counterOf(t *testing.T, r *roundTrip, project string) int {
 	}
 	return last
 }
-
-func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
-	t.Helper()
-	var task tracker.Task
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		var body []byte
-		if err := tx.QueryRowContext(t.Context(),
-			`SELECT document FROM tracker_tasks WHERE id = ?`, id).
-			Scan(&body); err != nil {
-			return err
-		}
-		return json.Unmarshal(body, &task)
-	}); err != nil {
-		t.Fatalf("read task %s: %v", id, err)
-	}
-	return task
-}

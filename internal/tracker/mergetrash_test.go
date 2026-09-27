@@ -136,7 +136,6 @@ func TestATaskIsNeverFiledUnderItsOwnSubtree(t *testing.T) {
 	r.drain()
 
 	for _, onto := range []string{"top", "mid", "low"} {
-		onto := onto
 		_, err := r.writer.UpdateTask(t.Context(), "op-onto-"+onto, "top", "ENG",
 			tracker.NoIfMatch, tracker.TaskPatch{Parent: &onto},
 			tracker.ChangeReparented, nil)
