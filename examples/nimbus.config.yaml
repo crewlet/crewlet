@@ -9,7 +9,7 @@
 #     export LLM_MODEL="your-provider/model-id"
 #     export LLM_API_KEY="<your-llm-provider-key>"
 #     export OPENAI_API_KEY="<for-embeddings>"
-#     # optional — only if you enable the `secrets:` keyring below.
+#     # The keyring every node needs — see `secrets:` below.
 #     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
 #     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #
@@ -29,8 +29,8 @@
 #   - coordination: where seat leases live (a fleet needs the shared slot)
 #   - node        : this process's identity, roles and labels
 #   - api         : host / port / bearer-auth tokens
-#   - secrets     : optional encryption keyring — encrypts the whole
-#                   Tier B company config at rest (see below)
+#   - secrets     : the keyring (REQUIRED) — signs every state-log record
+#                   and seals the Tier B company config at rest (see below)
 #   - logging     : how loud this node is (level), in what shape (format)
 #                   and where it writes (stderr, plus an optional rotating
 #                   file — and `stderr: false` hands the stream to that file)
@@ -249,19 +249,20 @@ api:
 # own, so a signature is the only thing that says a record came from this
 # fleet rather than from anything else that can reach the cluster port —
 # and a record is whatever the next node applies. A node with no keyring
-# refuses to start for that reason.
+# refuses to start for that reason, and `crewlet validate` refuses a file
+# without one.
 #
-# It also ENCRYPTS the Tier B company config at rest, if you ask it to:
-# run `crewlet config seal` once and the whole company payload is stored
-# as one opaque AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org
-# chart, policies, model choices and every secret as ciphertext. Without
-# that step Tier B is stored verbatim, with secrets as `${VAR}`
-# references resolved at construction time.
+# It SEALS the Tier B company config at rest: every write stores the
+# whole settings document as one opaque AES-256-GCM blob
+# (`{"__encrypted__": "enc:v1:…"}`) — policies, model choices,
+# integrations and every secret as ciphertext. The seal is also what
+# says a node of this fleet wrote it, so a node refuses a revision stored
+# unsealed. (The org chart is not in that document: it is a state log of
+# its own, signed like the rest.)
 #
 # Set it up:
 #   1. Mint a key + snippet:   crewlet secrets keygen -key-id 2026-01
 #   2. Export the printed key:  export CREWLET_SECRET_KEY_2026_01=<base64>
-#   3. Optionally seal the config too:  crewlet config seal
 #
 # Every node in a fleet needs the SAME keyring: one keyed differently
 # would refuse every peer's records.

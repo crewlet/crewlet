@@ -893,7 +893,7 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes); crewlet secrets keygen
 ```
 
-The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
+The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the settings' structure (policies, model choices, integrations, or secrets) is visible in the database. The org chart is not in this document: it is a state log of its own, whose structure is plaintext and whose credentials are sealed one value at a time — see [What the org chart puts here](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not).
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.

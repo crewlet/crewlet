@@ -904,11 +904,10 @@ error now and every seat losing a corrective round for ever.
 
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into
-the [encrypted secret store](../concepts/secret-store.md), so it needs a
-Tier A keyring first: `crewlet secrets keygen -key-id 2026-01`, then
-uncomment the `secrets:` block in `examples/nimbus-claude-cli.config.yaml`. Worth doing
-before you run this anywhere but a laptop; without a keyring the command
-stops and says so. See [Subscription LLM
+the [encrypted secret store](../concepts/secret-store.md), sealed under the
+Tier A keyring `examples/nimbus-claude-cli.config.yaml` already declares
+(every node needs one: `crewlet secrets keygen -key-id 2026-01` prints the
+key to export). Worth doing before you run this anywhere but a laptop. See [Subscription LLM
 Backends](../concepts/subscription-llm-backends.md#authentication) for the
 other login shapes (a token on stdin, a username/password where the CLI has
 one, a bundle moved onto another host).

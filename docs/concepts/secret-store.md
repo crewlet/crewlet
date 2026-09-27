@@ -78,8 +78,8 @@ So the chart makes its own trade, and states it rather than inheriting one:
   a seat or a unit is sealed into this store under a name derived from the
   object and the field, and the record carries a `${VAR}` **reference**. The
   value reaches the store and never the log, the rows, a snapshot or a backup
-  of either. A write that hands a literal to a node with no secret store is
-  **refused** rather than stored.
+  of either. A write whose literal cannot be sealed is **refused** rather
+  than stored in the clear.
 - **A whole `${VAR}` is stored as written.** It names a credential rather than
   being one, it is what you edit, and sealing it would put a pointer inside the
   store and a pointer to that pointer on the record.
