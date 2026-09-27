@@ -530,7 +530,7 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 	args := append([]any{EncodeTime(cutoff)}, keep...)
 
 	var n int64
-	err = c.db.Tx(ctx, func(tx *sql.Tx) error {
+	err = c.db.Tx(ctx, func(tx *sql.Tx) (err error) {
 		// THE SURVIVORS' PARENT POINTERS FIRST, and this is not tidiness:
 		// parent_revision_id is a real foreign key and this database runs
 		// with `PRAGMA foreign_keys = ON`, so deleting a row something
@@ -545,7 +545,7 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 		// and the column is already nullable because the first revision
 		// ever written has no parent. [Configs.Chain] stops at a break for
 		// this reason among others.
-		if _, err := tx.ExecContext(ctx,
+		if _, err = tx.ExecContext(ctx,
 			`UPDATE company_config SET parent_revision_id = NULL
 			 WHERE parent_revision_id IN (
 			     SELECT revision_id FROM company_config WHERE `+doomed+`)`,
