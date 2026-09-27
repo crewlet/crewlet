@@ -349,6 +349,22 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"structure is the company's too", personLeading("cto"),
 			authz.ActionChartStructure, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
+		// THE ADMIN PATH OVER A CHART OBJECT'S PROSE IS THE COMPANY'S
+		// GRANT: whoever may restructure the chart may correct a goal in
+		// it, leading nothing — and the deployment's grant, which
+		// decides nothing about what a seat is told to do, may not.
+		{"the company's grant corrects any seat's prose",
+			person("jane.doe", iam.GrantConfigWrite), authz.ActionChartContent,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonGrant},
+		{"and any unit's", person("jane.doe", iam.GrantConfigWrite),
+			authz.ActionChartContent,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			true, authz.ReasonGrant},
+		{"the deployment's grant alone does not", person("jane.doe", iam.GrantFleetOperate),
+			authz.ActionChartContent,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNotLead},
 
 		// --- destructive ---------------------------------------------- //
 		{"the container's lead removes an item", seat("cto"),
@@ -564,6 +580,38 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 					d.Allowed, d.Reason)
 			}
 		})
+	}
+}
+
+// A CHART OBJECT'S REFUSAL NAMES THE COMPANY'S GRANT, AND THAT GRANT NEEDS NO
+// CHART.
+//
+// `Decision.Grants` is what a person refused reads as the remedy, so a lead
+// refused a seat they do not lead is told `config:write` — the grant that
+// admits them — and not `fleet:operate`, which no longer does. And the admin
+// path is decided before the relation, so a node behind its chart log never
+// tells an administrator holding the company's grant that it cannot tell.
+// Mutation: put the deployment's grant back as this class's admin path and
+// every assertion here goes red.
+func TestAChartObjectsAdminPathIsTheCompanysGrant(t *testing.T) {
+	t.Parallel()
+	object := authz.Object{Kind: authz.KindPerson, Owner: "cto"}
+	refused := authz.Decide(t.Context(), personLeading("sre"),
+		authz.ActionChartContent, object, nimbus(), decidedAt)
+	if refused.Allowed || !slices.Equal(refused.Grants, []iam.Grant{iam.GrantConfigWrite}) {
+		t.Errorf("a lead refused a seat they do not lead: allowed %v naming "+
+			"%v, want a refusal naming [config:write]", refused.Allowed, refused.Grants)
+	}
+	admitted := authz.Decide(t.Context(), person("jane.doe", iam.GrantConfigWrite),
+		authz.ActionChartContent, object, authz.NoChart{}, decidedAt)
+	if admitted.Unknown() || !admitted.Allowed {
+		t.Errorf("the company's grant on a node with no chart: allowed %v, "+
+			"err %v — the admin path needs no chart", admitted.Allowed, admitted.Err)
+	}
+	deployment := authz.Decide(t.Context(), person("jane.doe", iam.GrantFleetOperate),
+		authz.ActionChartContent, object, nimbus(), decidedAt)
+	if deployment.Allowed {
+		t.Error("fleet:operate alone rewrote a seat's prose")
 	}
 }
 

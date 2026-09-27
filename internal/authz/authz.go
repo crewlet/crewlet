@@ -338,7 +338,8 @@ var Reasons = []Reason{
 // Valid reports whether a reason is one this build knows.
 func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
-// adminGrant is the capability that overrides every relation-based class.
+// adminGrant is the capability that overrides every relation-based class but
+// one — an org chart object's, whose admin path is [chartAdminGrant].
 //
 // [iam.GrantFleetOperate] rather than a grant of its own, because that is what
 // the closed eleven has for "whoever runs this deployment" and a second admin
@@ -354,3 +355,21 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // reading everybody's inbox by virtue of it, and folding the two would make
 // the grant that can grant also the grant that reads.
 const adminGrant = iam.GrantFleetOperate
+
+// chartAdminGrant is the capability that overrides the lead relation on an org
+// chart object's prose ([ClassChartObject]) — the COMPANY's grant, and not
+// [adminGrant].
+//
+// # Why the chart is the one relation class with its own
+//
+// Every other relation class decides somebody's WORK — a queue, a view, a
+// project's policy, a remark — and whoever runs the deployment is the right
+// party to unstick it. The chart is the company's own structure and the text
+// every seat's prompt is built from, which is what `config:write` already
+// governs: that grant writes the runtime half, every relation leadership is
+// derived from, and every structural change. Its admin path was
+// `fleet:operate`, which was wrong in both directions — an SRE holding only
+// the deployment's grant could rewrite what any seat is told to do, while an
+// administrator holding the company's grant and leading nobody could not
+// correct a single seat's goal on a chart they could restructure at will.
+const chartAdminGrant = iam.GrantConfigWrite

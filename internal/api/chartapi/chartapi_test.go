@@ -493,9 +493,23 @@ func TestAWriteCarryingTheRuntimeHalfIsDecidedAsAnOperatorWrite(t *testing.T) {
 		{"a null runtime is a shape nobody means", leadOf(),
 			`{"name":"Engineering","runtime":null}`,
 			http.StatusBadRequest, false},
-		{"somebody who leads nothing may not edit even the public half",
+		{"somebody who leads nothing may not edit even the prose",
 			proved(iam.Principal{ID: uuid.New(), Login: "sre", Seat: "sre",
 				Kind: iam.KindPerson, Stage: iam.StageActive}),
+			`{"name":"Engineering"}`, http.StatusForbidden, false},
+		// THE ADMIN PATH IS THE COMPANY'S GRANT: whoever may restructure
+		// the chart may correct its prose leading nothing, and the
+		// deployment's grant, which decides nothing about a seat's
+		// prompt, may not.
+		{"the company's grant edits the prose leading nothing",
+			proved(iam.Principal{ID: uuid.New(), Login: "ops.admin",
+				Kind: iam.KindPerson, Stage: iam.StageActive,
+				Grants: []iam.Grant{iam.GrantConfigWrite}}),
+			`{"name":"Engineering"}`, http.StatusOK, true},
+		{"the deployment's grant alone does not",
+			proved(iam.Principal{ID: uuid.New(), Login: "sre.oncall",
+				Kind: iam.KindPerson, Stage: iam.StageActive,
+				Grants: []iam.Grant{iam.GrantFleetOperate}}),
 			`{"name":"Engineering"}`, http.StatusForbidden, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

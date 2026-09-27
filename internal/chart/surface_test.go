@@ -159,7 +159,8 @@ func TestALeadsPatchThroughTheSurfaceKeepsTheRuntimeItLeftOut(t *testing.T) {
 // the body changes; the domain can, and refuses the one that would make the
 // lead the founder's manager. The caller reads the refusal the authority table
 // would have written — `403`, `no_grant`, `config:write` — with the field that
-// asked, and the same lead holding the company's grant makes the change.
+// asked, and a holder of the company's grant, who leads nothing, makes the
+// same change.
 func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
@@ -196,10 +197,10 @@ func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *test
 		t.Fatalf("the refused edge reached the rows: %v", got)
 	}
 
-	rec = serveChart(r, signedIn(iam.GrantConfigWrite), "report").send(
-		http.MethodPatch, "/chart/seats/report", body)
+	rec = serveChart(r, signedIn(iam.GrantConfigWrite)).send(http.MethodPatch,
+		"/chart/seats/report", body)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("the lead holding the company's grant answered %d: %s",
+		t.Fatalf("the company's grant, leading nothing, answered %d: %s",
 			rec.Code, rec.Body)
 	}
 	if got := r.column(`SELECT target FROM chart_manages WHERE manager = ?`,

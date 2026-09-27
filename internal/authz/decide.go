@@ -94,9 +94,11 @@ const (
 
 	// ClassChartObject — one object in the org chart's PROSE: a unit's
 	// name and purpose, a seat's goal and responsibilities. Whoever leads
-	// that object, or the admin path. The relations authority is derived
-	// from and the runtime half are the company's grant, whoever leads
-	// it, and are asked separately ([ActionChartContent]).
+	// that object, or the COMPANY's grant, which is this class's admin
+	// path rather than the deployment's ([chartAdminGrant]). The
+	// relations authority is derived from and the runtime half are the
+	// company's grant, whoever leads it, and are asked separately
+	// ([ActionChartContent]).
 	//
 	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
 	// FOUR lead relations and they are four questions: who leads a seat,
@@ -191,7 +193,8 @@ var Classes = []Class{
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the grant cannot: an operator holding
-// fleet:operate must not be told "I cannot tell" by a node that is behind.
+// fleet:operate — or config:write, on a chart object — must not be told "I
+// cannot tell" by a node that is behind.
 //
 // AND THE PROOF LAST, at now: a verb whose row asks for a recent proof of
 // identity refuses an ADMITTED principal whose proof is older than that
@@ -362,8 +365,10 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		return consulting(leadsProject(ctx, chart, actorOf(p), o.Container), adminGrant)
 
 	case ClassChartObject:
-		if p.Can(adminGrant) {
-			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
+		// THE COMPANY'S GRANT IS THE ADMIN PATH HERE, not the
+		// deployment's — see [chartAdminGrant].
+		if p.Can(chartAdminGrant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, chartAdminGrant)
 		}
 		// THE KIND PICKS THE RELATION. See the class's own doc for why
 		// one relation cannot serve for all three, and what asking the
@@ -371,21 +376,21 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		switch o.Kind {
 		case KindUnit:
 			if o.Container == "" {
-				return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
+				return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
 			}
-			return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), adminGrant)
+			return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), chartAdminGrant)
 		case KindPerson:
 			if o.Owner == "" {
-				return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
+				return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
 			}
 			// NO SELF PATH, which is what makes this different from
 			// [ClassOwnOrLead]: a seat rewriting its own goal, its
 			// backstory and its responsibilities is a model editing
 			// the prompt it is about to run under, and nobody asked
 			// for that. Its LEAD edits it.
-			return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead), adminGrant)
+			return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead), chartAdminGrant)
 		}
-		return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
+		return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
 
 	case ClassAuthored:
 		if o.Author == "" {
