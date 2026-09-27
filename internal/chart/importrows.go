@@ -150,12 +150,6 @@ func (a Authored) Rows() Chart {
 	return out
 }
 
-// Edges is this authored company's structure, as one import's placements.
-//
-// THE ORDER IS PARENTS BEFORE CHILDREN, which the apply does not require — a
-// placement creates a stub for an object that is not there yet — but which
-// makes the record readable: an operator reading the log sees a chart being
-// built rather than a set of references in whatever order a map produced.
 // ImportKey is the ledger key for one authored chart: a hash of its own
 // content.
 //
@@ -185,6 +179,12 @@ func ImportKey(a Authored) string {
 	return fmt.Sprintf("file:%x", sha256.Sum256(body))
 }
 
+// Edges is this authored company's structure, as one import's placements.
+//
+// THE ORDER IS PARENTS BEFORE CHILDREN, which the apply does not require — a
+// placement creates a stub for an object that is not there yet — but which
+// makes the record readable: an operator reading the log sees a chart being
+// built rather than a set of references in whatever order a map produced.
 func (a Authored) Edges() []Edge {
 	out := make([]Edge, 0, len(a.Units)+len(a.Seats))
 	placed := map[string]bool{}
