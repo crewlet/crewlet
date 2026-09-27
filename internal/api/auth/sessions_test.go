@@ -671,16 +671,21 @@ func TestAChartPastTheStallGraceIsUnavailable(t *testing.T) {
 
 // SIGNING OUT STILL WORKS WHEN THE SEAT IS GONE.
 //
-// The refusal above is written only for a GUARDED route. `/auth/logout` is
-// how somebody ends the session they are holding, and refusing it would
-// leave a leaver with a live bearer and no way to end it.
+// The seat refusal is written for every guarded route but the `/auth/`
+// surface, whose subject is a person's own credential. Signing out everywhere,
+// reading who you are, stepping up and enrolling a second factor are guarded
+// routes there, and refusing them would leave a leaver with a live bearer and
+// no way to end it. The rows name the routes the surface REGISTERS — they
+// named `/auth/logout-all` and `/auth/totp/enrol`, which nothing serves, and
+// passed only because the spared surface is a prefix. `/auth/logout` itself
+// is unguarded and reaches its handler whatever the guard could say.
 func TestASeatRefusalDoesNotReachTheSignOutRoute(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	delete(rig.chart.seats, sessionSeat)
 	g := rig.guard()
-	for _, path := range []string{"/auth/logout", "/auth/logout-all",
-		"/auth/session", "/auth/step-up", "/auth/totp/enrol"} {
+	for _, path := range []string{auth.PathAuthLogout, "/auth/logout/all",
+		auth.PathAuthSession, auth.PathAuthStepUp, auth.PathAuthTOTP} {
 
 		got := rig.call(g, http.MethodPost, path, rig.withCookie)
 		if got.status != http.StatusOK {
