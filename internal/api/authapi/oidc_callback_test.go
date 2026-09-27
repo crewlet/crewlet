@@ -69,6 +69,14 @@ type provider struct {
 	// end_session_endpoint, as some providers' do not.
 	noEndSession bool
 
+	// endSession, when set, is the end_session_endpoint the document
+	// publishes in place of the provider's own.
+	endSession string
+
+	// discoveryDown makes the discovery document answer 502, as a
+	// metadata host that is down does.
+	discoveryDown bool
+
 	// groups is the groups claim every ID token carries, or none.
 	groups []string
 
@@ -88,6 +96,10 @@ func newProvider(t *testing.T) *provider {
 	p := &provider{key: key, nonces: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc(oidc.MetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		if p.discoveryDown {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
 		doc := map[string]any{
 			"issuer":                                p.URL,
 			"authorization_endpoint":                p.URL + "/authorize",
@@ -99,6 +111,9 @@ func newProvider(t *testing.T) *provider {
 		}
 		if p.noEndSession {
 			delete(doc, "end_session_endpoint")
+		}
+		if p.endSession != "" {
+			doc["end_session_endpoint"] = p.endSession
 		}
 		_ = json.NewEncoder(w).Encode(doc)
 	})

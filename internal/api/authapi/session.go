@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -417,13 +418,23 @@ func (s *Service) LogoutProvider(w http.ResponseWriter, r *http.Request) {
 			"out at the provider too")
 		return
 	}
+	// AN HTTPS ADDRESS ON A HOST, as the issuer itself must be, or the
+	// browser is not sent there at all. It used to be enough that the value
+	// parsed: a RELATIVE one was then a path on this deployment and a
+	// plain-http one an address anybody on the path could answer, and either
+	// redirect read to the person as a sign-out at their provider that did
+	// not happen.
 	target, err := url.Parse(metadata.EndSessionEndpoint)
+	if err == nil && (target.Scheme != "https" || target.Host == "") {
+		err = fmt.Errorf("%q is not an https address on a host",
+			metadata.EndSessionEndpoint)
+	}
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_end_session_unusable",
 			"endpoint", metadata.EndSessionEndpoint, "error", err)
 		notEnded("signed out here; the identity provider's end_session_endpoint " +
-			"is not a url, so your session there was not ended — sign out at " +
-			"the provider too")
+			"is not an https address, so your session there was not ended — " +
+			"sign out at the provider too")
 		return
 	}
 	query := target.Query()

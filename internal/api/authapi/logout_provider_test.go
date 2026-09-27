@@ -143,6 +143,65 @@ func TestAProviderWithNoEndSessionIsAPlainSignOutThatSaysSo(t *testing.T) {
 	}
 }
 
+// A PROVIDER SIGN-OUT THAT CANNOT REACH THE PROVIDER'S END-SESSION ENDPOINT
+// ENDS THE SESSION HERE AND SAYS THE OTHER WAS NOT.
+//
+// Beside a provider that publishes no end_session_endpoint (above), there are
+// two more ways the redirect cannot be made, and each must still end the
+// session here, clear the cookie and say plainly that the provider's session
+// was not ended: discovery that cannot be reached, and an endpoint the browser
+// cannot be sent to — one that does not parse, and one that parses and is not
+// an https address on a host. The last two were one arm that asked only
+// whether the value parsed, so a RELATIVE value was "sent" to a path on this
+// deployment and a plain-http one to an address anybody on the path could
+// answer, each redirect reading to the person as a sign-out at their provider.
+//
+// Mutation: redirect whenever the value parses and the relative and plain-http
+// rows answer 303.
+func TestAProviderSignOutThatCannotBeSentOnSaysSo(t *testing.T) {
+	t.Parallel()
+	for name, spoil := range map[string]func(*provider){
+		"discovery unreachable":         func(p *provider) { p.discoveryDown = true },
+		"an endpoint that is not a url": func(p *provider) { p.endSession = "https://[::1" },
+		"an endpoint with no host":      func(p *provider) { p.endSession = "/logout" },
+		"an endpoint anybody on the path can answer": func(p *provider) {
+			p.endSession = "http://idp.example.com/logout"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			idp := newProvider(t)
+			spoil(idp)
+			rec, writer, lineage := providerSignOut(t, idp)
+			if rec.Code != http.StatusOK || rec.Header().Get("Location") != "" {
+				t.Fatalf("answered %d to %q, want 200 and no redirect", rec.Code,
+					rec.Header().Get("Location"))
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body, err)
+			}
+			if body["status"] != "signed out" || body["provider_session"] != "not_ended" ||
+				body["detail"] == "" {
+				t.Errorf("answered %v, want signed out with the provider session "+
+					"named not ended", body)
+			}
+			if len(writer.closed) != 1 || writer.closed[0][0] != lineage {
+				t.Errorf("closed %v, want the presented session %s", writer.closed, lineage)
+			}
+			cleared := false
+			for _, c := range rec.Result().Cookies() {
+				if c.Name == session.HostCookieName && c.MaxAge < 0 {
+					cleared = true
+				}
+			}
+			if !cleared {
+				t.Error("the cookie was not cleared")
+			}
+		})
+	}
+}
+
 // awaitNothing is an identity applier that has always already applied.
 type awaitNothing struct{}
 

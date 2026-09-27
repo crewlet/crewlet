@@ -1521,8 +1521,9 @@ naming this client and asking to come back to the dashboard. Register
 or it leaves the person on its own page. No `id_token_hint` is sent, because the
 engine keeps no ID token once a sign-in completes — a provider that insists on
 one asks the person to confirm, and the session here is over either way. A
-provider that publishes no end-session endpoint, or cannot be reached, gets a
-plain sign-out that says so: `provider_session: not_ended`. Like the plain
+provider that publishes no end-session endpoint, publishes one that is not an
+`https` address on a host, or cannot be reached, gets a plain sign-out that
+says so: `provider_session: not_ended`. Like the plain
 sign-out it is not behind the request guard, so a node that cannot read its
 identity estate still ends the session here as far as it can and still sends
 the browser on to the provider.
