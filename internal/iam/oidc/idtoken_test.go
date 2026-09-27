@@ -6,6 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -486,13 +489,19 @@ func TestEveryTimeClaimIsJudgedWithinTheSkew(t *testing.T) {
 // AN ID TOKEN SIGNED WITH AN ELLIPTIC-CURVE KEY VERIFIES, ON ITS OWN CURVE ONLY.
 //
 // Some providers sign ES256 or ES384, and an allowlist of RSA families alone
-// refused every sign-in at one of them. Each algorithm is bound to its key by
-// the verifier's own type check — an ES256 header over the RSA key a set
-// publishes, or ES384 over a P-256 key, is refused before any arithmetic — and
-// ES512 stays out, since no key the key set yields could verify it.
+// refused every sign-in at one of them. Each algorithm is bound to the key RFC
+// 7518 defines it over — ES256 to P-256, ES384 to P-384 — and ES512 stays out,
+// since no key the key set yields could verify it.
+//
+// The mismatched case is BUILT BY HAND, because a library signing ES384 with a
+// P-256 key refuses to, and signing with the P-384 key instead fails on the
+// signature whether or not any binding exists: this token is a real ES384
+// signature by the P-256 key — SHA-384, its halves padded to 48 bytes — which
+// golang-jwt's own check (a key's Go type and the signature's length, never
+// its curve) accepts.
 //
 // Mutation: take ES256 and ES384 out of the allowlist and the first two cases
-// are refused.
+// are refused; drop the curve from the binding and the hand-built one verifies.
 func TestAnEllipticCurveIDTokenVerifiesOnItsOwnCurve(t *testing.T) {
 	t.Parallel()
 	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -512,27 +521,92 @@ func TestAnEllipticCurveIDTokenVerifiesOnItsOwnCurve(t *testing.T) {
 		"p521": &p521.PublicKey, testKID: &signingKey.PublicKey,
 	}}
 	for _, tc := range []struct {
-		name   string
-		method jwt.SigningMethod
-		kid    string
-		key    any
-		want   bool
+		name  string
+		token string
+		want  bool
 	}{
-		{"ES256 over a P-256 key", jwt.SigningMethodES256, "p256", p256, true},
-		{"ES384 over a P-384 key", jwt.SigningMethodES384, "p384", p384, true},
-		{"ES256 naming the RSA key", jwt.SigningMethodES256, testKID, p256, false},
-		{"ES384 naming a P-256 key", jwt.SigningMethodES384, "p256", p384, false},
-		{"ES512, which nothing here verifies", jwt.SigningMethodES512, "p521", p521, false},
+		{"ES256 over a P-256 key", sign(t, claims(), jwt.SigningMethodES256, "p256", p256), true},
+		{"ES384 over a P-384 key", sign(t, claims(), jwt.SigningMethodES384, "p384", p384), true},
+		{"ES256 naming the RSA key", sign(t, claims(), jwt.SigningMethodES256, testKID, p256), false},
+		{"ES384 signed by a P-256 key", es384ByP256(t, claims(), "p256", p256), false},
+		{"ES512, which nothing here verifies", sign(t, claims(), jwt.SigningMethodES512, "p521", p521), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := testConfig().Verify(t.Context(), keys,
-				sign(t, claims(), tc.method, tc.kid, tc.key), testNonce, at)
+			_, err := testConfig().Verify(t.Context(), keys, tc.token, testNonce, at)
 			switch {
 			case tc.want && err != nil:
 				t.Errorf("refused: %v", err)
 			case !tc.want && err == nil:
 				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// es384ByP256 is a token whose header says ES384 and whose signature is the
+// P-256 key's over the SHA-384 digest of its signing input, each half padded to
+// ES384's 48 bytes — the one mismatch a key's Go type and a signature's length
+// cannot see.
+func es384ByP256(t *testing.T, c jwt.MapClaims, kid string, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "ES384", "typ": "JWT", "kid": kid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := base64.RawURLEncoding.EncodeToString(header) + "." +
+		base64.RawURLEncoding.EncodeToString(body)
+	digest := sha512.Sum384([]byte(input))
+	r, s, err := ecdsa.Sign(rand.Reader, key, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := make([]byte, 96)
+	r.FillBytes(signature[:48])
+	s.FillBytes(signature[48:])
+	return input + "." + base64.RawURLEncoding.EncodeToString(signature)
+}
+
+// EVERY ALGORITHM THIS ENGINE ACCEPTS IS BOUND TO A KEY, AND VERIFIES OVER IT.
+//
+// The binding is a switch beside the allowlist, so an algorithm added to
+// [oidc.Algorithms] with no arm would be pinned, advertised in the discovery
+// report as one this engine verifies — and refuse every token signed with it.
+// Each entry here is signed by a key of its own family and must verify.
+//
+// Mutation: add an algorithm to the allowlist without an arm and its case is
+// refused; bind an RSA family to anything else and its case is refused.
+func TestEveryAcceptedAlgorithmVerifiesOverItsOwnKey(t *testing.T) {
+	t.Parallel()
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signers := map[string]any{"ES256": p256, "ES384": p384}
+	published := map[string]any{"ES256": &p256.PublicKey, "ES384": &p384.PublicKey}
+	for _, alg := range oidc.Algorithms {
+		t.Run(alg, func(t *testing.T) {
+			t.Parallel()
+			signer, public := signers[alg], published[alg]
+			if signer == nil {
+				signer, public = signingKey, &signingKey.PublicKey
+			}
+			method := jwt.GetSigningMethod(alg)
+			if method == nil {
+				t.Fatalf("%s is accepted and no signing method of that name exists", alg)
+			}
+			keys := keySource{pub: map[string]any{testKID: public}}
+			if _, err := testConfig().Verify(t.Context(), keys,
+				sign(t, claims(), method, testKID, signer), testNonce, at); err != nil {
+				t.Errorf("a %s token over its own key was refused: %v", alg, err)
 			}
 		})
 	}
