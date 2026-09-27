@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE RETENTION HALF OF A CHANNEL'S LIFE, and why it is a type of its own.
+// Sweeper is THE RETENTION HALF OF A CHANNEL'S LIFE, and a type of its own.
 //
 // A [Service] ADDRESSES. An ask names a target, an answer names a recipient,
 // and [New] refuses a service with no [Directory] by name — one that could
