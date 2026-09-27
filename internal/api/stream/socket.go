@@ -45,6 +45,13 @@ import (
 // they mean, so an operator reading a close code and an operator reading a
 // REST refusal are reading one number.
 //
+// THE DASHBOARD HOLDS THE SAME TWO NUMBERS, as `CLOSE_UNAUTHENTICATED` and
+// `CLOSE_FORBIDDEN` in its socket module, and a gate in this package's suite
+// reads them from its source: each must equal the constant here, and every
+// application close code declared here must have one there. They were two
+// literals with nothing between them, and renumbering one side would have left
+// the dashboard reconnecting for ever against a withdrawn grant.
+//
 // NOTHING ELSE CLOSES THIS SOCKET FOR A FAULT. A node that cannot serve keeps
 // its socket open and degrades it instead — see [FrameDegraded].
 const (
