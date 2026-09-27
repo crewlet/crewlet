@@ -15,13 +15,11 @@ import (
 // reading "High" off a board. So two declarations whose names differ only in
 // case are two rows one lookup cannot tell apart, and the resolution picks
 // whichever the index reached first: the same collision the slug rule exists
-// to prevent, through the door nobody closed.
+// to prevent, through another door.
 //
-// The schema has been carrying the column for it all along — `name_norm`, with
-// an index annotated "the case-insensitive collision rule" — and the rule was
-// never written. So "Bug" and "bug " both landed, and `OptionIDs` mapped both
+// Admitted, "Bug" and "bug " would both land, and `OptionIDs` would map both
 // to one key, silently keeping whichever option came last in the slice: a
-// value written by name resolved differently after somebody reordered the
+// value written by name would resolve differently after somebody reordered the
 // list.
 //
 // # And a config knob on a type that has none is a caller who believes they
@@ -30,16 +28,12 @@ import (
 // `Precision` on a checkbox, `Time` on a number, a `Rollup` on a text field:
 // each is a setting stored, replicated and read by nothing. The options check
 // already refuses its own version of this — "options belong to the three types
-// that have them" — and the rest of the struct was unchecked, so every other
-// knob was accepted anywhere.
+// that have them" — and every other knob is held to the same rule, or it
+// would be accepted anywhere.
 
-// NormName is the one normalisation a name is compared under.
-//
-// ONE FUNCTION, because there were three inline copies — the applier writes
-// `name_norm` for types, for fields and for options — and the check added
-// beside them would have been a fourth. A collision rule that normalises one
-// way and a column that normalises another is a rule that passes a write the
-// index then treats as a duplicate.
+// NormName is the one normalisation the name collision rule compares under
+// ([checkNames]), for types, fields and options alike — so two declarations
+// the rule lets through are two names it compared the same way.
 func NormName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
@@ -156,11 +150,10 @@ func checkProgress(f *FieldDef) error {
 		seen[source] = true
 	}
 	if c.Progress == "auto" {
-		// AND THIS BUILD DOES NOT COMPUTE ONE, which is the same
-		// objection the refusal below this used to make about tracking
-		// nothing: an automatic field reads whatever was last written
-		// into it and calls itself automatic, which is worse than a
-		// manual field because nobody knows to keep it up to date.
+		// AND THIS BUILD DOES NOT COMPUTE ONE: an automatic field would
+		// read whatever was last written into it and call itself
+		// automatic, which is worse than a manual field because nobody
+		// knows to keep it up to date.
 		//
 		// Refused rather than accepted and left empty, on the rule the
 		// tracking check already stated: a bar that never moves reads as
@@ -188,9 +181,10 @@ func checkRollup(f *FieldDef) error {
 	}
 	// AND THIS BUILD GATHERS NOTHING. A rollup is a correlated aggregate
 	// over a relation — read-time, per row, over a set the row does not
-	// contain — and none of that exists here: the declaration was
-	// validated, stored, replicated and snapshotted, and the value stayed
-	// whatever somebody typed. Refused for [checkProgress]'s reason: a
+	// contain — and none of that exists here: admitted, the declaration
+	// would be validated, stored, replicated and snapshotted, and the
+	// value would stay whatever somebody typed. Refused for
+	// [checkProgress]'s reason: a
 	// field that calls itself gathered and is not is worse than a plain
 	// number, because nobody knows to maintain it.
 	//

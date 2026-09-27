@@ -140,14 +140,14 @@ const KindSprint ObjectKind = "sprint"
 // RetiredKinds are the kinds this build once published and no longer applies.
 //
 // THE TWO DIRECTIONS OF A ROLLING UPGRADE ARE NOT SYMMETRICAL, and this list
-// exists because only one of them was ever handled. A NEWER peer's record
-// carries a record version this build cannot read, so `statelog` retains it,
-// files it under its own subject and reprocesses it after an upgrade — which
-// is the case [ObjectKind]'s own doc describes. An OLDER peer's record is the
-// mirror image and nothing caught it: the version is one this build reads
-// perfectly and it is the KIND that is gone, so it passes the version gate at
-// `statelog/apply.go`, reaches [Applier.apply]'s switch, matches no case and
-// faults. There is no retry past it — the applier returns an error, the batch
+// is the half nothing else handles. A NEWER peer's record carries a record
+// version this build cannot read, so `statelog` retains it, files it under its
+// own subject and reprocesses it after an upgrade — which is the case
+// [ObjectKind]'s own doc describes. An OLDER peer's record is the mirror
+// image: the version is one this build reads perfectly and it is the KIND that
+// is gone, so without this list it would pass the version gate at
+// `statelog/apply.go`, reach [Applier.apply]'s switch, match no case and
+// fault. There is no retry past that — the applier returns an error, the batch
 // rolls back, the checkpoint stops, and the node wedges at that position for
 // as long as the record is in the log, which is `stream.tracker_retention`
 // (seven days by default) and unbounded wherever the trim cannot advance.
@@ -384,8 +384,9 @@ func (k ObjectKind) HomedInAProject() bool {
 // PERSON rather than about a row: a goal's owners hear that the outcome they
 // committed the company to moved, and one person hears that somebody else
 // wrote their priority list. Neither is reachable from a task's own routing —
-// an assignee, a watcher, a dependent — which is why the parser used to drop
-// them both and why they arrive under their own reasons instead.
+// an assignee, a watcher, a dependent — which is why they arrive under their
+// own reasons instead, and why a parser that routed tasks alone would drop
+// them both.
 //
 // EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
 // and a rank order have no audience at all; a catalogue, a view, a tag set and
@@ -412,10 +413,10 @@ func (k ObjectKind) Routable() bool {
 // It is the rule that decides which records must STATE what they did. A
 // history row's `kind` is what every feed filter, every report window and the
 // unblocked repair's own scan select on, so a record that produces one and
-// names no kind leaves that column to be guessed — and the guess used to be
-// made from the OPERATION, which is a different vocabulary: a quiet catalogue
-// edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
-// is a [ChangeKind] any filter can name.
+// names no kind leaves that column to be guessed — and a guess made from the
+// OPERATION is a different vocabulary: a quiet catalogue edit filed as
+// `patch`, a purge as `purge` rather than `purged`, and neither is a
+// [ChangeKind] any filter can name.
 //
 // The six document kinds and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an

@@ -569,13 +569,13 @@ runbook nobody read.
 
 ## Removal, deletion and what a purge does not reach
 
-Three different things:
+Two gestures:
 
 - **Removing** a task hides it. The rows stay; a restore brings it back.
-- **Deleting** writes a marker. Every node drops every record about that task,
-  for ever — which is what stops a redelivery months later resurrecting it.
-- **Purging** removes the rows. Its report has **three groups**: what was
-  purged, what could not be reached, and what is stale.
+- **Purging** destroys the task's content and writes a **deletion marker** in
+  its place. Every node honours the marker for ever, dropping every later
+  record about that task — which is what stops a redelivery months later
+  resurrecting it.
 
 ```
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>

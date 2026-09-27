@@ -2180,10 +2180,10 @@ func (r *coordRig) parkOnAQuestion(t *testing.T, large bool) (*Coordinator, *roo
 // until the delivery's budget was spent and then dead-lettered, with the run
 // still parked on a question somebody had answered — so a cap that held for
 // longer than the redeliveries lost the reply. It is held instead: its whole
-// in parts filed under the run's launch, past the parts the launch's own
-// suspension is kept in, and its delivery acknowledged. Once the budget has
-// room the turn resumes with every byte of it, and the suspension it re-enters
-// is still whole.
+// in parts of its own under the run's launch, filed under an id the hold
+// mints, apart from the parts the launch's own suspension is kept in, and its
+// delivery acknowledged. Once the budget has room the turn resumes with every
+// byte of it, and the suspension it re-enters is still whole.
 func TestAReplyNoRecordCanHoldIsHeldAndResumedWhole(t *testing.T) {
 	rig := newCoordRig(t)
 	coordinator, budget := rig.parkOnAQuestion(t, true)
@@ -2200,10 +2200,15 @@ func TestAReplyNoRecordCanHoldIsHeldAndResumedWhole(t *testing.T) {
 			handled, err)
 	}
 	got := rig.get("t1")
-	ref := got.HeldAnswerParts
-	if _, held := got.Held(); !held || ref == nil || ref.Parts < 2 || ref.First != len(before)+1 {
-		t.Fatalf("the row reads held answer %+v beside reference %+v: want a reply of more than one "+
-			"record in parts from part %d, past the suspension's", got.HeldAnswer, ref, len(before)+1)
+	held, ok := got.Held()
+	if !ok || held.Parts == nil || held.Parts.Parts < 2 || held.Parts.ID == "" {
+		t.Fatalf("the row reads held answer %+v: want a reply of more than one record in parts "+
+			"under an id of its own", got.HeldAnswer)
+	}
+	after, err := rig.pending.calls.SuspensionParts(t.Context(), "t1", got.LaunchID)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("the launch's suspension is in %d parts after the hold (%v), want its own %d "+
+			"untouched", len(after), err, len(before))
 	}
 	if n := rig.publishedOf("budget_exhausted"); n != 1 {
 		t.Errorf("the wait was announced %d times, want once", n)
@@ -2286,6 +2291,10 @@ func (partsRefused) CreateSuspensionPart(context.Context, string, string, int, [
 	return false, fmt.Errorf("the server accepts nothing this long: %w", coord.ErrTooLarge)
 }
 
+func (partsRefused) CreateAnswerPart(context.Context, string, string, string, int, []byte) (bool, error) {
+	return false, fmt.Errorf("the server accepts nothing this long: %w", coord.ErrTooLarge)
+}
+
 // A REPLY THAT CANNOT BE HELD IS HANDED BACK, NAMING WHY: its parts were
 // refused, it is kept nowhere else, and acknowledged it would be gone. Nothing
 // is held, so no reference names parts that are not there.
@@ -2300,8 +2309,8 @@ func TestAReplyThatCannotBeHeldIsHandedBack(t *testing.T) {
 		t.Fatalf("TryResumeFromAnswer = %v, %v, want the delivery handed back naming the bound "+
 			"and the refusal", handled, err)
 	}
-	if got := rig.get("t1"); got.HeldAnswer != nil || got.HeldAnswerParts != nil {
-		t.Errorf("the run holds %+v beside %+v, want nothing held", got.HeldAnswer, got.HeldAnswerParts)
+	if got := rig.get("t1"); got.HeldAnswer != nil {
+		t.Errorf("the run holds %+v, want nothing held", got.HeldAnswer)
 	}
 }
 
@@ -2317,19 +2326,20 @@ func TestAnAnswerWhosePartsDoNotMakeItsWholeEndsTheRun(t *testing.T) {
 		t.Fatalf("TryResumeFromAnswer = %v, %v", handled, err)
 	}
 	run := rig.get("t1")
-	if run.HeldAnswerParts == nil {
+	if run.HeldAnswer == nil || run.HeldAnswer.Parts == nil {
 		t.Fatal("the premise: the reply is held in parts")
 	}
 	// A part of another whole where the reference says this one continues.
-	if _, err := rig.pending.calls.CreateSuspensionPart(t.Context(), "t1", run.LaunchID,
-		run.HeldAnswerParts.First+run.HeldAnswerParts.Parts, []byte("x")); err != nil {
-		t.Fatalf("CreateSuspensionPart: %v", err)
+	parts := *run.HeldAnswer.Parts
+	if _, err := rig.pending.calls.CreateAnswerPart(t.Context(), "t1", run.LaunchID, parts.ID,
+		parts.Parts+1, []byte("x")); err != nil {
+		t.Fatalf("CreateAnswerPart: %v", err)
 	}
-	stretched := *run.HeldAnswerParts
+	stretched := parts
 	stretched.Parts++
 	stretched.Bytes++
 	if _, _, err := rig.pending.mutate(t.Context(), "t1", func(r *PendingRun) bool {
-		r.HeldAnswerParts = &stretched
+		r.HeldAnswer.Parts = &stretched
 		return true
 	}); err != nil {
 		t.Fatalf("mutate: %v", err)
@@ -3626,4 +3636,84 @@ func TestAnUnreadableStoreLeavesTheSeatsCountWhereItWas(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A HELD REPLY RESUMES WITH THE SPEND OF THE RUN THAT ASKED. The person's
+// answer waited on the run's row for the budget, and the resume the signal
+// starts is the one record the asking run's figures reach — it stopped once it
+// asked, so no later collect reports it. Held or handed over at once, the
+// answer carries the same account.
+func TestAHeldReplyResumesWithTheSpendOfTheRunThatAsked(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	asked := Result{NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		InputTokens: 40, OutputTokens: 4, CostUSD: 0.02, UsageWhole: true,
+		Models: []types.ModelSpend{{Model: "claude-sonnet", InputTokens: 40, OutputTokens: 4, CostUSD: 0.02}}}
+	rig.runner.Finish(asked)
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
+	coordinator := rig.budgeted(t, budget)
+	reply := events.New(types.ExternalNotification{Body: "main"}, events.TraceContext{})
+	if handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "main", reply); err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the reply held", handled, err)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("the premise: resumed %d times into a budget with no room", n)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held reply's resume: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want once", len(calls))
+	}
+	want := types.RunSpend{Collected: true, Whole: true, Models: asked.Models}
+	if fmt.Sprint(calls[0].RunSpend) != fmt.Sprint(want) || calls[0].CostUSD != 0.02 {
+		t.Errorf("the held reply resumed with spend %+v at $%v, want the asking run's %+v at $0.02",
+			calls[0].RunSpend, calls[0].CostUSD, want)
+	}
+	rig.finished("t1")
+}
+
+// A RESULT HELD IN ITS BOX RESUMES WITH ITS SPEND. Too large for the row, it
+// was held as a reference to the box, and the resume collects it from there
+// again — which is where its spend is read back, since the row keeps none of
+// the result: a resume that took its text from the box and its spend from the
+// row would report the run as unaccounted for.
+func TestAResultHeldInItsBoxResumesWithItsSpend(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1, Limit: 1}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	result := spendingResult()
+	result.Text = strings.Repeat("f", MaxHeldAnswerBytes)
+	rig.runner.Finish(result)
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if held, ok := rig.get("t1").Held(); !ok || !held.InBox || held.Spend != nil {
+		t.Fatalf("the premise: the row holds %+v, want a reference to the box and nothing else", held)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if err := rig.signalReady(t, coordinator, "t1"); err != nil {
+		t.Fatalf("the held result's resume: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want once", len(calls))
+	}
+	want := types.RunSpend{Collected: true, Whole: true, Models: result.Models}
+	if fmt.Sprint(calls[0].RunSpend) != fmt.Sprint(want) || calls[0].CostUSD != result.CostUSD {
+		t.Errorf("the box's result resumed with spend %+v at $%v, want %+v at $%v",
+			calls[0].RunSpend, calls[0].CostUSD, want, result.CostUSD)
+	}
+	rig.finished("t1")
 }

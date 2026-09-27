@@ -49,8 +49,8 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	// THE KIND IS THE RECORD'S OWN, and it is a different fact from
 	// whether anybody was told.
 	//
-	// It used to be the NOTIFICATION's, which made the feed's vocabulary a
-	// property of whether the change had an audience: the same catalogue
+	// Taken from the NOTIFICATION instead, the feed's vocabulary would be
+	// a property of whether the change had an audience: the same catalogue
 	// edit filed as `catalogue_updated` when somebody heard about it and
 	// as `patch` when nobody did — and a quiet purge as `purge`, which is
 	// not a [ChangeKind] at all, so `kinds=purged` could never find it.
@@ -73,12 +73,12 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	}
 	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet.
 	//
-	// They used to be the NOTIFICATION's, which made "what changed" a
-	// property of what was ANNOUNCED: a quiet status change wrote `{}`
-	// here and produced no span, so every report derived from the spans
-	// silently omitted it. The two are the same function of the same two
-	// documents — see [TaskDeltas] — so nothing is lost by taking the
-	// applier's, and what is gained is that a record nobody was told
+	// Taken from the NOTIFICATION instead, "what changed" would be a
+	// property of what was ANNOUNCED: a quiet status change would write
+	// `{}` here and produce no span, so every report derived from the
+	// spans would silently omit it. The two are the same function of the
+	// same two documents — see [TaskDeltas] — so nothing is lost by taking
+	// the applier's, and what is gained is that a record nobody was told
 	// about is still a record of what happened.
 	if len(applied) > 0 {
 		fields = jsonOf(applied)
@@ -187,19 +187,17 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 //
 // # Why only the newest row is read
 //
-// This derived the whole `tracker_status_spans` table until migration 0014
-// dropped it — one DELETE, a walk of the task's entire status history and one
-// INSERT per historical status change, to maintain rows nothing selected from.
-// What survived that table is this single column, and the column is the NEWEST
-// status change's instant, so the read is one seek on
-// `tracker_history_subject_idx` rather than a walk. The rows the spans held
-// are still derivable: they were a function of `tracker_history`, which is
-// never swept.
+// The column is the NEWEST status change's instant, so the read is one seek
+// on `tracker_history_subject_idx` rather than a walk of the task's status
+// history — and an apply that maintained a row per historical status change
+// would pay that walk on every status change of every task, for rows no read
+// selects from. Any span between two status changes is a function of
+// `tracker_history`, which nothing deletes a row from.
 //
-// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately and unlike the spans
-// this replaced. A span with no group was a span no report could read, so an
-// unknown status was skipped; this column is an INSTANT, it needs no group,
-// and skipping would leave it naming an older change than the one the task
+// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately. A span needs a
+// status group for a report to read it, so a span over an unknown status
+// would have to be skipped; this column is an INSTANT, it needs no group, and
+// skipping would leave it naming an older change than the one the task
 // actually last made.
 func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
 	var at int64
@@ -378,27 +376,26 @@ func batchOf(rec MutationRecord) any {
 // fallbackKind is what a record that names no kind and carries no notification
 // is filed under.
 //
-// # It is the compatibility rung, and it used to be the ordinary one
+// # It is the compatibility rung
 //
 // Every record this build writes states its own kind ([MutationRecord.Kind]),
 // so this is reached only for a record an older build wrote QUIETLY — which a
-// rolling upgrade makes real traffic for as long as one takes, and never
-// after. It stays for exactly that window and is the only thing that can ever
-// read such a row.
+// rolling upgrade makes real traffic for as long as one takes, and a replay of
+// the log carries for as long as the log keeps such a record. It is the only
+// thing that can ever read one.
 //
 // BY WHAT MOVED, in a fixed precedence, because the kind is what every feed
 // filter selects on. The order puts `status` first for the same reason the
 // spans read the delta: it is the change other tables are derived from.
 //
-// # AND IT ANSWERS ONLY IN [ChangeKind]s, which is the half that was wrong
+// # AND IT ANSWERS ONLY IN [ChangeKind]s, never in the operation cast
 //
-// It used to end at `ChangeKind(op)` — the OPERATION, cast. That is a
-// different vocabulary: `patch`, `tombstone`, `restore` and `purge` are
-// [OpKind]s, none of them is a valid [ChangeKind], and three of them are
-// near-misses of one (`removed`, `restored`, `purged`). So a quiet removal
-// filed as `tombstone` and `kinds=removed` did not find it — a filter looking
-// at the right word for a row written under the wrong one, with nothing on
-// either side to say so.
+// `ChangeKind(op)` would be a different vocabulary: `patch`, `tombstone`,
+// `restore` and `purge` are [OpKind]s, none of them is a valid [ChangeKind],
+// and three of them are near-misses of one (`removed`, `restored`, `purged`).
+// So a quiet removal filed as `tombstone` would be missed by `kinds=removed` —
+// a filter looking at the right word for a row written under the wrong one,
+// with nothing on either side to say so.
 func fallbackKind(applied map[string]Delta, op OpKind) ChangeKind {
 	switch op {
 	case OpCreate:

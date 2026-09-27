@@ -123,7 +123,7 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindGeneration:
 		return pages.OpGeneration, pages.Generation{
-			V: pages.GateRecordVersion, Generation: 2, By: "suite",
+			V: pages.DocumentVersion, Generation: 2, By: "suite",
 			StreamCreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindBarrier:

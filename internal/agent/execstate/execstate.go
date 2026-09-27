@@ -87,6 +87,23 @@ type State struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 
+	// Model is the model the pre-suspend rounds' first completion reported
+	// serving it, and Models their tokens split by the model each completion
+	// reported — the tool loop's own Result.Model and Result.Models
+	// (internal/agent/toolloop), in the phase record's `models` shape. Carried
+	// for the reason the tokens are: the resumed phase's record is the
+	// phase's only one, so it names the model the PHASE began on and bills
+	// each pre-suspend round to the model that served it, rather than billing
+	// them all to whichever model answered first after the resume.
+	//
+	// Additive within v2, and a contract between PEERS: a build that
+	// predates these decodes the state without them and resumes the phase
+	// as it always did, and a suspension it writes carries neither. Such a
+	// row resumes here with the pre-suspend tokens under no split, which the
+	// spend rollups count under the record's model (internal/tokens).
+	Model  string             `json:"model,omitempty"`
+	Models []types.ModelSpend `json:"models,omitempty"`
+
 	// ToolExecutions is what the pre-suspend rounds actually ran. The
 	// resumed phase's ledger entry is built from these plus its own, which
 	// is what stops a resumed turn re-firing a delivery that already went.

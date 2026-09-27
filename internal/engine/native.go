@@ -501,10 +501,6 @@ type ReplicationStatus struct {
 	// Name is the domain, which is what an operator sees.
 	Name string
 
-	// Kind is the mechanism the row describes. `domain`, a state-log
-	// applier, is the only one a node runs.
-	Kind string
-
 	// Ready is whether this copy is one a seat's tools may be attached to.
 	// It is NOT strict readiness — see [Engine.NativeHydrated], which asks
 	// the stricter question that actually gates admission.

@@ -575,10 +575,9 @@ func keptThrough[T any](stored []byte) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-// AND AN OBJECT WITH NOTHING UNKNOWN ENCODES AS ITS STRUCT DOES — in field
-// order, not the sorted order a merge with unknown keys takes — so every
-// document this build writes itself is the bytes it was before the round trip
-// existed, and a key spelled with other case is decoded once, not kept too.
+// AND AN OBJECT WITH NOTHING UNKNOWN ENCODES AS ITS STRUCT DOES, in field
+// order — so every document this build writes itself is its struct's own
+// bytes — and a key spelled with other case is decoded once, not kept too.
 func TestAnObjectWithNothingUnknownEncodesAsItsStruct(t *testing.T) {
 	t.Parallel()
 	out, err := json.Marshal(tracker.Task{V: 1, ID: "t-1", Title: "a task"})

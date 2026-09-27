@@ -12,20 +12,19 @@ import (
 
 // The inbox retention sweep.
 //
-// # It was designed, indexed, configured — and never written
+// # The horizon is read in two places, and only this one deletes
 //
 // `tracker_notifications` ships `tracker_notifications_swept_idx ON
 // (created_at)`, whose migration comment names "the per-node inbox retention
-// sweep, which is a range delete". `tracker.native.inbox_retention_days` is a
-// validated company setting with a default, a floor and a ceiling, and its
-// package doc says it is "the one horizon here that deletes anything". Nothing
-// deleted anything: the horizon was read at APPLY time, where it stops a whole-
-// log replay rebuilding an expired inbox, and no row ever aged out afterwards.
+// sweep, which is a range delete", and `tracker.native.inbox_retention_days`
+// is a validated company setting with a default, a floor and a ceiling. The
+// applier reads the horizon too, at APPLY time, where it stops a whole-log
+// replay rebuilding an expired inbox — and that ages nothing out afterwards.
 //
-// So every routed change wrote a row per recipient and kept it for the life of
-// the deployment — on every node, since each applies the same log. That is the
-// exact failure the maintenance package doc names about the `<domain>_ops`
-// tables, one table over.
+// Without this sweep every routed change would write a row per recipient and
+// keep it for the life of the deployment — on every node, since each applies
+// the same log. That is the exact failure the maintenance package doc names
+// about the `<domain>_ops` tables, one table over.
 //
 // # [maintenance.NodeLocal], and the table's class is why
 //
@@ -68,8 +67,8 @@ func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
 // pool's competition; this runs once a tick and is done, so a pin here is a
 // per-run pin and unpin with the declared-count bookkeeping attached — and
 // every pin the replicated estate declares belongs to a domain's applier for
-// the life of the process, so asking for one was refused on every tick of a
-// running node. A pooled write transaction takes the same write lock through
+// the life of the process, so asking for one would be refused on every tick
+// of a running node. A pooled write transaction takes the same write lock through
 // the same queue (see internal/store's writequeue.go), which is all this
 // needs.
 func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {

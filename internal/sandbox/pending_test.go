@@ -1370,6 +1370,13 @@ func (l lowRunServer) CreateSuspensionPart(ctx context.Context, turnID, launchID
 	return l.Fleet.CreateSuspensionPart(ctx, turnID, launchID, part, value)
 }
 
+func (l lowRunServer) CreateAnswerPart(ctx context.Context, turnID, launchID, answerID string, part int, value []byte) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.CreateAnswerPart(ctx, turnID, launchID, answerID, part, value)
+}
+
 // A SERVER BELOW THE CEILING DOES NOT LOSE THE CONVERSATION. It refuses a row
 // the contract's ceiling admits — a node does not boot against one, but a
 // reconnect can reach one — and the refusal is permanent, so the conversation
@@ -1833,9 +1840,9 @@ func TestAMemberDecodedIntoAFieldIsNotCarriedBesideIt(t *testing.T) {
 	}
 }
 
-// AN ANSWER HELD FOR ANOTHER LAUNCH IS NOBODY'S. A build that does not know the
-// field carries it through a relaunch as it carries every member it does not
-// know, so it names its launch, and the row's own launch has to match it.
+// AN ANSWER HELD FOR ANOTHER LAUNCH IS NOBODY'S. It answers a call that launch
+// made and the row's own launch never did, so it names its launch, and the
+// row's own launch has to match it.
 func TestAnAnswerHeldForAnotherLaunchIsNobodys(t *testing.T) {
 	t.Parallel()
 	run := sandbox.PendingRun{LaunchID: "l-2", HeldAnswer: &sandbox.HeldAnswer{Launch: "l-1", Text: "old"}}

@@ -73,12 +73,12 @@ type ErrAmbiguousAnswer struct {
 	//
 	// It is what makes the count honest. The read takes one row more than it
 	// will name so it can tell "five" from "at least five", and that extra
-	// row used to be left on Asks and counted: a seat with nine open asks
-	// was told "6 open questions on this item are addressed to you", a
-	// number that is neither the five it went on to list nor the nine that
-	// exist. A refusal a model reads is the wrong place to state a
-	// fabricated total — it is the one number the model has no way to
-	// check, and its next move is chosen against it.
+	// row is dropped from Asks rather than counted: left on, a seat with
+	// nine open asks would be told "6 open questions on this item are
+	// addressed to you", a number that is neither the five it went on to
+	// list nor the nine that exist. A refusal a model reads is the wrong
+	// place to state a fabricated total — it is the one number the model
+	// has no way to check, and its next move is chosen against it.
 	More bool
 
 	Actor string
@@ -101,7 +101,7 @@ func (e *ErrAmbiguousAnswer) Error() string {
 //
 // "AT LEAST N" WHERE THE PROBE FIRED, because that is the whole of what one
 // extra row buys: the read stops at [MaxOpenAsksNamed]+1, so past the bound the
-// exact number was never counted and claiming one is inventing it.
+// exact number is not counted and claiming one is inventing it.
 func (e *ErrAmbiguousAnswer) count() string {
 	if e.More {
 		return "at least " + strconv.Itoa(len(e.Asks))
@@ -313,15 +313,16 @@ func askAuthor(ctx context.Context, tx *sql.Tx, task, comment, author string) (s
 // AskExcerptShown is how much of each candidate question a refusal quotes.
 //
 // A HUNDRED AND TWENTY BYTES, which is the opening sentence of a question —
-// enough to tell two apart, which is the entire job of this list. It was an
-// inline SQL literal with no name, no reason and no MARKER, so an excerpt that
-// stopped mid-word read as a question that really ended there, and two
-// questions sharing an opening clause rendered identically. The reader then
-// picks one, and `askAuthor` stamps it answered on somebody's behalf.
+// enough to tell two apart, which is the entire job of this list. Named, with
+// its reason, and MARKED where it cuts: unmarked, an excerpt that stopped
+// mid-word would read as a question that really ended there, and two questions
+// sharing an opening clause would render identically. The reader then picks
+// one, and `askAuthor` stamps it answered on somebody's behalf.
 //
 // The whole body is one read away — every candidate carries its comment id,
-// which is the argument the caller is being asked for — so this is a pointer
-// rather than a loss.
+// which is the argument the caller is being asked for, and `get_work_item`
+// with `comment` set to it answers that comment whole ([DetailWants.Comment])
+// — so this is a pointer rather than a loss.
 const AskExcerptShown = 120
 
 // MaxOpenAsksNamed is how many candidates an ambiguous-answer refusal lists.

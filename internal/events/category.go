@@ -114,8 +114,10 @@ var categories = map[string]string{
 	"compaction_completed":         "learning",
 
 	// One auxiliary completion's spend. Filed with the work that makes it —
-	// the reflection workers, the background passes and the prefetch — so
-	// the one toggle that hides that traffic hides its cost rows with it.
+	// the reflection workers, the background passes, the prefetch and the
+	// recall tools — so the activity log's category filter shows and hides
+	// these rows with that traffic. The spend rollups fold them whatever the
+	// log shows.
 	"auxiliary_call_completed": "learning",
 }
 
@@ -152,8 +154,10 @@ var excluded = map[string]string{
 		"two million a year per node to answer a question the live projection " +
 		"and GET /budgets answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded in the rows " +
-		"internal/tokens aggregates — agent_phase_completed per phase and " +
-		"auxiliary_call_completed per auxiliary completion — so \"what did " +
+		"internal/tokens aggregates — agent_phase_completed per phase, a " +
+		"coding run's own spend on the record of the phase its resume " +
+		"re-enters, and auxiliary_call_completed per auxiliary completion " +
+		"— so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
 		"reading at 14:03:15\" is not a question anybody asks",
 	"tool_skill_page_changed": "a NUDGE between nodes that one tool-skill " +

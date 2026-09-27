@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -94,12 +95,21 @@ func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 	}
 }
 
-// A DEFERRED RECORD ABOUT ANOTHER TASK DOES NOT MAKE THIS ONE INCOMPLETE.
+// A DEFERRED RECORD ABOUT ANOTHER TASK DOES NOT TOUCH THIS ONE, AND THE TASK
+// IT IS ABOUT IS REFUSED.
 //
 // The coverage probe is scoped to the OBJECT here and to the container on a
 // board, and the difference is the whole reason they are two calls: a company
-// holding one undecodable record about one task would otherwise carry a
-// permanent warning on every task it has.
+// holding one undecodable record about one task would otherwise refuse every
+// task it has. And a point read REFUSES where a board reports a gap, because
+// the answer is about that one task and its rows may already be wrong.
+//
+// This harness's node reports nothing deferred, so the framework's own probe
+// never runs and the refusal is the one the read's transaction makes — the
+// probe that covers a task this node did not hold before the read.
+//
+// Mutation: answer the probe's hit with Complete false instead of a refusal,
+// and the affected task reads back.
 func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -111,24 +121,74 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	detail, err := r.reader.Task(t.Context(), mine.ID, tracker.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		t.Fatalf("a deferred record about another task refused this one: %v", err)
 	}
 	if !detail.Complete {
 		t.Fatalf("a deferred record about another task made this one "+
 			"incomplete: %+v", detail.Incomplete)
 	}
 
-	flagged, err := r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
+	_, err = r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadSession})
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("the task the deferred record is ABOUT answered %v, want the "+
+			"read refused as deferred", err)
+	}
+	if !strings.Contains(refused.Detail, other.ID) {
+		t.Errorf("the refusal says %q, which does not name the task", refused.Detail)
+	}
+}
+
+// A RECORD DEFERRED ON A TASK'S PROJECT REFUSES THE TASK BEFORE THE READ WAITS.
+//
+// A scope path nests an object under its container, so the record filed under
+// the project covers every task in it. The framework's own probe runs before
+// any wait and meets it only when the read names the task under that project —
+// named under the workspace, the read waited out a floor this node never
+// reaches and was refused as behind, for a task whose rows no wait can fix.
+//
+// Mutation: form the framework read's scope from the reference alone and this
+// answers `behind`.
+func TestARecordDeferredOnTheProjectRefusesTheTaskBeforeItWaits(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := r.createTask("in a project somebody's newer build wrote to")
+	r.deferRecordAt(task.ID, tracker.ScopeTerm{
+		Kind: tracker.TermContainer, ID: task.Project,
+	}.Path())
+
+	at := statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 1}
+	var lag, first, floor uint64 = 0, 1, 0
+	log, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: tracker.Domain{}, DB: r.db.Replicated(), Waiter: stuckWaiter{at: at},
+		Health: func() statelog.Health {
+			return statelog.Health{
+				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
+				Lag:   &lag, FirstSeq: &first, TrimFloor: &floor,
+				Deferred: 1,
+			}
+		},
+	})
 	if err != nil {
-		t.Fatalf("read the affected task: %v", err)
+		t.Fatalf("build the framework reader: %v", err)
 	}
-	if flagged.Complete {
-		t.Fatal("the task the deferred record is ABOUT reports complete, so " +
-			"the probe cannot report anything at all")
+	reader, err := tracker.NewReader(r.db, log)
+	if err != nil {
+		t.Fatalf("build the tracker reader: %v", err)
 	}
-	if flagged.Incomplete == nil || flagged.Incomplete.Records != 1 {
-		t.Fatalf("the affected task reports %+v", flagged.Incomplete)
+
+	// A FLOOR THIS NODE NEVER REACHES, so a read the probe let through
+	// waits and is refused as behind.
+	_, err = reader.Task(t.Context(), task.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession, MinPosition: statelog.Position{
+			Stream: at.Stream, Generation: at.Generation, Seq: at.Seq + 1,
+		}})
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("a task in a project a deferred record covers answered %v, "+
+			"want the read refused as deferred before it waited", err)
 	}
 }
 
@@ -211,9 +271,15 @@ func (r *roundTrip) relate(from, to string, kind tracker.RelationKind) {
 // record from a newer build looks like on this node.
 func (r *roundTrip) deferRecordOn(taskID, project string) {
 	r.t.Helper()
-	scope := tracker.ScopeTerm{
+	r.deferRecordAt(taskID, tracker.ScopeTerm{
 		Kind: tracker.TermObject, ID: taskID, Container: project,
-	}.Path()
+	}.Path())
+}
+
+// deferRecordAt writes a deferred record on one task whose declared scope is
+// one path.
+func (r *roundTrip) deferRecordAt(taskID, scope string) {
+	r.t.Helper()
 	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO tracker_log_deferred
@@ -230,6 +296,23 @@ func (r *roundTrip) deferRecordOn(taskID, project string) {
 	}); err != nil {
 		r.t.Fatalf("defer a record: %v", err)
 	}
+}
+
+// stuckWaiter is a node's applier that never moves past where it is.
+type stuckWaiter struct{ at statelog.Position }
+
+func (w stuckWaiter) Committed() statelog.Position { return w.at }
+
+func (w stuckWaiter) WaitCommitted(_ context.Context, p statelog.Position) error {
+	if p.Packed() <= w.at.Packed() {
+		return nil
+	}
+	return errors.New("this applier does not move")
+}
+
+func (w stuckWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
+	p statelog.Position) error {
+	return w.WaitCommitted(ctx, p)
 }
 
 func strptr(s string) *string { return &s }

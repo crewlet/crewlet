@@ -16,14 +16,17 @@
 //
 // # What a record is
 //
-// One spend event, as either producer read it: a turn's phase record
-// (`agent_phase_completed`), or one auxiliary completion
+// One spend event, as both producers read it: a turn's phase record
+// (`agent_phase_completed`), or one completion on a seat's auxiliary model
 // (`auxiliary_call_completed`), which internal/engine publishes for every
-// completion the learning workers and the turn-start prefetch make. A record
-// carries its own model split ([Record.Models]) and says when part of its spend
-// was never reported ([Record.Unreported]), and the fold honours both:
-// `by_model` is what each completion reported rather than the first model a
-// phase met, and a total that is only a floor carries a count saying so.
+// completion made through a model its auxiliary seam resolved — a learning
+// worker's, a background learning pass's, the turn-start prefetch's, and the
+// memory filter `refresh_memory` re-runs inside a turn. A record carries its
+// own model split ([Record.Models]) and says when part of its spend was never
+// reported ([Record.Unreported]), and the fold honours both: `by_model` is
+// what each completion reported rather than the first model a phase met, and a
+// total that is only a floor carries a count saying so. [Record.shares] says
+// exactly what each `by_model` row holds.
 package tokens
 
 import (
@@ -79,7 +82,8 @@ type Record struct {
 	Worker string `json:"worker"`
 	// Model is the model the record names: on a phase record the first
 	// model a completion of the phase reported, on an auxiliary record the
-	// one completion's.
+	// one completion's — and, on a record that names none, the provider key
+	// it ran on, which both producers read in its place.
 	Model string `json:"model"`
 
 	// Models is what each model that served the record accounts for, when
@@ -134,8 +138,10 @@ type Record struct {
 type ModelSpend struct {
 	// Model is the model a completion reported serving the call, or the
 	// configured model of the provider that served it where the completion
-	// named none. Empty is a model nobody named, which the rollup files
-	// under "unknown" like any other unnamed dimension.
+	// named none. Empty is spend reported under no model's name — what a
+	// coding agent that reports only totals leaves — which the rollup files
+	// under "unknown" like any other unnamed dimension, apart from
+	// [UnmeasuredModel].
 	Model        string `json:"model"`
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
@@ -240,8 +246,33 @@ func (b *Bucket) fold(o Bucket) {
 // lose.
 const costNoise = 5e-7
 
-// shares splits a record into one record per model that served it — the unit
-// the per-model breakdown and the model bands count.
+// UnmeasuredModel is the `by_model` key, and the model band, of the calls part
+// of whose spend nobody reported ([Record.Unreported]).
+//
+// Its OWN key rather than "unknown", which the rollup files spend under when it
+// was REPORTED with no model's name: the two answer different questions — "who
+// spent these measured tokens" against "how many calls went partly unmeasured"
+// — and one row summing both would read a coding agent that reports totals
+// only as unmeasured, and an unmeasured run as spend of a known size.
+const UnmeasuredModel = "unmeasured"
+
+// shares splits a record into the parts the per-model breakdown and the model
+// bands count, each under the key of the row it lands in.
+//
+// WHAT EACH ROW HOLDS:
+//
+//   - A model's own name: the tokens and price the record's split attributes
+//     to that model, and — under the record's own [Record.Model] — whatever
+//     part of the record the split does not cover. One call of each model the
+//     record names.
+//   - "unknown": spend that was REPORTED under no model's name — a split entry
+//     naming none, which is what a coding agent that reports only totals
+//     leaves — and a record that names no model at all. The tokens are
+//     measured; only the name is missing.
+//   - [UnmeasuredModel]: one call for each record part of whose spend nobody
+//     reported, and no tokens. Nobody reported which model spent what nobody
+//     reported, so every figure in the rows beside it is one that was
+//     measured.
 //
 // THE SPLIT IS TRUSTED ONLY WHERE IT FITS INSIDE ITS RECORD. A split whose
 // tokens or price sum past the record's own figures, or with a negative entry,
@@ -252,23 +283,17 @@ const costNoise = 5e-7
 // WHAT A SPLIT DOES NOT COVER COUNTS UNDER THE RECORD'S OWN MODEL: a record
 // whose split names part of its spend — a phase that carried rounds from
 // before a suspension, written by a build that kept no split for them — loses
-// none of the rest. So the shares always sum to the record's own figures, and
+// none of the rest. So the shares' tokens always sum to the record's own, and
 // `by_model` always sums to the totals.
 //
-// AN UNREPORTED PART IS A SHARE OF ITS OWN, under no model's name: nobody
-// reported which model spent what nobody reported. It carries no tokens and
-// counts one call, so the per-model breakdown has a row that says a record's
-// spend went unmeasured instead of folding that into a named model's figures,
-// which were measured.
-//
-// Shares naming one model are merged, so a record counts as one call of each
-// model it names however its split was written.
-func (r Record) shares() []Record {
+// Parts under one key are merged, so a record counts as one call in each row
+// it reaches however its split was written.
+func (r Record) shares() []part {
 	whole := r
 	whole.Models, whole.Unreported = nil, false
-	out := make([]Record, 0, len(r.Models)+2)
+	out := make([]part, 0, len(r.Models)+2)
 	if !r.splitFits() {
-		out = append(out, whole)
+		out = append(out, part{orUnknown(whole.Model), whole})
 	} else {
 		covered := whole
 		covered.InputTokens, covered.OutputTokens, covered.TotalTokens, covered.CostUSD = 0, 0, 0, 0
@@ -278,7 +303,7 @@ func (r Record) shares() []Record {
 			share.InputTokens, share.OutputTokens = m.InputTokens, m.OutputTokens
 			share.TotalTokens = m.InputTokens + m.OutputTokens
 			share.CostUSD = m.CostUSD
-			out = mergeShare(out, share)
+			out = mergeShare(out, part{orUnknown(share.Model), share})
 			covered.InputTokens += share.InputTokens
 			covered.OutputTokens += share.OutputTokens
 			covered.TotalTokens += share.TotalTokens
@@ -293,7 +318,7 @@ func (r Record) shares() []Record {
 			rest.CostUSD = 0
 		}
 		if rest.InputTokens > 0 || rest.OutputTokens > 0 || rest.TotalTokens > 0 || rest.CostUSD > 0 {
-			out = mergeShare(out, rest)
+			out = mergeShare(out, part{orUnknown(rest.Model), rest})
 		}
 	}
 	if r.Unreported {
@@ -301,7 +326,7 @@ func (r Record) shares() []Record {
 		unmeasured.Model = ""
 		unmeasured.InputTokens, unmeasured.OutputTokens, unmeasured.TotalTokens, unmeasured.CostUSD = 0, 0, 0, 0
 		unmeasured.Unreported = true
-		out = mergeShare(out, unmeasured)
+		out = mergeShare(out, part{UnmeasuredModel, unmeasured})
 	}
 	return out
 }
@@ -327,18 +352,18 @@ func (r Record) splitFits() bool {
 		cost <= r.CostUSD+costNoise
 }
 
-// mergeShare adds a share to the list, into the share already naming its model
+// mergeShare adds a share to the list, into the share already under its key
 // when there is one.
-func mergeShare(list []Record, share Record) []Record {
+func mergeShare(list []part, share part) []part {
 	for i := range list {
-		if list[i].Model != share.Model {
+		if list[i].key != share.key {
 			continue
 		}
-		list[i].InputTokens += share.InputTokens
-		list[i].OutputTokens += share.OutputTokens
-		list[i].TotalTokens += share.TotalTokens
-		list[i].CostUSD += share.CostUSD
-		list[i].Unreported = list[i].Unreported || share.Unreported
+		list[i].rec.InputTokens += share.rec.InputTokens
+		list[i].rec.OutputTokens += share.rec.OutputTokens
+		list[i].rec.TotalTokens += share.rec.TotalTokens
+		list[i].rec.CostUSD += share.rec.CostUSD
+		list[i].rec.Unreported = list[i].rec.Unreported || share.rec.Unreported
 		return list
 	}
 	return append(list, share)
@@ -353,11 +378,11 @@ type PhaseRow struct {
 // ModelRow is the per-model breakdown of a rollup.
 //
 // Built from what each completion reported serving it, through the record's
-// own split ([Record.shares]), never from a provider's configured name alone: a
-// fallback chain serves several models under one key, and one phase's rounds
-// can be served by more than one of them. A record two models served is a call
-// of each, so the rows' calls can sum past the totals' while their tokens sum to
-// exactly the totals'.
+// own split ([Record.shares], which says what each row holds), never from a
+// provider's configured name alone: a fallback chain serves several models
+// under one key, and one phase's rounds can be served by more than one of them.
+// A record two models served is a call of each, so the rows' calls can sum past
+// the totals' while their tokens sum to exactly the totals'.
 type ModelRow struct {
 	Model string `json:"model"`
 	Bucket
@@ -533,7 +558,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 		out.Totals.add(r)
 		bucketFor(byPhase, phase).add(r)
 		for _, share := range r.shares() {
-			bucketFor(byModel, orUnknown(share.Model)).add(share)
+			bucketFor(byModel, share.key).add(share.rec)
 		}
 		if id, ok := workerOf(r); ok {
 			bucketFor(byWorker, id).add(r)

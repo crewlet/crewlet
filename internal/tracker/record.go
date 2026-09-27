@@ -39,13 +39,11 @@ import (
 const (
 	// MaxTitle and MaxBody bound a task's own text.
 	//
-	// MaxBody IS SIZED AGAINST THE ANSWER THAT RETURNS IT WHOLE, which is
-	// the relationship it did not have: at 64 KiB it was exactly
-	// [builtin.ToolAnswerBytes], so a body at its cap could not be sent
-	// beside ANY envelope — a task alone at the old cap encoded to 65,915
-	// bytes against a 65,536 ceiling, and `get_work_item` on it was
-	// refused for weight with no argument that would narrow it. A cap a
-	// read can never return is a cap that stores what nobody can get back.
+	// MaxBody IS SIZED AGAINST THE ANSWER THAT RETURNS IT WHOLE. At
+	// [builtin.ToolAnswerBytes] itself, a body at its cap could not be sent
+	// beside ANY envelope, and `get_work_item` on it would be refused for
+	// weight with no argument that would narrow it. A cap a read can never
+	// return is a cap that stores what nobody can get back.
 	//
 	// 32 KiB is ≈ 8,000 words, the same ceiling a comment takes, and it
 	// leaves the whole-body read a 2× margin for JSON escaping. Longer
@@ -117,16 +115,14 @@ const (
 	// DERIVED FROM THE ITEMS, because an assignee sits on an ITEM and not
 	// on a list: a task holds [MaxChecklistItemsTotal] items across
 	// [MaxChecklists] lists, and every one of them can name a different
-	// person. This was [MaxChecklists] — sixteen, the cap on the number of
-	// LISTS — applied to a set the number of ITEMS bounds, which is the one
-	// cap in the notification family whose stated justification did not
-	// describe what it capped.
+	// person. [MaxChecklists] — sixteen, the cap on the number of LISTS —
+	// would be the wrong knob here, applied to a set the number of ITEMS
+	// bounds.
 	//
-	// The cost of the wrong knob was not a short list. `checklistAssignees`
-	// sorted the handles before it cut them, so past sixteen people the
-	// seventeenth BY ALPHABET lost their wake — silently, and permanently:
-	// a wake is not recoverable by reading the task later, because nothing
-	// tells them to look.
+	// And the cost of a knob below the set is not a short list: a cut over
+	// the sorted handles would lose the next person BY ALPHABET their wake
+	// — silently, and permanently: a wake is not recoverable by reading the
+	// task later, because nothing tells them to look.
 	//
 	// TWICE THE ITEM TOTAL, because the set is a UNION of two checklists:
 	// `checklistAssignees` names the owner of every item a commit added,
@@ -185,13 +181,11 @@ const (
 // checkTextCaps refuses a write whose own text is past the cap its field
 // declares — [MaxTitle], [MaxBody], [MaxCommentBody].
 //
-// THE PRODUCER THOSE CAPS NEVER HAD. The block above has said since it was
-// written that each is "refused at WRITE naming the field, never cut", and
-// nothing refused any of them: a search for the three constants found their
-// declaration, one alias and four doc comments, and not one comparison. The
-// nearest bound that did fire was [MaxCommitBytes], about forty times these
-// and phrased about the RECORD rather than the field, so a caller past a cap
-// got either silence or a number they could not act on.
+// THE ONE PLACE THOSE CAPS ARE ENFORCED. The block above says each is
+// "refused at WRITE naming the field, never cut", and this is that refusal.
+// Without it the nearest bound would be [MaxCommitBytes], about forty times
+// these and phrased about the RECORD rather than the field, so a caller past a
+// cap would get either silence or a number they could not act on.
 //
 // A comment is where that cost is visible, because the read side was built on
 // the promise: the thread page carries [CommentBodyShown] precisely because a
@@ -231,15 +225,15 @@ func checkTextCaps(id string, title, body, comment *string) error {
 // checkChecklistCaps refuses a checklist tree past the caps that declare it —
 // [MaxChecklists], [MaxChecklistItems] and [MaxChecklistItemsTotal].
 //
-// IT HAD NO IMPLEMENTATION. The three constants sat under a header promising
-// "Each is refused at WRITE naming the field, never cut", and nothing read any
-// of them: a task could carry any number of lists holding any number of items,
-// and the only code that mentioned the caps was a test.
+// THE ONE PLACE THOSE CAPS ARE ENFORCED. The three constants sit under a
+// header promising "Each is refused at WRITE naming the field, never cut", and
+// without this a task could carry any number of lists holding any number of
+// items.
 //
-// What that cost is one cap over: [MaxChecklistAssignees] is derived from the
-// item total on the reasoning that one commit cannot touch more distinct
-// owners than the items on its two sides, which is only true while the item
-// total is a bound rather than a sentence. Without this the routing cap sits
+// What that would cost is one cap over: [MaxChecklistAssignees] is derived
+// from the item total on the reasoning that one commit cannot touch more
+// distinct owners than the items on its two sides, which is only true while
+// the item total is a bound rather than a sentence. Without this the routing cap sits
 // on an unenforced number and the snapshot that exceeds it is REFUSED at
 // [Notify.checkSnapshot] — turning an unbounded checklist into a failed write
 // on the commit that touches it, which is the worst place to discover it.
@@ -287,6 +281,8 @@ type Spend struct {
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
 	Tokens     int `json:"tokens,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Tombstone is an operator's removal.
@@ -300,6 +296,8 @@ type Tombstone struct {
 	Kind        AuthorKind `json:"kind"`
 	At          time.Time  `json:"at"`
 	RemovedWith *string    `json:"removed_with,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // RelationKind is what one task is to another.
@@ -359,8 +357,8 @@ type Relation struct {
 	// a fact about the blocker's own rows, so the applier derives it —
 	// see the `one_sided` case in writeChildren. A writer stating it would
 	// be stating what it read in another transaction about another
-	// subject, which is why the field existed for so long with no producer
-	// and the repair duty it was declared for had nothing to select.
+	// subject — and a field no writer can honestly fill leaves the repair
+	// duty it is declared for nothing to select.
 	OneSidedFinal bool `json:"one_sided_final,omitempty"`
 }
 
@@ -383,6 +381,8 @@ type Checklist struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Items []ChecklistItem `json:"items,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Task is the object almost every record is about.
@@ -581,6 +581,8 @@ type Comment struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // BodyRevision is the body a task held at one version, carried in the same
@@ -596,6 +598,8 @@ type BodyRevision struct {
 	Author     string     `json:"author,omitempty"`
 	AuthorKind AuthorKind `json:"author_kind,omitempty"`
 	At         time.Time  `json:"at"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // KeyAlias is a row created by the commit that mints or moves a key.
@@ -607,6 +611,8 @@ type KeyAlias struct {
 	Key     string `json:"key"`
 	TaskID  string `json:"task_id"`
 	Current bool   `json:"current,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Counter is a project's key sequence, on its own subject so a mint never
@@ -642,6 +648,8 @@ type RankOrder struct {
 type Placement struct {
 	Task string `json:"task"`
 	Rank Rank   `json:"rank"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Eviction is a node's eviction or its readmission.
@@ -770,10 +778,10 @@ type TaskPatch struct {
 	//
 	// It exists because a caller CANNOT form those sets: the collections
 	// are carried whole, and a tool spelling "watch this" as
-	// `watchers: [me]` replaced everybody already watching — and, because
-	// the change kind is [ChangeWatchers], announced their removal in the
-	// wake it sent. Deciding it anywhere but the decide snapshot means
-	// reading the set in one transaction and writing it in another.
+	// `watchers: [me]` would replace everybody already watching — and,
+	// because the change kind is [ChangeWatchers], announce their removal
+	// in the wake it sent. Deciding it anywhere but the decide snapshot
+	// means reading the set in one transaction and writing it in another.
 	//
 	// NEVER ON THE WIRE. The record an applier sees carries the resolved
 	// collections, so a replay writes rows rather than re-deriving a set
@@ -1043,6 +1051,8 @@ type Option struct {
 	Color    string `json:"color,omitempty"`
 	Order    int    `json:"order,omitempty"`
 	Archived bool   `json:"archived,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Ident and Label make an option resolvable by the shared three-tier rule.
@@ -1056,6 +1066,8 @@ type Rollup struct {
 	Source string `json:"source"`
 	Field  string `json:"field"`
 	Op     string `json:"op"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // FieldConfig is everything a field's type may need.
@@ -1071,6 +1083,8 @@ type FieldConfig struct {
 	Project   string   `json:"project,omitempty"`
 	Multi     bool     `json:"multi,omitempty"`
 	Rollup    *Rollup  `json:"rollup,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // FieldDef is one custom field's declaration.
@@ -1106,6 +1120,8 @@ type FieldDef struct {
 	CreatedBy      string `json:"created_by,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitzero"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Ident and Label make a field resolvable by the shared three-tier rule.
@@ -1127,6 +1143,8 @@ type TaskType struct {
 	Description string `json:"description,omitempty"`
 	Builtin     bool   `json:"builtin,omitempty"`
 	Archived    bool   `json:"archived,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Ident and Label make a type resolvable by the shared three-tier rule.
@@ -1144,6 +1162,8 @@ type Tag struct {
 	Archived    bool      `json:"archived,omitempty"`
 	CreatedBy   string    `json:"created_by,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Ident is the tag's slug.
@@ -1265,6 +1285,8 @@ var ViewTypes = []ViewType{ViewList, ViewBoard, ViewCalendar, ViewTimeline, View
 type Container struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // The container kinds a view or a goal may belong to.
@@ -1323,6 +1345,8 @@ type GoalUpdate struct {
 	Author string    `json:"author"`
 	Health string    `json:"health,omitempty"`
 	Text   string    `json:"text,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // GoalTarget is one measurable outcome.
@@ -1371,12 +1395,16 @@ type InboxEntry struct {
 	RecordID string     `json:"record_id"`
 	Position uint64     `json:"position"`
 	Until    *time.Time `json:"until,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Favorite is one thing a person starred.
 type Favorite struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Person is one human's own state: their inbox, their ordering and their pins.
@@ -1400,9 +1428,9 @@ type Person struct {
 
 	// Generation is anchored to the stream's own identity, and it is the
 	// THIRD belt behind the identity refusal and the wrong-stream read
-	// refusal. It stays because the failure it was written for — a
-	// founder's inbox silently reading empty for ever — is one nobody
-	// would report as a bug.
+	// refusal, kept because the failure it guards against — a founder's
+	// inbox silently reading empty for ever — is one nobody would report
+	// as a bug.
 	Generation string `json:"generation,omitempty"`
 
 	// SeenThrough is a POSITION TRIPLE rather than a number, because a
@@ -1440,6 +1468,8 @@ type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation"`
 	Seq        uint64 `json:"seq"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // MaxCommitBytes is the design maximum for one record, envelope included.
@@ -1486,4 +1516,6 @@ type KeyMint struct {
 	// moving subtree alone. Zero on every other mint.
 	Base   uint64 `json:"base,omitempty"`
 	Length int    `json:"length,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }

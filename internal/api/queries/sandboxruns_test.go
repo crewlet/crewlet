@@ -576,7 +576,8 @@ func TestARunAnOlderBuildRecordedShowsWhatItsRowDropped(t *testing.T) {
 // seat's token budget, with the question answered. A running run whose result
 // is held has a job that finished, its box paused. The board is told which,
 // and since when, so it does not send a person to answer a question somebody
-// already answered; a run holding nothing says nothing.
+// already answered; a run holding nothing says nothing. Nor does a run already
+// claimed to resume with its held answer: it is resuming, and waits on nothing.
 func TestARunWhoseAnswerIsHeldSaysSo(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -584,8 +585,9 @@ func TestARunWhoseAnswerIsHeldSaysSo(t *testing.T) {
 		sandbox.PendingRun{TurnID: "t-reply", AgentHandle: "swe", CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "t-result", AgentHandle: "swe", CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "t-none", AgentHandle: "swe", CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t-resumed", AgentHandle: "swe", CreatedAt: runBase},
 	)
-	for _, turnID := range []string{"t-reply", "t-result", "t-none"} {
+	for _, turnID := range []string{"t-reply", "t-result", "t-none", "t-resumed"} {
 		if ok, err := store.MarkSuspended(ctx, turnID, map[string]any{"version": 2}); err != nil || !ok {
 			t.Fatalf("MarkSuspended %s = %v, %v", turnID, ok, err)
 		}
@@ -597,16 +599,21 @@ func TestARunWhoseAnswerIsHeldSaysSo(t *testing.T) {
 		}
 		return run.LaunchID
 	}
-	for _, turnID := range []string{"t-reply", "t-none"} {
+	for _, turnID := range []string{"t-reply", "t-none", "t-resumed"} {
 		if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{Question: "which branch?"}); err != nil {
 			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
 		}
 	}
 	replied := runBase.Add(time.Hour)
-	if landed, err := store.HoldAnswer(ctx, "t-reply", sandbox.HeldAnswer{
-		Launch: launch("t-reply"), Text: "use main", At: replied,
-	}); err != nil || !landed {
-		t.Fatalf("HoldAnswer = %v, %v", landed, err)
+	for _, turnID := range []string{"t-reply", "t-resumed"} {
+		if landed, err := store.HoldAnswer(ctx, turnID, sandbox.HeldAnswer{
+			Launch: launch(turnID), Text: "use main", At: replied,
+		}); err != nil || !landed {
+			t.Fatalf("HoldAnswer %s = %v, %v", turnID, landed, err)
+		}
+	}
+	if _, won, err := store.ClaimForResume(ctx, "t-resumed", sandbox.HeldTail(launch("t-resumed"))); err != nil || !won {
+		t.Fatalf("ClaimForResume t-resumed = %v, %v", won, err)
 	}
 	claimed, won, err := store.ClaimForResume(ctx, "t-result", sandbox.CompletionTail(launch("t-result")))
 	if err != nil || !won {
@@ -621,11 +628,16 @@ func TestARunWhoseAnswerIsHeldSaysSo(t *testing.T) {
 	}
 
 	want := map[string][2]string{
-		"t-reply":  {string(queries.HeldReply), replied.Format(time.RFC3339Nano)},
-		"t-result": {string(queries.HeldResult), finished.Format(time.RFC3339Nano)},
-		"t-none":   {"", ""},
+		"t-reply":   {string(queries.HeldReply), replied.Format(time.RFC3339Nano)},
+		"t-result":  {string(queries.HeldResult), finished.Format(time.RFC3339Nano)},
+		"t-none":    {"", ""},
+		"t-resumed": {"", ""},
 	}
-	for _, row := range askRuns(t, store) {
+	rows := askRuns(t, store)
+	if len(rows) != len(want) {
+		t.Fatalf("the board lists %d runs, want %d", len(rows), len(want))
+	}
+	for _, row := range rows {
 		turnID, _ := row["turn_id"].(string)
 		if got := [2]string{fmt.Sprint(row["answer_held"]), fmt.Sprint(row["answer_held_at"])}; got != want[turnID] {
 			t.Errorf("%s reads answer_held=%q answer_held_at=%q, want %q", turnID, got[0], got[1], want[turnID])

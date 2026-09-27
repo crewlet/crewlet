@@ -32,7 +32,13 @@ import (
 // its own last position instead.
 func TestEveryTrackerJobIsGatedOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
-	jobs := tracker.Jobs(tracker.DutyDeps{NodeID: "node-a"})
+	r := newRoundTrip(t)
+	jobs, err := tracker.Jobs(tracker.DutyDeps{
+		DB: r.db, Writer: r.writer, NodeID: "node-a", Reader: r.reader,
+	})
+	if err != nil {
+		t.Fatalf("build the tracker's jobs: %v", err)
+	}
 	if len(jobs) == 0 {
 		t.Fatal("the tracker registers no duty jobs, so this case is " +
 			"measuring its own reader")
@@ -54,6 +60,42 @@ func TestEveryTrackerJobIsGatedOrSaysWhyNot(t *testing.T) {
 				"RECORDS — running one on every node is N copies of one "+
 				"record for the applier to arbitrate", job.Name, job.Scope)
 		}
+	}
+}
+
+// A DUTY MISSING A DEPENDENCY IS REFUSED WHEN IT IS BUILT, NAMING THE FIELD.
+//
+// The jobs run on a timer under a fleet singleton, so a dependency found
+// missing only on a tick is missing on every tick of whichever node holds the
+// duty — and what an operator sees is merges left open, not a wiring mistake.
+// Refused at construction, the omission is the error the node's boot logs.
+//
+// Mutation: drop any one of the four refusals from tracker.Jobs and its case
+// builds a duty.
+func TestADutyMissingADependencyIsRefusedWhenItIsBuilt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	whole := tracker.DutyDeps{
+		DB: r.db, Writer: r.writer, NodeID: "node-a", Reader: r.reader,
+	}
+	if _, err := tracker.Jobs(whole); err != nil {
+		t.Fatalf("a duty with every dependency was refused: %v", err)
+	}
+	for field, drop := range map[string]func(*tracker.DutyDeps){
+		"DutyDeps.DB":     func(d *tracker.DutyDeps) { d.DB = nil },
+		"DutyDeps.Writer": func(d *tracker.DutyDeps) { d.Writer = nil },
+		"DutyDeps.NodeID": func(d *tracker.DutyDeps) { d.NodeID = "" },
+		"DutyDeps.Reader": func(d *tracker.DutyDeps) { d.Reader = nil },
+	} {
+		t.Run(field, func(t *testing.T) {
+			deps := whole
+			drop(&deps)
+			jobs, err := tracker.Jobs(deps)
+			if err == nil || !strings.Contains(err.Error(), field) {
+				t.Fatalf("a duty with no %s answered %d job(s) and %v, want it "+
+					"refused naming the field", field, len(jobs), err)
+			}
+		})
 	}
 }
 
@@ -256,11 +298,15 @@ func TestASweepCutShortLeavesTheBoardInItsOwnOrder(t *testing.T) {
 	// instant would dedupe the second against the first and prove nothing
 	// about what it reads.
 	at := wednesday
+	jobs, err := tracker.Jobs(tracker.DutyDeps{
+		DB: r.db, Writer: r.writer, NodeID: "node-a", Reader: linearReader(t, r),
+	})
+	if err != nil {
+		t.Fatalf("build the tracker's jobs: %v", err)
+	}
 	worker, err := maintenance.New(maintenance.Options{
-		Jobs: tracker.Jobs(tracker.DutyDeps{
-			DB: r.db, Writer: r.writer, NodeID: "node-a",
-		}),
-		Now: func() time.Time { return at },
+		Jobs: jobs,
+		Now:  func() time.Time { return at },
 	})
 	if err != nil {
 		t.Fatalf("build the tracker's maintenance worker: %v", err)
@@ -640,12 +686,16 @@ func trackerWorkerWriting(t *testing.T, r *roundTrip, log *slog.Logger,
 	writer *tracker.Writer) *maintenance.Worker {
 
 	t.Helper()
+	jobs, err := tracker.Jobs(tracker.DutyDeps{
+		DB: r.db, Writer: writer, NodeID: "node-a", Logger: log,
+		Reader: linearReader(t, r),
+	})
+	if err != nil {
+		t.Fatalf("build the tracker's jobs: %v", err)
+	}
 	w, err := maintenance.New(maintenance.Options{
-		Jobs: tracker.Jobs(tracker.DutyDeps{
-			DB: r.db, Writer: writer, NodeID: "node-a", Logger: log,
-			Reader: linearReader(t, r),
-		}),
-		Now: func() time.Time { return wednesday },
+		Jobs: jobs,
+		Now:  func() time.Time { return wednesday },
 	})
 	if err != nil {
 		t.Fatalf("build the tracker's maintenance worker: %v", err)

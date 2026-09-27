@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -292,18 +293,6 @@ type VectorRecord struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// knownKeys are the top-level keys this build writes, so Extra holds exactly
-// what it does not.
-//
-// LISTED RATHER THAN REFLECTED, because the list is the format's own reserved
-// set: a key added to the struct and not here would be carried in Extra as
-// well as in its field, and re-encoded twice.
-var knownKeys = []string{
-	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"container", "model", "dim", "source_rev", "text_sha", "chunks",
-	"embedding",
-}
-
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
 func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 	var env RecordEnvelope
@@ -354,19 +343,12 @@ func Decode(payload []byte) (VectorRecord, error) {
 			Got: env.V, Want: RecordVersion, Subject: env.Subject,
 		}
 	}
+	// THE MEMBERS THIS BUILD DOES NOT KNOW ARE KEPT in [VectorRecord.Extra],
+	// so an encode of what was decoded writes back what the writer wrote.
 	var rec VectorRecord
 	if err := json.Unmarshal(payload, &rec); err != nil {
 		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: decode "+
 			"the vector record on %s: %w", env.Subject, err)
-	}
-	var extra map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &extra); err == nil {
-		for _, known := range knownKeys {
-			delete(extra, known)
-		}
-		if len(extra) > 0 {
-			rec.Extra = extra
-		}
 	}
 	return rec, nil
 }
@@ -399,24 +381,23 @@ func (r VectorRecord) Encode() ([]byte, error) {
 				"statement", r.Subject, r.Dim, len(r.Embedding), want)
 		}
 	}
-	body, err := json.Marshal(r)
-	if err != nil || len(r.Extra) == 0 {
-		return body, err
-	}
+	// A RECORD DECODED AND ENCODED AGAIN WRITES BACK WHAT ITS WRITER WROTE,
+	// members this build does not know included, and a record this build
+	// wrote is its struct's own bytes.
+	return json.Marshal(r)
+}
 
-	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS, so a
-	// relayed record loses nothing its writer wrote. The map path is taken
-	// only when there is something to add, so a record this build wrote is
-	// the struct's own bytes.
-	var merged map[string]json.RawMessage
-	if err := json.Unmarshal(body, &merged); err != nil {
-		return nil, fmt.Errorf("search: re-encode a vector record carrying %d "+
-			"field(s) this build does not know: %w", len(r.Extra), err)
-	}
-	for key, value := range r.Extra {
-		if _, taken := merged[key]; !taken {
-			merged[key] = value
-		}
-	}
-	return json.Marshal(merged)
+// MarshalJSON writes [VectorRecord.Extra] back beside the members this build
+// knows, through [github.com/crewlet/crewlet/internal/jsoncarry], whose
+// package doc is the contract.
+func (r VectorRecord) MarshalJSON() ([]byte, error) {
+	type fields VectorRecord
+	return jsoncarry.Marshal(fields(r), r.Extra)
+}
+
+// UnmarshalJSON keeps every member of the record this build does not know in
+// [VectorRecord.Extra].
+func (r *VectorRecord) UnmarshalJSON(b []byte) error {
+	type fields VectorRecord
+	return jsoncarry.Unmarshal(b, (*fields)(r), &r.Extra)
 }

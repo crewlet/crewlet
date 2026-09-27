@@ -154,7 +154,8 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 	return written, nil
 }
 
-// appliesTo reports whether a declaration covers a task of this type.
+// appliesTo reports whether a declaration covers a task of this type — the one
+// rule the write path's required check and an item's `applies` both read.
 //
 // AN EMPTY LIST IS EVERY TYPE. It is the declaration that says nothing about
 // types, not one that applies to none — and reading it the other way would

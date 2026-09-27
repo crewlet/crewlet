@@ -165,7 +165,8 @@ type EventRecord struct {
 	// timeline, not a bug to paper over.
 	Failed bool `json:"failed"`
 
-	// Spend is what one LLM call cost, present only on a phase completion.
+	// Spend is what one LLM call cost, present only on a spend record — a
+	// phase completion or an auxiliary completion ([SpendFor]).
 	//
 	// Promoted out of the payload and into columns because the rollup that
 	// reads it is an AGGREGATION: it wants nine small values from every
@@ -177,13 +178,15 @@ type EventRecord struct {
 
 // Spend is one LLM call's identity and its token cost.
 //
-// A pointer on [EventRecord] rather than flat fields: it is set on one event
-// type out of dozens, and flattening it would put nine always-empty fields on
+// A pointer on [EventRecord] rather than flat fields: it is set on two event
+// types out of dozens, and flattening it would put nine always-empty fields on
 // every row the dashboard renders.
 type Spend struct {
-	// Phase is which phase ran; HostPhase is the phase a nested call ran
-	// under, and Worker names the `workers:` template a "subagent" phase
-	// ran — the worker rollup keys on the pair (internal/tokens).
+	// Phase is which phase ran — "auxiliary" on an auxiliary completion;
+	// HostPhase is the phase a nested call ran under, and Worker names the
+	// `workers:` template a "subagent" phase ran, or the learning worker or
+	// prefetch behind an auxiliary completion — the worker rollup keys on
+	// the pair (internal/tokens).
 	Phase     string `json:"phase,omitempty"`
 	HostPhase string `json:"host_phase,omitempty"`
 	Worker    string `json:"worker,omitempty"`
@@ -360,10 +363,10 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	//
 	// [RecordFor] sets it from the one decode it already makes, and the
 	// event writer builds every row it writes through RecordFor, so this
-	// derives a spend only for an agent_phase_completed row assembled by
-	// hand, which only tests assemble. The webhook receiver assembles its
-	// rows by hand too, but a delivery is not a phase completion, and
-	// [SpendFor] derives nothing for any other type.
+	// derives a spend only for a spend record assembled by hand, which only
+	// tests assemble. The webhook receiver assembles its rows by hand too,
+	// but a delivery is not a spend record, and [SpendFor] derives nothing
+	// for any other type.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.
@@ -1582,7 +1585,8 @@ func cutToPage(recs []EventRecord, limit int) []EventRecord {
 	return recs
 }
 
-// PhaseTokenQuery selects the phase records a spend breakdown aggregates.
+// PhaseTokenQuery selects the spend records a spend breakdown aggregates: each
+// phase's record and each auxiliary completion's.
 type PhaseTokenQuery struct {
 	// SinceDays is the window, in whole days back from now. Zero or less
 	// takes DefaultPhaseTokenDays.
@@ -1685,19 +1689,30 @@ const (
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
-// The price is the one value here still read out of the PAYLOAD, and
-// deliberately: it is set by a single backend on a minority of phases, so
-// promoting it would be a migration and a column that is NULL on almost every
-// row of the table. The extraction is free of a scan cost the filter does not
-// already pay — the event_type and event_time predicates are what choose the
-// rows, and json_extract runs only on the ones they keep.
+// phaseTokenSQL reads ONE spend record type's rows ([spendEventTypes]), bound
+// as its first parameter; [EventLog.phaseTokens] runs it once per type and
+// merges them.
+//
+// ONE TYPE PER STATEMENT, because that is what keeps the read on the (type,
+// time) index's range. `event_type IN (...)` over both is planned as a search
+// constraining the type alone, with a sorter for the order: every row of either
+// type the table holds is read to answer a window of one day.
+//
+// Three values are still read out of the PAYLOAD, and deliberately: the price,
+// which a single backend sets on a minority of records; the per-model split
+// (`models`, see internal/tokens' ModelSpend); and `run_spend_unreported`, set
+// only on a record that collected a coding run whose agent gave no whole
+// account. Promoting them would be a migration and columns that are empty on
+// most rows. One json_extract names all three, so a row's payload is parsed
+// once, and only on the rows the type and time predicates keep; it answers a
+// JSON array of the three in that order, `null` for any the payload lacks.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0)
+       json_extract(payload, '$.cost_usd', '$.models', '$.run_spend_unreported')
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type = ? AND event_time >= ?`
 
 // AgentPhaseLimit bounds one page of a seat's phase history.
 //
@@ -1871,16 +1886,17 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 // than by how many a screen can show.
 const MaxPhasePage = 60
 
-// PhaseTokens returns the per-phase spend records inside a window.
+// PhaseTokens returns the spend records inside a window: every phase's record
+// and every auxiliary completion's ([spendEventTypes]), newest first.
 //
 // The rows the dashboard's spend breakdown is folded from — see
 // internal/tokens, which does the folding for BOTH this and the live window,
 // so a rollup over seven days and a rollup over the live one cannot disagree
 // about what a phase costs.
 //
-// The token counts are COLUMNS (schema/0015), so the window folds without
-// reading a payload; the price is the one value still read out of it, for the
-// reason given at [phaseTokenSQL].
+// The token counts are COLUMNS (schema/0015); the price, the per-model split
+// and whether a coding run's spend went unreported are read out of the
+// payload, for the reason given at [phaseTokenSQL].
 //
 // THE WHOLE WINDOW, always. A caller that keeps only a bounded tail reads
 // [EventLog.PhaseTokenTail] instead.
@@ -1922,11 +1938,54 @@ func (l *EventLog) PhaseTokenTail(ctx context.Context, q PhaseTokenQuery, limit 
 	return out, more, nil
 }
 
-// phaseTokens is the one statement both spend reads run: `depth` rows deep, or
-// the whole window at zero.
+// phaseTokens is what both spend reads run: each spend type `depth` rows deep,
+// or the whole window at zero, merged newest first.
+//
+// ONE STATEMENT PER SPEND TYPE, merged here — see [phaseTokenSQL] for why the
+// types are not one statement. So a read `depth` deep answers up to `depth`
+// rows of EACH type, and that is enough for the one caller that sets it
+// ([EventLog.PhaseTokenTail]), which keeps the newest of the merge ([probed]):
+// the newest `depth` of the merge are among the newest `depth` of each type,
+// so what it keeps is exactly what one ordered read of both would have
+// returned.
 func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
+	var merged []spendRow
+	for _, eventType := range spendEventTypes {
+		rows, err := l.spendRows(ctx, eventType, since, until, q.AgentRole, depth)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, rows...)
+	}
+	// Newest first, which is the order the breakdown renders in, and the
+	// order a tail keeps the head of: (time, id) descending, the table's own
+	// key, so the merge orders exactly as one statement's ORDER BY would.
+	slices.SortFunc(merged, func(a, b spendRow) int {
+		if c := cmp.Compare(b.at, a.at); c != 0 {
+			return c
+		}
+		return cmp.Compare(b.rec.EventID, a.rec.EventID)
+	})
+	out := make([]tokens.Record, len(merged))
+	for i, row := range merged {
+		out[i] = row.rec
+	}
+	return out, nil
+}
+
+// spendRow is one spend record with the instant it is ordered on.
+type spendRow struct {
+	at  int64
+	rec tokens.Record
+}
+
+// spendRows reads one spend type's records inside [since, until), newest first,
+// `depth` deep or the whole window at zero.
+func (l *EventLog) spendRows(ctx context.Context, eventType string, since, until time.Time,
+	role string, depth int,
+) ([]spendRow, error) {
 	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
 	// half-open window the bucketing folds over, so a record on the
 	// boundary belongs to exactly one of two adjacent windows. Applied even
@@ -1934,40 +1993,40 @@ func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int
 	// reports that as now and the rows have to be the rows the label
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
-	sql := phaseTokenSQL + " AND event_time < ?"
-	args := []any{EncodeTime(since), EncodeTime(until)}
-	if q.AgentRole != "" {
-		sql += " AND agent_role = ?"
-		args = append(args, q.AgentRole)
+	query := phaseTokenSQL + " AND event_time < ?"
+	args := []any{eventType, EncodeTime(since), EncodeTime(until)}
+	if role != "" {
+		query += " AND agent_role = ?"
+		args = append(args, role)
 	}
-	// Newest first, which is the order the breakdown renders in, and the
-	// order a tail keeps the head of.
-	sql += " ORDER BY event_time DESC, event_id DESC"
+	query += " ORDER BY event_time DESC, event_id DESC"
 	if depth > 0 {
-		sql += " LIMIT ?"
+		query += " LIMIT ?"
 		args = append(args, depth)
 	}
 
-	rows, err := l.db.sql.QueryContext(ctx, sql, args...)
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: phase tokens: %w", err)
+		return nil, fmt.Errorf("store: phase tokens (%s): %w", eventType, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []tokens.Record{}
+	var out []spendRow
 	for rows.Next() {
 		var (
-			at  int64
-			rec tokens.Record
+			row     spendRow
+			payload sql.NullString
 		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
+		rec := &row.rec
+		if err := rows.Scan(&row.at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
-			&rec.CostUSD,
+			&payload,
 		); err != nil {
-			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
+			return nil, fmt.Errorf("store: phase tokens (%s): scan: %w", eventType, err)
 		}
+		rec.CostUSD, rec.Models, rec.Unreported = payloadSpend(payload.String)
 		// RFC3339Nano, the same encoding the live window carries, so the
 		// two orderings cannot disagree about which record is newer.
 		//
@@ -1977,11 +2036,30 @@ func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int
 		// digit, and 'Z' sorts after '.' — which put 03:04:05Z ahead of
 		// 03:04:05.9Z. The encoding is still what matters here; it is the
 		// one both sides agree to parse.
-		rec.Timestamp = DecodeTime(at).Format(time.RFC3339Nano)
-		out = append(out, rec)
+		rec.Timestamp = DecodeTime(row.at).Format(time.RFC3339Nano)
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: phase tokens: %w", err)
+		return nil, fmt.Errorf("store: phase tokens (%s): %w", eventType, err)
 	}
 	return out, nil
+}
+
+// payloadSpend reads the three payload values [phaseTokenSQL] extracts, from
+// the JSON array it answers them in: the price, the per-model split and the
+// unreported flag.
+//
+// EACH IS READ ON ITS OWN, so a value that does not decode costs itself and
+// nothing else: a price that is not a number is no price, a split that is not
+// a list is no split (the record then counts whole under its model — see
+// tokens.DecodeModels), and a flag that is not a boolean is not set.
+func payloadSpend(extracted string) (cost float64, models []tokens.ModelSpend, unreported bool) {
+	var values []json.RawMessage
+	if err := json.Unmarshal([]byte(extracted), &values); err != nil || len(values) != 3 {
+		return 0, nil, false
+	}
+	_ = json.Unmarshal(values[0], &cost)
+	models = tokens.DecodeModels(values[1])
+	_ = json.Unmarshal(values[2], &unreported)
+	return cost, models, unreported
 }

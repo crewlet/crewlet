@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"slices"
 )
 
 // A task's custom fields, as a READER sees them.
@@ -103,21 +102,10 @@ func readFieldValues(ctx context.Context, tx *sql.Tx, task Task) ([]FieldValue, 
 		}
 		value.Slug, value.Name, value.Type = field.Slug, field.Name, field.Type
 		value.Hidden = field.Archived
-		value.Applies = appliesToType(field, task.Type)
+		value.Applies = appliesTo(field, task.Type)
 		out = append(out, value)
 	}
 	return out, nil
-}
-
-// appliesToType is the same rule the write path's required check reads: an
-// empty AppliesTo is every type, and a listed one is those types.
-func appliesToType(field FieldDef, taskType string) bool {
-	if len(field.AppliesTo) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(field.AppliesTo, func(name string) bool {
-		return NormName(name) == NormName(taskType)
-	})
 }
 
 // foreignFieldIDs is which of a task's values were mirrored in from another

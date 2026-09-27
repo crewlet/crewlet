@@ -250,7 +250,7 @@ type Query struct {
 	//
 	// Without it there is no way to list what a removal hid, so nothing
 	// could reach [OpRestore] — `tracker_tasks_removed_idx` names
-	// `work_trash` as its reader and the reader did not exist.
+	// `work_trash` as its reader, and this is what that reader asks.
 	Removed *bool
 
 	// Dates are keyed by the column they filter, so a compiler walks them
@@ -304,7 +304,7 @@ type Query struct {
 	// The row's `overdue` flag is derived from it, and so is the
 	// `due=overdue` filter — the field exists precisely so a renderer
 	// never re-derives the predicate differently, and deriving it from
-	// the reader's own `time.Now()` made the row and the filter two
+	// the reader's own `time.Now()` would make the row and the filter two
 	// different questions on two different clocks.
 	DayStart time.Time
 
@@ -313,18 +313,16 @@ type Query struct {
 	// MaxLag is the bound a `stale` read declares it will accept, and zero
 	// accepts anything.
 	//
-	// CARRIED RATHER THAN MERELY VALIDATED. `max_lag_seconds` was checked
-	// against the level and then dropped on the floor, so a dashboard tile
-	// polling every twenty seconds and declaring a twenty-second bound was
-	// served an answer of any age at all — and rendered it as a live tile,
-	// because the answer came back at the level it asked for.
+	// CARRIED RATHER THAN MERELY VALIDATED. A bound checked against the
+	// level and then dropped on the floor serves a dashboard tile polling
+	// every twenty seconds and declaring a twenty-second bound an answer of
+	// any age at all — which it renders as a live tile, because the answer
+	// came back at the level it asked for.
 	MaxLag time.Duration
 
-	// MaxLagSeq is the same bound counted in RECORDS, and it was the other
-	// half of exactly the defect above: `max_lag_seq` was refused at every
-	// level that is not a staleness bound and then IGNORED at the one
-	// level it means something on — the shape the comment beside it says
-	// was fixed, left standing for the second key.
+	// MaxLagSeq is the same bound counted in RECORDS, and carried for the
+	// same reason: refused at every level that is not a staleness bound, it
+	// has to be HONOURED at the one level it means something on.
 	//
 	// A record count is what the broker actually answers and a duration is
 	// derived from it through this node's own drain rate, so a caller that
@@ -447,9 +445,9 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	// the row's own `overdue` flag is derived from the SAME value rather
 	// than from a clock the reader happens to have — which is what the
 	// field's own doc promises. Derived in the browser, or from
-	// time.Now() in the reader, the two disagreed by up to a day: a task
-	// due at 09:00 today was `overdue: true` on every row from 09:01 and
-	// absent from `?due=overdue` all day.
+	// time.Now() in the reader, the two would disagree by up to a day: a
+	// task due at 09:00 today would be `overdue: true` on every row from
+	// 09:01 and absent from `?due=overdue` all day.
 	dayStart, err := ResolveDate("today", now, loc)
 	if err != nil {
 		return Query{}, err
@@ -664,12 +662,11 @@ func (q *Query) parseSubtasks(p Params) error {
 // wall-clock bound the caller typed and a clamp would answer a different
 // question from the one on the screen.
 //
-// `archived_at` is the newest of them and it is what gave that column a
-// reader: the instant was stamped, stored and read by nothing at all, so the
-// one question the archive raises — what left the board, and when — had no way
-// to be asked. It is spelled in full because `archived` is already the
-// three-valued MODE that decides whether archived rows are in the answer at
-// all, and one key cannot be both.
+// `archived_at` is that column's reader: without it the instant would be
+// stamped and stored for nothing, and the one question the archive raises —
+// what left the board, and when — would have no way to be asked. It is spelled
+// in full because `archived` is already the three-valued MODE that decides
+// whether archived rows are in the answer at all, and one key cannot be both.
 var dateKeys = []string{
 	"due", "start", "created", "updated", "done", "closed", "finished",
 	"archived_at", "status_entered",
@@ -1037,14 +1034,12 @@ func (q *Query) parseTotals(p Params) error {
 //
 // # Why one grammar and not one per question
 //
-// Thirteen registered questions take a level and a staleness bound, and
-// exactly ONE of them — the task board, which happens to be the one that goes
-// through [ParseQuery] — used to read either. The other twelve hardcoded a
-// level and never looked at a bound at all, so a caller asking a project
-// listing for a fresher answer was served the same one and told it came back
-// at the level asked for. One grammar serves the board, the socket, the REST
-// route and a seat's own tools, and a second reading of `read_level` would be
-// the one place a freshness key meant something slightly different.
+// Every registered question that takes a level and a staleness bound reads
+// them here. A question that hardcoded a level instead would serve a caller
+// asking for a fresher answer the same one and tell it it came back at the
+// level asked for. One grammar serves the board, the socket, the REST route
+// and a seat's own tools, and a second reading of `read_level` would be the
+// one place a freshness key meant something slightly different.
 //
 // The shape it returns is the framework's own ([statelog.Freshness]) because
 // the knowledge base reads through the same four keys and a second struct
@@ -1056,9 +1051,9 @@ func (q *Query) parseTotals(p Params) error {
 // form every write answers with and every wake carries — and the answer is
 // served from no earlier than it, at whatever level. It is what makes
 // `read_level=session` honest here: a session read waits for the caller's
-// own last write, this grammar had no key to carry one, and accepted bare the
-// level would wait for the zero position, serve this node's committed prefix
-// and label the answer `session`. So `session` is accepted ONLY beside a
+// own last write, `min_position` is the only key that carries one, and
+// accepted bare the level would wait for the zero position, serve this node's
+// committed prefix and label the answer `session`. So `session` is accepted ONLY beside a
 // `min_position`, and refused without one naming the key.
 func ParseFreshness(p Params) (statelog.Freshness, error) {
 	var out statelog.Freshness
@@ -1080,8 +1075,8 @@ func ParseFreshness(p Params) (statelog.Freshness, error) {
 		// that resolves an absent level to `stale` is exactly the one
 		// whose callers bound staleness — a dashboard poll. Refusing it
 		// here would refuse the common case; carrying it and letting a
-		// non-stale resolution ignore it would be the silent drop this
-		// grammar was already fixed for once.
+		// non-stale resolution ignore it would be the silent drop
+		// [withBounds] exists to prevent.
 		return withBounds(out, p)
 	}
 	level := statelog.ReadLevel(value)
@@ -1114,8 +1109,7 @@ func ParseFreshness(p Params) (statelog.Freshness, error) {
 //
 // THE BOUND IS CARRIED, not just checked. A bound refused where it is
 // inconsistent and dropped where it is not is a bound that never bounded
-// anything — which is what `max_lag_seconds` did before it was fixed, and what
-// `max_lag_seq` did after, in the same function, for longer.
+// anything, and each of the two keys is carried here for that reason.
 func withBounds(f statelog.Freshness, p Params) (statelog.Freshness, error) {
 	if p.Has("max_lag_seconds") {
 		secs := p.Int("max_lag_seconds", 0)

@@ -104,9 +104,8 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 	base := p.inbound(record)
 	// FROM THE RECORD, exactly as the applier reads it — see
-	// [MutationRecord.Batched]. This used to read a field on the parser
-	// that nothing ever assigned, so the two surfaces agreed only by the
-	// accident that no writer sets a batch id yet.
+	// [MutationRecord.Batched] — so the parser and the applier cannot
+	// disagree about whether a commit was one of a batch.
 	candidates := Candidates(record.Notify, record.Batched())
 	routed := Route(candidates, registryHas(reg), record.Actor)
 	if len(routed) == 0 {

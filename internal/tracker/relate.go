@@ -34,11 +34,11 @@ import (
 // captured patch would compound across attempts.
 func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
 	if patch.Relate == nil {
-		// A WHOLE SET STILL HAS TO FIT. Nothing in this tree states
-		// one any more — every caller says what it wants as a gesture —
-		// but the field is on the RECORD, so it is what a future writer
-		// reaches for first, and a cap enforced on the gesture alone is
-		// a cap that writer walks straight past.
+		// A WHOLE SET HAS TO FIT TOO. Every caller in this tree says
+		// what it wants as a gesture, but the field is on the RECORD, so
+		// it is what a future writer reaches for first, and a cap
+		// enforced on the gesture alone is a cap that writer walks
+		// straight past.
 		if patch.Relations != nil {
 			if err := checkRelations(current.ID, *patch.Relations); err != nil {
 				return patch, err
@@ -306,10 +306,10 @@ func relationKindList() string {
 // The apply rewrites `blocker_open` and `cleared_at` on every row naming this
 // task as a blocker on EVERY task apply — `maintainDeps` runs out of
 // `explodeTask`, which nothing gates on what the patch changed. Widening only
-// a status write left every other patch to a task somebody waits on claiming a
-// scope short of what its own apply writes, which [ScopeSet.covers] then
-// refused inside the decide — permanently, since the re-run it asked for took
-// the same gate and came up short again.
+// a status write would leave every other patch to a task somebody waits on
+// claiming a scope short of what its own apply writes, which [ScopeSet.covers]
+// would then refuse inside the decide — permanently, since the re-run it asked
+// for would take the same gate and come up short again.
 //
 // It returns the scope unchanged when the task has no dependents, which is the
 // overwhelming majority of tasks: the read below is one indexed lookup and the

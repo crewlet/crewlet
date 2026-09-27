@@ -223,8 +223,7 @@ func request(t *testing.T) prefetch.Request {
 	o, seat := company(t)
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
-		Task:   "fix the login redirect loop on staging",
-		TurnID: "turn-1",
+		Task: "fix the login redirect loop on staging",
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
 		},

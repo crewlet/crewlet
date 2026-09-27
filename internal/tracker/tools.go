@@ -46,9 +46,9 @@ const (
 	// differently shaped questions: a board narrows a list and keeps the
 	// board's order, and this ranks a corpus so its answer IS the order.
 	// The board's own `q` is a substring of the key or the title and
-	// cannot see a description at all — so the whole of what somebody
-	// wrote down about a piece of work was unreachable from a seat, while
-	// the engine had been paying to embed every one of those descriptions.
+	// cannot see a description at all — so without this verb the whole of
+	// what somebody wrote down about a piece of work would be unreachable
+	// from a seat.
 	SearchWorkItemsTool = "search_work_items"
 
 	// The PROJECT reads, and they are a seat's for the reason

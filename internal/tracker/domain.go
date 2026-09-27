@@ -157,10 +157,10 @@ func (Domain) ReadinessInput() bool { return true }
 //
 // A checksum over each node's identity-claimed tables, published and compared,
 // is what would turn "should be identical" into something a fleet reports on.
-// Nothing builds one. This sentence used to say it was checkable in a way that
-// read as though something checked it — the shape
-// [internal/statelog]'s own vocabulary gate exists to catch, since a paragraph
-// describing a mechanism nobody built is an instruction to build it.
+// Nothing builds one, and this says so rather than calling the claim
+// checkable: a paragraph describing a mechanism nobody built reads as though
+// something checked it — the shape [internal/statelog]'s own vocabulary gate
+// exists to catch.
 //
 // A checksum written today would also be WRONG, and the reason is worth
 // keeping beside the claim: `tracker_projects.rank_duplicate_pending` is an

@@ -644,3 +644,90 @@ func TestCoverageIsTheEarliestInstantNotTheSmallestString(t *testing.T) {
 		t.Errorf("coverage = %v, want %v — the earliest record kept", covered, whole)
 	}
 }
+
+// auxiliarySpend is one auxiliary completion as the stream delivers it.
+func auxiliarySpend(eventID, ts string, total int) *livestate.Envelope {
+	return env("auxiliary_call_completed", map[string]any{
+		"role": "Lead", "agent_id": "a-1", "phase": "auxiliary",
+		"worker": "persist_decider", "model": "claude-haiku-5", "provider_key": "aux",
+		"turn_id": "tn-1", "work_key": "wk-1",
+		"input_tokens": total - 1, "output_tokens": 1, "total_tokens": total,
+	}, id(eventID), at(ts), func(e *livestate.Envelope) { e.Category = "learning" })
+}
+
+// AN AUXILIARY COMPLETION IS SPEND THE LIVE ROLLUP FOLDS — AND ONLY SPEND.
+//
+// A learning worker's or the prefetch's completion publishes no phase record,
+// so a projection that folded phase records alone kept that spend off the live
+// rollup, its push and every screen built on it. It is folded here, and it
+// says nothing about the seat: an auxiliary call is no leg of a turn, so a
+// seat that finished its turn is still idle after its reflection's calls, and
+// a seat nothing else has reported is not made to appear.
+func TestAnAuxiliaryCompletionIsFoldedAndMovesNoSeat(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	change := s.Apply(auxiliarySpend("x1", "2026-06-14T12:00:00Z", 40))
+	if !change.Tokens {
+		t.Fatal("the auxiliary completion did not count, so the live rollup is never re-pushed")
+	}
+	if len(change.Agents) != 0 || s.AgentOverlay("Lead") != nil {
+		t.Errorf("an auxiliary completion moved seats %v / made one appear: %+v",
+			change.Agents, s.AgentOverlay("Lead"))
+	}
+	if s.Apply(auxiliarySpend("x1", "2026-06-14T12:00:00Z", 40)).Tokens {
+		t.Error("a redelivered auxiliary completion counted again")
+	}
+
+	s.Apply(phaseSpend("p1", "2026-06-14T12:01:00Z", 100))
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "tn-1"},
+		id("done"), at("2026-06-14T12:02:00Z")))
+	s.Apply(auxiliarySpend("x2", "2026-06-14T12:03:00Z", 60))
+	if got := s.AgentOverlay("Lead"); got == nil || got.State != "idle" {
+		t.Errorf("after its turn ended and a reflection call landed the seat reads %+v, want idle", got)
+	}
+
+	rollup := tokens.Aggregate(spendRows(s), tokens.Options{})
+	if rollup.Totals.TotalTokens != 200 || rollup.Totals.Calls != 3 {
+		t.Errorf("totals = %+v, want the phase's 100 and both calls' 100", rollup.Totals)
+	}
+	if len(rollup.ByWorker) != 1 || rollup.ByWorker[0].Phase != "auxiliary" ||
+		rollup.ByWorker[0].Worker != "persist_decider" || rollup.ByWorker[0].TotalTokens != 100 {
+		t.Errorf("by_worker = %+v, want the persist decider's two calls", rollup.ByWorker)
+	}
+	if len(rollup.ByTurn) != 1 || rollup.ByTurn[0].TotalTokens != 200 || rollup.ByTurn[0].WorkKey != "wk-1" {
+		t.Errorf("by_turn = %+v, want the calls on the turn they served", rollup.ByTurn)
+	}
+}
+
+// A LIVE RECORD CARRIES ITS SPLIT AND ITS UNREPORTED MARK. The stored rollup
+// reads both off the payload, and the live one is the same arithmetic only if
+// it is handed the same record: dropped here, a phase two models served counts
+// under its first one, and a coding run's floor reads as its whole, until the
+// next reload says otherwise.
+func TestALiveRecordCarriesItsSplitAndItsUnreportedMark(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	// The split as a broker delivers it: a JSON round trip, so a list of
+	// maps of float64s.
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"role": "Lead", "phase": "execute", "model": "sonnet", "turn_id": "tn-1",
+		"input_tokens": float64(150), "output_tokens": float64(15), "total_tokens": float64(165),
+		"models": []any{
+			map[string]any{"model": "sonnet", "input_tokens": float64(100), "output_tokens": float64(10)},
+			map[string]any{"model": "haiku", "input_tokens": float64(50), "output_tokens": float64(5)},
+		},
+		"run_spend_unreported": true,
+	}, id("p1"), at("2026-06-14T12:00:00Z")))
+
+	rollup := tokens.Aggregate(spendRows(s), tokens.Options{})
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range rollup.ByModel {
+		byModel[row.Model] = row
+	}
+	if byModel["sonnet"].TotalTokens != 110 || byModel["haiku"].TotalTokens != 55 {
+		t.Errorf("by_model = %+v, want each model's own part", rollup.ByModel)
+	}
+	if rollup.Totals.UnreportedCalls != 1 || byModel[tokens.UnmeasuredModel].Calls != 1 {
+		t.Errorf("totals %+v, by_model %+v: the floor must say it is one", rollup.Totals, rollup.ByModel)
+	}
+}

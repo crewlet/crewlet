@@ -18,9 +18,9 @@ import (
 // Every work tracker can tell you that somebody was notified. This one records,
 // per change and per recipient, the ONE reason of nineteen that reached them,
 // whether it ASKS something of them, and whether they were reached only because
-// nobody better was found. The applier has written exactly that set since the
-// domain landed — it is what [Candidates] resolved — and its only trace on any
-// surface was `tracker_history.notified`: a single boolean saying that
+// nobody better was found. The applier writes exactly that set — it is what
+// [Candidates] resolved — and without this reader its only trace on any
+// surface would be `tracker_history.notified`: a single boolean saying that
 // somebody, somewhere, was told.
 //
 // That boolean is the whole reason this reader exists. "Did my comment reach

@@ -250,10 +250,11 @@ skill_staled, skill_archived, skill_revived
 prefetch_summary
 compaction_requested, compaction_completed
 auxiliary_call_completed   # one completion on a seat's auxiliary model — a
-                           # learning worker's, a background pass's or the
-                           # prefetch's — with the worker, the model and the
-                           # tokens; the spend rollups fold it beside the
-                           # phase records
+                           # learning worker's, a background pass's, the
+                           # prefetch's or the recall tool's — with the
+                           # worker, the turn it served, the model and the
+                           # tokens; the spend rollups and the live
+                           # projection fold it beside the phase records
 
 # system: the engine talking about itself
 agent_turn_completed       # full LLM reasoning cycle with tokens and tools
@@ -305,16 +306,22 @@ long as retention keeps them; none may be registered or categorised again.
 
 **Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
 live-only per-round signal whose durable record is `agent_phase_completed`),
-`budget_reported` (a snapshot of the fleet's shared token counter, published
-by every node on a fixed tick, which the next report supersedes; the live
-projection reads it), `raw_webhook` (the delivery is already a row), and the two
-A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
-already rows as `a2a_channel_opened` and `a2a_message_sent`), and
-`sandbox_answer_ready` (a command to one seat's node on its control topic,
-never published to `crewlet.events.*`: the wait it ends was said when the
-answer was held — a `budget_exhausted` naming the scope at its cap, or a log
-line when the budget could not be read — and what the resumed turn does is in
-its own phase records). See the exclusions table in the Deployment page above.
+`agent_spawned` and `agent_terminated` (placement moves a seat between nodes on
+every rebalance, so a row per claim would record scheduling rather than the
+company; the live projection reads them), `budget_reported` (a snapshot of the
+fleet's shared token counter, published by every node on a fixed tick, which
+the next report supersedes; the live projection reads it), `raw_webhook` (the
+delivery is already a row), the two A2A inbox wakes `a2a_request` and
+`a2a_message` (the ask and the answer are already rows as `a2a_channel_opened`
+and `a2a_message_sent`), `tool_skill_page_changed` (a nudge between nodes that
+one tool-skill page moved, so every node's registry reads it again; the
+delivery that caused it is already a row, and what the change did is a log
+line on each node), and `sandbox_answer_ready` (a command to one seat's node on
+its control topic, never published to `crewlet.events.*`: the wait it ends was
+said when the answer was held — a `budget_exhausted` naming the scope at its
+cap, or a log line when the budget could not be read — and what the resumed
+turn does is in its own phase records). See the exclusions table in the
+Deployment page above.
 
 **Stored and never listed**: `agent_phase_record_part`, a piece of the whole
 of a phase record the transport refused as too large. The record is published

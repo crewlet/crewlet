@@ -284,7 +284,14 @@ type Actor struct {
 // `operator`, and there is deliberately no way for a caller to name a seat to
 // act as — a knowledge base whose author field is chosen by the writer is not
 // an audit trail.
+//
+// THE ENGINE HAS ONE NAME, [SystemName], whatever else the actor carries: a
+// system write validates only without a handle or an operator id, so there is
+// nothing else it could be recorded as.
 func (a Actor) Name() string {
+	if a.Kind == AuthorSystem {
+		return SystemName
+	}
 	if a.Handle != "" {
 		return a.Handle
 	}
@@ -301,9 +308,20 @@ func (a Actor) validate() error {
 	if !a.Kind.Valid() {
 		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
 	}
-	// EVERY KIND BUT AN OPERATOR MUST NAME ITS SEAT. An operator is named
-	// by the token it presented, which [Actor.Name] renders; a seat or an
-	// agent with no handle is a change nobody made.
+	if a.Kind == AuthorSystem {
+		// THE ENGINE NAMES NO SEAT AND NO TOKEN. A handle on a create
+		// becomes the page's watcher, and either would record the change
+		// as somebody's who never made it.
+		if strings.TrimSpace(a.Handle) != "" || strings.TrimSpace(a.OperatorID) != "" {
+			return invalid("actor.handle", "a %s write names no seat and no "+
+				"token, and this one names handle %q and operator %q",
+				a.Kind, a.Handle, a.OperatorID)
+		}
+		return nil
+	}
+	// EVERY OTHER KIND BUT AN OPERATOR MUST NAME ITS SEAT. An operator is
+	// named by the token it presented, which [Actor.Name] renders; a seat or
+	// an agent with no handle is a change nobody made.
 	if a.Kind != AuthorOperator && strings.TrimSpace(a.Handle) == "" {
 		return invalid("actor.handle",
 			"an %s write must name the seat it acts as", a.Kind)

@@ -96,8 +96,10 @@ keeps every task that chose an option when somebody renames it. A multi-valued
 field is one row per member, so `f.areas=api` is a seek rather than a scan.
 
 **A required field is required of the tasks it applies to.** `applies_to`
-names the types that carry a field, and a field that does not apply to a task
-cannot be missing from it — its value would be hidden the moment it was set. A
+names the types that carry a field, **by slug** — `Bug ` is stored as `bug`,
+and a name that is no type slug at all is refused naming the field — and a
+field that does not apply to a task cannot be missing from it: its value would
+be hidden the moment it was set. A
 field required at the **workspace** is required in every project, and one
 required on a project only there; a subtask is judged by the second toggle
 (`required_in_subtasks`, off by default) so one required field does not block
@@ -529,7 +531,7 @@ CHANGE rather than about state:
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. A view that **groups** answers as the same list too: a grouped answer draws a bounded number of columns and a bounded slice of each and mints no cursor, so through this tool the rest of a column could not be reached at all — flattened, the view's filter and order come back as rows with a `next_cursor`, and nothing is cut. A view that **pins one column** (`group=`, or a `subgroup=` lane) is refused naming the column, because dropping the axis would drop the narrowing with it; pass the filter the column stands for instead. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
-| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
+| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere). An item a record from a newer build covers — one this node holds but cannot apply yet — is **refused** (`deferred`) rather than answered with a gap the way a list is, because that one item's rows may already be wrong |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. `duplicate_of` links the item as a duplicate of one other: an item duplicates one thing, so the link **replaces** any `duplicate_of` link it already had, resolved against the item's links inside the write's own transaction. It is a link and nothing more — `merge_work_item` is what closes the duplicate and moves its work |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
@@ -1104,14 +1106,22 @@ moment it is written rather than trusting what the merge saw when it started:
 - **One merge of an item runs at a time.** A second merge of the same item,
   from any seat on any node, is refused while the first is running, and
   nothing is written.
+- **A merge that loses its hold on the item stops.** A running merge holds the
+  item for 60 seconds at a time and renews that hold every 15. One that has
+  had no renewal confirmed for 45 seconds — its node lost touch with the
+  coordination store, or stalled — stops before its next write, and the tool
+  reports that the merge landed only in part because it lost its claim. The
+  sweep below takes the merge over once the hold has run out. A write that
+  was already on its way when the merge stopped can still land after it.
 - **A merge ended by another writer is not closed over.** If the merge's marker
   was cleared by somebody else by the time this call comes to close it — the
   engine's own sweep, once this call had lost its hold on the merge — or the
   duplicate was purged, this call closes nothing. The subtasks it moved stay
   where it moved them, and the tool reports that the merge landed only in part.
 
-A merge interrupted part-way — its node went away, or one of its steps failed —
-is finished by the engine's own **sweep** once nothing is running it. The merge
+A merge interrupted part-way — its node went away, it lost its hold, or one of
+its steps failed — is finished by the engine's own **sweep** once nothing is
+running it. The merge
 names the item it folds into on the duplicate itself, and that is what the
 sweep finishes it into, whatever the duplicate's links say by then. The sweep
 reads the duplicate only after taking the merge over, and only once its node
@@ -1207,7 +1217,7 @@ a purge stops applying the log at it — its health reports false and its seats
 move to a node that can — rather than apply the purge by an older build's rule.
 See [Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach).
 
-The purge report gives no time guarantee, and that is honest rather than
+What a purge prints gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a
 snapshot, is replaced, or is destroyed. There is no duration to state. See
 [Retention](retention.md).

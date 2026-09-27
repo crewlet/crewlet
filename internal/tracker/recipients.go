@@ -58,7 +58,7 @@ const (
 // It has to match the order [Candidates] adds them in, and the three reasons
 // ahead of `assignee` are why that is worth saying. Each describes what THIS
 // COMMIT did to the recipient, and each names exactly the handle the standing
-// role was about to claim: behind `assignee` they were shadowed on the one
+// role is about to claim: behind `assignee` they would be shadowed on the one
 // person most likely to be the subject, and `blocking` — whose only handle IS
 // the blocker's assignee — could never name anybody at all.
 var Reasons = []Reason{
@@ -79,15 +79,14 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // rather than an obligation, and a watcher is following the task rather than
 // being asked about it.
 //
-// IT IS NOT THE INBOX'S FIRST BAND, although it was called `primaryReasons`
-// and documented as exactly that for as long as it has existed. That question
-// has its own answer — [DefaultPrimaryReasons] — and the two lists differ on
-// four reasons, correctly: `unassigned` and `unblocked` are changes to your
-// own work that belong at the top of what you read, and neither asks you for
-// an answer; `thread` and `blocking` do ask for one, and neither is what a
-// person wants their inbox to open with. Two questions, two answers. The name
-// was the bug: a reader who found this one first wrote its eight into a
-// screen that needed the other eight, and nothing could have told them apart.
+// IT IS NOT THE INBOX'S FIRST BAND. That question has its own answer —
+// [DefaultPrimaryReasons] — and the two lists differ on four reasons,
+// correctly: `unassigned` and `unblocked` are changes to your own work that
+// belong at the top of what you read, and neither asks you for an answer;
+// `thread` and `blocking` do ask for one, and neither is what a person wants
+// their inbox to open with. Two questions, two answers and two names: under
+// one name, a reader who found this list first would write its eight into a
+// screen that needs the other eight, and nothing would tell them apart.
 var addressedReasons = []Reason{
 	ReasonMention, ReasonAsked, ReasonAssignee, ReasonReporter,
 	ReasonAnswered, ReasonPrioritised, ReasonThread, ReasonBlocking,
@@ -180,15 +179,16 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	//
 	// The order here IS the precedence — the first reason that names a
 	// handle is the one that handle hears under — and all three name
-	// exactly the people the generic `assignee` arm was about to claim.
-	// Behind it they were not merely outranked; `blocking` could never
+	// exactly the people the generic `assignee` arm is about to claim.
+	// Behind it they would not merely be outranked; `blocking` could never
 	// name ANYBODY, because the only handle it ever adds is the blocker's
-	// own assignee. `asked` and `answered` fared worse than they looked:
-	// they fired for a colleague and fell silent for the one person most
-	// likely to be asked, so asking the assignee a question told them "a
-	// task you are assigned to changed" — and, when the asker was another
-	// agent, told them so UNADDRESSED, which a turn is entitled to absorb
-	// without replying. That is the exact silence an ask exists to prevent.
+	// own assignee. `asked` and `answered` would fare worse than they
+	// look: they would fire for a colleague and fall silent for the one
+	// person most likely to be asked, so asking the assignee a question
+	// would tell them "a task you are assigned to changed" — and, when the
+	// asker was another agent, tell them so UNADDRESSED, which a turn is
+	// entitled to absorb without replying. That is the exact silence an
+	// ask exists to prevent.
 	//
 	// It is the same rule that already puts `mention` first: being named
 	// in the text outranks holding the task, and an ask is a mention with

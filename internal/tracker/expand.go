@@ -216,10 +216,10 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 		}
 		// "WHAT CAN I PICK UP" IS A DISJUNCTION, and both arms matter:
 		// the work this person HOLDS, and the work in their project that
-		// NOBODY holds. Written as `assignee=me` alone it answered only
-		// the first, so a seat whose queue was empty read the company as
-		// having nothing for it while its own project's unassigned
-		// backlog sat there.
+		// NOBODY holds. Written as `assignee=me` alone it would answer
+		// only the first, so a seat whose queue was empty would read the
+		// company as having nothing for it while its own project's
+		// unassigned backlog sat there.
 		//
 		// AND `blocked=false`, because a task that cannot move is not
 		// something to pick up — it is `preset=blocked`'s answer, and

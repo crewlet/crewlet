@@ -59,9 +59,9 @@ type DutyDeps struct {
 
 	// Reader is what the merge repair decides from: one task, read at
 	// [statelog.ReadLinearizable] — see [duty.finishAbandoned] for why
-	// that level and why after the claim. REQUIRED by that job, which
-	// refuses on every tick without it rather than decide from this
-	// node's rows alone.
+	// that level and why after the claim. REQUIRED, and refused by [Jobs]
+	// rather than by the job: a dependency missed only on a tick is missed
+	// on every tick of a node nobody is watching.
 	Reader TaskReader
 }
 
@@ -77,7 +77,30 @@ type TaskReader interface {
 // FIVE JOBS, every one [maintenance.Fleet] and all but one gated. The names
 // are the log's, and each is the table or the walk it is about rather than the
 // code that runs it.
-func Jobs(d DutyDeps) []maintenance.Job {
+//
+// A MISSING DEPENDENCY IS REFUSED HERE, naming the field, and never left for a
+// job to find: the jobs run on a timer under a fleet singleton, so a job that
+// refused on its own tick would refuse on every tick of whichever node held the
+// duty, and what an operator would see is merges left open rather than a
+// wiring mistake. Only [DutyDeps.Leads] and [DutyDeps.Logger] may be absent,
+// and each says what its absence means.
+func Jobs(d DutyDeps) ([]maintenance.Job, error) {
+	switch {
+	case d.DB == nil:
+		return nil, errors.New("tracker: the duty has no store (DutyDeps.DB), " +
+			"and every job's gate is a read of it")
+	case d.Writer == nil:
+		return nil, errors.New("tracker: the duty has no writer " +
+			"(DutyDeps.Writer), and every repair it makes is a record it publishes")
+	case d.NodeID == "":
+		return nil, errors.New("tracker: the duty has no node id " +
+			"(DutyDeps.NodeID), which every operation id it mints carries")
+	case d.Reader == nil:
+		return nil, errors.New("tracker: the duty has no read authority " +
+			"(DutyDeps.Reader), and the merge repair decides only from a " +
+			"linearizable read — from this node's rows alone it would act on " +
+			"a merge that closed on another node before this one applied the close")
+	}
 	duty := &duty{deps: d}
 	if duty.deps.Logger == nil {
 		duty.deps.Logger = slog.New(slog.DiscardHandler)
@@ -112,7 +135,7 @@ func Jobs(d DutyDeps) []maintenance.Job {
 			Gate:  duty.pendingOneSided,
 			Run:   duty.repairOneSided,
 		},
-	}
+	}, nil
 }
 
 type duty struct {
@@ -582,9 +605,10 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 // The marker is raised by the mark and lowered by the close, so it stands for
 // the whole of every walk, a live one included — the row alone cannot tell a
 // walk whose holder died from one still running. Its claim can: a holder that
-// returns gives it back ([Writer.MergeDuplicates] releases on every path), and
-// one that died loses it when its lease runs out. So a claim somebody still
-// holds, on this node or another, is a walk left to finish, and the next sweep
+// returns gives it back ([Writer.MergeDuplicates] releases on every path), one
+// that died loses it when its lease runs out, and one still alive stops
+// appending before its lease can run out ([held.holding]). So a claim somebody
+// still holds, on this node or another, is a walk left to finish, and the next sweep
 // reads the marker again if it outlives that walk. Run beside it instead, this
 // repair would re-read the same subtasks and publish a second re-parent for
 // each one the walk had not moved yet, and a second close of the duplicate.
@@ -611,13 +635,25 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 //
 // # What no read closes, and why either order is then a valid one
 //
-// A write that lands after the barrier and is not this repair's own. The merge
-// marker is written only under the claim, and the one other write that ends a
-// merge — a purge of the duplicate — ends it for every step after it, each of
-// which then writes nothing ([mergeStep.purged]); and an append a holder that
-// died still had in flight when its lease ran out is one of this same merge's
-// steps. What is
-// left are writes on the subtasks and on the target, each on its own subject,
+// A write that lands after the barrier and is not this repair's own.
+//
+// The merge marker is written only by a walk's appends — the holder's, or a
+// sweep's — and each is fenced on the merge's claim ([Writer.under]): a walk
+// that can no longer vouch for its lease stops before its next append. What
+// the fence leaves is an append already PAST its check when the lease ran out
+// ([held.holding]) — one that passed with at least [ClaimFenceMargin] of the
+// lease left and took longer than that to reach the broker, or one a holder
+// that died had in flight. Such an append is one of this same merge's steps,
+// and when it is the holder's close landing after this repair's barrier, this
+// repair's own close and give-up read the merge as ended and write nothing —
+// but a subtask it moves first, one filed under the duplicate after the holder
+// read its batch, lands on the target after the merge closed without it. An
+// append already past its check is the only way in to that outcome.
+//
+// The one other write that ends a merge — a purge of the duplicate — ends it
+// for every step after it, each of which then writes nothing
+// ([mergeStep.purged]). What is left are writes on the subtasks and on the
+// target, each on its own subject,
 // and each step of the repair reads what it depends on in its own decide
 // ([mergeStep]) — a subtask moved elsewhere or into the trash is passed over,
 // a target purged or put in the trash gives the merge up, and a subtask filed
@@ -631,12 +667,6 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 // nothing and is not counted. The subtask moves read whether each is still
 // the duplicate's subtask instead ([Writer.movingOutOf]).
 func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (bool, error) {
-	if d.deps.Reader == nil {
-		return false, fmt.Errorf("tracker: the merge repair has no read " +
-			"authority to decide from (DutyDeps.Reader), so it finishes no " +
-			"merge rather than one this node's rows may show as running " +
-			"after it closed")
-	}
 	claim, err := d.deps.Writer.claim(ctx, mergeClaim(id))
 	switch {
 	case err != nil:
@@ -645,6 +675,10 @@ func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (b
 		return false, nil
 	}
 	defer claim.release(ctx)
+	// THE REPAIR IS A WALK TOO, and its appends are fenced on the claim
+	// like the holder's were: a sweep that loses the claim stops before its
+	// next append rather than finish the merge beside whoever took it.
+	writer := d.deps.Writer.under(claim)
 
 	walk, err := d.abandonedMerge(ctx, id)
 	switch {
@@ -668,7 +702,7 @@ func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (b
 				"is cleared and the task left open; the mark names no target "+
 				"and its `duplicates` relations do not name exactly one")
 		done := false
-		_, err = d.deps.Writer.whileMerging().UpdateTask(ctx, opID, walk.task,
+		_, err = writer.whileMerging().UpdateTask(ctx, opID, walk.task,
 			walk.project, NoIfMatch, TaskPatch{Merging: &done}, ChangeFields, nil)
 		switch {
 		case errors.Is(err, errMergeOver):
@@ -684,7 +718,7 @@ func (d *duty) finishAbandoned(ctx context.Context, id string, now time.Time) (b
 	// scan, which is older than all of them. A target purged or put in the
 	// trash since the mark gives the merge up there, exactly as it does for
 	// a holder that is still alive ([Writer.finishMerge]).
-	end, err := d.deps.Writer.finishMerge(ctx, opID, walk.task, walk.project,
+	end, err := writer.finishMerge(ctx, opID, walk.task, walk.project,
 		walk.into, walk.reparent, statelog.Position{}, nil)
 	switch {
 	case errors.Is(err, errMergeOver):
@@ -771,13 +805,13 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		// takes a task's row away, and it ends the merge with the task.
 		return walk, nil
 	case err != nil:
+		// A REFUSAL IS AMONG THESE, and one of them is the case this
+		// repair must not step past: a record this node cannot read
+		// covering the task, which a point read refuses ([Reader.Task])
+		// and which may be the very close this repair would repeat. The
+		// marker stays for a sweep on a node, or a build, that can read
+		// it.
 		return walk, fmt.Errorf("tracker: read mid-merge task %s: %w", id, err)
-	case !detail.Complete:
-		// A RECORD THIS NODE CANNOT READ COVERS THE TASK, and it may be
-		// the very close this repair would repeat. The marker stays for
-		// a sweep on a node, or a build, that can read it.
-		return walk, fmt.Errorf("tracker: task %s is mid-merge and a record "+
-			"this node cannot apply covers it: %w", id, statelog.ErrUnavailable)
 	}
 	current := detail.Task
 	walk.task, walk.project = current.ID, current.Project
@@ -889,8 +923,8 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 //
 // A POOLED TRANSACTION, NOT A PIN, for the reason purgeInbox carries: every
 // pin the replicated estate declares belongs to an applier for the life of
-// the process, so a repair asking for one of its own was refused on every
-// tick of a running node.
+// the process, so a repair asking for one of its own would be refused on
+// every tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
 	return d.deps.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `

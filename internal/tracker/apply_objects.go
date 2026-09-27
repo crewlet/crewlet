@@ -41,9 +41,9 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	// and SKIPS a record it is not newer than — which is ordinary traffic:
 	// a redelivery, or a record this build retained and reprocessed at its
 	// original position after a newer one had already applied. The explode
-	// below DELETES and re-inserts, and until this guard existed it did so
-	// unconditionally: a stale reprocess left the goal's document saying
-	// one thing and its targets saying another, with nothing to notice.
+	// below DELETES and re-inserts, and unguarded it would do so for a
+	// stale reprocess too — leaving the goal's document saying one thing
+	// and its targets saying another, with nothing to notice.
 	//
 	// Zero rows affected is exactly "this record did not write the
 	// document", because an upsert that runs always affects one.
@@ -112,8 +112,8 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		// A PROJECT'S OWN FIELD DECLARATIONS EXPLODE INTO NOTHING, on
 		// [Applier.explodeCatalogue]'s rule: a declaration is read
 		// through the project DOCUMENT, which this same upsert writes,
-		// and the relational copy that used to hold both scopes'
-		// declarations was rewritten per apply and read by nothing.
+		// and a relational copy of them would be rewritten per apply for
+		// no reader.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,

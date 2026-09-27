@@ -90,7 +90,7 @@ func (e *Engine) equipEpoch(c *Company) error {
 		Sandbox:           e.sandboxLauncher(),
 		Knowledge:         KnowledgeSearch(e, c),
 		Events:            e.telemetry(),
-		Recall:            e.prefetcher(c),
+		Recall:            e.recaller(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
 		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
 		SkillBodyMax:      refinement.MaxBodyBytes,

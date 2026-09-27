@@ -2,22 +2,38 @@ package confluence
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 )
 
 // Confluence's half of cross-agent skill promotion: create the draft page a
-// unit lead reviews, or hand back the one already there.
+// unit lead reviews, or hand back the one already there, and say whether a
+// lead rejected it.
 //
-// # Why the dedup lives here
+// # What dedups a draft, and what this writer adds
 //
-// The promotion pass re-clusters the same persisted skills every tick, so
-// without cross-tick dedup one converging team would yield one draft a day
-// forever. Confluence already answers the question — a page title is unique
-// within a space — so the honest place for the check is here, where that fact
-// is known, rather than in a ledger the engine would have to keep in step.
+// The promotion pass keeps a fleet-wide record of every convergence it has
+// drafted and reads it before asking a model, so a drafted procedure is not
+// drafted again whatever the model would have called it (internal/learning's
+// promote.go). What this writer adds is that a create is idempotent by TITLE,
+// which a page title's uniqueness within a space gives it: a pass that made
+// the page and could not record it makes it again from its record and finds
+// it here, rather than making a second.
+//
+// # A lead rejects a draft by deleting it
+//
+// Deleting is what Confluence lets a person do to a page: it moves the page to
+// the space's trash — with every page under it, so deleting the drafts parent
+// rejects every draft it holds — and a lead who changes their mind restores it
+// from there. The pass asks for the page by id, which Confluence serves at the
+// status asked for, `current` unless told otherwise, so a page in the trash is
+// not served and neither is one purged from it. A page not served in a space
+// that is served has been deleted; a space that is not served proves nothing
+// about the page in it, so that is an error rather than a rejection.
 //
 // # Why the parent is created rather than required
 //
@@ -31,6 +47,46 @@ import (
 
 // PromotionWriter drafts promoted skills into a Confluence space.
 type PromotionWriter struct{ client *Client }
+
+// Backend names this knowledge base as its searcher does.
+func (w *PromotionWriter) Backend() string { return Backend }
+
+// Rejection is how a lead rejects a draft in Confluence.
+func (w *PromotionWriter) Rejection() string { return "delete it" }
+
+// Rejected reports whether a lead deleted a draft, reading the page by id.
+//
+// Present anywhere — under the drafts parent or moved out of it — the draft
+// stands. Absent from a space that still answers, it was deleted. Anything
+// else is an error, never a rejection.
+func (w *PromotionWriter) Rejected(ctx context.Context, space, pageID string) (string, error) {
+	if strings.TrimSpace(pageID) == "" {
+		return "", fmt.Errorf("confluence: no page id to look for a rejected draft by")
+	}
+	_, err := w.client.PageByID(ctx, pageID)
+	if err == nil {
+		return "", nil
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		return "", fmt.Errorf("confluence: reading the draft %s: %w", pageID, err)
+	}
+	// NOT SERVED. Confluence answers a page that is not there and one this
+	// credential may not view alike, and it answers so for every page of a
+	// space that is gone or unreadable — which says nothing about what a
+	// lead did. The space is asked before the page is called deleted.
+	readable, err := w.client.SpaceExists(ctx, space)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("confluence: the draft %s is not served, and whether "+
+			"its space %s is could not be read: %w", pageID, space, err)
+	case !readable:
+		return "", fmt.Errorf("confluence: the draft %s is not served, and neither "+
+			"is its space %s, so its absence says nothing about a lead's "+
+			"decision", pageID, space)
+	}
+	return "it was deleted", nil
+}
 
 // NewPromotionWriter builds one over an org-token client.
 func NewPromotionWriter(c *Client) *PromotionWriter {
@@ -109,5 +165,7 @@ const autoDraftedParentBody = `<p>Pages under this one were drafted ` +
 	`automatically from what several agents on this team independently ` +
 	`learned. They are <strong>not reviewed</strong> and no agent can find ` +
 	`them: the knowledge search excludes this subtree.</p>` +
-	`<p>To adopt one, edit it and move it out of this parent. To reject one, ` +
-	`delete it — it will be re-drafted only if the team converges on it again.</p>`
+	`<p>To adopt one, move it out of this parent. To reject one, delete it: the ` +
+	`promotion pass records the rejection for the whole company. Either way, ` +
+	`and if you leave it here, the pass does not draft that procedure for this ` +
+	`team in this knowledge base again.</p>`

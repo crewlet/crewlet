@@ -154,7 +154,7 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 	for _, kind := range q.ActorKinds {
 		if !kind.Valid() {
 			return PageActivity{}, fmt.Errorf("pages: %q is not an author kind — "+
-				"the three are %v", kind, AuthorKinds())
+				"the kinds are %v", kind, AuthorKinds())
 		}
 	}
 	limit := q.Limit

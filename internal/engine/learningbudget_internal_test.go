@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,6 +184,47 @@ func TestAnAuxiliaryRecordNamesItsSeatWorkerModelAndTurn(t *testing.T) {
 	}
 	if got[1].Worker != "" || got[1].TurnID != "" {
 		t.Errorf("the unbound wrapper recorded %q/%q, want nobody's", got[1].Worker, got[1].TurnID)
+	}
+}
+
+// namingProvider answers under a configured model with completions that name
+// the model given — or none, where it is empty.
+type namingProvider struct{ served string }
+
+func (namingProvider) Model() string { return "configured-model" }
+
+func (p namingProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Model: p.served, InputTokens: 3, OutputTokens: 1}, nil
+}
+
+// A RECORD NAMES THE MODEL THAT SERVED THE CALL. A fallback chain answers
+// under one configured key with whichever member is up, so the completion's
+// own model is what the per-model breakdown has to be keyed on; the configured
+// model stands in only for a completion that names none, which is the rule the
+// turn loop's own split follows.
+func TestAnAuxiliaryRecordNamesTheModelTheCompletionReported(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ served, want string }{
+		{"served-model", "served-model"},
+		{"", "configured-model"},
+	} {
+		var got []types.AuxiliaryCallCompleted
+		models := meteredModels{
+			inner: staticModels{provider: namingProvider{served: tc.served}},
+			record: func(_ context.Context, _ *org.Role, spend types.AuxiliaryCallCompleted) {
+				got = append(got, spend)
+			},
+		}
+		member, err := models.Head(&org.Role{Name: "Dev"}, phase.Auxiliary)
+		if err != nil {
+			t.Fatalf("Head: %v", err)
+		}
+		if _, err := member.Provider.Complete(t.Context(), llm.Request{}); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if len(got) != 1 || got[0].Model != tc.want {
+			t.Errorf("a completion naming %q was recorded as %+v, want model %q", tc.served, got, tc.want)
+		}
 	}
 }
 
@@ -420,6 +463,84 @@ func TestLearningWorkersResolveModelsThroughTheMeter(t *testing.T) {
 		t.Error("prefetch.go sets no Models field any more — this guard is asserting nothing; " +
 			"point it at wherever the prefetch's sources are built")
 	}
+}
+
+// NO AUXILIARY RESOLUTION SKIPS ITS ATTRIBUTION.
+//
+// meteredModelsFor records every completion made through a model it resolved,
+// and whom the completion served is bound by the caller that knows it: a
+// learning worker through learning's own resolution, the compaction pass and
+// the prefetch through auxiliaryModelsFor. Head called on meteredModelsFor's
+// result directly resolves a model that is recorded as NOBODY's — no worker,
+// no turn — which is the same leak as the unmetered registry, one step later:
+// the spend reaches the counter and a record, and no per-worker or per-turn
+// row can say whose it was. It is never right, so every file is checked.
+func TestNoAuxiliaryResolutionSkipsItsAttribution(t *testing.T) {
+	t.Parallel()
+	// THE DETECTOR FIRST, on a snippet that commits the leak, because a
+	// guard that finds nothing in the engine is only evidence if it can
+	// find something at all.
+	fset := token.NewFileSet()
+	probe, err := parser.ParseFile(fset, "probe.go", `package engine
+func leak(e *Engine, c *Company) { _, _ = e.meteredModelsFor(c).Head(nil, "auxiliary") }
+func fine(e *Engine, c *Company) { _, _ = e.auxiliaryModelsFor(c, who).Head(nil, "auxiliary") }
+`, 0)
+	if err != nil {
+		t.Fatalf("parse the probe: %v", err)
+	}
+	if got := unattributedHeads(probe); len(got) != 1 {
+		t.Fatalf("the detector found %d unattributed resolutions in a probe holding one", len(got))
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		checked++
+		for _, pos := range unattributedHeads(file) {
+			t.Errorf("%s resolves an auxiliary model with meteredModelsFor(...).Head — its "+
+				"completions are recorded as nobody's. Bind whom it serves: "+
+				"e.auxiliaryModelsFor(c, learning.Attribution{...}).", fset.Position(pos))
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no source file was checked — this guard is asserting nothing")
+	}
+}
+
+// unattributedHeads is every `<x>.meteredModelsFor(...).Head(...)` in file: a
+// resolution made through the recording wrapper with no attribution bound.
+func unattributedHeads(file *ast.File) []token.Pos {
+	var found []token.Pos
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		head, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || head.Sel.Name != "Head" {
+			return true
+		}
+		inner, ok := head.X.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if resolve, ok := inner.Fun.(*ast.SelectorExpr); ok && resolve.Sel.Name == "meteredModelsFor" {
+			found = append(found, call.Pos())
+		}
+		return true
+	})
+	return found
 }
 
 // registryRead reports whether expr reads a company's model registry directly:

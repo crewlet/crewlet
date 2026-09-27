@@ -210,7 +210,7 @@ func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeCallPage) map[stri
 	// parked on its question whose reply is held is waiting on the seat's
 	// token budget, not on a person, and a running run whose result is held
 	// has a job that finished. Both keys always present, empty for a run
-	// holding none.
+	// holding none and for one already claimed to resume with it.
 	held, at := heldAnswerOf(run)
 	row["answer_held"], row["answer_held_at"] = string(held), at
 	// LEFT OUT ON A RUN THAT MADE NO BRIDGED CALLS: the board draws no

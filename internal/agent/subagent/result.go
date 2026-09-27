@@ -259,6 +259,13 @@ type Result struct {
 	Model       string
 	ProviderKey string
 
+	// Models is the task's tokens split by the model each completion
+	// reported serving it — the loop's own [toolloop.Result.Models]. A
+	// worker's chain can fall back from one member to the next like any
+	// phase's, so Model alone would bill every round to the model that
+	// answered first.
+	Models []toolloop.ModelTokens
+
 	// ToolsAvailable is what the task could call when it finished,
 	// activations included. Rejected is what it asked for and did not
 	// get, in request order.
@@ -314,7 +321,7 @@ func (r *Result) keep(loop toolloop.Result) {
 	r.Text = loop.Text
 	r.Rounds = loop.RoundsUsed
 	r.InputTokens, r.OutputTokens = loop.InputTokens, loop.OutputTokens
-	r.Model = loop.Model
+	r.Model, r.Models = loop.Model, loop.Models
 	r.Executions = loop.Executions
 	r.Narration = loop.Narration
 	r.Abandoned = loop.Abandoned

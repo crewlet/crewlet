@@ -201,6 +201,38 @@ func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
 		clip(name), strings.Join(names, ", "))
 }
 
+// --- whom a recall serves ------------------------------------------------- //
+
+// AttributingRecaller is a [Recaller] whose recalls make auxiliary model calls
+// that are recorded as the seat's spend, and so has to be told which turn each
+// recall serves.
+//
+// The attribution is the TOOL's to state, because the tool is the one frame
+// that holds the turn: the recaller behind it is built once per company
+// revision, before any turn exists. Its spend record then names the turn the
+// call served, rather than reading as a background pass that served none.
+//
+// A SEPARATE INTERFACE, as learning.Attributing is beside the model registry:
+// For binds whom the recall serves and nothing else — the Recaller it returns
+// recalls exactly as its receiver does — and a Recaller that records nothing
+// has nothing to bind, so it is used as it is.
+type AttributingRecaller interface {
+	Recaller
+	For(who learning.Attribution) Recaller
+}
+
+// recallFor is recall bound to the turn it serves, under
+// [learning.RecallWorker], where the recaller records its spend.
+func recallFor(recall Recaller, turn *turnctx.Turn) Recaller {
+	attributing, ok := recall.(AttributingRecaller)
+	if !ok || turn == nil {
+		return recall
+	}
+	return attributing.For(learning.Attribution{
+		Worker: learning.RecallWorker, TurnID: turn.RunID, WorkKey: turn.WorkKey,
+	})
+}
+
 // --- query_episodes ------------------------------------------------------- //
 
 type queryEpisodes struct {
@@ -293,7 +325,7 @@ func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query s
 	if t.recall == nil {
 		return learning.EpisodePage{}, errNoSimilarity
 	}
-	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, filter, offset, limit+1)
+	hits, err := recallFor(t.recall, turn).RecallEpisodes(ctx, turn.Seat, query, filter, offset, limit+1)
 	if err != nil {
 		return learning.EpisodePage{}, err
 	}
@@ -595,7 +627,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 			take.Spent)), nil
 	}
 
-	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
+	entries, err := recallFor(t.recall, turn).RecallMemories(ctx, turn.Seat, agentID, hint)
 	if err != nil {
 		return failed(fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
 	}

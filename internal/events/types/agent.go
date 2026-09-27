@@ -400,7 +400,12 @@ type AgentPhaseCompleted struct {
 	// serving it, in the order the models first answered: a phase whose
 	// rounds a fallback chain moved between two models names both, with
 	// what each billed. A completion that named no model is counted under
-	// the configured model of the provider that served it.
+	// the configured model of the provider that served it. It covers the
+	// whole phase — every invocation of an extended one, and a resumed
+	// one's rounds before its suspension — and on a record that collected
+	// a detached coding run, the run's own spend under the models its agent
+	// named, with Model empty for what the agent reported under no model's
+	// name ([AgentPhaseCompleted.AddRun]).
 	//
 	// ADDITIVE, and so read with a rule for its absence: a record without
 	// it, and whatever part of a record's tokens it does not cover — rounds
@@ -968,14 +973,16 @@ func (e *AgentPhaseCompleted) AddRun(run RunSpend) {
 }
 
 // AuxiliaryCallCompleted records one completion on a seat's AUXILIARY model:
-// what a learning worker or the turn-start prefetch spent, on whose behalf, and
-// for which turn.
+// what a learning worker, a background learning pass, the turn-start prefetch
+// or the memory filter a recall tool re-runs spent, on whose behalf, and for
+// which turn.
 //
 // ONE PER COMPLETION, published by the one seam every auxiliary call resolves
 // its model through (internal/engine), so a worker added later is recorded
 // without anybody remembering to. It is the spend record the token rollups
-// fold beside the phase records: the budget counter is charged with the same
-// spend where a cap is set, and without this record that spend would be on the
+// fold beside the phase records — the event store's spend read and the live
+// projection both — and the budget counter is charged with the same spend
+// where a cap is set, so without this record that spend would be on the
 // counter and in no rollup.
 //
 // A RECORD OF ITS OWN rather than an [AgentPhaseCompleted] with
@@ -1000,8 +1007,9 @@ type AuxiliaryCallCompleted struct {
 	// for every caller — carried under the key a phase record uses so the
 	// event store's spend columns read it the same way.
 	Phase Phase `json:"phase"`
-	// Worker is the name of what made the call: a learning worker's, or
-	// the prefetch's. Empty where the caller named none.
+	// Worker is the name of what made the call: a learning worker's, a
+	// background pass's, the prefetch's or the recall tools'. Empty where
+	// the caller named none.
 	Worker string `json:"worker"`
 	// Model is the model the completion reported serving it, or the
 	// configured model of the provider that served it where it named none.

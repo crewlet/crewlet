@@ -2082,7 +2082,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 // refusals, the two ways a serving domain is still not ready — behind the
 // log's head, or holding records back — say so.
 func replicationRow(name string, health statelog.Health, err error, now time.Time) ReplicationStatus {
-	row := ReplicationStatus{Name: name, Kind: "domain"}
+	row := ReplicationStatus{Name: name}
 	if err != nil {
 		// UNREADABLE IS NOT READY. The alternative reads as a caught-up
 		// loop on a node whose broker is unreachable, which is the one

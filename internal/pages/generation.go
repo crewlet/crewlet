@@ -35,8 +35,11 @@ func (s *Store) PublishGeneration(ctx context.Context, actor Actor, nodeID strin
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			// AT [DocumentVersion]: a reanchor's record installs no gate
+			// ([ObjectKind.InstallsGate]), so [GateRecordVersion] does not
+			// bind it.
 			return s.decide(actor, subject, OpGeneration, scope, opID, Generation{
-				V: GateRecordVersion, Generation: gen, By: actor.Name(),
+				V: DocumentVersion, Generation: gen, By: actor.Name(),
 				PrevHighest: in.Highest, StreamCreatedAt: in.StreamCreatedAt.UTC(),
 			}, nil, at)
 		},

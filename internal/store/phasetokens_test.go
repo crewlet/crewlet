@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seedPhase writes one completed phase with a price and the promoted counts.
@@ -148,5 +151,168 @@ func TestAnInvertedWindowCoversNothingRatherThanEverything(t *testing.T) {
 	}.Window(now)
 	if !since.Equal(until) {
 		t.Errorf("window = %s..%s, want an empty one at the later edge", since, until)
+	}
+}
+
+// storeEvent writes one event the way the engine's event writer does: through
+// [store.RecordFor], which is where a spend record's columns are derived.
+func storeEvent(t *testing.T, log *store.EventLog, ev *events.Event) {
+	t.Helper()
+	rec, ok, err := store.RecordFor(ev)
+	if err != nil || !ok {
+		t.Fatalf("RecordFor(%s) = %v, %v; want a row", ev.Type, ok, err)
+	}
+	if err := log.Append(t.Context(), rec); err != nil {
+		t.Fatalf("append %s: %v", ev.Type, err)
+	}
+}
+
+// stamped stamps an event with an instant of the test's choosing.
+func stamped(ev *events.Event, at time.Time) *events.Event {
+	ev.Timestamp = at
+	return ev
+}
+
+// AN AUXILIARY COMPLETION IS SPEND EVERY STORED ROLLUP FOLDS. A learning
+// worker's, a background pass's and the prefetch's completions are no phase's,
+// so each publishes an auxiliary_call_completed of its own, and a read that
+// selected phase records alone left that spend on the budget counter and off
+// every breakdown, series and seeded live window. It reaches all of them here
+// as its own phase, its own worker and the turn it served.
+func TestAnAuxiliaryCompletionReachesTheBreakdownAndTheSeries(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	storeEvent(t, log, stamped(events.New(types.AgentPhaseCompleted{
+		RoleName: "PM", TurnID: "run-1", WorkKey: "wk-1", Phase: types.PhaseExecute,
+		Model: "sonnet", InputTokens: 90, OutputTokens: 10, TotalTokens: 100,
+	}, events.TraceContext{}), base))
+	storeEvent(t, log, stamped(events.New(types.AuxiliaryCallCompleted{
+		RoleName: "PM", TurnID: "run-1", WorkKey: "wk-1", Phase: types.PhaseAuxiliary,
+		Worker: "persist_decider", Model: "haiku", ProviderKey: "aux",
+		InputTokens: 30, OutputTokens: 5, TotalTokens: 35,
+	}, events.TraceContext{}), base.Add(time.Minute)))
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	rollup := tokens.Aggregate(got, tokens.Options{})
+	if rollup.Totals.TotalTokens != 135 || rollup.Totals.Calls != 2 {
+		t.Fatalf("totals = %+v, want the phase's 100 and the auxiliary call's 35", rollup.Totals)
+	}
+	byPhase := map[string]int{}
+	for _, row := range rollup.ByPhase {
+		byPhase[row.Phase] = row.TotalTokens
+	}
+	if byPhase["auxiliary"] != 35 {
+		t.Errorf("by_phase = %v, want the auxiliary call under its own phase", byPhase)
+	}
+	if len(rollup.ByWorker) != 1 || rollup.ByWorker[0].Phase != "auxiliary" ||
+		rollup.ByWorker[0].Worker != "persist_decider" || rollup.ByWorker[0].TotalTokens != 35 {
+		t.Errorf("by_worker = %+v, want the persist decider's 35", rollup.ByWorker)
+	}
+	if len(rollup.ByTurn) != 1 || rollup.ByTurn[0].TotalTokens != 135 || rollup.ByTurn[0].WorkKey != "wk-1" {
+		t.Errorf("by_turn = %+v, want the call on the turn it served", rollup.ByTurn)
+	}
+
+	series := tokens.Bucketed(got, tokens.SeriesOptions{
+		Group: tokens.GroupWorker, Since: base, Until: base.Add(time.Hour),
+	})
+	if len(series.ByGroup) != 1 || series.ByGroup[0].Group != "auxiliary/persist_decider" ||
+		series.ByGroup[0].TotalTokens != 35 {
+		t.Errorf("worker bands = %+v, want the persist decider's", series.ByGroup)
+	}
+
+	// AND THE LIVE WINDOW'S SEED, which reads the tail.
+	tail, _, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 10)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	if len(tail) != 2 || tail[0].Phase != "auxiliary" {
+		t.Errorf("tail = %+v, want both records, the auxiliary call newest", tail)
+	}
+}
+
+// A TAIL ACROSS BOTH SPEND TYPES IS THE NEWEST OF BOTH. Each type is its own
+// read, and the tail is their merge cut to the limit — so the records it keeps
+// are the ones one ordered read of the two would have kept, and whether the
+// window held more is still read rather than inferred.
+func TestATailAcrossBothSpendTypesKeepsTheNewestOfBoth(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	now := time.Now().UTC()
+	for i, ev := range []*events.Event{
+		events.New(types.AgentPhaseCompleted{RoleName: "PM", Phase: types.PhaseExecute, TotalTokens: 1},
+			events.TraceContext{}),
+		events.New(types.AuxiliaryCallCompleted{RoleName: "PM", Phase: types.PhaseAuxiliary, TotalTokens: 2},
+			events.TraceContext{}),
+		events.New(types.AgentPhaseCompleted{RoleName: "PM", Phase: types.PhaseReview, TotalTokens: 4},
+			events.TraceContext{}),
+		events.New(types.AuxiliaryCallCompleted{RoleName: "PM", Phase: types.PhaseAuxiliary, TotalTokens: 8},
+			events.TraceContext{}),
+	} {
+		storeEvent(t, log, stamped(ev, now.Add(-time.Duration(4-i)*time.Minute)))
+	}
+	sum := func(rs []tokens.Record) int {
+		n := 0
+		for _, r := range rs {
+			n += r.TotalTokens
+		}
+		return n
+	}
+	tail, more, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 3)
+	if err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	}
+	if sum(tail) != 14 || !more || tail[0].TotalTokens != 8 || tail[2].TotalTokens != 2 {
+		t.Errorf("tail of 3 = %+v (more=%v), want the newest three, newest first, and more=true", tail, more)
+	}
+	if tail, more, _ := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 4); sum(tail) != 15 || more {
+		t.Errorf("tail of exactly the window = %+v (more=%v), want all four and more=false", tail, more)
+	}
+}
+
+// A RECORD'S MODEL SPLIT AND ITS UNREPORTED MARK REACH THE STORED ROLLUP. Both
+// are payload members rather than columns, so a read of the columns alone
+// counted every phase under its first model and stated a coding run's floor as
+// its whole — the live window, which reads the payload, answered otherwise.
+func TestAStoredRecordsSplitAndUnreportedMarkReachTheRollup(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	two := types.AgentPhaseCompleted{
+		RoleName: "PM", TurnID: "run-1", Phase: types.PhaseExecute, Model: "sonnet",
+		InputTokens: 150, OutputTokens: 15, TotalTokens: 165,
+		Models: []types.ModelSpend{
+			{Model: "sonnet", InputTokens: 100, OutputTokens: 10},
+			{Model: "haiku", InputTokens: 50, OutputTokens: 5},
+		},
+	}
+	storeEvent(t, log, stamped(events.New(two, events.TraceContext{}), at))
+	floor := types.AgentPhaseCompleted{
+		RoleName: "PM", TurnID: "run-2", Phase: types.PhaseExecute, Model: "sonnet",
+		InputTokens: 10, TotalTokens: 10, CostUSD: 0.5,
+	}
+	floor.AddRun(types.RunSpend{Collected: true, Models: []types.ModelSpend{{InputTokens: 30, OutputTokens: 5}}})
+	storeEvent(t, log, stamped(events.New(floor, events.TraceContext{}), at.Add(time.Minute)))
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	rollup := tokens.Aggregate(got, tokens.Options{})
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range rollup.ByModel {
+		byModel[row.Model] = row
+	}
+	if byModel["sonnet"].TotalTokens != 120 || byModel["haiku"].TotalTokens != 55 {
+		t.Errorf("by_model = %+v, want sonnet's 110 and the floor's own 10, and haiku's 55", rollup.ByModel)
+	}
+	if byModel["unknown"].TotalTokens != 35 || byModel[tokens.UnmeasuredModel].Calls != 1 {
+		t.Errorf("by_model = %+v, want the run's unnamed 35 and its unmeasured rest", rollup.ByModel)
+	}
+	if rollup.Totals.UnreportedCalls != 1 || rollup.Totals.CostUSD != 0.5 {
+		t.Errorf("totals = %+v, want one unreported call and the run's price", rollup.Totals)
 	}
 }

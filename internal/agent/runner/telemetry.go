@@ -266,6 +266,14 @@ func (s *Spend) record(rec phaseRecord) {
 	}
 	s.InputTokens += rec.Result.InputTokens
 	s.OutputTokens += rec.Result.OutputTokens
+	// AND THE RUN IT RE-ENTERED FROM, under the one condition the record
+	// takes it in on ([emitter.completed]): the turn's totals are what its
+	// phase records sum to, and that record's tokens include the run's.
+	if rec.Run.Sandboxed() {
+		in, out := rec.Run.Spend.Tokens()
+		s.InputTokens += in
+		s.OutputTokens += out
+	}
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}
@@ -664,7 +672,10 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		InputTokens:       res.InputTokens,
 		OutputTokens:      res.OutputTokens,
 		TotalTokens:       res.Tokens(),
-		RoundsUsed:        res.Rounds,
+		// WHAT EACH MODEL SERVED, as the turn's own phases carry it: a
+		// worker's chain can fall back mid-task like any other.
+		Models:     modelSpend(res.Models),
+		RoundsUsed: res.Rounds,
 		// THE WORKER'S OWN WALL CLOCK, off the result. A fan-out of eight
 		// runs its tasks in parallel under one wall-clock cap, so "which
 		// worker was slow" is the question a delegate call raises and the
@@ -778,6 +789,12 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.SandboxID = rec.Run.SandboxID
 		ev.CostUSD = rec.Run.CostUSD
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
+		// THE RUN'S OWN TOKENS JOIN THE RECORD'S, under the models its
+		// agent named, and a run whose agent gave no whole account marks
+		// the record's spend a floor. Without it the record prices the
+		// coding run at what its agent reported and sizes it at the few
+		// rounds this process ran around it.
+		ev.AddRun(rec.Run.Spend)
 	}
 	if rec.Err != nil {
 		// WHOLE, as the worker's error above is and for the same reason:

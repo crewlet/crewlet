@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // RecordVersion is the record shape THIS BUILD can decode.
@@ -24,6 +26,13 @@ const RecordVersion = 1
 // still running that build at once. So the two gate kinds, the eviction and
 // the purge, are pinned at 1 and never evolve: a field they need that they
 // cannot have is a field that belongs somewhere else.
+//
+// # The generation record is NOT at this version
+//
+// A reanchor's record ([Generation]) installs no gate
+// ([ObjectKind.InstallsGate] is the eviction alone, and its op is not the
+// purge), so nothing here binds it: its envelope is at [RecordVersion] and its
+// payload states [DocumentVersion], as a page's and a container's do.
 const GateRecordVersion = 1
 
 // OpKind is what a record does.
@@ -249,6 +258,10 @@ type Notify struct {
 	// change, so a wake reads without a lookup.
 	Container string `json:"container,omitempty"`
 	Title     string `json:"title,omitempty"`
+
+	// Extra carries members a newer build wrote, so a relayed record keeps
+	// what the writer put in its notification.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -306,28 +319,25 @@ func Decode(payload []byte) (MutationRecord, error) {
 			Got: env.V, Want: RecordVersion, Subject: env.Subject,
 		}
 	}
+	// THE MEMBERS THIS BUILD DOES NOT KNOW ARE KEPT in [MutationRecord.Extra]
+	// and the notification's own, so a relay writes back what the writer
+	// wrote.
 	var rec MutationRecord
-	extra, err := decodeInto(payload, &rec, recordFields, env.V)
-	if err != nil {
+	if err := json.Unmarshal(payload, &rec); err != nil {
 		return MutationRecord{RecordEnvelope: env}, fmt.Errorf("pages: decode "+
 			"the record on %s: %w", env.Subject, err)
 	}
-	rec.Extra = extra
 	return rec, nil
 }
 
 // Encode renders a record, carrying back whatever a newer build wrote.
 //
 // LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
-// node that read a record it only half understood and republished it — the
-// reanchor path does exactly that — must not strip the half it did not.
-//
-// It goes through the same [encode] every document shape here uses, rather
-// than a second merge of its own: a carried field LOSES to a known one, and
-// two implementations of that rule are one place where a stale carried copy
-// undoes the write that set it.
+// node that read a record it only half understood and passed it on — the
+// change feed's body is exactly that ([recordBody]) — must not strip the half
+// it did not.
 func Encode(rec MutationRecord) ([]byte, error) {
-	data, err := encode(rec, rec.Extra)
+	data, err := encode(rec)
 	if err != nil {
 		return nil, fmt.Errorf("pages: encode the record on %s: %w",
 			rec.Subject, err)
@@ -335,13 +345,29 @@ func Encode(rec MutationRecord) ([]byte, error) {
 	return data, nil
 }
 
-// recordFields is every top-level name this build writes.
-//
-// DERIVED from the struct rather than typed again, on [fieldSet]'s terms: the
-// omitempty names have to be listed because a zero value does not marshal
-// them, and a name missing here is decoded into the struct AND carried as
-// unknown — so the next encode writes the stale carried copy back over what
-// the caller set.
-var recordFields = fieldSet(MutationRecord{}, "op_id", "created_at", "gen",
-	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id",
-	"turn_id", "chain", "notify")
+// MarshalJSON writes [MutationRecord.Extra] back beside the members this build
+// knows.
+func (r MutationRecord) MarshalJSON() ([]byte, error) {
+	type fields MutationRecord
+	return jsoncarry.Marshal(fields(r), r.Extra)
+}
+
+// UnmarshalJSON keeps every member of the record this build does not know in
+// [MutationRecord.Extra].
+func (r *MutationRecord) UnmarshalJSON(b []byte) error {
+	type fields MutationRecord
+	return jsoncarry.Unmarshal(b, (*fields)(r), &r.Extra)
+}
+
+// MarshalJSON writes [Notify.Extra] back beside the members this build knows.
+func (n Notify) MarshalJSON() ([]byte, error) {
+	type fields Notify
+	return jsoncarry.Marshal(fields(n), n.Extra)
+}
+
+// UnmarshalJSON keeps every member of the notification this build does not know
+// in [Notify.Extra].
+func (n *Notify) UnmarshalJSON(b []byte) error {
+	type fields Notify
+	return jsoncarry.Unmarshal(b, (*fields)(n), &n.Extra)
+}

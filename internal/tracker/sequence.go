@@ -30,8 +30,10 @@ import (
 // So each states FOUR things and this file implements exactly them: the
 // ORDER of its appends, the CLAIM that stops two walks of it running at once
 // — the fleet's durable lease between nodes, and [localClaims] between two
-// goroutines on one — the CRASH RESIDUE the order was chosen to leave, and the
-// REPAIRER that clears it — or the argument for why none is needed.
+// goroutines on one; a walk that cannot run without its claim also fences
+// every append on it ([Writer.under]) — the CRASH RESIDUE the order was chosen
+// to leave, and the REPAIRER that clears it — or the argument for why none is
+// needed.
 //
 // The order is never arbitrary. A create mints its number first and its task
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
@@ -117,13 +119,26 @@ const (
 	WalkBatch = 64
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
-	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
-	// survivable.
+	// survives unrenewed. FOUR HEARTBEATS, so the lease outlives three
+	// consecutive missed renewals.
 	ClaimTTL = 60 * time.Second
 
 	// ClaimHeartbeat is how often the holder renews that claim — a quarter
 	// of [ClaimTTL], which is the arithmetic its own comment rests on.
 	ClaimHeartbeat = 15 * time.Second
+
+	// ClaimFenceMargin is how much of its lease a walk must still be able
+	// to vouch for to make its next append ([held.holding]).
+	//
+	// ONE HEARTBEAT, the unit this claim is already measured in. A walk
+	// whose last confirmed renewal is older than [ClaimTTL] less this has
+	// missed three renewals in a row, and it stops there — so the append
+	// it made last had a whole heartbeat to reach the broker before the
+	// lease could lapse under it. Narrower, a walk riding out a
+	// coordination blip appends closer to the lapse and a slow append
+	// lands after it; wider, a walk stops on fewer missed renewals and
+	// leaves more merges for the duty to finish.
+	ClaimFenceMargin = ClaimHeartbeat
 
 	// ClaimStale is half the TTL past its last heartbeat, which is the
 	// point at which a holder that is still alive would have renewed
@@ -671,8 +686,8 @@ func bodyWarnings(body string) []string {
 //
 // A promoted item is a subtask, and a subtask has a KEY — so the promotion
 // mints a counter value and carries the identical counter-then-task window a
-// create does, including the numbering gap. It was listed among the one-append
-// gestures for as long as nobody asked what its key came from.
+// create does, including the numbering gap — which is what makes it more than
+// one append, however much it reads like one.
 //
 // The parent is marked last because the other order leaves an item marked
 // promoted with no subtask behind it — a struck-through line pointing at
@@ -907,7 +922,26 @@ func (c *localClaims) give(resource string) {
 	delete(c.held, resource)
 }
 
-// held is one claim, heartbeated for as long as a walk runs.
+// ErrClaimLost refuses an append of a walk that can no longer vouch for the
+// claim it runs under ([held.holding]). The walk stops there, and what it
+// already wrote stands.
+var ErrClaimLost = errors.New("tracker: this walk no longer holds its claim")
+
+// held is one claim, heartbeated for as long as a walk runs, and the fence
+// every append that walk makes is checked against ([Writer.under]).
+//
+// # Why the fence is the holder's own record of its lease
+//
+// The log knows nothing of a lease: an append from a walk whose lease lapsed
+// is accepted like any other, and meanwhile the claim can be re-acquired —
+// under a higher fencing epoch ([coord]'s rule 2) — by the duty finishing what
+// looks like an abandoned walk. So the walk has to stop itself, and what it
+// stops on is what the coordination store last told it: a renewal the store
+// answered "not held" ([Claims.Renew] is predicated on this tenure's epoch,
+// which a lapse and a re-acquisition leave behind), or a lease this walk has
+// not been able to confirm for so long that it may have lapsed. Asking the
+// store before every append instead would put a coordination round trip on
+// every subtask a merge moves.
 type held struct {
 	claims   Claims
 	local    *localClaims
@@ -916,6 +950,23 @@ type held struct {
 	epoch    int64
 	stop     chan struct{}
 	done     chan struct{}
+
+	// clock is what the lease's age is measured on — [Writer.claimClock].
+	clock func() time.Time
+
+	mu sync.Mutex
+
+	// confirmed is when the latest request the store answered "held" was
+	// SENT. The store starts a lease's TTL when it receives the request,
+	// which is no earlier than this, so the lease runs until at least
+	// confirmed + [ClaimTTL] — a bound read from this side without any
+	// clock of the store's.
+	confirmed time.Time
+
+	// lost is set once the store has answered that this tenure is not
+	// held. Nothing clears it: a lapsed lease is re-acquired only under a
+	// new epoch, which this walk does not have.
+	lost bool
 }
 
 // claim takes a walk's claim — this node's and the fleet's — and keeps it
@@ -960,6 +1011,7 @@ func (w *Writer) claim(ctx context.Context, resource string) (*held, error) {
 //
 // meta rides the lease for whoever reads the holder with [Claims.Get].
 func (w *Writer) lease(ctx context.Context, resource string, meta map[string]any) (*held, error) {
+	sent := w.claimClock()
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: w.nodeID, TTL: ClaimTTL, Meta: meta,
 	})
@@ -969,6 +1021,7 @@ func (w *Writer) lease(ctx context.Context, resource string, meta map[string]any
 	h := &held{
 		claims: w.claims, local: w.local, resource: resource, owner: w.nodeID,
 		epoch: lease.Epoch, stop: make(chan struct{}), done: make(chan struct{}),
+		clock: w.claimClock, confirmed: sent,
 	}
 	go h.beat(context.WithoutCancel(ctx))
 	return h, nil
@@ -1001,14 +1054,68 @@ func (h *held) beat(ctx context.Context) {
 		case <-h.stop:
 			return
 		case <-ticker.C:
-			// A FAILED RENEW IS NOT FATAL HERE. The claim's TTL is four
-			// heartbeats, so three misses are survivable, and the walk
-			// that would be abandoned on the fourth is idempotent.
-			// Tearing the walk down on the first blip would abandon more
-			// of them, not fewer.
-			_, _ = h.claims.Renew(ctx, h.resource, h.owner, h.epoch, ClaimTTL)
+			if !h.renew(ctx) {
+				return
+			}
 		}
 	}
+}
+
+// renew heartbeats the lease once and records what the store answered,
+// reporting whether there is still a lease to renew.
+//
+// AN UNANSWERED RENEW DOES NOT STOP THE WALK BY ITSELF. It is the third value
+// ([coord]'s tri-state): the lease is probably still held, and tearing a walk
+// down on the first blip would abandon more walks rather than fewer. The walk
+// goes on under what its last confirmed renewal bought, and [held.holding]
+// stops it once too little of that is left.
+//
+// A "NOT HELD" STOPS THE HEARTBEAT, because nothing is left for it to renew:
+// the tenure lapsed or was taken, and only a new acquisition — under a new
+// epoch — holds the resource again.
+func (h *held) renew(ctx context.Context) bool {
+	sent := h.clock()
+	ok, err := h.claims.Renew(ctx, h.resource, h.owner, h.epoch, ClaimTTL)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case err != nil:
+		return true
+	case !ok:
+		h.lost = true
+		return false
+	}
+	h.confirmed = sent
+	return true
+}
+
+// holding is the fence: nil while this walk may make its next append under
+// the claim, and [ErrClaimLost] once it may not.
+//
+// # What it stops, and what it cannot
+//
+// It is checked inside each append's decide ([Writer.publish]), so an append
+// decided after the walk lost its claim is never published. What it cannot
+// stop is an append already past its check: the broker does not consult the
+// lease, so an append that passed with at least [ClaimFenceMargin] of the
+// lease left and then took longer than that to reach the broker lands after
+// the lease lapsed, whatever has taken the claim since.
+func (h *held) holding() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lost {
+		return fmt.Errorf("%w: the coordination store answered that %s is not "+
+			"held at epoch %d any more, so this walk stopped before its next "+
+			"append", ErrClaimLost, h.resource, h.epoch)
+	}
+	if age := h.clock().Sub(h.confirmed); ClaimTTL-age < ClaimFenceMargin {
+		return fmt.Errorf("%w: %s was last confirmed %s ago, which leaves less "+
+			"than %s of its %s lease, so this walk stopped before its next "+
+			"append rather than make it under a lease that may have lapsed",
+			ErrClaimLost, h.resource, age.Round(time.Second), ClaimFenceMargin,
+			ClaimTTL)
+	}
+	return nil
 }
 
 // release stops the heartbeat and gives the claim up — the lease, then this
@@ -1085,6 +1192,10 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 	defer claim.release(ctx)
+	// EVERY APPEND BELOW IS THIS WALK'S, so every one is made under the
+	// claim: a walk that loses it stops before its next append rather than
+	// re-keying a subtree beside whoever holds the claim now.
+	w = w.under(claim)
 
 	// The subtree, read ONCE and ordered by (depth, id) — the ordering the
 	// range assignment is a pure function of, so a duty completing this
@@ -1363,6 +1474,12 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		return WriteResult{}, err
 	}
 	defer claim.release(ctx)
+	// EVERY APPEND BELOW IS THIS WALK'S, so every one is made under the
+	// claim — the mark, each subtask's move, and the close that lowers the
+	// marker. A walk that loses the claim stops before its next append,
+	// rather than go on writing beside the duty that finishes a merge whose
+	// claim it can take ([duty.finishAbandoned]).
+	w = w.under(claim)
 
 	var task Task
 	if w.db == nil {
@@ -1423,12 +1540,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		marked.Position, notify)
 	switch {
 	case errors.Is(err, errMergeOver):
-		// THE MARK HAS LANDED, and every subtask this call moved: what ended
-		// the merge is another writer — the tracker duty, once this call's
-		// claim ran out under it, or a purge of the duplicate — so this call
-		// closes nothing, and what it wrote stands. PARTIAL, because every
-		// other refusal a write returns says the change was not made
-		// ([PartialError]).
+		// THE MARK HAS LANDED, and every subtask this call moved: another
+		// writer ended the merge — a purge of the duplicate, or a clear of
+		// its marker — so this call closes nothing, and what it wrote
+		// stands. PARTIAL, because every other refusal a write returns says
+		// the change was not made ([PartialError]).
 		return WriteResult{}, partial(false, "tracker: the merge of %s into "+
 			"%s had been ended by another writer when this call came to close "+
 			"it: the %d subtask(s) this call moved stay under %s, and this "+

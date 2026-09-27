@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -146,6 +147,10 @@ func promotionContainer(unit *org.Unit) (container, hint string) {
 // nodes promoting one unit would draft the same page twice, and the writers'
 // dedup would make the second a silent no-op only if the first had already
 // committed — which across two nodes it may not have.
+//
+// THE LEDGER IS THE FLEET'S, because the duty moves: the node that runs the
+// pass tomorrow has to see what today's holder drafted and what a lead
+// rejected, or it drafts both again.
 func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	cfg := c.Config.Learning.SkillPromotion
 	if !cfg.Promotes() || e.backends.Store == nil {
@@ -154,6 +159,7 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	promoter, err := learning.NewPromoter(learning.PromoterOptions{
 		// THE RESOLVER, not a writer: see [Engine.promotionWriter].
 		Writer:           e.promotionWriter,
+		Ledger:           e.backends.Fleet,
 		Skills:           learning.NewSkills(e.backends.Store),
 		Models:           e.meteredModelsFor(c),
 		Units:            e.promotionUnits,
@@ -170,11 +176,12 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	return promoter
 }
 
-// Compile-time proof that both writers satisfy the pass's seam. The interface
-// is declared by the consumer, so nothing else would notice a signature drift
-// until the wiring above failed to build — which is later than a reader of
-// either writer would want to find out.
+// Compile-time proof that both writers and the fleet store satisfy the pass's
+// seams. The interfaces are declared by the consumer, so nothing else would
+// notice a signature drift until the wiring above failed to build — which is
+// later than a reader of either writer would want to find out.
 var (
 	_ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)
 	_ learning.PromotionWriter = (*nativeDrafts)(nil)
+	_ learning.PromotionLedger = (coord.Fleet)(nil)
 )

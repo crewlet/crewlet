@@ -59,9 +59,9 @@ func documentSelect(s Subject) (query string, args []any, err error) {
 	// NOT tracker_persons, and its absence here is the point: that table
 	// stores no `document` column at all — a person's record is exploded
 	// into columns and nothing keeps the blob — so this statement would
-	// have failed with "no such column: document" the first time anything
-	// read one. [readPerson] reassembles it from the columns instead, for
-	// the reason [readCounter] gives for the same shape.
+	// fail with "no such column: document" the first time anything read
+	// one. [readPerson] reassembles it from the columns instead, for the
+	// reason [readCounter] gives for the same shape.
 	return "", nil, fmt.Errorf("tracker: %s has no document read", s.Kind)
 }
 
@@ -227,10 +227,9 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 //
 // Because that is what a merge moves. A grandchild re-parented onto the
 // canonical task is a grandchild whose own parent is somewhere else entirely
-// — the subtree flattened, which is what re-parenting every descendant did,
-// and which no caller ever asked for: `move_subtasks` promises the
-// duplicate's SUBTASKS move, and a subtask's own subtasks travel underneath
-// it.
+// — the subtree flattened, which is what re-parenting every descendant would
+// do, and which no caller asks for: `move_subtasks` promises the duplicate's
+// SUBTASKS move, and a subtask's own subtasks travel underneath it.
 //
 // # Why it is a batch, and why the batch is keyed rather than counted
 //

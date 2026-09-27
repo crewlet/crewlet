@@ -13,7 +13,7 @@ import (
 
 // The engine's own knowledge base's half of cross-agent skill promotion:
 // create the draft page a unit lead reviews, or hand back the one already
-// there.
+// there, and say whether a lead rejected it.
 //
 // # The same conventions as the Confluence writer
 //
@@ -25,15 +25,32 @@ import (
 // parent chain names the auto-drafted page — and published by the same
 // gesture: moving it out from under that page.
 //
-// # Why the dedup is a read and then a create
+// # Why the create is a read and then a create
 //
-// A title is an address in this knowledge base: unique per container, and
-// what a create ARBITRATES ON at the broker. So a second page at a draft's
-// address is impossible whatever this node has applied, and the read first
-// only saves the round trip. The read is at `stale` — this node's own rows,
-// no broker call — because a miss there is settled by the create itself: a
+// The promotion pass keeps a fleet-wide record of every convergence it has
+// drafted and reads it before asking a model (internal/learning's promote.go),
+// so what this writer is asked to make again is a page a pass made and could
+// not record, which it makes again from its record under the same title. A
+// title is an address in this knowledge base: unique per container, and what
+// a create ARBITRATES ON at the broker. So a second page at a draft's address
+// is impossible whatever this node has applied, and the read first only saves
+// the round trip. The read is at `stale` — this node's own rows, no broker
+// call — because a miss there is settled by the create itself: a
 // title somebody else holds is refused as taken, and only then is the winner
 // read, through the log's barrier.
+//
+// # A lead rejects a draft by labelling it
+//
+// This knowledge base's page tools — a seat's, and the operator's own
+// assistant's, which are the same tools — create a page, comment on one, and
+// change its body, title, labels, parent and whether the caller watches it;
+// none of them removes one. A label is the one among those that says something
+// ABOUT a page without changing what it says or where it is: moving a draft is
+// how a lead PUBLISHES it, and an edit to its body is a review. So a draft
+// carrying [rejectedDraftLabel] is rejected — and so is one in the trash or
+// purged, which the store can do to a page although no page tool offers it,
+// because a draft somebody put out of reach is not one they want drafted
+// again.
 //
 // # Why the parent is created rather than required, and never skipped
 //
@@ -53,13 +70,64 @@ type nativeDrafts struct {
 }
 
 // draftAuthor is who a native draft and its parent are written as: the engine
-// itself, under the name the engine's own writes to this knowledge base carry
-// — [pages.Store.EnsureContainer] writes a container as it.
+// itself, [pages.AuthorSystem], which is also who [pages.Store.EnsureContainer]
+// writes a container as.
 //
 // NOT A SEAT, because no seat wrote the draft: several converged on it, and
-// the page names them. This knowledge base's author kinds are agent, human and
-// operator, and a write no seat made is recorded as `operator` there.
-var draftAuthor = pages.Actor{Handle: "system", Kind: pages.AuthorOperator}
+// the page names them. And no handle either — a created page's author handle
+// becomes its watcher — so the draft is watched by nobody, and its creation
+// reaches the container's lead ([pages.LeadWorthy]).
+var draftAuthor = pages.Actor{Kind: pages.AuthorSystem}
+
+// nativeBackend is this knowledge base's name, as its searcher reports it
+// ([pages.Searcher]'s Backend).
+const nativeBackend = "native"
+
+// rejectedDraftLabel is the label a lead puts on a draft to reject it.
+//
+// A plain word a person types without looking it up, and one that means
+// something only on a page the pass recorded drafting: the pass asks about its
+// own drafts by id and never searches by label, so the same word on any other
+// page is that page's business.
+const rejectedDraftLabel = "rejected"
+
+// Backend names this knowledge base as its searcher does.
+func (w *nativeDrafts) Backend() string { return nativeBackend }
+
+// Rejection is how a lead rejects a draft here.
+func (w *nativeDrafts) Rejection() string {
+	return "add the label `" + rejectedDraftLabel + "` to it"
+}
+
+// Rejected reports whether a lead rejected a draft: labelled it, put it in the
+// trash, or purged it.
+//
+// A PAGE THIS NODE HAS NOT APPLIED IS NOT A PURGED ONE. The draft may have
+// been made on another node, so a miss in this node's own rows is asked of the
+// log, through its barrier, before it is called gone.
+func (w *nativeDrafts) Rejected(ctx context.Context, _ string, pageID string) (string, error) {
+	if strings.TrimSpace(pageID) == "" {
+		return "", fmt.Errorf("pages: no page id to look for a rejected draft by")
+	}
+	page, found, err := w.byRef(ctx, pageID, ownRows())
+	if err == nil && !found {
+		page, found, err = w.byRef(ctx, pageID, throughBarrier())
+	}
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("pages: reading the draft %s: %w", pageID, err)
+	case !found:
+		return "it was purged", nil
+	case page.Status == pages.StatusTrashed:
+		return "it is in the trash", nil
+	}
+	for _, label := range page.Labels {
+		if strings.EqualFold(strings.TrimSpace(label), rejectedDraftLabel) {
+			return "it carries the label `" + rejectedDraftLabel + "`", nil
+		}
+	}
+	return "", nil
+}
 
 // CreateDraft creates the draft under the container's auto-drafted parent, or
 // returns the page already there under that title.
@@ -203,7 +271,15 @@ func (w *nativeDrafts) winner(ctx context.Context, container, title string) (pag
 func (w *nativeDrafts) find(ctx context.Context, container, title string,
 	fresh statelog.Freshness) (pages.Page, bool, error) {
 
-	detail, err := w.reader.Get(ctx, container+"/"+title, fresh)
+	return w.byRef(ctx, container+"/"+title, fresh)
+}
+
+// byRef reads the page a reference names — an id, or a container and a title
+// joined by a slash — and whether there is one.
+func (w *nativeDrafts) byRef(ctx context.Context, ref string,
+	fresh statelog.Freshness) (pages.Page, bool, error) {
+
+	detail, err := w.reader.Get(ctx, ref, fresh)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return pages.Page{}, false, nil
@@ -243,5 +319,7 @@ const draftParentBody = "Pages under this one were drafted automatically " +
 	"the search leaves out every page beneath this one.\n\n" +
 	"To adopt one, move it out from under this page — to the top of this " +
 	"container, or under any other page — and it is an ordinary page every " +
-	"agent's search can return. A draft left here stays hidden, and while it " +
-	"holds its title the same draft is not written again."
+	"agent's search can return. To reject one, add the label `" +
+	rejectedDraftLabel + "` to it: the promotion pass records the rejection " +
+	"for the whole company. Either way, and if you leave it here, the pass " +
+	"does not draft that procedure for this team in this knowledge base again."

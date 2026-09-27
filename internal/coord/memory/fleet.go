@@ -53,10 +53,12 @@ type Fleet struct {
 	admissions   map[string]coord.Admission
 	maintAcks    map[string]coord.MaintenanceAck
 	maintRev     uint64
+	promotions   map[promotionAddress]coord.PromotionRecord
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs and mailbox records alike. Store-wide rather than per record, as
-	// a KV revision is, so a record deleted and created again never hands
+	// runs, mailbox records and promotion records alike. Store-wide rather
+	// than per record, as a KV revision is, so a record deleted and created
+	// again never hands
 	// back a version an older incarnation of it already used: a caller still
 	// holding that version must lose, not win against a record it never
 	// read. A per-record counter restarting at 1 was exactly that bug.
@@ -97,6 +99,7 @@ func NewFleet() *Fleet {
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
+		promotions:   map[promotionAddress]coord.PromotionRecord{},
 	}
 }
 

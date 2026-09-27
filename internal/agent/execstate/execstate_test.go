@@ -30,8 +30,13 @@ func suspended() execstate.State {
 		Round:           2,
 		InputTokens:     1200,
 		OutputTokens:    340,
-		ToolExecutions:  []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
-		RoundsUsed:      2,
+		Model:           "sonnet",
+		Models: []types.ModelSpend{
+			{Model: "sonnet", InputTokens: 1000, OutputTokens: 300},
+			{Model: "haiku", InputTokens: 200, OutputTokens: 40},
+		},
+		ToolExecutions: []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
+		RoundsUsed:     2,
 		RoundNarration: []types.RoundNarration{
 			{"round": 1, "reasoning": "read it first", "content": ""},
 			{"round": 2, "reasoning": "", "content": "Starting a coding run."},
@@ -65,6 +70,11 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	if got.Round != 2 || got.InputTokens != 1200 || got.OutputTokens != 340 {
 		t.Fatalf("counters lost: %+v", got)
+	}
+	// WHICH MODEL SERVED THEM, beside the tokens: the resumed record is the
+	// phase's only one, and it splits the pre-suspend rounds from this.
+	if got.Model != "sonnet" || len(got.Models) != 2 || got.Models[1] != want.Models[1] {
+		t.Fatalf("the pre-suspend split was lost: model %q, %+v", got.Model, got.Models)
 	}
 	if len(got.ActiveTools) != 2 || len(got.LoadedSkills) != 1 {
 		t.Fatalf("surface state lost: %+v", got)

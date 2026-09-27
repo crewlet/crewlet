@@ -547,20 +547,33 @@ func TestARecordWithoutASplitCountsUnderItsOneModel(t *testing.T) {
 // whose split names part of its spend — rounds carried across a suspension by
 // a build that kept no split for them — loses none of the rest, and `by_model`
 // still sums to the totals.
+//
+// AND IT IS ONE CALL OF THAT MODEL, however the record reached it: the split
+// here names sonnet too, so sonnet's row is its own entry and the uncovered
+// rest together — one record, one call — and a row per part would count the
+// record twice under one model.
 func TestWhatASplitDoesNotCoverCountsUnderTheRecordsModel(t *testing.T) {
 	t.Parallel()
 	phase := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 300, 40)
-	phase.Models = []tokens.ModelSpend{{Model: "haiku", InputTokens: 100, OutputTokens: 10}}
+	phase.Models = []tokens.ModelSpend{
+		{Model: "haiku", InputTokens: 100, OutputTokens: 10},
+		{Model: "sonnet", InputTokens: 50, OutputTokens: 5},
+	}
 
 	got := tokens.Aggregate([]tokens.Record{phase}, tokens.Options{})
-	byModel := map[string]int{}
+	byModel := map[string]tokens.ModelRow{}
 	sum := 0
 	for _, row := range got.ByModel {
-		byModel[row.Model] = row.TotalTokens
+		byModel[row.Model] = row
 		sum += row.TotalTokens
 	}
-	if byModel["haiku"] != 110 || byModel["sonnet"] != 230 {
-		t.Errorf("by_model = %v, want haiku's 110 and the uncovered 230 under sonnet", byModel)
+	if len(got.ByModel) != 2 || byModel["haiku"].TotalTokens != 110 || byModel["sonnet"].TotalTokens != 230 {
+		t.Errorf("by_model = %+v, want haiku's 110, and sonnet's own 55 with the uncovered 175 "+
+			"under sonnet", got.ByModel)
+	}
+	if byModel["haiku"].Calls != 1 || byModel["sonnet"].Calls != 1 {
+		t.Errorf("calls = haiku %d, sonnet %d, want the one record counted once under each",
+			byModel["haiku"].Calls, byModel["sonnet"].Calls)
 	}
 	if sum != got.Totals.TotalTokens {
 		t.Errorf("by_model sums to %d, the totals say %d", sum, got.Totals.TotalTokens)
@@ -649,8 +662,66 @@ func TestAnUnreportedRunIsCountedAsAFloorNotAZero(t *testing.T) {
 	if byModel["sonnet"].UnreportedCalls != 0 || byModel["sonnet"].TotalTokens != 65 {
 		t.Errorf("sonnet = %+v, want its measured 65 and no unreported call", byModel["sonnet"].Bucket)
 	}
-	if u := byModel["unknown"]; u.UnreportedCalls != 1 || u.TotalTokens != 0 {
-		t.Errorf("unknown = %+v, want the unmeasured part as its own call of no tokens", u.Bucket)
+	if u := byModel[tokens.UnmeasuredModel]; u.Calls != 1 || u.UnreportedCalls != 1 || u.TotalTokens != 0 {
+		t.Errorf("%s = %+v, want the unmeasured part as its own call of no tokens",
+			tokens.UnmeasuredModel, u.Bucket)
+	}
+	if _, ok := byModel["unknown"]; ok {
+		t.Errorf("by_model = %+v has an unknown row, and every token here was reported under "+
+			"a model's name", got.ByModel)
+	}
+}
+
+// SPEND REPORTED UNDER NO MODEL'S NAME IS NOT UNMEASURED SPEND. A coding agent
+// that reports only totals leaves its run's tokens in a split entry naming no
+// model: measured, and filed under "unknown". A run whose account is not whole
+// is a different fact, counted as a call of [tokens.UnmeasuredModel] with no
+// tokens — and one row summing the two would state a known quantity as an
+// unmeasured one, or an unmeasured one as a known size.
+func TestReportedButUnnamedSpendIsNotTheUnmeasuredMarker(t *testing.T) {
+	t.Parallel()
+	named := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:00Z", 130, 15)
+	named.Models = []tokens.ModelSpend{{Model: "", InputTokens: 30, OutputTokens: 5}}
+	floor := rec("CEO", "execute", "sonnet", "t2", "2026-06-14T12:00:05Z", 130, 15)
+	floor.Models = []tokens.ModelSpend{{Model: "", InputTokens: 30, OutputTokens: 5}}
+	floor.Unreported = true
+
+	for name, tc := range map[string]struct {
+		records    []tokens.Record
+		unmeasured int
+	}{
+		"a whole account":    {[]tokens.Record{named}, 0},
+		"an account a floor": {[]tokens.Record{floor}, 1},
+		"one of each":        {[]tokens.Record{named, floor}, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := tokens.Aggregate(tc.records, tokens.Options{})
+			byModel := map[string]tokens.ModelRow{}
+			for _, row := range got.ByModel {
+				byModel[row.Model] = row
+			}
+			unnamed := byModel["unknown"]
+			if unnamed.TotalTokens != 35*len(tc.records) || unnamed.Calls != len(tc.records) ||
+				unnamed.UnreportedCalls != 0 {
+				t.Errorf("unknown = %+v, want the unnamed 35 of each record, reported", unnamed.Bucket)
+			}
+			marker, ok := byModel[tokens.UnmeasuredModel]
+			if ok != (tc.unmeasured > 0) || marker.Calls != tc.unmeasured ||
+				marker.UnreportedCalls != tc.unmeasured || marker.TotalTokens != 0 {
+				t.Errorf("%s = %+v (present %v), want %d calls of no tokens",
+					tokens.UnmeasuredModel, marker.Bucket, ok, tc.unmeasured)
+			}
+			series := tokens.Bucketed(tc.records, tokens.SeriesOptions{Group: tokens.GroupModel})
+			bands := map[string]tokens.GroupRow{}
+			for _, row := range series.ByGroup {
+				bands[row.Group] = row
+			}
+			if bands["unknown"].TotalTokens != unnamed.TotalTokens ||
+				bands[tokens.UnmeasuredModel].Calls != tc.unmeasured {
+				t.Errorf("the model bands %+v do not count what by_model does", series.ByGroup)
+			}
+		})
 	}
 }
 
@@ -776,6 +847,15 @@ func TestARunWithoutAWholeAccountMarksItsRecordAFloor(t *testing.T) {
 	got := tokens.Aggregate([]tokens.Record{recordOf(t, ev)}, tokens.Options{})
 	if got.Totals.UnreportedCalls != 1 || got.ByPhase[0].UnreportedCalls != 1 {
 		t.Errorf("totals %+v, by_phase %+v: the floor must say it is one", got.Totals, got.ByPhase)
+	}
+	byModel := map[string]tokens.ModelRow{}
+	for _, row := range got.ByModel {
+		byModel[row.Model] = row
+	}
+	if byModel["exec-model"].TotalTokens != 110 || byModel["unknown"].TotalTokens != 35 ||
+		byModel[tokens.UnmeasuredModel].Calls != 1 || byModel[tokens.UnmeasuredModel].TotalTokens != 0 {
+		t.Errorf("by_model = %+v, want the rounds' 110 under exec-model, the run's unnamed 35 "+
+			"under unknown, and the unmeasured rest as a call of no tokens", got.ByModel)
 	}
 
 	// AND A RECORD THAT COLLECTED NO RUN SAYS NOTHING ABOUT ONE.

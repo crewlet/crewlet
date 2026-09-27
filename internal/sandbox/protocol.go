@@ -220,6 +220,11 @@ type Result struct {
 // spend is the run's own model spend as the phase that collects it takes it in:
 // its split, whole or not, with whatever part of its figures the split does
 // not name as one part under no model's name.
+//
+// THAT PART IS REPORTED SPEND, and the rollups keep it apart from spend nobody
+// reported: they file it under "unknown", as measured tokens whose model is
+// not named, while a run whose account is not whole ([Result.UsageWhole]) is
+// counted as a call of internal/tokens' UnmeasuredModel.
 func (r Result) spend() types.RunSpend {
 	out := types.RunSpend{Collected: true, Whole: r.UsageWhole}
 	rest := types.ModelSpend{InputTokens: r.InputTokens, OutputTokens: r.OutputTokens, CostUSD: r.CostUSD}

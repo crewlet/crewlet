@@ -2,16 +2,34 @@ package sandbox_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
+
+// heldRef is the reference to the parts the answer held on a run is kept in,
+// failing the test when the run holds none.
+func heldRef(t *testing.T, store *sandbox.CoordStore, turnID string) sandbox.HeldParts {
+	t.Helper()
+	run, _, err := store.Get(t.Context(), turnID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", turnID, err)
+	}
+	answer, ok := run.Held()
+	if !ok || answer.Parts == nil {
+		t.Fatalf("the premise: run %s holds its answer in parts (it holds %+v, held=%v)", turnID, answer, ok)
+	}
+	return *answer.Parts
+}
 
 // held reads the answer held on a run whole, failing the test on an error.
 func held(t *testing.T, store *sandbox.CoordStore, turnID string) sandbox.HeldAnswer {
@@ -51,7 +69,7 @@ func TestAReplyTheRowRefusesIsHeldInPartsTheServerTakes(t *testing.T) {
 		t.Fatalf("the answer read back is %d bytes held at %v, want the whole %d-byte reply", len(got.Text),
 			got.At, len(reply))
 	}
-	parts, err := fleet.SuspensionParts(t.Context(), "t-low", run.LaunchID)
+	parts, err := fleet.AnswerParts(t.Context(), "t-low", run.LaunchID, heldRef(t, store, "t-low").ID)
 	if err != nil || len(parts) < 2 {
 		t.Fatalf("the reply is in %d parts, %v: want it split to what the server takes", len(parts), err)
 	}
@@ -62,22 +80,162 @@ func TestAReplyTheRowRefusesIsHeldInPartsTheServerTakes(t *testing.T) {
 	}
 }
 
-// A REFERENCE NAMING ANOTHER ANSWER IS NOBODY'S. It names the answer it was
-// written with, and a row holding a different one beside it — which a build
-// that carries the reference without knowing it can leave — is answered with
-// what the row holds.
-func TestAReferenceNamingAnotherAnswerIsNobodys(t *testing.T) {
+// A REFERENCE NAMING NO ANSWER IS UNREADABLE, not a store to retry.
+//
+// Its parts are filed under the answer's id, and one with no id names parts no
+// address can hold. Asked of the store it is refused as an address, which
+// reads as a failed read: the resume would hand its claim back and meet the
+// same refusal on every signal, for as long as the budget had room.
+func TestAReferenceNamingNoAnswerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)
 	run := sandbox.PendingRun{
 		TurnID: "t1", LaunchID: "l-1",
-		HeldAnswer:      &sandbox.HeldAnswer{Launch: "l-1", Text: "on the row", At: at},
-		HeldAnswerParts: &sandbox.HeldParts{Launch: "l-1", At: at.Add(-time.Minute), First: 1, Parts: 1, Bytes: 9},
+		HeldAnswer: &sandbox.HeldAnswer{Launch: "l-1", Parts: &sandbox.HeldParts{Parts: 1, Bytes: 9}},
 	}
-	got, ok, err := sandbox.NewCoordStore(memory.NewFleet()).Answer(t.Context(), run)
-	if err != nil || !ok || got.Text != "on the row" {
-		t.Errorf("Answer = %+v, %v, %v, want the answer the row holds", got, ok, err)
+	_, ok, err := sandbox.NewCoordStore(memory.NewFleet()).Answer(t.Context(), run)
+	if !ok || !errors.Is(err, sandbox.ErrAnswerUnreadable) {
+		t.Errorf("Answer = %v, %v, want ErrAnswerUnreadable", ok, err)
 	}
+}
+
+// AN ANSWER HELD IN PARTS IS A WHOLE OF ITS OWN, beside a suspension in parts.
+//
+// Both are the launch's and both are filed under it, and each starts at part 1
+// of its own address: the answer is filed among none of the suspension's
+// parts, the suspension's are read without the answer's, and each reads back
+// whole — the reply the person gave, and the conversation the resume
+// re-enters.
+func TestAnAnswerHeldInPartsIsAWholeOfItsOwn(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", ConversationKey: "chat:C1",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	// Past the half of a record the row keeps a suspension within.
+	state := map[string]any{"version": 2, "messages": strings.Repeat("s", coord.MaxRecordBytes/2+64<<10)}
+	if ok, err := store.MarkSuspended(ctx, "t1", state); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	run, _, err := store.Get(ctx, "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	before, err := fleet.SuspensionParts(ctx, "t1", run.LaunchID)
+	if err != nil || len(before) == 0 {
+		t.Fatalf("the premise: the suspension is in parts (%d, %v)", len(before), err)
+	}
+
+	reply := strings.Repeat("r", sandbox.MaxHeldAnswerBytes)
+	if landed, err := store.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{Launch: run.LaunchID, Text: reply}); err != nil || !landed {
+		t.Fatalf("HoldAnswer = %v, %v", landed, err)
+	}
+	ref := heldRef(t, store, "t1")
+	parts, err := fleet.AnswerParts(ctx, "t1", run.LaunchID, ref.ID)
+	if err != nil || len(parts) != ref.Parts || parts[0].Part != 1 {
+		t.Fatalf("the answer's parts are %d (%v), want the %d its reference names, from part 1",
+			len(parts), err, ref.Parts)
+	}
+	after, err := fleet.SuspensionParts(ctx, "t1", run.LaunchID)
+	if err != nil || len(after) != len(before) {
+		t.Errorf("the suspension holds %d parts after the hold (%v), want its own %d", len(after), err, len(before))
+	}
+	if got := held(t, store, "t1"); got.Text != reply {
+		t.Errorf("the answer read back is %d bytes, want the whole %d-byte reply", len(got.Text), len(reply))
+	}
+	run, _, err = store.Get(ctx, "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got, err := store.Suspension(ctx, run); err != nil || !sameJSON(t, got, state) {
+		t.Errorf("the suspension read back is not the one suspended (%v)", err)
+	}
+}
+
+// A REPLY THE RUN CAN NO LONGER TAKE FILES NO PARTS.
+//
+// The row is read before any part is filed, so a reply that arrives after the
+// run was claimed — or relaunched, ended or answered — costs no write at all;
+// filed first, its parts would sit named by nothing until the launch was
+// purged, megabytes at a time.
+func TestAReplyTheRunCanNoLongerTakeFilesNoParts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := &answerPartsCounted{Fleet: memory.NewFleet()}
+	store := sandbox.NewCoordStore(fleet)
+	run := parked(t, store, "t1")
+	if _, won, err := store.ClaimForResume(ctx, "t1", sandbox.AnswerTail(run.LaunchID)); err != nil || !won {
+		t.Fatalf("the premise: another reply claimed the run (%v, %v)", won, err)
+	}
+
+	landed, err := store.HoldAnswer(ctx, "t1", sandbox.HeldAnswer{
+		Launch: run.LaunchID, Text: strings.Repeat("r", sandbox.MaxHeldAnswerBytes),
+	})
+	if err != nil || landed {
+		t.Fatalf("HoldAnswer = %v, %v, want a run no longer waiting to hold nothing", landed, err)
+	}
+	if n := fleet.filed.Load(); n != 0 {
+		t.Errorf("%d parts were filed for a reply the run could no longer take", n)
+	}
+}
+
+// A HOLD AFTER ONE WHOSE RECORD DID NOT LAND STILL LANDS.
+//
+// A hold files its parts, then writes the row that names them; a store that
+// fails between the two leaves parts no row names, and the reply's delivery is
+// handed back and comes again. Each hold files under an id of its own, so the
+// redelivery's hold files a whole of its own beside the first one's parts
+// rather than meeting them at its first address and failing there on every
+// redelivery until the reply was dead-lettered.
+func TestAHoldAfterOneWhoseRecordDidNotLandStillLands(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := &rowWriteFailsOnce{Fleet: memory.NewFleet()}
+	store := sandbox.NewCoordStore(fleet)
+	run := parked(t, store, "t1")
+	reply := sandbox.HeldAnswer{Launch: run.LaunchID, Text: strings.Repeat("r", sandbox.MaxHeldAnswerBytes)}
+
+	fleet.armed.Store(true)
+	if landed, err := store.HoldAnswer(ctx, "t1", reply); err == nil || landed {
+		t.Fatalf("the premise: the first hold's record did not land (%v, %v)", landed, err)
+	}
+	if landed, err := store.HoldAnswer(ctx, "t1", reply); err != nil || !landed {
+		t.Fatalf("the redelivered reply's hold = %v, %v, want it held", landed, err)
+	}
+	if got := held(t, store, "t1"); got.Text != reply.Text {
+		t.Errorf("the answer read back is %d bytes, want the whole %d-byte reply", len(got.Text), len(reply.Text))
+	}
+}
+
+// rowWriteFailsOnce refuses the first update of a run's record once armed, as a
+// store that cannot be reached for one write does.
+type rowWriteFailsOnce struct {
+	*memory.Fleet
+	armed, failed atomic.Bool
+}
+
+func (r *rowWriteFailsOnce) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if r.armed.Load() && r.failed.CompareAndSwap(false, true) {
+		return false, fmt.Errorf("the store could not be reached: %w", coord.ErrUnavailable)
+	}
+	return r.Fleet.UpdateSandboxRun(ctx, turnID, value, version)
+}
+
+// answerPartsCounted counts the parts of held answers filed through it.
+type answerPartsCounted struct {
+	*memory.Fleet
+	filed atomic.Int64
+}
+
+func (a *answerPartsCounted) CreateAnswerPart(ctx context.Context, turnID, launchID, answerID string, part int, value []byte) (bool, error) {
+	a.filed.Add(1)
+	return a.Fleet.CreateAnswerPart(ctx, turnID, launchID, answerID, part, value)
 }
 
 // A RELAUNCH DROPS AN ANSWER HELD IN PARTS, AND ITS PARTS. The answer is the
@@ -94,15 +252,15 @@ func TestARelaunchDropsAnAnswerHeldInPartsAndItsParts(t *testing.T) {
 	}); err != nil || !landed {
 		t.Fatalf("HoldAnswer = %v, %v", landed, err)
 	}
+	ref := heldRef(t, store, "t1")
 	if err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	after, _, err := store.Get(ctx, "t1")
-	if err != nil || after.HeldAnswer != nil || after.HeldAnswerParts != nil {
-		t.Errorf("the relaunched row holds %+v beside %+v (%v), want neither",
-			after.HeldAnswer, after.HeldAnswerParts, err)
+	if err != nil || after.HeldAnswer != nil {
+		t.Errorf("the relaunched row holds %+v (%v), want none", after.HeldAnswer, err)
 	}
-	if parts, err := fleet.SuspensionParts(ctx, "t1", run.LaunchID); err != nil || len(parts) != 0 {
+	if parts, err := fleet.AnswerParts(ctx, "t1", run.LaunchID, ref.ID); err != nil || len(parts) != 0 {
 		t.Errorf("the replaced launch still holds %d parts (%v)", len(parts), err)
 	}
 }
@@ -131,13 +289,14 @@ func TestAMemberANewerBuildAddedInsideAnObjectSurvivesEveryWrite(t *testing.T) {
 	newer := json.RawMessage(`{"counted":true}`)
 	nested := func(members map[string]json.RawMessage) map[string]json.RawMessage {
 		out := map[string]json.RawMessage{}
-		for _, key := range []string{"held_answer", "held_answer_parts"} {
-			var object map[string]json.RawMessage
-			if err := json.Unmarshal(members[key], &object); err != nil {
-				t.Fatalf("decode %s: %v", key, err)
-			}
-			out[key] = object["a_newer_builds_fact"]
+		var answer, parts map[string]json.RawMessage
+		if err := json.Unmarshal(members["held_answer"], &answer); err != nil {
+			t.Fatalf("decode held_answer: %v", err)
 		}
+		if err := json.Unmarshal(answer["parts"], &parts); err != nil {
+			t.Fatalf("decode held_answer.parts: %v", err)
+		}
+		out["held_answer"], out["held_answer.parts"] = answer["a_newer_builds_fact"], parts["a_newer_builds_fact"]
 		var calls []map[string]json.RawMessage
 		if err := json.Unmarshal(members["bridge_calls"], &calls); err != nil || len(calls) == 0 {
 			t.Fatalf("decode bridge_calls (%d): %v", len(calls), err)
@@ -146,14 +305,17 @@ func TestAMemberANewerBuildAddedInsideAnObjectSurvivesEveryWrite(t *testing.T) {
 		return out
 	}
 	members, version := rawMembers(t, fleet, "t1")
-	for _, key := range []string{"held_answer", "held_answer_parts"} {
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(members[key], &object); err != nil {
-			t.Fatalf("decode %s: %v", key, err)
-		}
-		object["a_newer_builds_fact"] = newer
-		members[key], _ = json.Marshal(object)
+	var answer, parts map[string]json.RawMessage
+	if err := json.Unmarshal(members["held_answer"], &answer); err != nil {
+		t.Fatalf("decode held_answer: %v", err)
 	}
+	if err := json.Unmarshal(answer["parts"], &parts); err != nil {
+		t.Fatalf("the premise: the held answer names its parts (%v)", err)
+	}
+	parts["a_newer_builds_fact"] = newer
+	answer["parts"], _ = json.Marshal(parts)
+	answer["a_newer_builds_fact"] = newer
+	members["held_answer"], _ = json.Marshal(answer)
 	var calls []map[string]json.RawMessage
 	if err := json.Unmarshal(members["bridge_calls"], &calls); err != nil || len(calls) != 1 {
 		t.Fatalf("the premise: the row's view holds one call (%d, %v)", len(calls), err)
@@ -209,60 +371,6 @@ func TestAMemberANewerBuildAddedInsideAnObjectSurvivesEveryWrite(t *testing.T) {
 	}
 }
 
-// EVERY OBJECT ON A RUN'S ROW CARRIES WHAT IT DOES NOT KNOW.
-//
-// The carry is per object, so an object added to the row without it is one a
-// newer build's member inside is erased from by this build's first write — and
-// nothing else would say so. Every struct reachable from the row's type is
-// held to the shape the carry takes: its own MarshalJSON and UnmarshalJSON, and
-// an Extra field the encoder skips. A time is a JSON string rather than an
-// object, and is the one struct that is not.
-func TestEveryObjectOnARunsRowCarriesWhatItDoesNotKnow(t *testing.T) {
-	t.Parallel()
-	marshaler := reflect.TypeFor[json.Marshaler]()
-	unmarshaler := reflect.TypeFor[json.Unmarshaler]()
-	extra := reflect.TypeFor[map[string]json.RawMessage]()
-	seen := map[reflect.Type]bool{}
-	var walk func(t2 reflect.Type, at string)
-	walk = func(typ reflect.Type, at string) {
-		switch typ.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
-			walk(typ.Elem(), at)
-			return
-		case reflect.Struct:
-		default:
-			return
-		}
-		if typ == reflect.TypeFor[time.Time]() || seen[typ] {
-			return
-		}
-		seen[typ] = true
-		if !typ.Implements(marshaler) && !reflect.PointerTo(typ).Implements(marshaler) ||
-			!reflect.PointerTo(typ).Implements(unmarshaler) {
-			t.Errorf("%s (%s) encodes without the carry: it has no MarshalJSON and UnmarshalJSON "+
-				"of its own", typ, at)
-		}
-		field, ok := typ.FieldByName("Extra")
-		if !ok || field.Type != extra || field.Tag.Get("json") != "-" {
-			t.Errorf("%s (%s) has no Extra map[string]json.RawMessage the encoder skips", typ, at)
-		}
-		if typ.PkgPath() != reflect.TypeFor[sandbox.PendingRun]().PkgPath() {
-			// Another package's object states its own wire rule; its shape
-			// is checked, its fields are that package's.
-			return
-		}
-		for i := range typ.NumField() {
-			if f := typ.Field(i); f.IsExported() && f.Tag.Get("json") != "-" {
-				walk(f.Type, at+"."+f.Name)
-			}
-		}
-	}
-	walk(reflect.TypeFor[sandbox.PendingRun](), "PendingRun")
-	if !seen[reflect.TypeFor[sandbox.HeldParts]()] || !seen[reflect.TypeFor[sandbox.BridgeCall]()] {
-		t.Fatal("the walk did not reach the objects the row is known to hold")
-	}
-}
-
 // AN ANSWER'S PARTS THAT DO NOT MAKE ITS WHOLE ARE UNREADABLE, never a shorter
 // reply passed off as the one given.
 func TestAnAnswerWhosePartsAreShortIsUnreadable(t *testing.T) {
@@ -279,7 +387,7 @@ func TestAnAnswerWhosePartsAreShortIsUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	got.HeldAnswerParts.Bytes++
+	got.HeldAnswer.Parts.Bytes++
 	if _, _, err := store.Answer(t.Context(), got); !errors.Is(err, sandbox.ErrAnswerUnreadable) {
 		t.Errorf("Answer over parts one byte short = %v, want ErrAnswerUnreadable", err)
 	}

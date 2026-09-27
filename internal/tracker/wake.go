@@ -173,13 +173,12 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 	if w.Comment != nil {
 		// WHO WROTE IT DECIDES WHETHER THE ASSIGNEE IS ADDRESSED, which
 		// is the difference between a turn that answers and one that
-		// absorbs — see [Notify.assigneeAddressed]. It was never copied
-		// here, so the field was the zero AuthorKind on every record
-		// ever written and the comparison against `human`/`operator`
-		// was false for every comment: a person asking an agent a
-		// question in a comment produced an unaddressed wake, and the
-		// agent read it as activity to note rather than a question to
-		// answer.
+		// absorbs — see [Notify.assigneeAddressed]. Left uncopied, the
+		// field is the zero AuthorKind and the comparison against
+		// `human`/`operator` is false for every comment: a person asking
+		// an agent a question in a comment would produce an unaddressed
+		// wake, and the agent would read it as activity to note rather
+		// than a question to answer.
 		snapshot.CommentAuthorKind = w.Comment.AuthorKind
 	}
 	if w.Kind == ChangeWatchers {
@@ -187,7 +186,7 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		// know. [Candidates] reads them on this kind alone and writes
 		// them to the INBOX rather than routing them — a human learns
 		// that a lead removed her watch — and with nothing filling the
-		// field that never happened at all.
+		// field that would never happen at all.
 		snapshot.RemovedWatchers = without(w.Before.Watchers, after.Watchers)
 	}
 	if leads != nil {
@@ -320,9 +319,9 @@ func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 // copy is how one stops matching the other: the WRITER computes it for the
 // notification card, and the APPLIER computes it for the history row — which
 // every quiet commit also writes, and which the entered stamp is derived
-// from. While this was a method on [Wake] the applier had no way to reach it,
-// so a quiet status change wrote a history row with NO deltas, and
-// `status_entered_at` went on naming an older change than the task had
+// from. A method on [Wake] would put it out of the applier's reach, and a
+// quiet status change would then write a history row with NO deltas, and
+// `status_entered_at` would go on naming an older change than the task had
 // actually last made.
 func TaskDeltas(before, after Task) map[string]Delta {
 	moved := map[string]Delta{}
@@ -338,23 +337,21 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
 	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
-	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
-	// nothing here could observe it: a due date, an estimate and a size
-	// had no producer in the tree, so their absence from this list was
-	// invisible. With one, a re-estimate wrote a history row and a
-	// notification card carrying NO deltas at all — which renders as the
-	// bare kind, and reads as a change that lost what it changed.
+	// THE SCHEDULE MOVES TOO. Left off this list, a re-estimate would
+	// write a history row and a notification card carrying NO deltas at
+	// all — which renders as the bare kind, and reads as a change that
+	// lost what it changed.
 	// THE WHOLE INSTANT, which is [instantText] — the same helper a GOAL's
 	// due and start deltas already take, for the same two field names.
 	//
-	// A DAY IS NOT A DELTA. Rendered as a calendar day these compared
-	// equal whenever a move stayed inside one, so pulling a due time from
-	// 09:00 to 17:00 produced NO entry at all: the history row and the
-	// notification card carried the change's kind and nothing it changed,
-	// which is the exact failure the block above this one was added to
-	// end. The day form was also wrong about WHICH day for any company
-	// east or west of UTC — an all-day due date is stored as the
-	// company's own midnight, so truncating it in UTC moved it a day —
+	// A DAY IS NOT A DELTA. Rendered as a calendar day these would
+	// compare equal whenever a move stayed inside one, so pulling a due
+	// time from 09:00 to 17:00 would produce NO entry at all: the history
+	// row and the notification card would carry the change's kind and
+	// nothing it changed, which is the exact failure the block above
+	// exists to end. The day form is also wrong about WHICH day for any
+	// company east or west of UTC — an all-day due date is stored as the
+	// company's own midnight, so truncating it in UTC moves it a day —
 	// and a delta written by the APPLIER cannot consult the company's
 	// zone to fix that: these rows are the state log's N identical
 	// copies, and text derived from live configuration would differ

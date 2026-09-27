@@ -600,7 +600,7 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 				}
 				out.CreatedAt = held.CreatedAt
 			}
-			return s.decide(Actor{Handle: "system", Kind: AuthorOperator},
+			return s.decide(Actor{Kind: AuthorSystem},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
 				ContainerPayload{
 					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,

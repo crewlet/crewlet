@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // DocumentVersion is the shape version every record here carries: a page is
@@ -177,123 +179,119 @@ func (e ErrUnknownVersion) Error() string {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record. A name missing here is decoded into the
-// struct AND carried as unknown, and although [encode] lets a known field win,
-// an omitempty field the caller CLEARED is absent from the marshal — so the
-// stale carried copy is written back in its place. The zero value's names come
-// from marshalling it; the omitempty names are listed by hand, and
-// TestEveryFieldARecordDeclaresIsKnownToItsDecoder fails on one left out.
-var (
-	containerFields = fieldSet(Container{}, "name", "purpose")
-	pageFields      = fieldSet(Page{}, "parent_id", "body", "labels", "watchers",
-		"muted", "author", "trashed_at")
-	revisionFields = fieldSet(Revision{}, "message", "author")
-	commentFields  = fieldSet(Comment{}, "mentions", "reply_to")
-	claimFields    = fieldSet(TitleClaim{})
-	changeFields   = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
-		"comment_id", "excerpt", "turn_id", "chain", "quiet")
-)
+// A page is read, modified and written back by whichever node the request
+// landed on, so every document here carries the members this build does not
+// know, through [github.com/crewlet/crewlet/internal/jsoncarry] — whose
+// package doc is the contract — and a save by an older build writes back what
+// a newer one added.
 
 // EncodeContainer renders a container.
-func EncodeContainer(c Container) ([]byte, error) { return encode(c, c.Extra) }
+//
+// THROUGH THE CARRY DIRECTLY rather than a MarshalJSON of its own, which every
+// other document here has: [ContainerListing] embeds a container, and a method
+// on it would be promoted onto the listing and write it as the bare container,
+// without the page count beside it.
+func EncodeContainer(c Container) ([]byte, error) {
+	data, err := jsoncarry.Marshal(c, c.Extra)
+	if err != nil {
+		return nil, fmt.Errorf("pages: encode: %w", err)
+	}
+	return data, nil
+}
 
 // DecodeContainer reads a container.
 func DecodeContainer(data []byte) (Container, error) {
 	var c Container
-	extra, err := decodeInto(data, &c, containerFields, c.V)
-	if err != nil {
+	if err := jsoncarry.Unmarshal(data, &c, &c.Extra); err != nil {
 		return Container{}, fmt.Errorf("pages: decode container: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Container{}, err
 	}
-	c.Extra = extra
 	return c, nil
 }
 
 // EncodePage renders a page head.
-func EncodePage(p Page) ([]byte, error) { return encode(p, p.Extra) }
+func EncodePage(p Page) ([]byte, error) { return encode(p) }
 
 // DecodePage reads a page head.
 func DecodePage(data []byte) (Page, error) {
 	var p Page
-	extra, err := decodeInto(data, &p, pageFields, p.V)
-	if err != nil {
+	if err := json.Unmarshal(data, &p); err != nil {
 		return Page{}, fmt.Errorf("pages: decode page: %w", err)
 	}
 	if err := checkVersion(p.V); err != nil {
 		return Page{}, err
 	}
-	p.Extra = extra
 	return p, nil
 }
 
 // EncodeRevision renders a revision.
-func EncodeRevision(r Revision) ([]byte, error) { return encode(r, r.Extra) }
+func EncodeRevision(r Revision) ([]byte, error) { return encode(r) }
 
 // DecodeRevision reads a revision.
 func DecodeRevision(data []byte) (Revision, error) {
 	var r Revision
-	extra, err := decodeInto(data, &r, revisionFields, r.V)
-	if err != nil {
+	if err := json.Unmarshal(data, &r); err != nil {
 		return Revision{}, fmt.Errorf("pages: decode revision: %w", err)
 	}
 	if err := checkVersion(r.V); err != nil {
 		return Revision{}, err
 	}
-	r.Extra = extra
 	return r, nil
 }
 
 // EncodeComment renders a comment.
-func EncodeComment(c Comment) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeComment(c Comment) ([]byte, error) { return encode(c) }
 
 // DecodeComment reads a comment.
 func DecodeComment(data []byte) (Comment, error) {
 	var c Comment
-	extra, err := decodeInto(data, &c, commentFields, c.V)
-	if err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return Comment{}, fmt.Errorf("pages: decode comment: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Comment{}, err
 	}
-	c.Extra = extra
 	return c, nil
 }
 
 // EncodeClaim renders a title claim.
-func EncodeClaim(c TitleClaim) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeClaim(c TitleClaim) ([]byte, error) { return encode(c) }
 
 // DecodeClaim reads a title claim.
 func DecodeClaim(data []byte) (TitleClaim, error) {
 	var c TitleClaim
-	extra, err := decodeInto(data, &c, claimFields, c.V)
-	if err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return TitleClaim{}, fmt.Errorf("pages: decode title claim: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return TitleClaim{}, err
 	}
-	c.Extra = extra
 	return c, nil
 }
 
 // EncodeChange renders a change.
-func EncodeChange(c Change) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeChange(c Change) ([]byte, error) { return encode(c) }
 
 // DecodeChange reads a change.
 func DecodeChange(data []byte) (Change, error) {
 	var c Change
-	extra, err := decodeInto(data, &c, changeFields, c.V)
-	if err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return Change{}, fmt.Errorf("pages: decode change: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Change{}, err
 	}
-	c.Extra = extra
 	return c, nil
+}
+
+func encode(document any) ([]byte, error) {
+	data, err := json.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("pages: encode: %w", err)
+	}
+	return data, nil
 }
 
 func checkVersion(got int) error {
@@ -303,73 +301,68 @@ func checkVersion(got int) error {
 	return nil
 }
 
-// encode marshals a record and folds unknown fields back in. A carried field
-// LOSES to a known one, so a stale carried copy can never undo the write that
-// set it.
-func encode(record any, extra map[string]json.RawMessage) ([]byte, error) {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	if len(extra) == 0 {
-		return data, nil
-	}
-	var merged map[string]json.RawMessage
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := json.Unmarshal(data, &merged); err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	for name, value := range extra {
-		if _, known := merged[name]; !known {
-			merged[name] = value
-		}
-	}
-	out, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	return out, nil
+// MarshalJSON writes [Page.Extra] back beside the members this build knows.
+func (p Page) MarshalJSON() ([]byte, error) {
+	type fields Page
+	return jsoncarry.Marshal(fields(p), p.Extra)
 }
 
-// decodeInto unmarshals into out and returns the fields out has no home for.
-func decodeInto(data []byte, out any, known map[string]bool, _ int) (map[string]json.RawMessage, error) {
-	if err := json.Unmarshal(data, out); err != nil {
-		return nil, err
-	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(data, &all); err != nil {
-		return nil, err
-	}
-	var extra map[string]json.RawMessage
-	for name, value := range all {
-		if known[name] {
-			continue
-		}
-		if extra == nil {
-			extra = map[string]json.RawMessage{}
-		}
-		extra[name] = value
-	}
-	return extra, nil
+// UnmarshalJSON keeps every member of the page head this build does not know in
+// [Page.Extra].
+func (p *Page) UnmarshalJSON(b []byte) error {
+	type fields Page
+	return jsoncarry.Unmarshal(b, (*fields)(p), &p.Extra)
 }
 
-// fieldSet is the JSON names a struct defines: the ones a zero value
-// marshals, plus the omitempty names given explicitly.
-func fieldSet(v any, omitted ...string) map[string]bool {
-	data, err := json.Marshal(v)
-	if err != nil {
-		panic("pages: a record type does not marshal: " + err.Error())
-	}
-	var named map[string]json.RawMessage
-	if err := json.Unmarshal(data, &named); err != nil {
-		panic("pages: a record type does not marshal to an object: " + err.Error())
-	}
-	out := make(map[string]bool, len(named)+len(omitted))
-	for name := range named {
-		out[name] = true
-	}
-	for _, name := range omitted {
-		out[name] = true
-	}
-	return out
+// MarshalJSON writes [Revision.Extra] back beside the members this build knows.
+func (r Revision) MarshalJSON() ([]byte, error) {
+	type fields Revision
+	return jsoncarry.Marshal(fields(r), r.Extra)
+}
+
+// UnmarshalJSON keeps every member of the revision this build does not know in
+// [Revision.Extra].
+func (r *Revision) UnmarshalJSON(b []byte) error {
+	type fields Revision
+	return jsoncarry.Unmarshal(b, (*fields)(r), &r.Extra)
+}
+
+// MarshalJSON writes [Comment.Extra] back beside the members this build knows.
+func (c Comment) MarshalJSON() ([]byte, error) {
+	type fields Comment
+	return jsoncarry.Marshal(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps every member of the comment this build does not know in
+// [Comment.Extra].
+func (c *Comment) UnmarshalJSON(b []byte) error {
+	type fields Comment
+	return jsoncarry.Unmarshal(b, (*fields)(c), &c.Extra)
+}
+
+// MarshalJSON writes [TitleClaim.Extra] back beside the members this build
+// knows.
+func (c TitleClaim) MarshalJSON() ([]byte, error) {
+	type fields TitleClaim
+	return jsoncarry.Marshal(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps every member of the title claim this build does not know
+// in [TitleClaim.Extra].
+func (c *TitleClaim) UnmarshalJSON(b []byte) error {
+	type fields TitleClaim
+	return jsoncarry.Unmarshal(b, (*fields)(c), &c.Extra)
+}
+
+// MarshalJSON writes [Change.Extra] back beside the members this build knows.
+func (c Change) MarshalJSON() ([]byte, error) {
+	type fields Change
+	return jsoncarry.Marshal(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps every member of the change this build does not know in
+// [Change.Extra].
+func (c *Change) UnmarshalJSON(b []byte) error {
+	type fields Change
+	return jsoncarry.Unmarshal(b, (*fields)(c), &c.Extra)
 }

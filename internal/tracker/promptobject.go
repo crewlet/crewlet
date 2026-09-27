@@ -20,15 +20,12 @@ import (
 //
 // # Why they exist at all
 //
-// Two of the three routable object kinds are not tasks, and for a long time
-// the parser simply dropped them — which is why [Writer.WritePriorities] came
-// to argue, in its own doc comment, that a notification "attached to a person
-// record renders no card and reaches nobody". That was TRUE of the code and
-// false of the design: the routing rules for both already existed in
-// recipients.go, the reasons were already in the enum and already split
-// Primary from Other, and the snapshot already carried GoalOwners and Person.
-// Only the two ends were missing — nobody published, and nothing could render
-// it if they had.
+// Two of the three routable object kinds are not tasks ([ObjectKind.Routable]).
+// The routing rules for both are in recipients.go, the reasons are in the enum
+// and split Primary from Other, and the snapshot carries GoalOwners and
+// Person — and a wake needs both ends as well: a writer that publishes it, and
+// a frame here that renders it. Without these frames a notification attached
+// to a person record would render no card and reach nobody.
 //
 // # Neither of the two sends the reader to `get_work_item`
 //
