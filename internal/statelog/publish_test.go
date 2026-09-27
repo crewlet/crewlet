@@ -746,3 +746,66 @@ func TestASubjectsEndIsItsOwnLastRecord(t *testing.T) {
 		t.Errorf("an unwritten subject answered %s (found %v, %v)", end, found, err)
 	}
 }
+
+// A PUBLISHER MISSING A SEAM IS REFUSED AT CONSTRUCTION, NAMING IT.
+//
+// Every seam is on the write path: the rows are the snapshot a decision is
+// taken in, the fence is the eviction check every append makes, and the gates
+// are what a create's permanent deletion marker is read through. Built without
+// one, the write authority would fail at its first append — or, for a fence
+// nothing asked, collect acknowledgements for records every node drops — so
+// [statelog.NewPublisher] refuses the set, and the refusal names the missing
+// field because it is read by whoever wired a new domain's register entry.
+//
+// The complete set is the control: a refusal that fired whatever was passed
+// would satisfy every row below.
+func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	complete := func() statelog.Deps {
+		a := newApplier()
+		return statelog.Deps{
+			Domain:     probeDomain{},
+			Log:        refusingAppender{},
+			Signer:     testSigner(t, probeDomain{}),
+			Rows:       &fakeRows{applier: a},
+			Fence:      &fakeFence{},
+			Gates:      &fakeGates{},
+			Waiter:     a,
+			NodeID:     "node-a",
+			Generation: func() uint32 { return 1 },
+		}
+	}
+	if _, err := statelog.NewPublisher(complete()); err != nil {
+		t.Fatalf("a complete dependency set is refused: %v", err)
+	}
+	for _, c := range []struct {
+		field string
+		drop  func(*statelog.Deps)
+		names string
+	}{
+		{"Domain", func(d *statelog.Deps) { d.Domain = nil }, "no domain"},
+		{"Log", func(d *statelog.Deps) { d.Log = nil }, "no appender"},
+		{"Signer", func(d *statelog.Deps) { d.Signer = nil }, "no signer"},
+		{"Rows", func(d *statelog.Deps) { d.Rows = nil }, "no rows"},
+		{"Fence", func(d *statelog.Deps) { d.Fence = nil }, "no fence"},
+		{"Gates", func(d *statelog.Deps) { d.Gates = nil }, "no gates"},
+		{"Waiter", func(d *statelog.Deps) { d.Waiter = nil }, "no waiter"},
+		{"Generation", func(d *statelog.Deps) { d.Generation = nil }, "no generation source"},
+		{"NodeID", func(d *statelog.Deps) { d.NodeID = "" }, "no node id"},
+	} {
+		t.Run(c.field, func(t *testing.T) {
+			t.Parallel()
+			deps := complete()
+			c.drop(&deps)
+			_, err := statelog.NewPublisher(deps)
+			if err == nil {
+				t.Fatalf("a publisher with no %s was built — it fails at its "+
+					"first append instead of at the boot", c.field)
+			}
+			if !strings.Contains(err.Error(), c.names) {
+				t.Errorf("the refusal of a publisher with no %s says %q, which does "+
+					"not name what is missing (%q)", c.field, err, c.names)
+			}
+		})
+	}
+}
