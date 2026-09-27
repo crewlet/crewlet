@@ -304,9 +304,9 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	parent := ""
 	if found {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := secrets.Open(cs.cipher, active.Payload)
+		current, err := openStored(cs.cipher, active)
 		if err != nil {
-			return fmt.Errorf("open the active revision: %w", err)
+			return err
 		}
 		if bytes.Equal(current, document) {
 			fmt.Fprintf(stdout,
@@ -509,6 +509,40 @@ func renderValue(v any) string {
 	}
 }
 
+// openStored opens a revision this node's store holds, and a refusal says what
+// brings it back — which depends on the revision, so the keyring's own refusal
+// names nothing.
+//
+// An UNSEALED revision was written by a build older than the mandatory
+// keyring. The ACTIVE one is sealed by `crewlet config seal`, which re-seals
+// the active revision and nothing else; a SUPERSEDED one is sealed in place by
+// nothing at all, so it can be neither shown nor reverted to, and its document
+// comes back only by importing it again from the operator's own copy. A
+// revision sealed under a key the keyring does not hold needs that key back.
+func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
+	document, err := secrets.Open(cipher, rev.Payload)
+	switch {
+	case err == nil:
+		return document, nil
+	case errors.Is(err, secrets.ErrUnsealedWithKey) && rev.Active:
+		return nil, fmt.Errorf("revision %s is this node's active revision, and "+
+			"a build older than the mandatory keyring stored it without a seal; "+
+			"seal it with `crewlet config seal`, which stores it sealed and "+
+			"activates it: %w", rev.ID, err)
+	case errors.Is(err, secrets.ErrUnsealedWithKey):
+		return nil, fmt.Errorf("revision %s is a superseded revision a build "+
+			"older than the mandatory keyring stored without a seal, and nothing "+
+			"seals a superseded revision in place, so it can be neither shown nor "+
+			"reverted to; to have its document again, import it from your own "+
+			"copy with `crewlet config import`, which stores it sealed: %w",
+			rev.ID, err)
+	default:
+		return nil, fmt.Errorf("revision %s does not open under this node's "+
+			"keyring; restore the key it was sealed under to secrets.keys: %w",
+			rev.ID, err)
+	}
+}
+
 // storedCompany opens one revision, or the active one, as the stored form.
 //
 // THE STORED-FORM READER, never the authored one. A revision is JSON a build
@@ -523,9 +557,9 @@ func storedCompany(ctx context.Context, cs *configStore, revisionID string) (sto
 	if err != nil {
 		return store.Revision{}, nil, err
 	}
-	document, err := secrets.Open(cs.cipher, rev.Payload)
+	document, err := openStored(cs.cipher, rev)
 	if err != nil {
-		return store.Revision{}, nil, fmt.Errorf("open revision %s: %w", rev.ID, err)
+		return store.Revision{}, nil, err
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {

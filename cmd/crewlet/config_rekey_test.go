@@ -138,7 +138,7 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 // path seals — so the only plaintext revision a store can carry is one an
 // older build left there, and a test reaches that state the way it arose: by
 // a write that did not seal.
-func plantPlaintextRevision(t *testing.T, dir string) {
+func plantPlaintextRevision(t *testing.T, dir string) string {
 	t.Helper()
 	company, err := config.LoadCompany(companyFile(t, dir, "company.yaml", nil))
 	if err != nil {
@@ -148,7 +148,7 @@ func plantPlaintextRevision(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("encode the fixture company: %v", err)
 	}
-	plantPlaintext(t, dir, document)
+	return plantPlaintext(t, dir, document)
 }
 
 // plantPlaintext stores document UNSEALED as the active revision of the store
@@ -224,6 +224,38 @@ func TestConfigSealEncryptsAPlaintextRevision(t *testing.T) {
 	// AND IT STILL READS.
 	if _, errs, err := configCmd(t, keyed, "show"); err != nil {
 		t.Fatalf("the sealed revision no longer reads: %v (%s)", err, errs)
+	}
+}
+
+// A SUPERSEDED UNSEALED REVISION IS NOT SENT TO `config seal`.
+//
+// `crewlet config seal` seals the ACTIVE revision and nothing else, so once
+// the plaintext revision is superseded — by the seal itself, here — a reader
+// that told the operator to run it again would be naming a command that
+// changes nothing. Nothing seals a superseded revision in place: it can be
+// neither shown nor compared, and its document comes back only by importing
+// it again.
+//
+// Mutation: answer a superseded unsealed revision with the active arm's
+// remedy and neither reader names the import.
+func TestASupersededUnsealedRevisionNamesTheImport(t *testing.T) {
+	dir := t.TempDir()
+	plain := plantPlaintextRevision(t, dir)
+	keyed := bootstrapWithKeys(t, dir, "k1")
+	if _, errs, err := configCmd(t, keyed, "seal"); err != nil {
+		t.Fatalf("seal: %v (%s)", err, errs)
+	}
+	for _, args := range [][]string{{"export", plain}, {"diff", plain}} {
+		_, _, err := configCmd(t, keyed, args...)
+		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Fatalf("%s of a superseded unsealed revision = %v, want ErrUnsealedWithKey",
+				args[0], err)
+		}
+		for _, says := range []string{"superseded", "crewlet config import"} {
+			if !strings.Contains(err.Error(), says) {
+				t.Errorf("%s: the refusal does not say %q: %v", args[0], says, err)
+			}
+		}
 	}
 }
 

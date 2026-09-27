@@ -274,6 +274,64 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	}
 }
 
+// A BOOT PUBLISHES NO REVISION IT HOLDS IN THE CLEAR.
+//
+// What a node publishes with no pointer to defer to, every peer applies — and
+// every peer refuses a body that is not sealed, this node included. Published,
+// a revision an older build stored unsealed was refused on every node, each
+// telling its operator to seal a revision that was never theirs. It is refused
+// here instead, naming the command this node's operator runs.
+//
+// The control is the same store holding the revision sealed: published.
+//
+// Mutation: drop the open before the publish and the pointer moves.
+func TestABootPublishesNoRevisionItHoldsInTheClear(t *testing.T) {
+	t.Parallel()
+	document, err := json.Marshal(config.SettingsOf(parse(t, companyYAML)).Company())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sealed := range []bool{false, true} {
+		db := seedStore(t)
+		payload := json.RawMessage(document)
+		if sealed {
+			if payload, err = secrets.Seal(fixtureCipher, document); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "file", CreatedBy: "an-older-build", Summary: "stored before",
+			Payload: payload, CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		fleet := coordmemory.NewFleet()
+		err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"},
+			fixtureCipher, quiet())
+		_, published, targetErr := fleet.Target(t.Context())
+		if targetErr != nil {
+			t.Fatal(targetErr)
+		}
+		if sealed {
+			// THE CONTROL.
+			if err != nil || !published {
+				t.Fatalf("a sealed active revision was not published: published=%v err=%v",
+					published, err)
+			}
+			continue
+		}
+		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Fatalf("a boot over an unsealed revision = %v, want it refused unsealed", err)
+		}
+		if !strings.Contains(err.Error(), "crewlet config seal") {
+			t.Errorf("the refusal does not name the command that seals it: %v", err)
+		}
+		if published {
+			t.Error("the boot published a revision it holds in the clear")
+		}
+	}
+}
+
 // A node booting into a running fleet must CONVERGE on what the fleet already
 // decided, not overwrite it with whatever its local database happens to say.
 // Without this rule one restarted node could roll a company back.

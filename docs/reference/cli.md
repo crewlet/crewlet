@@ -396,7 +396,9 @@ Re-points the fleet at a revision. Every node applies it on its next reconcile.
 crewlet config seal [-config PATH]
 ```
 
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest for a store an older build wrote before the keyring was required. It is the **one** reader of a plaintext revision: every other refuses one, naming this command, because an unsealed document is one anything that reaches the store could have written, and the seal is what authenticates a revision a node fetches from its peers. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed.
+Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest for a store an older build wrote before the keyring was required. It is the **one** reader of a plaintext revision: every other refuses one, because an unsealed document is one anything that reaches the store could have written, and the seal is what authenticates a revision a node fetches from its peers. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed.
+
+It seals the **active** revision and nothing else, so a refusal names it only where it applies. A reader of the active revision (`show`, `import`, a boot, and the boot's publish of a revision the fleet has no pointer for, which is refused rather than published) names this command. A **superseded** plaintext revision is sealed in place by nothing: `export` and `diff` refuse it as one that can be neither shown nor compared, and name the way to have its document again, which is importing it from your own copy.
 
 Like `import`, this writes the revision to **this node's** store; the note it prints says what publishes it to a running fleet.
 
