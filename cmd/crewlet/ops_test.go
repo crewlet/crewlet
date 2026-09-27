@@ -408,12 +408,12 @@ func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 func TestAWildcardBindResolvesToSomethingDialable(t *testing.T) {
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		got, err := nodeBaseURL(&config.Bootstrap{
-			API: config.API{Host: host, Port: 8080},
+			API: config.API{Host: host, Port: 8000},
 		}, "", "this node")
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}
-		if got != "http://127.0.0.1:8080" {
+		if got != "http://127.0.0.1:8000" {
 			t.Errorf("host %q resolved to %q, want the loopback address", host, got)
 		}
 	}

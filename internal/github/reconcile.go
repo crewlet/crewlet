@@ -270,8 +270,8 @@ type Result struct {
 	// A SEPARATE FIELD because an empty Hooks list means two opposite
 	// things. A pass given no public base registers nothing by
 	// construction — every hook state it would have produced is simply
-	// absent — and Classify over no findings is Ready. So a company whose
-	// public_base_url was never set reported GitHub as working while
+	// absent — and Classify over no findings is Ready. So a pass run with
+	// no address for this deployment reported GitHub as working while
 	// nothing at GitHub pointed at it, which is the same not-there
 	// coverage every other rule here exists to refuse.
 	//

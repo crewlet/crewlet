@@ -2966,8 +2966,8 @@ export interface SetupListing {
   /**
    * Where a browser and a third-party app reach this deployment.
    *
-   * ONE FIELD WHERE THERE WERE FOUR. While this was `integrations.public_base_url`
-   * — a Tier B pointer a node resolved per epoch — the screen also needed
+   * ONE FIELD WHERE THERE WERE FOUR. While this was a key in the company
+   * document — a Tier B pointer a node resolved per epoch — the screen also needed
    * `present`, `resolved` and the variable's `reference`, because "configured
    * and resolving to nothing" was a state a banner had to name. It is
    * `api.external_url` now: Tier A, required once the API is served, and

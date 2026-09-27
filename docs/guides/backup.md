@@ -402,7 +402,7 @@ written. The **fleet-wide session generation** is the one number that can be
 pushed forward without knowing:
 
 ```bash
-crewlet iam invalidate-all -api http://127.0.0.1:8080
+crewlet iam invalidate-all -api http://127.0.0.1:8000
 ```
 
 Every bearer minted before it — every cookie, every session and every

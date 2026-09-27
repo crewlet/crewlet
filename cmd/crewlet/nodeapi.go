@@ -81,7 +81,7 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Host == "" {
 		return "", fmt.Errorf("%q is not a URL the API can be reached at "+
-			"(want something like http://127.0.0.1:8080)", base)
+			"(want something like http://127.0.0.1:8000)", base)
 	}
 	return strings.TrimRight(parsed.String(), "/"), nil
 }

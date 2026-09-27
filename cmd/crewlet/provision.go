@@ -807,20 +807,6 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 	return fromConfig
 }
 
-// webhookBase is the address a third-party app reaches this deployment on: the flag
-// when one was passed, and the company document's own value otherwise.
-//
-// THE FLAG WINS, and only when it is non-empty. It is the one-off override —
-// a staging tunnel, a run against a second site — while the document is what
-// every other reader of this value sees, the reconcile loop included. A flag
-// that won even when unset would make an operator who simply forgot it
-// silently re-point a working hook at "".
-//
-// The flag is taken AS TYPED and the document's value is RESOLVED, which is
-// the difference between the two: somebody typing `-public-url` typed an
-// address, while `public_base_url` may be a whole `${VAR}` this run has to
-// read before it can build anything a third-party app will hold. See
-// [config.Integrations.WebhookBase].
 // noPublicBase says what to change when a run needs an address and has none.
 //
 // TWO WAYS TO BE EMPTY NOW, WHERE THERE WERE THREE. While the address was a
@@ -842,11 +828,20 @@ func noPublicBase(boot *config.Bootstrap) string {
 		"set it there, or pass -public-url to override it for this run. " + why
 }
 
-// webhookBase is the address this run builds vendor URLs on: the flag when it
-// was given, and otherwise the deployment's own.
+// webhookBase is the address a third-party app reaches this deployment on,
+// which this run builds vendor URLs on: the `-public-url` flag when it was
+// given, and otherwise Tier A's `api.external_url`.
 //
-// THE FLAG WINS ONLY WHEN IT WAS TYPED. One that won even when unset would let
-// an operator who simply forgot it silently re-point a working hook at "".
+// THE FLAG WINS ONLY WHEN IT WAS TYPED. It is the one-off override — a staging
+// tunnel, a run against a second site — while `api.external_url` is what every
+// other reader of this address sees, the reconcile loop included. One that won
+// even when unset would let an operator who simply forgot it silently re-point
+// a working hook at "".
+//
+// NOTHING IS RESOLVED HERE, for either: somebody typing `-public-url` typed an
+// address, and `api.external_url` is Tier A, whose `${VAR}` references are
+// expanded before the file is decoded — so by the time this reads it, it is an
+// address too. With no Tier A file at all there is only the flag.
 func webhookBase(flagValue string, boot *config.Bootstrap) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")

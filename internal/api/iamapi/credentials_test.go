@@ -358,7 +358,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	}
 	b := config.DefaultBootstrap()
 	b.API.Auth.MaxGrants = iam.AllGrants
-	b.API.ExternalURL = "http://127.0.0.1:8080"
+	b.API.ExternalURL = "http://127.0.0.1:8000"
 	rows := sessionRows{session.Identity{Applied: 10,
 		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
 		Person: session.PersonRow{Found: true, Epoch: 1,
@@ -379,7 +379,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/iam/credentials",
 		strings.NewReader(`{"label":"my laptop"}`))
 	req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: cookie})
-	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set("Origin", "http://127.0.0.1:8000")
 	rec := httptest.NewRecorder()
 	auth.New(&b).WithSessions(arm).Middleware(r.mux).ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {

@@ -227,8 +227,8 @@ const (
 	// It names the Tier A setting rather than the retired Tier B one, and
 	// the two differ in what an operator has to do: the old field was
 	// edited live through the dashboard, this one is a file on the node
-	// and a restart. A code that still said `public_base_url` would send
-	// somebody to a key the loader now refuses by name.
+	// and a restart. A code that still named the company document's key
+	// would send somebody to a key the loader now refuses by name.
 	CodeNoExternalURL Code = "no_external_url"
 
 	// CodeRequirementsOutstanding is a pass asked for against a

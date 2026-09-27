@@ -102,7 +102,7 @@ func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
 	b.API.Auth.MaxGrants = ceiling
-	b.API.ExternalURL = "http://127.0.0.1:8080"
+	b.API.ExternalURL = "http://127.0.0.1:8000"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
