@@ -1519,8 +1519,32 @@ document, and to the rules its question needs:
   runnable rules only. A revert to a revision that breaks one answers
   `400 validation_error` naming the field; a revert to one that breaks only an
   admission rule is accepted, and each node logs `org_admission_warning` when it
-  applies it. A revert to a revision sealed under a key this node does not hold
-  answers `409 unreadable_revision`.
+  applies it.
+
+#### A revision this node cannot open is refused, whichever route reads it
+
+What a read does not skip is the **seal**. Every one of those readers, and a
+revert and a write whose prior it is, opens the revision under the node's
+keyring first, and a revision that does not open is answered `409` naming it
+(`revision_id`) under one of two codes, because the two causes share no
+remedy:
+
+- **`unreadable_revision`**: it is sealed under a key the keyring no longer
+  holds. `hint` says to put that key back in the node's `secrets.keys`.
+- **`unsealed_revision`**: it was stored **without a seal**, which only a build
+  older than the mandatory keyring wrote. A node reads only sealed revisions,
+  because the seal is what says a node of this fleet wrote one; a plaintext
+  revision could have been written by anything that reached the store. `hint`
+  depends on which revision it is. The **active** revision is sealed by
+  running [`crewlet config seal`](cli.md#crewlet-config-seal) on the node,
+  which stores it sealed and activates it. A **superseded** one is sealed in
+  place by nothing, so it can be neither shown, compared nor reverted to; to
+  have its document again, import it from your own copy with `PUT /config` or
+  `crewlet config import`, which stores it sealed.
+
+These used to be `500 internal_error` everywhere but a revert, and a revert to
+an unsealed revision answered `unreadable_revision`, whose message tells the
+caller to put back a key that was never involved.
 
 #### Fields a newer build wrote survive every write
 

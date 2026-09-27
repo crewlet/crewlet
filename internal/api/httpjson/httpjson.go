@@ -297,6 +297,12 @@ const (
 	// deployment no longer holds.
 	CodeUnreadableRevision Code = "unreadable_revision"
 
+	// CodeUnsealedRevision is a revision stored WITHOUT a seal, which a
+	// node reads nowhere. Its own code rather than [CodeUnreadableRevision]
+	// because the remedies share nothing: that one is a key to put back,
+	// and this one depends on which revision it is, which the hint names.
+	CodeUnsealedRevision Code = "unsealed_revision"
+
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
 
@@ -716,6 +722,10 @@ var codes = map[Code]string{
 	CodeUnreadableRevision: "That revision is sealed under a key this " +
 		"deployment no longer holds, so it cannot be read. Put the key back in " +
 		"the node's keyring first.",
+	CodeUnsealedRevision: "That revision is stored without a seal, which a " +
+		"build older than the mandatory keyring wrote, and a node reads only " +
+		"sealed revisions because the seal is what authenticates one. The hint " +
+		"says what brings its document back.",
 	CodeInvalidRevisionID: "Name the revision this is about.",
 	CodeAgainstNotFound:   "The revision to compare against is not held here.",
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +

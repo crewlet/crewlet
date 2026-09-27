@@ -829,27 +829,15 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// OPENED, not copied. A revision sealed under a key no longer in the
-	// keyring cannot be reverted to, and finding that out now beats
-	// activating a document every node will fail to read.
+	// OPENED, not copied. A revision this node cannot open cannot be
+	// reverted to, and finding that out now beats activating a document
+	// every node will fail to read. The refusal is the one every reader of
+	// a revision answers ([refuseUnreadable]).
 	document, company, err := s.openDocument(target)
 	if err != nil {
-		hint := "the target revision is sealed under a key that is no longer " +
-			"in the keyring; restore it to the node's secrets.keys first"
-		if errors.Is(err, secrets.ErrUnsealedWithKey) {
-			// NOT A KEY PROBLEM, and the key hint would send somebody
-			// looking for one: the revision was stored without a seal
-			// by a build older than the mandatory keyring, and a node
-			// holding one never applies a document it cannot
-			// authenticate.
-			hint = "the target revision was stored without a seal, which a " +
-				"node holding a keyring never applies; revert to a revision " +
-				"this deployment sealed, or write the document again"
+		if !refuseUnreadable(w, err) {
+			s.fail(w, "open the revision to revert to", err)
 		}
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUnreadableRevision, map[string]string{
-			"detail": err.Error(),
-			"hint":   hint,
-		})
 		return
 	}
 	prepared, err := s.prepare(r.Context(), draft{
@@ -1048,10 +1036,15 @@ func (s *Service) open(revision store.Revision) (*config.Company, error) {
 
 // openDocument is [Service.open] plus the unsealed bytes it decoded, which is
 // what a write that must keep fields this build cannot represent works from.
+//
+// A revision the keyring does not open is an [UnreadableRevisionError], which
+// knows whether it is the active revision, because the remedy depends on it.
 func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &UnreadableRevisionError{
+			ID: revision.ID, Active: revision.Active, Err: err,
+		}
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -1144,8 +1137,86 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // database path or a driver's own message, and this surface is the one an
 // operator reaches from a browser.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
+	// A REVISION THIS NODE CANNOT OPEN IS NOT A FAULT, and every route that
+	// reads one reaches here: GET /config, a revision read, a diff, the
+	// references, an entity, and a write whose prior is the active
+	// revision. It was a 500 on all of them, which said nothing about a
+	// state an operator can fix and whose fix depends on the revision.
+	if refuseUnreadable(w, err) {
+		return
+	}
 	log.Error("config_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+}
+
+// UnreadableRevisionError is a stored revision this node's keyring does not
+// open: stored without a seal, or sealed under a key the keyring does not hold.
+//
+// It carries whether it is the ACTIVE revision because that is what decides
+// the remedy for an unsealed one: `crewlet config seal` re-seals the active
+// revision and nothing else, and a superseded revision is sealed in place by
+// nothing at all.
+type UnreadableRevisionError struct {
+	ID     string
+	Active bool
+	Err    error
+}
+
+func (e *UnreadableRevisionError) Error() string {
+	return "configapi: revision " + e.ID + " does not open under this node's " +
+		"keyring (" + e.Err.Error() + "): " + e.Remedy()
+}
+
+func (e *UnreadableRevisionError) Unwrap() error { return e.Err }
+
+// Unsealed reports whether the revision was stored without a seal, rather
+// than sealed under a key this keyring does not hold.
+func (e *UnreadableRevisionError) Unsealed() bool {
+	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
+}
+
+// Remedy is what brings the revision's document back, for the revision it is.
+func (e *UnreadableRevisionError) Remedy() string {
+	switch {
+	case !e.Unsealed():
+		return "it is sealed under a key that is no longer in the keyring; " +
+			"restore that key to the node's secrets.keys first"
+	case e.Active:
+		return "it is this node's active revision, stored without a seal by a " +
+			"build older than the mandatory keyring; seal it with `crewlet " +
+			"config seal` on this node, which stores it sealed and activates it"
+	default:
+		return "it is a superseded revision a build older than the mandatory " +
+			"keyring stored without a seal, and nothing seals a superseded " +
+			"revision in place, so it can be neither shown nor reverted to; to " +
+			"have its document again, import it from your own copy with PUT " +
+			"/config or `crewlet config import`, which stores it sealed"
+	}
+}
+
+// refuseUnreadable answers a revision this node cannot open, and reports
+// whether err was one.
+//
+// 409 with the code the cause names — [httpjson.CodeUnsealedRevision] or
+// [httpjson.CodeUnreadableRevision] — and the remedy as the hint. Two codes
+// and not one with two hints, because an envelope's message is the table's
+// sentence and always wins: under one code, an unsealed revision was answered
+// with a message telling the caller to put a key back that was never involved.
+func refuseUnreadable(w http.ResponseWriter, err error) bool {
+	var unreadable *UnreadableRevisionError
+	if !errors.As(err, &unreadable) {
+		return false
+	}
+	code := httpjson.CodeUnreadableRevision
+	if unreadable.Unsealed() {
+		code = httpjson.CodeUnsealedRevision
+	}
+	httpjson.FailWith(w, http.StatusConflict, code, map[string]string{
+		"revision_id": unreadable.ID,
+		"detail":      unreadable.Err.Error(),
+		"hint":        unreadable.Remedy(),
+	})
+	return true
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
