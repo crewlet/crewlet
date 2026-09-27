@@ -350,12 +350,10 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 	if reader == nil {
 		return nil
 	}
-	return func(seat string) bool {
-		// THE BACKGROUND CONTEXT, because this is asked while rendering a
-		// report on a tick with no request to inherit: a per-seat read
-		// bound to a cancelled request would make a page half-answer.
-		return reader.SeatHeld(context.Background(), seat)
-	}
+	// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
+	// made for a request — /chart/check, /health, the seat listing — so a
+	// read for one that has gone has nobody to answer.
+	return reader.SeatHeld
 }
 
 // directorySurface builds /iam, or reports that this node serves none.

@@ -352,7 +352,7 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		// exactly as the report asks: a binding names that (ADR-0020), so
 		// asked by the handle it answers to now, a renamed seat somebody
 		// holds was listed as one nobody does.
-		if unheld && s.held(seat.Origin()) {
+		if unheld && s.held(r.Context(), seat.Origin()) {
 			continue
 		}
 		seats = append(seats, viewOfSeat(seat, runtime))

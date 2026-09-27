@@ -254,7 +254,7 @@ func (a *App) health(ctx context.Context) Health {
 	for name, every := range state.IdentityDuties {
 		body.IdentityDutySeconds[name] = every.Seconds()
 	}
-	body.Consistency = consistencyOf(a.report())
+	body.Consistency = consistencyOf(a.report(ctx))
 	a.foundingOf(ctx, &body)
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
@@ -331,7 +331,7 @@ func consistencyOf(got chartapi.Report) Consistency {
 // epoch is applied, independently. A cached report would be a claim about a
 // company that no longer exists, and the evaluation is a walk over rows this
 // node already holds in memory.
-func (a *App) report() chartapi.Report {
+func (a *App) report(ctx context.Context) chartapi.Report {
 	if a.company == nil {
 		return chartapi.Report{}
 	}
@@ -340,7 +340,7 @@ func (a *App) report() chartapi.Report {
 	// the screen that renders the report can never disagree about whether
 	// a seat is held — which is the whole reason one evaluation feeds
 	// every surface.
-	return chartapi.Evaluate(view, settings, a.seatHeld)
+	return chartapi.Evaluate(ctx, view, settings, a.seatHeld)
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.

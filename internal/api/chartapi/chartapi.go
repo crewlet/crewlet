@@ -186,12 +186,12 @@ func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
 }
 
 // report is one evaluation over what this node is running.
-func (s *Service) report() Report {
+func (s *Service) report(ctx context.Context) Report {
 	if s.company == nil {
 		return Report{Findings: []Finding{}}
 	}
 	settings, view := s.company()
-	return Evaluate(view, settings, s.held)
+	return Evaluate(ctx, view, settings, s.held)
 }
 
 // Options wire the service.

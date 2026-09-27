@@ -1,6 +1,7 @@
 package chartapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -57,14 +58,14 @@ func TestASettingsRevisionRemovingAReferencedProviderIsReported(t *testing.T) {
 	view, settings := running()
 	// THE CONTROL FIRST: the pair as it stands is clean, so the case
 	// below is about the edit rather than about the fixture.
-	if got := chartapi.Evaluate(view, settings, nil); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil); len(got.Findings) != 0 {
 		t.Fatalf("the unchanged pair reports %v", got.Findings)
 	}
 
 	// The edit: somebody removes the provider the seat runs on.
 	settings.Providers.LLM = map[string]config.LLMProvider{"openai": {}}
 
-	got := chartapi.Evaluate(view, settings, nil)
+	got := chartapi.Evaluate(t.Context(), view, settings, nil)
 	if len(got.Findings) != 1 {
 		t.Fatalf("findings = %+v, want exactly the seat that lost its model", got.Findings)
 	}
@@ -105,7 +106,7 @@ func TestANodeThatCouldNotEvaluateSaysSoRatherThanReportingNothingWrong(t *testi
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := chartapi.Evaluate(c.view, c.cfg, nil)
+			got := chartapi.Evaluate(t.Context(), c.view, c.cfg, nil)
 			if got.Evaluated {
 				t.Error("a node that read nothing reported an evaluation")
 			}
@@ -143,7 +144,7 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 			t.Parallel()
 			view, settings := running()
 			c.edit(view, settings)
-			got := chartapi.Evaluate(view, settings, nil)
+			got := chartapi.Evaluate(t.Context(), view, settings, nil)
 			if got.Counts[c.want] == 0 {
 				t.Fatalf("counts = %v, want a %q", got.Counts, c.want)
 			}
@@ -184,7 +185,7 @@ func TestAHumanSeatWithNoContactIsAdmittedAndReportedUnreachable(t *testing.T) {
 
 	_, settings := running()
 	// HELD, so the only finding left is the one about the contact block.
-	got := chartapi.Evaluate(view, settings, func(string) bool { return true })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return true })
 	want := []chartapi.Finding{{
 		Kind: chartapi.KindSeatUnreachable, Severity: chartapi.SeverityWarning,
 		Object: "cto",
@@ -212,7 +213,7 @@ func TestTheSelfCellNeedsNoSandboxBackend(t *testing.T) {
 	t.Parallel()
 	view, settings := running()
 	view.Role("sre").Sandbox = &org.RoleSandbox{Enabled: true, RunIn: "self"}
-	if got := chartapi.Evaluate(view, settings, nil); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil); len(got.Findings) != 0 {
 		t.Errorf("findings = %+v, want none — `self` runs in this process", got.Findings)
 	}
 }
@@ -248,7 +249,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 	// because a struct compared against a decoded map would fail on key
 	// order rather than on content.
 	var direct map[string]any
-	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(view, settings, nil)),
+	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(t.Context(), view, settings, nil)),
 		&direct); err != nil {
 		t.Fatalf("decode the evaluation: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 		t.Errorf("the route and the evaluation disagree:\n route: %s\n  eval: %s",
 			mustMarshal(t, body["report"]), mustMarshal(t, direct))
 	}
-	if want := chartapi.Evaluate(view, settings, nil).Worst(); body["worst"] != string(want) {
+	if want := chartapi.Evaluate(t.Context(), view, settings, nil).Worst(); body["worst"] != string(want) {
 		t.Errorf("worst = %v, want %q", body["worst"], want)
 	}
 }
@@ -277,7 +278,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 	// this case reports is the directory's doing.
 	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
 
-	held := chartapi.Evaluate(view, settings, func(string) bool { return true })
+	held := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return true })
 	if held.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a seat somebody holds was reported unheld: %v", held.Counts)
 	}
@@ -286,7 +287,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 			held.Counts)
 	}
 
-	unheld := chartapi.Evaluate(view, settings, func(string) bool { return false })
+	unheld := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return false })
 	if unheld.Counts[chartapi.KindSeatUnheld] == 0 {
 		t.Errorf("a seat nobody in the directory holds was not reported: %v",
 			unheld.Counts)
@@ -308,7 +309,7 @@ func TestARenamedSeatIsAskedAboutByItsIdentity(t *testing.T) {
 	cto.DeclaredHandle, cto.OriginHandle = "chief-tech", "cto"
 	cto.FormerHandles = []string{"cto"}
 
-	got := chartapi.Evaluate(view, settings, func(seat string) bool { return seat == "cto" })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(_ context.Context, seat string) bool { return seat == "cto" })
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a renamed seat whose identity is held was reported unheld: %v",
 			got.Counts)
@@ -329,7 +330,7 @@ func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 	view.Role("cto").Kind = org.KindHuman
 	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
 
-	got := chartapi.Evaluate(view, settings, nil)
+	got := chartapi.Evaluate(t.Context(), view, settings, nil)
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a node that cannot read the directory reported %d seats "+
 			"unheld: a seats-only satellite would report every human seat in "+
@@ -338,7 +339,7 @@ func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 	// THE CONTROL: the arms that need no directory still fire, or this
 	// case would pass on a report that had stopped evaluating anything.
 	view.Role("cto").Contact = nil
-	if got := chartapi.Evaluate(view, settings, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
 		t.Errorf("the contact arm stopped firing too: %v", got.Counts)
 	}
 }

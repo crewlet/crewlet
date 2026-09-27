@@ -341,7 +341,7 @@ func TestTheSeatListingFiltersByKindAndByWhoHoldsASeat(t *testing.T) {
 		{Handle: "sre", Kind: chart.SeatAgent},
 		{Handle: "writer", Kind: chart.SeatHuman},
 	}}
-	held := func(seat string) bool { return seat == "writer" }
+	held := func(_ context.Context, seat string) bool { return seat == "writer" }
 
 	if got := servedSeats(t, company, held, "/chart/seats?kind=human",
 		http.StatusOK); !slices.Equal(got, []string{"designer", "writer"}) {
@@ -371,7 +371,7 @@ func TestTheUnheldFilterAsksARenamedSeatByItsIdentity(t *testing.T) {
 			FormerHandles: []string{"cto"}},
 		{Handle: "designer", Kind: chart.SeatHuman},
 	}}
-	held := func(seat string) bool { return seat == "cto" }
+	held := func(_ context.Context, seat string) bool { return seat == "cto" }
 
 	if got := servedSeats(t, company, held, "/chart/seats?unheld=true",
 		http.StatusOK); !slices.Equal(got, []string{"designer"}) {

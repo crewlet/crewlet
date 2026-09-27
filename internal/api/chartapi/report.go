@@ -1,6 +1,7 @@
 package chartapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -64,7 +65,11 @@ import (
 // A bool inside the function would be the wrong shape for the same reason a
 // bool is the wrong shape everywhere in this tree, and here the absence IS the
 // third value: a report that cannot ask does not guess.
-type Held func(seat string) bool
+//
+// IT TAKES THE CALLER'S CONTEXT, because it is a read of the identity
+// estate's rows: a request that is gone, or a node shutting down, stops the
+// reads it would otherwise go on making for every seat in the company.
+type Held func(ctx context.Context, seat string) bool
 
 // Severity orders a finding by what it costs.
 type Severity string
@@ -216,8 +221,10 @@ func (r Report) Worst() Severity {
 // returns what is wrong with the pair.
 //
 // A NIL HALF IS "COULD NOT EVALUATE", never "nothing is wrong". See
-// [Report.Evaluated].
-func Evaluate(o *org.Organization, settings *config.Company, held Held) Report {
+// [Report.Evaluated]. The context is handed to held and to nothing else: the
+// directory is the one input that is not a value.
+func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company,
+	held Held) Report {
 	if o == nil || settings == nil {
 		return Report{Findings: []Finding{}}
 	}
@@ -227,7 +234,7 @@ func Evaluate(o *org.Organization, settings *config.Company, held Held) Report {
 	}
 	for role := range o.AllRoles() {
 		out.Seats++
-		out.Findings = append(out.Findings, seatFindings(role, settings, held)...)
+		out.Findings = append(out.Findings, seatFindings(ctx, role, settings, held)...)
 	}
 	for _, ref := range o.DanglingRefs() {
 		out.Findings = append(out.Findings, danglingFinding(ref))
@@ -254,7 +261,8 @@ func Evaluate(o *org.Organization, settings *config.Company, held Held) Report {
 }
 
 // seatFindings is everything wrong with one seat against these settings.
-func seatFindings(role *org.Role, settings *config.Company, held Held) []Finding {
+func seatFindings(ctx context.Context, role *org.Role, settings *config.Company,
+	held Held) []Finding {
 	handle := role.Handle()
 	var out []Finding
 	for _, key := range missingProviders(role, settings) {
@@ -307,7 +315,7 @@ func seatFindings(role *org.Role, settings *config.Company, held Held) []Finding
 	// ASKED BY THE SEAT'S IDENTITY — the handle it was created under — which
 	// is what a binding names (ADR-0020): asked by the handle it answers to
 	// now, a renamed seat whose holder is bound read as unheld.
-	if role.IsHuman() && held != nil && !held(role.Origin()) {
+	if role.IsHuman() && held != nil && !held(ctx, role.Origin()) {
 		out = append(out, Finding{
 			Kind: KindSeatUnheld, Severity: SeverityWarning,
 			Object: handle,
@@ -432,7 +440,7 @@ func (s *Service) getCheck(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": "this route does not read " + key})
 		return
 	}
-	got := s.report()
+	got := s.report(r.Context())
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"report": got, "worst": string(got.Worst()),
 	})
