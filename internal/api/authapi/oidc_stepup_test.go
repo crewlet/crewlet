@@ -301,13 +301,17 @@ func TestAProviderStepUpTheProviderDidNotConfirmChangesNothing(t *testing.T) {
 		window   iam.Recency
 		authTime time.Time
 	}{
-		"no auth_time":            {iam.RecencyStepUp, time.Time{}},
-		"outside the window":      {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
-		"just outside the window": {iam.RecencyStepUp, clock.Add(-config.DefaultSessionStepUp - time.Second)},
+		"no auth_time":       {iam.RecencyStepUp, time.Time{}},
+		"outside the window": {iam.RecencyStepUp, clock.Add(-2 * time.Hour)},
+		// JUST OUTSIDE is outside the window AND the provider's clock
+		// skew, which `auth_time` is judged within as every instant the
+		// provider wrote is.
+		"just outside the window": {iam.RecencyStepUp,
+			clock.Add(-config.DefaultSessionStepUp - oidc.ClockSkew - time.Second)},
 		"half an hour old, asked for the sensitive window": {iam.RecencySensitive,
 			clock.Add(-30 * time.Minute)},
 		"just outside the sensitive window": {iam.RecencySensitive,
-			clock.Add(-config.DefaultSessionStepUpSensitive - time.Second)},
+			clock.Add(-config.DefaultSessionStepUpSensitive - oidc.ClockSkew - time.Second)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
