@@ -1009,7 +1009,7 @@ different runs:
 
 An attempt still being checked counts as a failure until it resolves, so a
 burst of concurrent guesses at one pair is served one after another along the
-curve rather than all at once; and at most sixty-four requests are held waiting
+curve rather than all at once; and at most sixty-four attempts are held waiting on a curve
 at once on a node — past that, a wait is answered `429` straight away rather
 than parked on an open connection an attacker chose to open.
 
