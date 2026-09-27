@@ -1057,9 +1057,9 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-	if !errors.Is(err, statelog.ErrForeignFloor) {
+	if !errors.Is(err, statelog.ErrForeignPosition) {
 		t.Fatalf("a stale read with a floor on another stream = %v, want %v",
-			err, statelog.ErrForeignFloor)
+			err, statelog.ErrForeignPosition)
 	}
 	if got := w.waited.Load(); got != 0 {
 		t.Errorf("the wrong-stream read waited %d time(s) before refusing", got)
@@ -1082,7 +1082,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 // before). They must answer the same way, because which side of a local
 // barrier a foreign sequence happens to fall on says nothing about anything.
 //
-// AND THE ANSWER IS [statelog.ErrForeignFloor], NEVER A [statelog.Refused]. It
+// AND THE ANSWER IS [statelog.ErrForeignPosition], NEVER A [statelog.Refused]. It
 // was `wrong_stream`, the refusal a node on a recreated stream gives, so every
 // surface answered a pasted position from another log as "this node cannot
 // answer here" — a 503 with no Retry-After that sent a client to another node
@@ -1119,10 +1119,10 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 				q := pointQuery(level)
 				q.MinPosition = floor
 				_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-				if !errors.Is(err, statelog.ErrForeignFloor) {
+				if !errors.Is(err, statelog.ErrForeignPosition) {
 					t.Errorf("a %s read floored at %s on a node that is %s "+
 						"answered %v, want %v", level, floor, health.name, err,
-						statelog.ErrForeignFloor)
+						statelog.ErrForeignPosition)
 					continue
 				}
 				if errors.Is(err, statelog.ErrUnavailable) {

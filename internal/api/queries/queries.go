@@ -457,11 +457,12 @@ func unresolved(ctx context.Context, what string) error {
 // identical request round a loop.
 //
 // AND ONE REQUEST MISTAKE IS RAISED ONLY BY THE READ ITSELF, so it is
-// classified here as [ErrBadParams]: a `min_position` on another domain's log
-// ([statelog.ErrForeignFloor]). The grammar that parses the position cannot
-// know which log a question reads, and the reader can — so the reader refuses
-// it, before it consults anything about this node, and this is where that
-// refusal becomes the caller's. It was a `wrong_stream` refusal, answered
+// classified here as [ErrBadParams]: a position the caller named on another
+// domain's log ([statelog.ErrForeignPosition]) — a `min_position`, or a feed's
+// `cursor` or `since`. The grammar that parses a position cannot know which
+// log a question reads, and the reader can — so the reader refuses it, before
+// it consults anything about this node, and this is where that refusal
+// becomes the caller's. A floor was a `wrong_stream` refusal, answered
 // `unavailable`: a 503 telling a client to ask another node, which refused it
 // identically, and a dashboard telling a person an operator had to act.
 func classifyFailure(err error) error {
@@ -473,7 +474,7 @@ func classifyFailure(err error) error {
 		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
-	case errors.Is(err, statelog.ErrForeignFloor):
+	case errors.Is(err, statelog.ErrForeignPosition):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	if errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, coord.ErrUnavailable) {

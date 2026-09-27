@@ -394,7 +394,7 @@ func TestAFloorOnAnotherLogIsABadRequestOnBothTransports(t *testing.T) {
 	}{
 		{"a min_position on another domain's log",
 			fmt.Errorf("read the board: %w: this read floors at CREWLET_PAGES_LOG@1:5",
-				statelog.ErrForeignFloor),
+				statelog.ErrForeignPosition),
 			http.StatusBadRequest, "bad_params"},
 		{"a node whose stream was rebuilt under it, the control",
 			fmt.Errorf("read the board: %w", &statelog.Refused{

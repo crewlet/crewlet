@@ -871,7 +871,7 @@ func TestAFloorOnAnotherLogIsABadRequest(t *testing.T) {
 	}{
 		{"a min_position on another domain's log",
 			fmt.Errorf("chart: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
-				statelog.ErrForeignFloor),
+				statelog.ErrForeignPosition),
 			http.StatusBadRequest, httpjson.CodeBadParams},
 		{"a node whose stream was rebuilt under it, the control",
 			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},

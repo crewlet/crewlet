@@ -42,6 +42,27 @@ var ErrPositionRange = errors.New("position outside the packed range")
 // site that asks.
 var ErrWrongStream = errors.New("positions are on different streams")
 
+// ErrForeignPosition is a position a CALLER named — a read's floor, a feed's
+// cursor or its lower bound — that is on another log than the one it is asked
+// of: the caller's mistake about the request, never a state of the node
+// answering it.
+//
+// # Why it is not a refusal, and not [ErrWrongStream]
+//
+// A [Refused] is a state of THIS node, and it unwraps to [ErrUnavailable],
+// which every surface answers as "this node cannot answer here": a client acts
+// on it by coming back later or by asking another node, and an operator by
+// acting on this one. A position from another log is none of that. Every node
+// in the fleet refuses it identically however long anybody waits, so answered
+// as a refusal — a floor was `wrong_stream`, the code this node's own
+// recreated stream answers — it sent a client to a node that would refuse it
+// the same, and a dashboard told a person an operator had to act on a node
+// with nothing wrong with it. It is [ReadLevel.Valid]'s kind of failure: the
+// request, which a surface answers as a bad request. [ErrWrongStream] is the
+// engine comparing two positions of its own, which is a fault rather than
+// anything a caller sent.
+var ErrForeignPosition = errors.New("statelog: a position on another log")
+
 // Position is where a domain is on a stream. THE THREE FIELDS ARE ONE VALUE.
 //
 // # Why a triple and never a bare integer
@@ -171,6 +192,29 @@ func (p Position) Valid() error {
 			"generation's whole space", ErrPositionRange, p.Seq, MaxSeq)
 	}
 	return nil
+}
+
+// On is the ONE rule a position a caller named is held to: it is on stream,
+// or it names nothing — a zero position, or one with no stream, has nothing to
+// compare and is honoured nowhere, so neither is refused. Anything else wraps
+// [ErrForeignPosition].
+//
+// # Why a caller's position is held to it before it is used at all
+//
+// [Position.Packed] deliberately carries the generation and the sequence and
+// NOT the stream, so a foreign position compared against a local one is two
+// coordinates from two number spaces, and every use of one is a comparison: a
+// floor selected against a barrier was DISCARDED whenever it sorted low
+// (`OTHER@0:0` against any live barrier) and the read was served as though no
+// floor had been named, and a feed's cursor or `since` bound compared against
+// a packed column answered a page of this log chosen by a number from another.
+func (p Position) On(stream string) error {
+	if p.IsZero() || p.Stream == "" || p.Stream == stream {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is a position on %s, and this is answered from "+
+		"%s — a position names the log it is a position in, so send one this "+
+		"log answered with", ErrForeignPosition, p, p.Stream, stream)
 }
 
 // IsZero reports a position that names nothing — a domain that has consumed

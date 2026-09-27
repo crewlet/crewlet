@@ -122,7 +122,7 @@ const (
 	//
 	// A CALLER'S floor on another log is not this refusal. It is the
 	// request's mistake, which every node answers the same, so it is
-	// [ErrForeignFloor] and not a refusal at all.
+	// [ErrForeignPosition] and not a refusal at all.
 	RefuseWrongStream ReadRefusal = "wrong_stream"
 
 	// RefuseTooStale — this node's lag is past what the caller said it
@@ -425,8 +425,9 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 // # The order, and why every step is where it is
 //
 //  0. The REQUEST: a level this build knows, and a floor on this read's own
-//     log ([ErrForeignFloor]). Neither is a state of this node, so neither
-//     waits behind one — every node refuses the same request the same way.
+//     log ([Position.On]). Neither is a state of this node, so neither waits
+//     behind one — every node refuses the same request the same way, and an
+//     evicted or stalled node must not answer it with a refusal about itself.
 //  1. The cheap LOCAL refusals, so a doomed read never appends: eviction,
 //     then the floor, then a stall. Each is answered from what this node
 //     already knows, for nothing.
@@ -452,8 +453,8 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	// level — or this node's own health — looks at anything.
 	// [Query.MinPosition] is the one value here that came off a wire; the
 	// session mark and the barrier are this domain's own.
-	if err := floorOn(q.MinPosition, r.domain.Stream().Name); err != nil {
-		return Answer{}, err
+	if err := q.MinPosition.On(r.domain.Stream().Name); err != nil {
+		return Answer{}, fmt.Errorf("this read's floor: %w", err)
 	}
 	h := r.health()
 
@@ -650,7 +651,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	// THE CALLER'S FLOOR IS ON THIS LOG: [Reader.Read] refused one that is
 	// not before it got here, because comparing a foreign floor against a
 	// local target is comparing coordinates from two number spaces — see
-	// [floorOn].
+	// [Position.On].
 	switch q.Level {
 	case ReadLinearizable:
 		if r.index == nil {

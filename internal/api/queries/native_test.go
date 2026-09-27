@@ -563,7 +563,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 	}{
 		{"a min_position on another domain's log",
 			fmt.Errorf("tracker: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
-				statelog.ErrForeignFloor),
+				statelog.ErrForeignPosition),
 			queries.ErrBadParams},
 		{"a node whose stream was rebuilt under it",
 			&statelog.Refused{Code: statelog.RefuseWrongStream, Level: statelog.ReadStale},

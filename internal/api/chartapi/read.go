@@ -213,7 +213,7 @@ func (s *Service) freshness(r *http.Request) (statelog.Freshness, error) {
 // so it is classified here rather than in [Service.readParams]; answered as a
 // refusal it told a client to ask another node, which refused it the same.
 func (s *Service) readFailed(w http.ResponseWriter, err error) {
-	if errors.Is(err, statelog.ErrForeignFloor) {
+	if errors.Is(err, statelog.ErrForeignPosition) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
 		return
