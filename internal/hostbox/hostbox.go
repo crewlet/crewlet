@@ -13,7 +13,9 @@
 // allowlist that disagreed with this one about five names, and the MCP client
 // carried none at all and handed every tool server the engine's whole
 // environment — its keyring, its Tier A token values and its identity
-// provider's client secret among it.
+// provider's client secret among it. A container runtime's own CLI has a rule
+// of its own ([ContainerRuntime]), held here for the same reason: two callers
+// start one, the sandbox and a tool server declared as `command: docker`.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
@@ -140,6 +142,81 @@ func InheritFamilies(env map[string]string, prefixes ...string) {
 			}
 		}
 	}
+}
+
+// ContainerRuntimeEnv is what a container runtime's own CLI reads by NAME,
+// beyond the host user's locations: REGISTRY_AUTH_FILE, where Podman reads
+// registry credentials, and DBUS_SESSION_BUS_ADDRESS, which rootless Podman's
+// systemd cgroup manager dials.
+var ContainerRuntimeEnv = []string{
+	"REGISTRY_AUTH_FILE",
+	"DBUS_SESSION_BUS_ADDRESS",
+}
+
+// ContainerRuntimeFamilies is what a container runtime's own CLI reads by
+// PREFIX: the DOCKER_ family — DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG and
+// the TLS trio, without which a rootless Docker's CLI dials the system socket
+// instead of the user's and a remote daemon is not the one configured — the
+// CONTAINER_ and CONTAINERS_ families, Podman's remote connection and its
+// config, storage and registry files, and the PODMAN_ family.
+//
+// FAMILIES rather than names, because each vendor documents the set as a
+// prefix and adds to it, and a runtime that silently lost a new member would
+// dial something other than what the operator configured. None of them is
+// anything of the engine's.
+var ContainerRuntimeFamilies = []string{"DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_"}
+
+// ContainerRuntime is the host environment a container runtime's CLI runs
+// with: the allowlist, the host user's locations ([HostUserEnv] — where the
+// runtime keeps its config, and XDG_RUNTIME_DIR, where a rootless daemon's
+// socket lives), [ContainerRuntimeEnv] and every member of
+// [ContainerRuntimeFamilies] the engine was started with.
+//
+// ONE RULE FOR EVERY CALLER THAT STARTS ONE, and there are two: the local
+// sandbox drives the CLI to make and run a box, and a stdio MCP server
+// declared as `command: docker` or `podman` IS the CLI. Written twice, the
+// copy on the second path is the one that loses DOCKER_HOST — and a rootless
+// runtime without it dials the system socket, which fails as a permission
+// error at the daemon rather than as anything naming the variable.
+//
+// It is what the runtime needs to reach the daemon the operator configured,
+// never what an image or a credential helper authenticates with: a caller
+// with a declared channel layers that over this.
+func ContainerRuntime() map[string]string {
+	env := Inherit(append(append([]string{}, HostUserEnv...), ContainerRuntimeEnv...)...)
+	InheritFamilies(env, ContainerRuntimeFamilies...)
+	return env
+}
+
+// ContainerRuntimeCarries reports whether [ContainerRuntime] passes name
+// through from the host, whether or not the host has it set.
+//
+// The question a check asks of a `-e NAME` it finds in a container's run
+// arguments: the runtime copies NAME from its OWN environment, so a name this
+// answers false for arrives in the box as nothing at all unless a caller
+// declares it.
+func ContainerRuntimeCarries(name string) bool {
+	if slices.Contains(PassthroughEnv, name) || slices.Contains(HostUserEnv, name) ||
+		slices.Contains(ContainerRuntimeEnv, name) {
+		return true
+	}
+	for _, prefix := range ContainerRuntimeFamilies {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsContainerRuntime reports whether command starts a container runtime's
+// CLI — `docker` or `podman`, by name or by path — and so is owed
+// [ContainerRuntime] rather than the environment of an ordinary child.
+func IsContainerRuntime(command string) bool {
+	switch filepath.Base(strings.TrimSpace(command)) {
+	case "docker", "podman":
+		return true
+	}
+	return false
 }
 
 // Environ renders env as os/exec's KEY=value slice: sorted, and NEVER nil.

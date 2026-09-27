@@ -90,6 +90,14 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 // for them; keeping a hostile server away from them is a different user or a
 // container.
 //
+// A SERVER WHOSE COMMAND IS `docker` OR `podman` IS THE RUNTIME'S CLI, and it
+// gets what the runtime's CLI gets everywhere else ([hostbox.ContainerRuntime]):
+// the DOCKER_ family, Podman's CONTAINER_/CONTAINERS_/PODMAN_ families and
+// the rest. A tool server shipped as an image (`docker run -i --rm …`) is the
+// commonest way one is published, and handed only the host user's locations
+// a rootless runtime lost DOCKER_HOST and dialled the system socket — a
+// permission error at the daemon that named nothing the operator had set.
+//
 // Note what it does NOT do either: secret-store values are not poured in.
 // spec.Env has already had its ${VAR} references resolved by the caller, so a
 // server receives exactly the stored credentials its own config declares and
@@ -97,6 +105,9 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 // every subprocess in the company.
 func mergedEnv(spec Spec, log *slog.Logger) []string {
 	env := hostbox.Inherit(hostbox.HostUserEnv...)
+	if hostbox.IsContainerRuntime(spec.Command) {
+		env = hostbox.ContainerRuntime()
+	}
 	keys := make([]string, 0, len(spec.Env))
 	var empty []string
 	for k, v := range spec.Env {

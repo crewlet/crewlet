@@ -191,6 +191,88 @@ func TestInheritFamiliesTakesTheFamilyAndNothingElse(t *testing.T) {
 	}
 }
 
+// A CONTAINER RUNTIME'S CLI GETS WHAT IT DIALS THE DAEMON WITH, and nothing of
+// the engine's: the runtime's own families and named settings, the host user's
+// locations, and not the keyring — nor a credential a helper might want, which
+// is the caller's declared channel to hand over and never this rule's.
+func TestContainerRuntimeTakesTheRuntimesSettingsAndNothingOfTheEngines(t *testing.T) {
+	for name, value := range map[string]string{
+		"DOCKER_HOST":                "unix:///run/user/1000/docker.sock",
+		"CONTAINERS_CONF":            "/etc/containers/containers.conf",
+		"PODMAN_CONNECTIONS_CONF":    "/home/engine/.config/podman.json",
+		"REGISTRY_AUTH_FILE":         "/home/engine/.config/auth.json",
+		"XDG_RUNTIME_DIR":            "/run/user/1000",
+		"HOME":                       "/home/engine",
+		"CREWLET_SECRET_KEY_2026_01": "base64-keyring-material-not-for-the-runtime",
+		"SSH_AUTH_SOCK":              "/tmp/ssh-agent.sock",
+		"AWS_PROFILE":                "production",
+	} {
+		t.Setenv(name, value)
+	}
+	env := ContainerRuntime()
+	for _, name := range []string{
+		"DOCKER_HOST", "CONTAINERS_CONF", "PODMAN_CONNECTIONS_CONF",
+		"REGISTRY_AUTH_FILE", "XDG_RUNTIME_DIR", "HOME",
+	} {
+		if env[name] != os.Getenv(name) {
+			t.Errorf("%s = %q, want the host's %q: the runtime needs it to reach "+
+				"the daemon the operator configured", name, env[name], os.Getenv(name))
+		}
+	}
+	for _, name := range []string{"CREWLET_SECRET_KEY_2026_01", "SSH_AUTH_SOCK", "AWS_PROFILE"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("%s reached the runtime without being declared", name)
+		}
+	}
+}
+
+// WHAT A CHECK IS TOLD THE RUNTIME CARRIES IS WHAT IT CARRIES. A `-e NAME` in a
+// container's run arguments is judged by [ContainerRuntimeCarries] and copied
+// by [ContainerRuntime], so the two answer the same question from two ends and
+// are held together here over every kind of name: allowlisted, the host user's,
+// named, a family member, a family look-alike, and a credential.
+func TestContainerRuntimeCarriesIsWhatContainerRuntimePasses(t *testing.T) {
+	names := []string{
+		"PATH", "HTTPS_PROXY", "HOME", "XDG_RUNTIME_DIR", "REGISTRY_AUTH_FILE",
+		"DBUS_SESSION_BUS_ADDRESS", "DOCKER_HOST", "DOCKER_CONFIG", "CONTAINER_HOST",
+		"CONTAINERS_STORAGE_CONF", "PODMAN_USERNS", "DOCKERFILE_PATH",
+		"SSH_AUTH_SOCK", "AWS_ROLE_ARN", "CREWLET_SECRET_KEY_2026_01",
+	}
+	for _, name := range names {
+		t.Setenv(name, "set-by-the-test")
+	}
+	env := ContainerRuntime()
+	for _, name := range names {
+		_, passed := env[name]
+		if carried := ContainerRuntimeCarries(name); carried != passed {
+			t.Errorf("ContainerRuntimeCarries(%q) = %v, but ContainerRuntime passes it: %v",
+				name, carried, passed)
+		}
+	}
+}
+
+// Every runtime this engine drives, by name or by path, and nothing that
+// merely resembles one.
+func TestIsContainerRuntimeNamesTheRuntimesCLI(t *testing.T) {
+	for command, want := range map[string]bool{
+		"docker":             true,
+		"podman":             true,
+		"/usr/bin/docker":    true,
+		"/opt/bin/podman":    true,
+		"npx":                false,
+		"uvx":                false,
+		"docker-compose":     false,
+		"/usr/bin/dockerd":   false,
+		"/usr/local/bin/sh":  false,
+		"":                   false,
+		"docker/credentials": false,
+	} {
+		if got := IsContainerRuntime(command); got != want {
+			t.Errorf("IsContainerRuntime(%q) = %v, want %v", command, got, want)
+		}
+	}
+}
+
 // A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec reads a nil Cmd.Env as
 // "inherit the parent's", so an empty map rendered as nil would hand a child
 // the whole engine environment — the exact opposite of the empty one it asked

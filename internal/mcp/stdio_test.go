@@ -268,3 +268,47 @@ func waitForGrandchildPIDIn(t *testing.T, rec *logRecorder) int {
 	t.Fatal("the grandchild never announced itself on the inherited stderr")
 	return 0
 }
+
+// A TOOL SERVER RUN AS AN IMAGE REACHES THE DAEMON ITS OPERATOR CONFIGURED.
+//
+// `command: docker` (or podman) makes the child the runtime's own CLI, and a
+// rootless runtime finds its daemon through DOCKER_HOST: handed only what an
+// ordinary server gets, it dialled the system socket and failed at the daemon
+// naming nothing anybody had set. So that child is owed the runtime's rule —
+// by name or by path — and every other server still is not: the family is a
+// runtime's setting, not something an `npx` package has any use for, and
+// neither is ever handed the engine's keyring.
+func TestADockerToolServerGetsTheRuntimesSettings(t *testing.T) {
+	// Not parallel: it sets process-wide environment variables, which is what
+	// a child inherits from.
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	t.Setenv("CONTAINERS_CONF", "/home/engine/.config/containers/containers.conf")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "keyring-material-not-for-a-tool-server")
+	log, _ := recorder()
+	for command, runtime := range map[string]bool{
+		"docker":          true,
+		"/usr/bin/podman": true,
+		"npx":             false,
+		"uvx":             false,
+	} {
+		env := strings.Join(mergedEnv(Spec{
+			Name: "github", Command: command,
+			Env: map[string]string{"GITHUB_PERSONAL_ACCESS_TOKEN": "declared"},
+		}, log), "\n") + "\n"
+		for _, setting := range []string{
+			"DOCKER_HOST=unix:///run/user/1000/docker.sock\n",
+			"CONTAINERS_CONF=/home/engine/.config/containers/containers.conf\n",
+		} {
+			if got := strings.Contains(env, setting); got != runtime {
+				t.Errorf("command %q: carries %q = %v, want %v", command,
+					strings.TrimSpace(setting), got, runtime)
+			}
+		}
+		if !strings.Contains(env, "GITHUB_PERSONAL_ACCESS_TOKEN=declared\n") {
+			t.Errorf("command %q: the server's declared env did not arrive", command)
+		}
+		if strings.Contains(env, "keyring-material") {
+			t.Errorf("command %q: the engine's keyring reached a tool server", command)
+		}
+	}
+}

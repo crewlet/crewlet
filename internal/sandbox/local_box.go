@@ -71,38 +71,16 @@ func runtimeCommand(timeout time.Duration, argv ...string) hostCommand {
 	return hostCommand{argv: argv, env: runtimeEnv(), timeout: timeout}
 }
 
-// runtimeEnv is the environment a container runtime's CLI runs with.
+// runtimeEnv is the environment a container runtime's CLI runs with:
+// [hostbox.ContainerRuntime], the one rule for every caller that starts one —
+// this backend, and a stdio MCP server declared as `command: docker`.
 //
-// NOT THE ENGINE'S, for the reason no child gets that (see [hostbox]). The CLI
-// runs as the engine's user in no box, so it gets the host allowlist and the
-// engine user's own locations — where the runtime keeps its config, and where
-// a rootless daemon's socket lives (XDG_RUNTIME_DIR) — and then the runtime's
-// OWN configuration, which is what it cannot run correctly without:
-//
-//   - the DOCKER_ family — DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG and the
-//     TLS trio — without which a rootless Docker's CLI dials the system socket
-//     instead of the user's and a remote daemon is not the one configured;
-//   - the CONTAINER_ and CONTAINERS_ families — Podman's remote connection
-//     and its config, storage and registry files — and the PODMAN_ family;
-//   - REGISTRY_AUTH_FILE, where Podman reads registry credentials, and
-//     DBUS_SESSION_BUS_ADDRESS, which rootless Podman's systemd cgroup
-//     manager dials.
-//
-// FAMILIES rather than names, because each vendor documents the set as a
-// prefix and adds to it, and a runtime that silently lost a new member would
-// dial something other than what the operator configured. None of them is
-// anything of the engine's.
-//
-// The run environment a coding agent gets is NOT here: it travels as an
-// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
-// is what the runtime needs and nothing a box does. A `-e NAME` in
+// NOT THE ENGINE'S, for the reason no child gets that (see [hostbox]). The run
+// environment a coding agent gets is not here either: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds is
+// what the runtime needs and nothing a box does. A `-e NAME` in
 // `local.run_args` therefore copies only a name this environment carries.
-func runtimeEnv() map[string]string {
-	env := hostbox.Inherit(append(append([]string{}, hostbox.HostUserEnv...),
-		"REGISTRY_AUTH_FILE", "DBUS_SESSION_BUS_ADDRESS")...)
-	hostbox.InheritFamilies(env, "DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_")
-	return env
-}
+func runtimeEnv() map[string]string { return hostbox.ContainerRuntime() }
 
 // ---------------------------------------------------------------------
 // direct
