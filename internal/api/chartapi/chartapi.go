@@ -44,6 +44,16 @@
 // the one structural change nothing undoes, a tombstoned address and a retired
 // mailbox — asked the moment a batch's body shows one, since the pattern
 // cannot see it.
+//
+// # Two of its reads are the audit's, and one is the directory's
+//
+// The company-wide history feed and the continuous report take `audit:read`:
+// who moved whom across the whole company, and which human seats nobody in
+// the identity directory holds, are the record of what happened rather than
+// the board. `?unheld=true` on the seat listing asks the directory's own
+// question and takes what the directory's listing takes. One object's history,
+// on that object's own read, stays the board's: it is the context of the one
+// thing a reader already asked about.
 package chartapi
 
 import (

@@ -296,6 +296,11 @@ func TestTheStrippedPostureIsServedByDefault(t *testing.T) {
 
 // servedSeats stands the surface up over company with held as its directory
 // seam, and answers the handles GET path lists.
+//
+// AS SOMEBODY WHO MAY ASK THE DIRECTORY'S QUESTION — the board's read and the
+// grant that invites people into seats — because every case using this is
+// about what the filters return; who may ask for `unheld` at all has its own
+// case.
 func servedSeats(t *testing.T, company chart.Chart, held chartapi.Held,
 	path string, want int) []string {
 
@@ -305,9 +310,11 @@ func servedSeats(t *testing.T, company chart.Chart, held chartapi.Held,
 		Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer {
 			return &writer{}
 		},
-		Principal: resolved(func() iam.Principal { return leadOf(iam.GrantStateRead) }),
-		Chart:     leads(),
-		Held:      held,
+		Principal: resolved(func() iam.Principal {
+			return leadOf(iam.GrantStateRead, iam.GrantPeopleManage)
+		}),
+		Chart: leads(),
+		Held:  held,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -354,6 +361,71 @@ func TestTheSeatListingFiltersByKindAndByWhoHoldsASeat(t *testing.T) {
 	// than applying it to an empty one, which would list every human seat.
 	servedSeats(t, company, nil, "/chart/seats?unheld=true",
 		http.StatusServiceUnavailable)
+}
+
+// WHO HOLDS NOBODY IS THE DIRECTORY'S QUESTION, AND TAKES ITS GRANT.
+//
+// `unheld=true` lists the human seats no person in the identity directory is
+// bound to — a fact about that estate, read through the chart. The board's
+// read grant says nothing about the directory, so a reader holding it alone is
+// refused naming what the directory's own listing takes: `people:manage`, the
+// grant that invites somebody into one of those seats, or `audit:read`. Each of
+// those is admitted, and the kind filter alone stays the board's.
+//
+// Mutation: drop the re-ask and the board's reader lists every vacancy.
+func TestTheUnheldFilterIsADirectoryRead(t *testing.T) {
+	t.Parallel()
+	company := chart.Chart{Seats: []chart.Seat{
+		{Handle: "designer", Kind: chart.SeatHuman},
+		{Handle: "writer", Kind: chart.SeatHuman},
+	}}
+	held := func(_ context.Context, seat string) bool { return seat == "writer" }
+	listing := func(who iam.Principal, path string) *httptest.ResponseRecorder {
+		svc, err := chartapi.New(chartapi.Options{
+			Reader: &reader{chart: company},
+			Authority: func(string, chart.AuthorKind, []iam.Grant, chart.Provenance) chartapi.Writer {
+				return &writer{}
+			},
+			Principal: resolved(func() iam.Principal { return who }),
+			Chart:     leads(),
+			Held:      held,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		mux := http.NewServeMux()
+		if err := svc.Routes(mux); err != nil {
+			t.Fatalf("Routes: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x"+path, nil))
+		return rec
+	}
+
+	rec := listing(leadOf(iam.GrantStateRead), "/chart/seats?kind=human&unheld=true")
+	var refusal struct {
+		Error  string   `json:"error"`
+		Grants []string `json:"grants"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+	if rec.Code != http.StatusForbidden || refusal.Error != string(httpjson.CodeUnauthorized) ||
+		!slices.Equal(refusal.Grants, []string{string(iam.GrantPeopleManage),
+			string(iam.GrantAuditRead)}) {
+		t.Errorf("the board's reader asking for unheld seats answered %d %s, "+
+			"want 403 naming [people:manage audit:read]", rec.Code, rec.Body)
+	}
+	for _, g := range []iam.Grant{iam.GrantPeopleManage, iam.GrantAuditRead} {
+		if rec := listing(leadOf(iam.GrantStateRead, g),
+			"/chart/seats?kind=human&unheld=true"); rec.Code != http.StatusOK ||
+			strings.Contains(rec.Body.String(), `"writer"`) {
+			t.Errorf("%s asking for unheld seats answered %d %s, want the "+
+				"seat nobody holds", g, rec.Code, rec.Body)
+		}
+	}
+	// THE CONTROL: the kind filter alone is the board's read.
+	if rec := listing(leadOf(iam.GrantStateRead), "/chart/seats?kind=human"); rec.Code != http.StatusOK {
+		t.Errorf("the board's reader filtering by kind answered %d: %s", rec.Code, rec.Body)
+	}
 }
 
 // THE UNHELD FILTER ASKS A RENAMED SEAT BY ITS IDENTITY.
@@ -759,6 +831,44 @@ func TestARemovalBatchTakesTheDeploymentsGrant(t *testing.T) {
 		len(both.writer.calls) != 1 || both.writer.calls[0] != "removal" {
 		t.Errorf("a removal holding both grants answered %d and reached %v: %s",
 			rec.Code, both.writer.calls, rec.Body)
+	}
+}
+
+// THE COMPANY-WIDE FEED AND THE CONTINUOUS REPORT ARE AUDIT READS; ONE
+// OBJECT'S OWN HISTORY IS NOT.
+//
+// `GET /chart/history` is who moved whom and who dissolved which team across
+// the whole company, and `GET /chart/check` names every seat nobody in the
+// identity directory holds — the record of what happened and the directory's
+// own question, which are `audit:read`'s. A reader holding the board's grant
+// alone is refused both naming it, and still reads a seat with the history it
+// carries: that is the context of the one object they asked about.
+//
+// Mutation: mount either route back on the chart's read and the board's reader
+// is served it.
+func TestTheFeedAndTheReportAreAuditReads(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/chart/history", "/chart/check"} {
+		r := serve(t, &reader{chart: nimbus()}, leadOf(iam.GrantStateRead), leads())
+		rec := httptest.NewRecorder()
+		r.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x"+path, nil))
+		var refusal struct {
+			Grants []string `json:"grants"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+		if rec.Code != http.StatusForbidden ||
+			!slices.Equal(refusal.Grants, []string{string(iam.GrantAuditRead)}) {
+			t.Errorf("%s for the board's reader answered %d %s, want 403 naming "+
+				"[audit:read]", path, rec.Code, rec.Body)
+		}
+	}
+	auditor := serve(t, &reader{chart: nimbus()}, leadOf(iam.GrantAuditRead), leads())
+	getJSON(t, auditor.mux, "/chart/history", http.StatusOK)
+
+	board := serve(t, &reader{chart: nimbus(), seat: chart.SeatDetail{
+		Seat: nimbus().Seats[0]}}, leadOf(iam.GrantStateRead), leads())
+	if body := getJSON(t, board.mux, "/chart/seats/sre", http.StatusOK); body["seat"] == nil {
+		t.Errorf("one seat's read for the board's reader carries no seat: %v", body)
 	}
 }
 

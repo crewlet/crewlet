@@ -354,7 +354,7 @@ change that did land is written twice.
 
 Nothing refuses a settings edit that strands a seat, because the two halves are
 written by different people at different times. `GET /chart/check` is the
-report over the pair:
+report over the pair, and it takes `audit:read`:
 
 ```bash
 curl -s "$CREWLET_URL/chart/check" -H "$AUTH" | jq '.report.findings'

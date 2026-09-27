@@ -475,6 +475,13 @@ A node that evaluated **nothing** — no chart view, or no settings epoch — is
 an error rather than a pass, because no findings from a node that read nothing
 is the most misleading answer this command could print.
 
+It needs `audit:read` on the credential in `CREWLET_API_TOKEN`, and so does
+`crewlet chart history`: the report names every human seat nobody in the
+identity directory holds, and the feed is who moved whom across the whole
+company — the record of what happened rather than the board. A deploy pipeline
+gating on the report carries that grant; the finding **counts** are on `/health`
+for any reader.
+
 ### `crewlet chart export`
 
 The chart as an authored document, whole and **unstripped**, which is why it

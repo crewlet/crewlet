@@ -126,7 +126,9 @@ revision that removes a provider every seat runs on is a valid revision, and
 refusing it would refuse an operator's edit over a seat they have never heard
 of — so `GET /chart/check` and `/health`'s `consistency` block carry one
 continuous evaluation over the chart this node holds and the settings epoch it
-applied. See
+applied. The report takes `audit:read`, as the company-wide
+`GET /chart/history` does — it names every human seat nobody in the directory
+holds — while `/health` carries its counts for every reader. See
 [the continuous report](configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write).
 
 **One of its findings reads the identity directory**, and what it says depends
@@ -139,7 +141,8 @@ as unheld. A report that cannot ask does not guess.
 
 **And the seats nobody holds are listable.** `GET /chart/seats?kind=human&unheld=true`
 answers the same question as a filter, which is what an invite screen needs
-before it asks who to send a link to. On a node with no identity domain the
+before it asks who to send a link to — and so it takes what the directory's own
+listing takes, `people:manage` or `audit:read`, rather than the board's read. On a node with no identity domain the
 filter is **refused with `503`** rather than applied to an empty directory —
 returning every human seat in the company under a parameter that promised the
 opposite is the one failure a screen renders as a finished answer.

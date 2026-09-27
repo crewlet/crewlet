@@ -164,7 +164,7 @@ opinion, and a blank must not read as a ceiling of nothing.
 | Grant | What it opens |
 |---|---|
 | `state:read` | What the company is doing: the board, the pages, the roster, the org chart, the fleet, budgets, schedules — the ordinary dashboard read |
-| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
+| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. The org chart's company-wide feed (`/chart/history`) and its continuous report (`/chart/check`) are this read too, and so — beside `people:manage` — is the list of seats nobody holds (`/chart/seats?unheld=true`); one object's own history stays the board's. A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
 | `config:read` | The company document — the org chart, every integration, and the *names* of every credential the company holds or has not set yet |
 | `secrets:read` | Revealing a stored credential's value (the one `/secrets` route that returns one, which needs an explicit `?reveal=true`, takes `config:read` beside this grant, and logs the access) |
 
@@ -191,7 +191,7 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's, and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
 | `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset` and a work item's purge. With `people:manage` beside it, `POST /iam/invalidate-all`; with `config:write` beside it, taking an object out of the org chart — the one structural change nothing undoes |
-| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company |
+| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
 **Connecting an integration has no grant of its own.** `/setup` performs no

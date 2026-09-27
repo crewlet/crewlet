@@ -318,6 +318,18 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	unheld := r.URL.Query().Get(UnheldParam) == "true"
+	// WHO HOLDS NOBODY IS A DIRECTORY READ, asked before anything is read.
+	// The filter answers a question about the identity directory — which
+	// human seats no person is bound to — and the chart's own read grant
+	// says nothing about that estate, so a reader of the board could list
+	// every vacancy the directory holds by asking the chart. It takes what
+	// the directory's own listing takes: `people:manage`, whoever invites
+	// somebody into one of those seats, or `audit:read`.
+	if unheld && !s.decide(w, r, authz.Policy{Action: authz.ActionDirectoryRead},
+		authz.Object{Kind: authz.KindCompany}) {
+		return
+	}
 	got, err := s.reader.Read(r.Context(), fresh)
 	if err != nil {
 		s.readFailed(w, err)
@@ -325,7 +337,6 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 	}
 	runtime := s.runtimeAllowed(r)
 	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get(KindParam)))
-	unheld := r.URL.Query().Get(UnheldParam) == "true"
 	if unheld && s.held == nil {
 		// THE FILTER CANNOT BE ANSWERED, so it is REFUSED rather than
 		// applied to an empty directory. A node running no identity

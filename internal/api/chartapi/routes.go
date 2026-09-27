@@ -40,7 +40,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /chart/units/{key}", at(authz.ActionChartRead), s.getUnit)
 	mount("GET /chart/seats", at(authz.ActionChartRead), s.getSeats)
 	mount("GET /chart/seats/{handle}", at(authz.ActionChartRead), s.getSeat)
-	mount("GET /chart/history", at(authz.ActionChartRead), s.getHistory)
+	// THE COMPANY-WIDE FEED IS AN AUDIT READ, and one object's history is
+	// not: the feed answers who moved whom, who was hired and who dissolved
+	// which team across the whole company — the record of what happened,
+	// which is `audit:read`'s question — while the history a unit or a
+	// seat carries on its own read is the context of the one object a
+	// reader already asked about.
+	mount("GET /chart/history", at(authz.ActionAuditRead), s.getHistory)
 	// THE PATTERN'S VERB IS THE LEAD'S, and a body carrying the runtime
 	// half re-asks for the operator verb before it writes — while a body
 	// changing a relation somebody's authority is derived from is refused
@@ -76,7 +82,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// failing when the hour ends.
 	mount("GET /chart/imports", at(authz.ActionChartImportRead), s.getImports)
 	mount("GET /chart/imports/{revision}", at(authz.ActionChartImportRead), s.getImport)
-	mount("GET /chart/check", at(authz.ActionChartRead), s.getCheck)
+	// THE CONTINUOUS REPORT IS AN AUDIT READ too: it names every seat
+	// nobody in the identity directory holds and every seat nobody can
+	// reach, which is the directory's own question read off the chart, and
+	// the dangling references it names are what an audit of the chart
+	// asks. The counts ride `/health` for every reader; the findings do not.
+	mount("GET /chart/check", at(authz.ActionAuditRead), s.getCheck)
 	// THE WHOLE AUTHORED DOCUMENT, at the grant that reads the company's
 	// configuration rather than the one that reads its chart. It is a
 	// ROUND TRIP rather than a view: whole or useless, so there is no
