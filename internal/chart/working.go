@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -142,6 +143,19 @@ func (w *working) seat(ref ObjectRef) (wnode, bool) {
 // created reports whether an earlier operation in this batch created n.
 func (n *wnode) created() bool {
 	return n.op == OpCreateUnit || n.op == OpCreateSeat
+}
+
+// found is the address the rows hold n at: the one it answered to when the
+// batch began, whatever this batch has renamed it to since.
+//
+// IT IS WHAT A REMOVAL NAMES THE OBJECT BY. A removal is a record of its own,
+// published without the batch's placements ([Writer.WriteBatch]), so it
+// applies against the rows as the batch found them — where a rename earlier in
+// the batch never happened. Named by the address the rename moved it onto, the
+// removal tombstoned an address that had never held anything, deleted nothing,
+// and left the object it was meant to remove running under its old one.
+func (n *wnode) found() string {
+	return cmp.Or(n.from, n.key)
 }
 
 // refKey composes an object reference into the replay's own key.
@@ -298,7 +312,11 @@ func (w *working) apply(ctx context.Context, index int, op Operation) *RefusalEr
 			}
 		}
 		delete(w.live, refKey(ref))
-		w.removedKeys[refKey(ref)] = true
+		// THE ADDRESS THE ROWS HOLD IT AT, which is the one the removal
+		// record names and the apply tombstones ([wnode.found]): an
+		// address this batch renamed it onto was never the object's on
+		// the log, and the replay says so exactly as the log will.
+		w.removedKeys[refKey(ObjectRef{Kind: ref.Kind, ID: n.found()})] = true
 		// AND ITS IDENTITY, which the apply tombstones beside the address
 		// it held ([Applier.tombstoneIdentity]) — so the replay refuses a
 		// later creation onto it exactly as the log will.

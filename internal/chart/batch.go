@@ -340,6 +340,10 @@ func (b Batch) Scope() ScopeSet {
 // change it was ([Edge.Op]). A batch that moves one seat twice publishes its
 // final placement, a move publishes the lead the unit has, and a create_unit
 // the lead it named.
+//
+// A REMOVED OBJECT IS NAMED BY THE ADDRESS THE ROWS HOLD IT AT, not by the one
+// the operation named: the removal is a record of its own, applied against the
+// rows as this batch found them ([wnode.found]).
 func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 	edges []Edge, removed []ObjectRef, err error) {
 
@@ -375,8 +379,12 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 			}
 		}
 		if op.Kind == OpRemoveObject {
+			// BY THE ADDRESS THE ROWS HOLD IT AT, which a rename
+			// earlier in this batch does not move: the removal is its
+			// own record and applies against the rows as the batch
+			// found them. See [wnode.found].
 			gone = append(gone, ObjectRef{
-				Kind: op.Object.Kind, ID: NormalizeKey(op.Object.ID)})
+				Kind: op.Object.Kind, ID: before.found()})
 		}
 	}
 	return state.edges(), gone, nil

@@ -816,6 +816,42 @@ func TestARenameIsReplayedForTheOperationsAfterIt(t *testing.T) {
 	}
 }
 
+// A REMOVAL AFTER A RENAME IS REPLAYED AS THE LOG WILL APPLY IT.
+//
+// The removal record names the object by the address the rows hold it at and
+// tombstones that one, so the replay does the same: the address the batch
+// found the object at is removed for the operations after it, and the address
+// a rename in this batch moved it onto — which the log never gives it — is
+// not. A replay that tombstoned the second refused a creation the log would
+// have accepted and accepted one onto the first that the log would drop.
+func TestARemovalAfterARenameIsReplayedAsTheLogWillApplyIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.must(create("op-platform", chart.KindUnit, "platform", ""))
+
+	_, removed, err := h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+		op(chart.OpRemoveObject, chart.KindUnit, "infra", ""),
+		op(chart.OpCreateUnit, chart.KindUnit, "infra", ""),
+	}})
+	if err != nil {
+		t.Fatalf("a creation onto the address the removed object never held "+
+			"on the log was refused: %v", err)
+	}
+	if want := []chart.ObjectRef{{Kind: chart.KindUnit, ID: "platform"}}; !slices.Equal(removed, want) {
+		t.Errorf("the batch removes %v, want %v", removed, want)
+	}
+	_, _, err = h.validate(chart.Batch{Operations: []chart.Operation{
+		renameOp(chart.KindUnit, "platform", "infra"),
+		op(chart.OpRemoveObject, chart.KindUnit, "infra", ""),
+		op(chart.OpCreateUnit, chart.KindUnit, "platform", ""),
+	}})
+	if ref := refusal(t, err); ref.Rule != chart.RuleKeyRemoved {
+		t.Errorf("a creation onto the address the removal tombstones: rule = "+
+			"%q, want %q", ref.Rule, chart.RuleKeyRemoved)
+	}
+}
+
 // WHAT A RENAME MAY NOT DO, each refused on its own rule.
 func TestARenameIsRefusedWhereItCouldNotLand(t *testing.T) {
 	t.Parallel()

@@ -518,6 +518,77 @@ func TestARemovedSeatsIdentityIsNeverIssuedAgain(t *testing.T) {
 	r.applySeatRekey("op-free", "lena-ops", "lena")
 }
 
+// A BATCH THAT RENAMES AN OBJECT AND THEN REMOVES IT REMOVES THE OBJECT.
+//
+// The removal is a record of its own, published without the batch's rename,
+// so it applies against the rows as the batch found them — where the object
+// still answers to its old address. It named the object by the address the
+// rename moved it onto, so the apply tombstoned an address that had never held
+// anything, deleted nothing and wrote no identity tombstone, and the caller was
+// told the removal landed: a seat meant to be gone went on running with its
+// credentials, and the new address was burned for ever. Measured before the
+// fix: the rows still held the object and `chart_removed` held only the new
+// address.
+func TestARenameThenRemovalRemovesTheObjectAndNotItsNewAddress(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []chart.ObjectKind{chart.KindUnit, chart.KindSeat} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			r := newWriteRig(t)
+			r.batch("op-create", chart.Operation{Kind: createOf(kind),
+				Object:   chart.ObjectRef{Kind: kind, ID: "platform"},
+				SeatKind: kindFor(kind)})
+			// AN EARLIER RENAME ON THE LOG, so the object's identity is
+			// not the address it is removed from and the identity
+			// tombstone is a separate row to look for.
+			if _, err := r.publishRename("op-rename", kind, "platform",
+				"platform-team"); err != nil {
+				t.Fatalf("rename: %v", err)
+			}
+			r.drain()
+
+			got, err := r.writer.WithHolders(noHolders{}).WriteBatch(t.Context(),
+				"op-gone", chart.Batch{Operations: []chart.Operation{
+					renameOp(kind, "platform-team", "infra"),
+					op(chart.OpRemoveObject, kind, "infra", ""),
+				}})
+			if err != nil {
+				t.Fatalf("write the batch: %v", err)
+			}
+			want := []chart.ObjectRef{{Kind: kind, ID: "platform-team"}}
+			if !slices.Equal(got.Objects, want) {
+				t.Errorf("the removal names %v, want %v — the address the "+
+					"rows hold the object at", got.Objects, want)
+			}
+			r.drain()
+
+			table := map[chart.ObjectKind]string{
+				chart.KindUnit: `SELECT key FROM chart_units`,
+				chart.KindSeat: `SELECT handle FROM chart_seats`,
+			}[kind]
+			if rows := r.column(table); len(rows) != 0 {
+				t.Errorf("the chart still holds %v after its removal landed", rows)
+			}
+			if got := r.column(`SELECT object_id FROM chart_removed
+				WHERE object_kind = ? ORDER BY object_id`, string(kind)); !slices.Equal(
+				got, []string{"platform", "platform-team"}) {
+				t.Errorf("the tombstones are %v, want the address the object "+
+					"held and its identity — and never infra, which held "+
+					"nothing", got)
+			}
+
+			// AND THE ADDRESS THE BATCH NAMED IS NOT BURNED: nothing ever
+			// answered to it, so a creation takes it.
+			r.batch("op-reuse", chart.Operation{Kind: createOf(kind),
+				Object:   chart.ObjectRef{Kind: kind, ID: "infra"},
+				SeatKind: kindFor(kind)})
+			if got := r.column(table); !slices.Equal(got, []string{"infra"}) {
+				t.Errorf("after creating infra the chart holds %v", got)
+			}
+		})
+	}
+}
+
 // A REMOVAL ASKS THE DIRECTORY ABOUT THE SEAT BY ITS IDENTITY.
 //
 // A binding names the seat it was made to by the handle the seat was created

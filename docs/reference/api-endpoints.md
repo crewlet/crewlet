@@ -612,15 +612,17 @@ that kind reads:
 | `set_lead` | `lead` | The unit stays where it is |
 | `set_kind` | `seat_kind` | A seat's kind is structure, so it changes here and never in the seat's content. Making a person's seat an agent's is refused while somebody in the identity directory holds it, naming them — on a node that cannot read the directory too |
 | `rename` | `to` | The object is named by the address it answers to **at this point in the batch**, and moves onto `to`; its former address goes on resolving. An operation after it uses the new key, and an object the same batch creates cannot be renamed — create it under the address you mean |
-| `remove` | nothing | |
+| `remove` | nothing | The removal is named by the address the chart holds the object at — the one it answered to when the batch began — because it is published as a record of its own and applied against the chart as the batch found it. A rename earlier in the same batch is superseded: the object is removed from the address it held, its identity is tombstoned beside it, and the address the rename would have given it is never tombstoned, so it stays free |
 
 An empty `parent` is the org root and an empty `lead` clears the unit's own
 lead. A field the kind does not take is refused `400` (`the operation does not
 take the field`) rather than dropped, because a batch that dropped it would
 answer as though it asked for less than it said.
 
-A batch whose operations are **all removals** is published as a removal record
-instead; one that mixes the two is refused, because a removal installs a gate
+A batch whose only effect is removals — its other operations, if any, being a
+rename of an object it then removes — is published as a removal record instead,
+and its answer's `objects` name each object by the address it was removed from;
+one that places and removes is refused, because a removal installs a gate
 and a record that installed one for some of its objects and not others would
 make "does this install a gate" a question about a payload.
 
