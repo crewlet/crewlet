@@ -63,11 +63,10 @@ A few things worth knowing when deploying Crewlet:
   cost and the verify cap instead, and shown in the audit trail's per-client
   failure tally; an invitation link, a founder code and a provider round trip
   meet no curve at all, their 256 bits being what bounds a walk. No curve
-  stands in front of a bearer — a Tier
-  A token, a machine token or a session cookie: a bearer names nobody until it
-  is compared, so a curve there could only be keyed on the address, and one was
-  a way for any stranger at an address to hold every token used from it at
-  `429`. A bearer's protection is its length and randomness (a Tier A value is
+  stands in front of a bearer — a Tier A token, a machine token or a session
+  cookie: a bearer names nobody until it is compared, so a curve there could
+  only be keyed on the address, and one was a way for any stranger at an
+  address to hold every token used from it at `429`. A bearer's protection is its length and randomness (a Tier A value is
   refused under 26 characters), and every refused one is counted in the audit
   trail's per-client failure tally. Behind a proxy, name it in
   `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
