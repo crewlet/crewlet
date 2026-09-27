@@ -92,19 +92,31 @@ var log = logging.Get("api.auth")
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
-//   - FIVE ROUTES UNDER /auth/, and only five: a login cannot require a login.
-//     The posture read, the sign-in, the first-operator bootstrap and the two
-//     OIDC legs are how somebody OBTAINS a credential, so requiring one is a
-//     deployment nobody can enter. What stands in for the guard on each is the
-//     per-source throttle and the origin check, which they are NOT exempt
-//     from. Plus /auth/invite/, whose link is the credential — the id in
-//     the path and the secret beside it, never in a URL.
+//   - SEVEN ROUTES UNDER /auth/, and only seven. Five because a login cannot
+//     require a login: the posture read, the sign-in, the first-operator
+//     bootstrap and the two OIDC legs are how somebody OBTAINS a credential,
+//     so requiring one is a deployment nobody can enter. What stands in for
+//     the guard on each is the per-source throttle and the origin check,
+//     which they are NOT exempt from. Plus /auth/invite/, whose link is the
+//     credential — the id in the path and the secret beside it, never in a
+//     URL. And the TWO SIGN-OUTS OF THIS SESSION, the plain one and the
+//     provider one, because a sign-out must clear the cookie whatever this
+//     node can read: guarded, a node that could not read its identity estate
+//     answered them `503 identity_unavailable` before they ran, so on
+//     exactly the node that could vouch for nobody nobody could sign out, and
+//     a person left a shared machine looking at a signed-in page — or, on the
+//     provider route, never reached the provider's end_session_endpoint. They
+//     need no guard: each verifies every bearer the browser holds itself,
+//     under the signature and this node's rows, and ends only a session it
+//     finds — and the origin check still judges both, as it judges every
+//     state change. Signing out of EVERY session, or of one named, stays
+//     guarded: those act on a caller the guard has to have resolved.
 //
 // NOT A /auth/ PREFIX, and that is the whole care in this entry. The same
-// surface serves the logout routes, the second-factor enrolment and the
-// session read, and a prefix would exempt every one of them — a credential
-// surface behind no credential, which is the exact shape /operator/ was
-// deliberately kept out of /mcp/ to avoid.
+// surface ends every session a person holds, ends other sessions by name,
+// enrols second factors and reads who the caller is, and a prefix would exempt
+// every one of them — a credential surface behind no credential, which is the
+// exact shape /operator/ was deliberately kept out of /mcp/ to avoid.
 //
 // The split is deliberate. A PREFIX exempts everything beneath it, so only the
 // ones that genuinely have sub-paths get one, and each ends in a slash, which
@@ -116,6 +128,7 @@ var unguardedExact = map[string]struct{}{
 	"/": {}, PathDashboard: {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthBootstrap: {},
 	PathAuthOIDCStart: {}, PathAuthOIDCCallback: {},
+	PathAuthLogout: {}, PathAuthLogoutProvider: {},
 }
 
 var unguardedPrefixes = []string{
@@ -150,6 +163,13 @@ const (
 	PathAuthOIDCStart    = "/auth/oidc/start"
 	PathAuthOIDCCallback = "/auth/oidc/callback"
 
+	// PathAuthLogout ends THIS session, and PathAuthLogoutProvider ends it
+	// AND the person's session at the identity provider — mounted only
+	// where a provider is. Both clear the cookie whatever this node can
+	// read, which is why they are here rather than behind the guard.
+	PathAuthLogout         = "/auth/logout"
+	PathAuthLogoutProvider = "/auth/logout/oidc"
+
 	// AuthInvitePrefix is the invitation pair, and a PREFIX because the
 	// id is a path segment. Holding the link is the credential — its
 	// secret, which travels beside the id in a header, a body or a form
@@ -172,7 +192,7 @@ const (
 	PathAuthPrefix = "/auth/"
 )
 
-// The four GUARDED routes an enrolment-only session may reach — see
+// The three GUARDED routes an enrolment-only session may reach — see
 // [EnrolmentAdmits] — named here for the exemption list's reason: the refusal
 // and the registration are one spelling, so a route authapi moved without
 // moving this would not compile rather than quietly lock a new person out of
@@ -190,16 +210,7 @@ const (
 	// enrolment-only session needs when enrolling asks for a proof fresher
 	// than the one it was opened with.
 	PathAuthStepUp = "/auth/step-up"
-
-	// PathAuthLogout ends THIS session.
-	PathAuthLogout = "/auth/logout"
 )
-
-// PathAuthLogoutProvider ends this session AND the person's session at the
-// identity provider. GUARDED, like the plain sign-out, and mounted only where a
-// provider is; named here beside the others so the guard and the registration
-// share one spelling.
-const PathAuthLogoutProvider = "/auth/logout/oidc"
 
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the
@@ -669,12 +680,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 //
 // # A session is resolved there, and a bearer is only marked
 //
-// One unguarded route reads a resolution at all: the provider step-up start,
-// which confirms the person a browser's SESSION belongs to, so a cookie is
-// resolved here exactly as on a guarded route. A BEARER is not. Nothing
-// unguarded acts on the principal a bearer resolves to — the webhooks verify
-// their own signatures, the per-run edges carry their own token, and the
-// step-up start refuses every bearer alike ([PresentedBearer]) — and comparing
+// Three unguarded routes read a resolution at all: the provider step-up start,
+// which confirms the person a browser's SESSION belongs to, and the two
+// sign-outs, which record who signed out when this node can say — so a cookie
+// is resolved here exactly as on a guarded route, and an UNKNOWN answer is
+// handed through rather than refused. A BEARER is not. Nothing unguarded acts
+// on the principal a bearer resolves to — the webhooks verify their own
+// signatures, the per-run edges carry their own token, the step-up start
+// refuses every bearer alike ([PresentedBearer]) and a sign-out ends only the
+// sessions its cookies name — and comparing
 // one anyway was an oracle: a matching Tier A value reads the identity
 // directory for the token's seat binding before it answers, and a refused one
 // returns after a map compare, so `Authorization: Bearer <guess>` against
@@ -685,9 +699,10 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 //
 // THE REFUSAL [Guard.Resolve] RETURNS IS DISCARDED ON PURPOSE. It is only ever
 // a credential whose SEAT is gone, or a session that may only enrol a second
-// factor, and the routes that are unguarded are how somebody signs in and how
-// the sign-in screen renders — locking either person out of those would leave
-// them holding a live cookie with no way on.
+// factor, and the routes that are unguarded are how somebody signs in, how
+// the sign-in screen renders and how somebody signs out — locking either
+// person out of those would leave them holding a live cookie with no way on,
+// or no way off.
 func (g *Guard) resolveUnguarded(w http.ResponseWriter, r *http.Request) *http.Request {
 	if g.Credential(r) != "" {
 		return r.WithContext(withBearer(iam.WithAnonymous(r.Context())))

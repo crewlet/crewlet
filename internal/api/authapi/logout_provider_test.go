@@ -1,10 +1,12 @@
 package authapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // providerSignOut signs a person out through the provider route, presenting a
@@ -136,5 +140,118 @@ func TestAProviderWithNoEndSessionIsAPlainSignOutThatSaysSo(t *testing.T) {
 	}
 	if len(writer.closed) != 1 || writer.closed[0][0] != lineage {
 		t.Errorf("closed %v, want the presented session %s", writer.closed, lineage)
+	}
+}
+
+// awaitNothing is an identity applier that has always already applied.
+type awaitNothing struct{}
+
+func (awaitNothing) AwaitApplied(context.Context, uint64) error { return nil }
+
+// A SIGN-OUT CLEARS THE COOKIE ON A NODE THAT CANNOT READ ITS ROWS.
+//
+// Both sign-outs promise the cookie goes whatever the write did — a sign-out
+// that answered 503 would leave somebody looking at a signed-in page on a
+// shared machine, and on the provider route it would never reach the
+// provider's end_session_endpoint either. Their handlers keep that promise,
+// verifying every bearer the browser holds themselves; but they were GUARDED,
+// and the guard answers `503 identity_unavailable` before any handler runs on
+// a node whose identity estate it cannot read. So on exactly the node that
+// could not vouch for anybody, nobody could sign out. Here the node's rows are
+// past the stall grace, as the real guard and origin check a node runs them
+// behind see them: the plain sign-out answers 200 and the provider one 303,
+// both clearing the cookie and recording the close the person asked for — and
+// the control, a guarded route beside them, is still the guard's 503.
+//
+// Mutation: put the two sign-outs back behind the guard and both answer 503
+// with the cookie still set.
+func TestASignOutClearsTheCookieOnANodeThatCannotReadItsRows(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	stalled := rows{session.Identity{
+		Applied: ^uint64(0) >> 1, Generation: 2,
+		Lag: statelog.StallGrace + time.Second,
+		Session: session.LineageRow{Found: true, Epoch: 3,
+			ProvedAt: clock.Add(-time.Hour)},
+		Person: session.PersonRow{Found: true, Epoch: 3,
+			Stage: iam.StageActive, Login: linkedPerson.Login},
+	}}
+	writer := &closingWriter{}
+	mux := http.NewServeMux()
+	buildWith(t, b, oidc.NewProvider(oidc.Config{
+		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
+		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
+	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
+		o.Writer = writer
+		o.Sessions = stalled
+	}).Routes(mux)
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: fixtureSigner(t), Directory: stalled, Applier: awaitNothing{},
+		Chart: seatless{}, External: b.API.ExternalBase(), Audit: &recordingAudit{},
+		Now: func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatalf("build the session arm: %v", err)
+	}
+	// AS A NODE RUNS THEM: the guard, and the origin check beneath it.
+	h := auth.New(&b).WithSessions(arm).Middleware(auth.NewCSRF(&b).Middleware(mux))
+
+	for _, tc := range []struct {
+		path   string
+		status int
+		clears bool
+	}{
+		{auth.PathAuthLogout, http.StatusOK, true},
+		{auth.PathAuthLogoutProvider, http.StatusSeeOther, true},
+		// THE CONTROL: a guarded route on the same node, which the guard
+		// still answers 503 — so the rows really are unreadable here.
+		{"/auth/logout/all", http.StatusServiceUnavailable, false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			lineage := uuid.Must(uuid.NewV7())
+			millis := clock.Add(-time.Hour).UnixMilli()
+			for i := range 6 {
+				lineage[i] = byte(millis >> (8 * (5 - i)))
+			}
+			bearer, err := fixtureSigner(t).Mint(session.Mint{
+				Lineage: lineage, Person: linkedPerson.ID, StartPosition: 1,
+				Epoch: 3, Generation: 2, AbsoluteExpiresAt: clock.Add(time.Hour),
+			})
+			if err != nil {
+				t.Fatalf("mint: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			req.Header.Set("Origin", b.API.ExternalBase())
+			req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: bearer})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("answered %d (%s), want %d", rec.Code, rec.Body, tc.status)
+			}
+			cleared := false
+			for _, c := range rec.Result().Cookies() {
+				if c.Name == session.HostCookieName && c.MaxAge < 0 {
+					cleared = true
+				}
+			}
+			if cleared != tc.clears {
+				t.Errorf("cleared the cookie = %v, want %v", cleared, tc.clears)
+			}
+			if !tc.clears {
+				return
+			}
+			writer.mu.Lock()
+			closed := slices.ContainsFunc(writer.closed, func(c [2]string) bool {
+				return c[0] == lineage.String()
+			})
+			writer.mu.Unlock()
+			if !closed {
+				t.Errorf("the close the person asked for was not recorded")
+			}
+		})
 	}
 }

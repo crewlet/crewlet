@@ -243,6 +243,17 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // it nothing is presented, and the record catching up later merely makes the
 // row agree with what already happened.
 //
+// # Unguarded, or the promise above is not one
+//
+// The request guard answers `503 identity_unavailable` on a node whose identity
+// estate it cannot read, BEFORE any handler runs — and this route was behind
+// it, so on exactly that node no sign-out cleared anything. It is exempt now
+// ([auth.PathAuthLogout] is on the guard's exact list), which it can afford
+// because it trusts nothing the guard would have told it: every bearer it ends
+// is read here under its signature and this node's rows. The guard still
+// hands through whatever it resolved, for [callerName]; the origin check still
+// judges the post.
+//
 // # A session already over is cleared, and nothing else
 //
 // The cookie is read under its signature AND this node's rows, and only a
@@ -380,6 +391,11 @@ type providerLogoutAnswer struct {
 // `post_logout_redirect_uri` is `api.external_url` + `/dashboard`, and the
 // provider only honours one registered for this client — so it is registered
 // beside the callback, or the provider leaves the person on its own page.
+//
+// UNGUARDED for [Service.Logout]'s reason, and here it matters twice: a node
+// that cannot read its identity estate must still clear the cookie AND still
+// send the browser to the provider, which is the half a person on a shared
+// machine is relying on.
 func (s *Service) LogoutProvider(w http.ResponseWriter, r *http.Request) {
 	s.signOut(w, r)
 

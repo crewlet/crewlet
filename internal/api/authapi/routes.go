@@ -37,7 +37,11 @@ const Prefix = "/auth/"
 // redemption and its redemption through the provider, because holding the
 // link is the credential. The sign-in meets the throttle's curve, keyed on
 // the login as TYPED from the caller's source; the rest present a credential
-// that names nobody and meet no curve ([Service.uncounted]). Every one is
+// that names nobody and meet no curve ([Service.uncounted]). And the two
+// sign-outs of THIS session, because a sign-out clears the cookie whatever
+// this node can read — guarded, a node that could not read its identity
+// estate answered them 503 before they ran — and each verifies every bearer
+// the browser holds for itself ([Service.signOut]). Every one is
 // origin-checked like any other state change.
 //
 // THE REST NEED A SESSION, and they are guarded by the same middleware every
@@ -64,6 +68,7 @@ func (s *Service) Routes(mux auth.Mux) {
 	// account created for somebody who never saw it.
 	mux.HandleFunc("GET "+auth.AuthInvitePrefix+"{id}", s.ViewInvite)
 	mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}", s.RedeemInvite)
+	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
 	if s.provider != nil {
 		// ABSENT RATHER THAN ERRORING on a deployment with no provider,
 		// which is the honest shape: a 404 says this company does not
@@ -76,6 +81,11 @@ func (s *Service) Routes(mux auth.Mux) {
 		// can refuse another site starting it.
 		mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}"+providerRedemption,
 			s.StartProviderRedemption)
+		// SIGNING OUT OF THE PROVIDER TOO, where there is one. Registered
+		// beside `/auth/logout/{lineage}`, which it would otherwise read
+		// as a lineage named `oidc`; the mux prefers the literal segment
+		// whatever the order.
+		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
 	}
 
 	// Guarded.
@@ -84,15 +94,6 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
 	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
-	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
-	if s.provider != nil {
-		// SIGNING OUT OF THE PROVIDER TOO, where there is one — and
-		// ABSENT where there is not, for the provider routes' reason.
-		// Registered before `/auth/logout/{lineage}`, which it would
-		// otherwise read as a lineage named `oidc`; the mux prefers the
-		// literal segment whatever the order, and this says so.
-		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
-	}
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one

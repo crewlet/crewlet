@@ -34,13 +34,15 @@ import (
 func TestEveryAuthRouteIsClassified(t *testing.T) {
 	t.Parallel()
 
-	// THE UNGUARDED FIVE, plus the invitation pair. Each is here because
-	// requiring a credential to obtain one is a deployment nobody can
-	// enter — or, for the invitation, because holding the link IS the
-	// credential.
+	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation pair and the
+	// sign-out. Each sign-in route is here because requiring a credential to
+	// obtain one is a deployment nobody can enter — for the invitation,
+	// because holding the link IS the credential — and the sign-out because
+	// it must clear the cookie on a node that cannot read its identity
+	// estate, verifying every bearer it ends for itself.
 	unguarded := []string{
 		auth.PathAuthConfig, auth.PathAuthLogin, auth.PathAuthBootstrap,
-		auth.AuthInvitePrefix + "{id}",
+		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
 	}
 	// THE OIDC PAIR IS CONDITIONAL, and this case is over a surface with
 	// no provider — which is an ordinary deployment rather than a gap:
@@ -50,10 +52,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// does and is broken. Their exemption is asserted below, on a surface
 	// that has one.
 	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider"}
-	// AND ONE CONDITIONAL ROUTE IS GUARDED: signing out of the provider
-	// too, which only somebody signed in can ask for.
-	optionalGuarded := []string{auth.PathAuthLogoutProvider}
+		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
 	// registration would otherwise pass silently, and one added would be
@@ -61,7 +60,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	guarded := []string{
 		"/auth/session", "/auth/token", "/auth/step-up",
 		"/auth/totp", "/auth/totp/recovery",
-		"/auth/logout", "/auth/logout/all", "/auth/logout/{lineage}",
+		"/auth/logout/all", "/auth/logout/{lineage}",
 	}
 
 	mux := &recordingMux{}
@@ -81,7 +80,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 					"it: a sign-in route behind a credential is a deployment "+
 					"nobody can enter", pattern)
 			}
-		case slices.Contains(guarded, path), slices.Contains(optionalGuarded, path):
+		case slices.Contains(guarded, path):
 			if auth.Unguarded(strings.Replace(path, "{lineage}", "abc", 1)) {
 				t.Errorf("%s is declared guarded here and the guard exempts "+
 					"it: this surface ends sessions and enrols second "+
@@ -238,7 +237,7 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 	withProvider(t).Routes(mux)
 
 	for _, want := range []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider"} {
+		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider} {
 		if !slices.ContainsFunc(mux.patterns, func(p string) bool {
 			return pathOf(p) == want
 		}) {
@@ -249,18 +248,10 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 		if !auth.Unguarded(strings.Replace(want, "{id}", "abc", 1)) {
 			t.Errorf("%s is guarded: a provider round trip is a BROWSER "+
 				"following a redirect, which carries nothing this engine "+
-				"issued — so requiring a credential makes it unreachable", want)
+				"issued, and signing out of the provider must clear the "+
+				"cookie on a node that cannot read its identity estate — so "+
+				"requiring a credential makes it unreachable there", want)
 		}
-	}
-	// SIGNING OUT OF THE PROVIDER is mounted beside them and GUARDED: it
-	// ends a session, which only its holder may ask for.
-	if !slices.Contains(mux.patterns, "POST "+auth.PathAuthLogoutProvider) {
-		t.Errorf("%s is not mounted on a deployment that has a provider",
-			auth.PathAuthLogoutProvider)
-	}
-	if auth.Unguarded(auth.PathAuthLogoutProvider) {
-		t.Errorf("%s is exempt from the guard, so anybody could end a session",
-			auth.PathAuthLogoutProvider)
 	}
 	// AND IT IS ABSENT WHERE THERE IS NONE, as the round trip is.
 	plain := &recordingMux{}

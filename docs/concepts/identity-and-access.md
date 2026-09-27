@@ -853,10 +853,13 @@ enrol one**:
 - The request guard answers **every other route** `403
   second_factor_enrolment_required` for that session — `/iam`, `/work`, the
   socket, and the rest of `/auth` too, which regenerates recovery codes and
-  signs a person out everywhere. It admits exactly four: `GET /auth/session`,
-  `POST /auth/totp`, `POST /auth/step-up` (enrolling asks a proof inside
+  signs a person out everywhere. It admits exactly three: `GET /auth/session`,
+  `POST /auth/totp` and `POST /auth/step-up` (enrolling asks a proof inside
   `step_up_sensitive`, and somebody who took longer than that to find their
-  phone re-confirms the password without signing out) and `POST /auth/logout`.
+  phone re-confirms the password without signing out). The two sign-outs of
+  this session, `POST /auth/logout` and `POST /auth/logout/oidc`, are reached
+  too, because the guard does not stand in front of them at all — see
+  [Every route is guarded](#every-route-is-guarded-and-the-exemptions-are-the-list).
 - Completing `POST /auth/totp` through that session **replaces it** with a
   whole one, as a step-up does: the restricted session is ended first, the new
   one keeps its absolute deadline and carried grants, and the enrolment's
@@ -1509,7 +1512,10 @@ or it leaves the person on its own page. No `id_token_hint` is sent, because the
 engine keeps no ID token once a sign-in completes — a provider that insists on
 one asks the person to confirm, and the session here is over either way. A
 provider that publishes no end-session endpoint, or cannot be reached, gets a
-plain sign-out that says so: `provider_session: not_ended`.
+plain sign-out that says so: `provider_session: not_ended`. Like the plain
+sign-out it is not behind the request guard, so a node that cannot read its
+identity estate still ends the session here as far as it can and still sends
+the browser on to the provider.
 
 ### The deactivation probe
 
@@ -1604,7 +1610,10 @@ anybody holding such a cookie author an `iam_session_ended` row per request.
 A node that cannot read its rows still records the close `POST /auth/logout`
 asked for — the lineage and the person come off the cookie's own verified
 signature, so nothing has to be looked up to write it — and announces nothing,
-since it cannot say the session was live until then. Ending one **named**
+since it cannot say the session was live until then. That is only reachable
+because neither sign-out of this session is behind the request guard: guarded,
+such a node answered them `503 identity_unavailable` before they ran, and the
+cookie stayed set. Ending one **named**
 session reads the same way — its owner and whether it is still live, in one
 snapshot — but there the owner **is** the read: it is what the caller is
 checked against, because a lineage is not a secret. So a node that cannot read
@@ -1827,6 +1836,8 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
+| `/auth/config`, `/auth/login`, `/auth/bootstrap`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/logout`, `/auth/logout/oidc` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered them `503` before they ran, and a person left a shared machine still signed in. Each verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges both. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
 decide this and defaulted to open, so `/events`, `/agents/{id}/memory` and

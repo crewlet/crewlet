@@ -122,7 +122,7 @@ type Refusal struct {
 // EACH REFUSAL CARRIES ITS OWN, because the two leave different things: a seat
 // refusal leaves the whole `/auth/` surface, whose subject is the person's own
 // credential rather than the seat ([ActsAsThemselves]), and an enrolment
-// refusal leaves exactly the four routes that let a person in
+// refusal leaves exactly the three guarded routes that let a person in
 // ([EnrolmentAdmits]). One rule in the middleware for both was either an
 // enrolment-only session reaching every `/auth/` route — recovery codes and
 // signing everybody out included — or an offboarded person unable to sign out.
@@ -147,7 +147,7 @@ func seatRefusal(binding session.Binding) *Refusal {
 }
 
 // enrolmentRefusal is the answer to a session that may only enrol a second
-// factor, on every route but the four [EnrolmentAdmits] names: 403
+// factor, on every guarded route but the three [EnrolmentAdmits] names: 403
 // `second_factor_enrolment_required`.
 //
 // # Why a session and not a sign-in refusal
@@ -162,7 +162,7 @@ func seatRefusal(binding session.Binding) *Refusal {
 // required a second factor admitted a password alone everywhere.
 //
 // THE PERSON IS STILL RESOLVED, as a seat refusal's is: this node knows exactly
-// who they are, the four routes need to, and the cookie is not cleared —
+// who they are, the three routes need to, and the cookie is not cleared —
 // signing in again reaches the same restricted session.
 func enrolmentRefusal() *Refusal {
 	return &Refusal{
@@ -176,7 +176,7 @@ func enrolmentRefusal() *Refusal {
 	}
 }
 
-// EnrolmentAdmits reports whether r is one of the four routes an
+// EnrolmentAdmits reports whether r is one of the three GUARDED routes an
 // enrolment-only session may reach.
 //
 // # Exactly these, and why each
@@ -189,8 +189,14 @@ func enrolmentRefusal() *Refusal {
 //     sensitive window, and a person who took longer than that to find their
 //     phone must be able to re-confirm the password without signing out; it
 //     opens another enrolment-only session, since a password is still all
-//     they hold;
-//   - `POST /auth/logout`, to leave.
+//     they hold.
+//
+// And TO LEAVE, both sign-outs of this session — `POST /auth/logout` and, where
+// a provider is, `POST /auth/logout/oidc` — which are not here because the
+// guard does not judge them at all: they are [Unguarded], so no refusal
+// reaches them, this one included. The provider sign-out was missing while
+// both were guarded, and a session that could only enrol was answered this
+// refusal there, its cookie kept and the provider never reached.
 //
 // AN EXACT LIST OF METHOD AND PATH, never a prefix, for the exemption list's
 // reason: the same surface regenerates recovery codes, signs a person out
@@ -202,7 +208,7 @@ func EnrolmentAdmits(r *http.Request) bool {
 	switch r.URL.Path {
 	case PathAuthSession:
 		return r.Method == http.MethodGet || r.Method == http.MethodHead
-	case PathAuthTOTP, PathAuthStepUp, PathAuthLogout:
+	case PathAuthTOTP, PathAuthStepUp:
 		return r.Method == http.MethodPost
 	}
 	return false
@@ -522,7 +528,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	if v.EnrolmentOnly() {
 		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR, refused as
 		// that whatever its seat: the seat refusal leaves the whole of
-		// /auth/ and this one only four routes of it, so the narrower
+		// /auth/ and this one only three routes of it, so the narrower
 		// answer is the one that holds — and enrolling is the first
 		// thing either person has to do. The cookie is kept and
 		// re-issued as any live session's is — its holder is working
