@@ -2,6 +2,8 @@ package jwks_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -9,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 
 	"sync/atomic"
@@ -536,5 +539,99 @@ func TestTheFirstCallerHangingUpFailsNobodyElse(t *testing.T) {
 	}
 	if n := served.Load(); n != 1 {
 		t.Errorf("the key set was fetched %d times, want the one flight", n)
+	}
+}
+
+// ecJWK is one EC key as a key set publishes it: its curve and its two
+// coordinates at the curve's full length.
+func ecJWK(t *testing.T, kid, crv string, pub *ecdsa.PublicKey) string {
+	t.Helper()
+	x, y := coordinates(t, pub)
+	return ecEntry(kid, crv, x, y)
+}
+
+// coordinates are a public key's x and y, each at its curve's full length.
+func coordinates(t *testing.T, pub *ecdsa.PublicKey) (x, y []byte) {
+	t.Helper()
+	point, err := pub.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := (len(point) - 1) / 2
+	return point[1 : 1+size], point[1+size:]
+}
+
+// ecEntry is a key set's EC entry over whatever coordinates a case supplies.
+func ecEntry(kid, crv string, x, y []byte) string {
+	return `{"kid":"` + kid + `","kty":"EC","crv":"` + crv + `","x":"` +
+		base64.RawURLEncoding.EncodeToString(x) + `","y":"` +
+		base64.RawURLEncoding.EncodeToString(y) + `"}`
+}
+
+// AN ELLIPTIC-CURVE KEY ON P-256 OR P-384 IS READ, AND NOTHING ELSE OF ITS KIND.
+//
+// Providers that sign ID tokens ES256 or ES384 publish EC keys, and a set read
+// for RSA alone left every sign-in at one of them refused as an unknown key.
+// What is read is exactly what those two algorithms verify with: a key on
+// another curve is skipped — without discarding the RSA key beside it, which is
+// the rotation rule — and so is a point that is not on its curve (the
+// invalid-curve attack's way in) and a coordinate shorter than its curve's.
+//
+// Mutation: skip every EC entry and the P-256 and P-384 keys are unknown; add
+// P-521 to the curves read and its key is handed back. The off-curve and short
+// entries are held by the parser and the length rule together.
+func TestAnEllipticCurveKeyIsReadOnTheCurvesThatVerify(t *testing.T) {
+	t.Parallel()
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p521, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A POINT OFF ITS CURVE: P-256's x beside a y one bit away from its own.
+	x, y := coordinates(t, &p256.PublicKey)
+	bent := slices.Clone(y)
+	bent[len(bent)-1] ^= 1
+	offCurve := ecEntry("off", "P-256", x, bent)
+	// AND A POINT SHORTER THAN ITS CURVE: P-384's coordinates named P-256
+	// would be too long, and P-256's cut to thirty bytes too short.
+	short := ecEntry("short", "P-256", x[:30], y[:30])
+
+	doc := `{"keys":[` + ecJWK(t, "p256", "P-256", &p256.PublicKey) + `,` +
+		ecJWK(t, "p384", "P-384", &p384.PublicKey) + `,` +
+		ecJWK(t, "p521", "P-521", &p521.PublicKey) + `,` +
+		offCurve + `,` + short + `,` +
+		`{"kid":"rsa","kty":"RSA","n":"` + modulusOf(t) + `","e":"AQAB"}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(doc))
+	}))
+	t.Cleanup(server.Close)
+	set := jwks.New(jwks.Options{URL: server.URL})
+
+	for kid, want := range map[string]*ecdsa.PublicKey{
+		"p256": &p256.PublicKey, "p384": &p384.PublicKey,
+	} {
+		got, err := set.Key(t.Context(), kid)
+		if err != nil {
+			t.Errorf("the %s key was not read: %v", kid, err)
+			continue
+		}
+		if pub, ok := got.(*ecdsa.PublicKey); !ok || !pub.Equal(want) {
+			t.Errorf("the %s key reads as %T %v, want the published point", kid, got, got)
+		}
+	}
+	for _, kid := range []string{"p521", "off", "short"} {
+		if _, err := set.Key(t.Context(), kid); err == nil {
+			t.Errorf("the %q entry was handed back to verify with", kid)
+		}
+	}
+	if _, err := set.Key(t.Context(), "rsa"); err != nil {
+		t.Errorf("the RSA key beside them was discarded: %v", err)
 	}
 }

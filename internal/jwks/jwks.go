@@ -43,6 +43,8 @@ package jwks
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -291,9 +293,17 @@ func (s *Set) fly(ctx context.Context, inflight *flight) {
 	close(inflight.done)
 }
 
-// document is the subset of a JWK set this reads. Only RSA keys, because every
-// caller's parser accepts only RS256 — a key of another type could never
-// verify a token any of them would accept.
+// document is the subset of a JWK set this reads: RSA keys, and elliptic-curve
+// keys on P-256 and P-384.
+//
+// WHAT EACH CALLER NEEDS, and nothing either does not. The identity provider
+// signs ID tokens RS256 almost everywhere and ES256 or ES384 at the providers
+// that offer them (internal/iam/oidc's Algorithms), so its key set has to
+// yield both types; the Forge relay pins RS256, and an EC key handed to its
+// RSA verifier fails on the key's TYPE before any arithmetic, so reading one
+// costs that caller nothing. Other curves and other key types (`oct`, `OKP`)
+// are skipped — an `oct` key above all, since a symmetric key read out of a
+// published set is a signing secret anybody can download.
 type document struct {
 	Keys []struct {
 		Kid string `json:"kid"`
@@ -301,6 +311,9 @@ type document struct {
 		Use string `json:"use"`
 		N   string `json:"n"`
 		E   string `json:"e"`
+		Crv string `json:"crv"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
 	} `json:"keys"`
 }
 
@@ -330,10 +343,19 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 		// issuer has said is not for signatures, and accepting it
 		// would verify a token against a key its own publisher says
 		// cannot have signed one.
-		if k.Kty != "RSA" || k.Kid == "" || k.Use == "enc" {
+		if k.Kid == "" || k.Use == "enc" {
 			continue
 		}
-		pub, err := rsaKey(k.N, k.E)
+		var pub any
+		var err error
+		switch k.Kty {
+		case "RSA":
+			pub, err = rsaKey(k.N, k.E)
+		case "EC":
+			pub, err = ecKey(k.Crv, k.X, k.Y)
+		default:
+			continue
+		}
 		if err != nil {
 			// ONE UNUSABLE ENTRY MUST NOT DISCARD THE REST: a key
 			// set carries the outgoing key alongside the incoming
@@ -353,7 +375,7 @@ func (s *Set) read(ctx context.Context) (map[string]any, error) {
 		// which the refresh floor then holds for a minute — so a
 		// momentarily broken document would keep refusing tokens well
 		// after the source recovered.
-		return nil, fmt.Errorf("jwks: %s carried no usable RSA key", s.url)
+		return nil, fmt.Errorf("jwks: %s carried no usable signing key", s.url)
 	}
 	return keys, nil
 }
@@ -381,4 +403,51 @@ func rsaKey(modulus, exponent string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("exponent out of range: %s", exp)
 	}
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exp.Int64())}, nil
+}
+
+// curves are the elliptic curves a key set's EC entries may name, by their JWK
+// `crv`, with the length of one coordinate on each.
+//
+// P-256 AND P-384, which are ES256's and ES384's: the curves the providers
+// that sign with ECDSA use. P-521 is left out because nothing this engine
+// verifies accepts ES512, and a key only an unaccepted algorithm could use is
+// a key nothing should hold.
+var curves = map[string]struct {
+	curve elliptic.Curve
+	bytes int
+}{
+	"P-256": {elliptic.P256(), 32},
+	"P-384": {elliptic.P384(), 48},
+}
+
+// ecKey rebuilds a public key from a JWK's curve and base64url coordinates.
+//
+// EACH COORDINATE MUST BE THE CURVE'S FULL LENGTH, which RFC 7518 §6.2.1.2
+// requires and which is what makes the two halves unambiguous, and the POINT
+// MUST BE ON THE CURVE: [ecdsa.ParseUncompressedPublicKey] refuses one that is
+// not, because a verifier handed an off-curve point is the invalid-curve
+// attack's way in.
+func ecKey(crv, x, y string) (*ecdsa.PublicKey, error) {
+	want, known := curves[crv]
+	if !known {
+		return nil, fmt.Errorf("curve %q is not one this engine verifies with", crv)
+	}
+	xb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(x, "="))
+	if err != nil {
+		return nil, fmt.Errorf("x: %w", err)
+	}
+	yb, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(y, "="))
+	if err != nil {
+		return nil, fmt.Errorf("y: %w", err)
+	}
+	if len(xb) != want.bytes || len(yb) != want.bytes {
+		return nil, fmt.Errorf("a %s coordinate is %d bytes, and x and y are %d "+
+			"and %d", crv, want.bytes, len(xb), len(yb))
+	}
+	point := append(append([]byte{4}, xb...), yb...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(want.curve, point)
+	if err != nil {
+		return nil, fmt.Errorf("point: %w", err)
+	}
+	return pub, nil
 }
