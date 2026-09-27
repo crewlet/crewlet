@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -690,5 +691,193 @@ func TestDiscoveryIsOneFetchHoweverManyAsk(t *testing.T) {
 	}
 	if n := served.Load(); n != 1 {
 		t.Errorf("%d callers fetched the document %d times, want one", callers+1, n)
+	}
+}
+
+// discoveryDoc is a minimal discovery document for a server at base.
+func discoveryDoc(base string) map[string]any {
+	return map[string]any{
+		"issuer":                 base,
+		"authorization_endpoint": base + "/authorize",
+		"token_endpoint":         base + "/token",
+		"jwks_uri":               base + "/jwks",
+	}
+}
+
+// movingClock is a clock a case moves while a provider's own goroutine reads
+// it.
+type movingClock struct{ nanos atomic.Int64 }
+
+func newMovingClock(start time.Time) *movingClock {
+	c := &movingClock{}
+	c.nanos.Store(start.UnixNano())
+	return c
+}
+
+func (c *movingClock) now() time.Time           { return time.Unix(0, c.nanos.Load()).UTC() }
+func (c *movingClock) advance(by time.Duration) { c.nanos.Add(int64(by)) }
+
+// signalling is a log handler that closes seen the first time a record with
+// its message arrives, so a case can wait for a provider's own goroutine to
+// have finished something it reports.
+type signalling struct {
+	message string
+	once    sync.Once
+	seen    chan struct{}
+}
+
+func newSignalling(message string) *signalling {
+	return &signalling{message: message, seen: make(chan struct{})}
+}
+
+func (h *signalling) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *signalling) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.message {
+		h.once.Do(func() { close(h.seen) })
+	}
+	return nil
+}
+
+func (h *signalling) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *signalling) WithGroup(string) slog.Handler      { return h }
+
+// A STALE DISCOVERY DOCUMENT IS ANSWERED AT ONCE, AND REFRESHED BEHIND IT.
+//
+// Past its TTL the document was re-read before anybody was answered, so with
+// the metadata host hanging every sign-in start waited out the fetch — up to
+// its ten seconds — to be handed the document this node already held, which
+// is what a failed refresh answered anyway. It is handed over at once now,
+// even to a caller whose request has already ended, and the refresh runs
+// behind the answer.
+//
+// Mutation: wait on the flight for a stale document and the ended caller is
+// answered its cancellation.
+func TestAStaleDiscoveryDocumentIsAnsweredAtOnce(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	hang := make(chan struct{})
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served.Add(1) > 1 {
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(hang) })
+	config := testConfig()
+	config.Issuer = server.URL
+	clock := newMovingClock(at)
+	provider := oidc.NewProvider(config, server.Client(), clock.now)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock.advance(oidc.MetadataTTL + time.Minute)
+	gone, leave := context.WithCancel(t.Context())
+	leave()
+	got, err := provider.Metadata(gone)
+	if err != nil || got.Issuer != server.URL {
+		t.Fatalf("a stale document with the host hanging answered (%+v, %v), "+
+			"want the document this node holds, at once", got, err)
+	}
+	// AND THE REFRESH WAS STARTED BEHIND THE ANSWER.
+	waitFor(t, func() bool { return served.Load() == 2 })
+}
+
+// A FAILED REFRESH HOLDS THE NEXT ONE BACK FOR THE FLOOR.
+//
+// Nothing was recorded about a refresh that failed, so past the TTL every
+// sign-in start — unauthenticated, as many as anybody cares to send — started
+// another fetch the moment the last one failed: a request per attempt at a
+// host that had just failed. A failed refresh now holds the next one back for
+// [oidc.MetadataRetryFloor], the key set's own minute, while the document this
+// node holds goes on being served; past the floor, one caller asks again.
+//
+// Mutation: drop the floor and the ten starts inside it fetch again.
+func TestAFailedDiscoveryRefreshHoldsTheNextBackForTheFloor(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	clock := newMovingClock(at)
+	failed := newSignalling("oidc_provider_metadata_refresh_failed")
+	provider := oidc.NewProvider(config, server.Client(), clock.now).
+		WithLogger(slog.New(failed))
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	clock.advance(oidc.MetadataTTL + time.Minute)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("a stale document was refused: %v", err)
+	}
+	select {
+	case <-failed.seen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh never reported failing")
+	}
+	for range 10 {
+		if got, err := provider.Metadata(t.Context()); err != nil || got.Issuer != server.URL {
+			t.Fatalf("inside the floor answered (%+v, %v), want the held document", got, err)
+		}
+	}
+	// ANYTHING THE STARTS ABOVE SENT WOULD HAVE ARRIVED BY NOW.
+	time.Sleep(100 * time.Millisecond)
+	if got := served.Load(); got != 2 {
+		t.Errorf("ten starts inside the floor of a failed refresh made %d "+
+			"fetches at a failing host, want none", got-2)
+	}
+
+	clock.advance(oidc.MetadataRetryFloor)
+	if _, err := provider.Metadata(t.Context()); err != nil {
+		t.Fatalf("past the floor a stale document was refused: %v", err)
+	}
+	waitFor(t, func() bool { return served.Load() == 3 })
+}
+
+// A NODE THAT HOLDS NO DOCUMENT ASKS AGAIN AT ONCE.
+//
+// The floor holds a refresh back only where there is a document to answer
+// from. A node that has never read one has nothing else to say, so its next
+// caller asks straight away — one fetch in flight at a time — rather than
+// refusing every sign-in for a minute over a blip at boot.
+//
+// Mutation: floor a cold cache too and the second start is refused.
+func TestANodeHoldingNoDiscoveryDocumentAsksAgainAtOnce(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int64
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discoveryDoc(server.URL))
+	}))
+	t.Cleanup(server.Close)
+	config := testConfig()
+	config.Issuer = server.URL
+	provider := oidc.NewProvider(config, server.Client(), func() time.Time { return at })
+	if _, err := provider.Metadata(t.Context()); err == nil {
+		t.Fatal("a 502 was taken for a discovery document")
+	}
+	if got, err := provider.Metadata(t.Context()); err != nil || got.Issuer != server.URL {
+		t.Errorf("the next start after a failed first fetch answered (%+v, %v), "+
+			"want the document the recovered host serves", got, err)
 	}
 }

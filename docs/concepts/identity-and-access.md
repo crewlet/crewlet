@@ -1349,7 +1349,12 @@ eight exchanges and the two fetches beside them. The discovery document and
 the key set are each fetched **once however many sign-ins ask**, on a request
 no single browser owns, so a node restarted in the middle of the morning's
 wave asks the provider for its metadata once rather than once per person, and
-one person closing their tab fails nobody else's sign-in. The key set is
+one person closing their tab fails nobody else's sign-in. Once a node holds the
+discovery document, nobody waits for it again: past its day it is served at
+once and re-read behind the answer, and a re-read that fails holds the next one
+back for a minute, so a metadata host that hangs or fails costs no sign-in a
+wait and is not asked again by every sign-in start. A node that holds none asks
+again straight away, since it has nothing else to answer with. The key set is
 re-read at most **once a minute** for a key id it does not name — a forged
 token's — and that minute is counted from the last attempt, a failed one
 included, so an outage at the provider does not turn every such token into a

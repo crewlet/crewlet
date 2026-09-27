@@ -40,6 +40,22 @@ import (
 // depending on the provider's metadata host being up.
 const MetadataTTL = 24 * time.Hour
 
+// MetadataRetryFloor is how long a FAILED refresh of a document this node
+// already holds keeps the next one from starting.
+//
+// A MINUTE, internal/jwks' own [jwks.RefreshFloor], because the discovery
+// document and the key set are one party's and a failing party should see one
+// cadence from a node. What it bounds is the requests an unauthenticated
+// caller can make this node send to a host that just failed: every sign-in
+// start reads the document, and with nothing recorded about the failure each
+// one past the TTL started another fetch the moment the last one failed. What
+// it costs is nothing a caller waits on, since a document it holds is served
+// at once whatever its age (see [Provider.Metadata]) — only how soon a
+// recovered host is noticed. A node that holds NO document is not held back:
+// it has nothing else to answer, and waiting out a minute after a blip at boot
+// would be a minute of refused sign-ins.
+const MetadataRetryFloor = jwks.RefreshFloor
+
 // Metadata is the subset of an OpenID provider's discovery document this
 // engine reads.
 type Metadata struct {
@@ -138,10 +154,15 @@ type Provider struct {
 	fetchedAt time.Time
 	keys      *jwks.Set
 
-	// discovering is the discovery fetch in progress, which every caller
-	// that finds the document cold or stale waits on — see
-	// [Provider.Metadata].
+	// discovering is the discovery fetch in progress: what a caller that
+	// finds the document COLD waits on, and what a stale one is refreshed
+	// by behind its answer — see [Provider.Metadata].
 	discovering *discovery
+
+	// attemptedAt is when the last fetch ended and failed whether it
+	// failed — what [MetadataRetryFloor] is measured from.
+	attemptedAt time.Time
+	failed      bool
 }
 
 // discovery is one fetch of the document, answered to everybody waiting on it.
@@ -300,22 +321,41 @@ func (p *Provider) slot(ctx context.Context) (func(), error) {
 // no caller can cancel, bounded by [ExchangeTimeout], and each caller waits on
 // its own: run on the first caller's, one browser leaving mid sign-in would
 // fail everybody waiting beside it.
+//
+// # A STALE DOCUMENT IS ANSWERED AT ONCE, and refreshed behind the answer
+//
+// Only a COLD cache waits for the flight. A document this node already holds
+// is what every caller would be handed if the refresh failed — its endpoints
+// change on the order of never — so it is handed over now, and the refresh is
+// started or joined behind it: every caller used to wait on the flight, up to
+// [ExchangeTimeout] against a hanging metadata host, to be given the document
+// it could have had at once. And a refresh that FAILED holds the next one back
+// for [MetadataRetryFloor], or each sign-in start past the TTL fetched again
+// the moment the last attempt failed.
 func (p *Provider) Metadata(ctx context.Context) (Metadata, error) {
 	p.mu.Lock()
-	if cached, age := p.metadata, p.now().Sub(p.fetchedAt); cached.Issuer != "" &&
-		age < MetadataTTL {
-
+	now := p.now()
+	cached := p.metadata
+	if cached.Issuer != "" && now.Sub(p.fetchedAt) < MetadataTTL {
 		p.mu.Unlock()
 		return cached, nil
 	}
 	inflight := p.discovering
-	if inflight == nil {
+	floored := cached.Issuer != "" && p.failed &&
+		now.Sub(p.attemptedAt) < MetadataRetryFloor
+	if inflight == nil && !floored {
 		inflight = &discovery{done: make(chan struct{})}
 		p.discovering = inflight
 		go p.discover(context.WithoutCancel(ctx), inflight)
 	}
 	p.mu.Unlock()
 
+	if cached.Issuer != "" {
+		// STALE BEATS WAITING, and stale beats refusing every login: the
+		// provider's metadata host being slow or down is not a reason a
+		// sign-in waits, let alone fails.
+		return cached, nil
+	}
 	select {
 	case <-inflight.done:
 		return inflight.metadata, inflight.err
@@ -324,31 +364,42 @@ func (p *Provider) Metadata(ctx context.Context) (Metadata, error) {
 	}
 }
 
-// discover performs one flight's fetch and answers everybody waiting on it.
+// discover performs one flight's fetch and answers everybody waiting on it —
+// who are only ever callers that found the cache cold.
 func (p *Provider) discover(ctx context.Context, inflight *discovery) {
 	ctx, cancel := context.WithTimeout(ctx, ExchangeTimeout)
 	defer cancel()
 	fetched, err := p.fetch(ctx)
 
 	p.mu.Lock()
+	now := p.now()
+	p.attemptedAt, p.failed = now, err != nil
+	if err != nil {
+		stale := p.metadata.Issuer != ""
+		inflight.err = err
+		p.discovering = nil
+		p.mu.Unlock()
+		close(inflight.done)
+		if stale {
+			// SAID HERE, because no caller hears of it: each is being
+			// served the document this node already holds, which is
+			// the whole point, and a refresh failing silently for days
+			// would be a provider change nobody notices.
+			p.logger.WarnContext(ctx, "oidc_provider_metadata_refresh_failed",
+				"issuer", p.config.Issuer, "error", err.Error(),
+				"detail", "serving the discovery document this node holds, "+
+					"past its TTL; the next attempt is not before "+
+					now.Add(MetadataRetryFloor).Format(time.RFC3339))
+		}
+		return
+	}
 	defer func() {
 		p.discovering = nil
 		p.mu.Unlock()
 		close(inflight.done)
 	}()
-	if err != nil {
-		inflight.err = err
-		if p.metadata.Issuer != "" {
-			// STALE METADATA BEATS REFUSING EVERY LOGIN. The endpoints
-			// in it change on the order of never; the provider's
-			// metadata host being briefly down is not a reason nobody
-			// can sign in.
-			inflight.metadata, inflight.err = p.metadata, nil
-		}
-		return
-	}
 	previous := p.metadata.JWKSURI
-	p.metadata, p.fetchedAt = fetched, p.now()
+	p.metadata, p.fetchedAt = fetched, now
 	if p.keys == nil || fetched.JWKSURI != previous {
 		// THE KEY SET IS FETCHED WITH THIS PROVIDER'S OWN CLIENT, not
 		// one of its own: the two requests go to the same party over
