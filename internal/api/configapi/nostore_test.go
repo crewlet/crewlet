@@ -17,8 +17,8 @@ import (
 // one wrapper.
 func TestNoConfigResponseIsCacheable(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	revision := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	revision := s.seed(t, companyDoc)
 	tag := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag")
 	if tag == "" {
 		t.Fatal("GET /config carries no ETag, so the 304 case cannot be exercised")

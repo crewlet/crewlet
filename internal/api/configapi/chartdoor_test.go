@@ -54,8 +54,8 @@ func TestTheChartCollectionsAreReadableAndNotWritableAtEveryDoor(t *testing.T) {
 // plainly has a CEO, reads as the engine having lost their org chart.
 func TestApplyingAChartEntityIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	_, err := s.service().ApplyEntity(t.Context(), configapi.ApplyEntityRequest{
 		Kind: configapi.EntityRoles, ID: "ceo",

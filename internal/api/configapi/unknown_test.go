@@ -122,7 +122,7 @@ func read(t *testing.T, s *surface) map[string]any {
 // REORDERED, so a positional match would put one server's key on the other.
 func TestAPatchReplacingAListKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	seedNewerPeer(t, s)
 
 	document := read(t, s)
@@ -144,7 +144,7 @@ func TestAPatchReplacingAListKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 // the stored array on every patch, whatever it named.
 func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	seedNewerPeer(t, s)
 	patchOnly(t, s, `{"mission": "unrelated"}`, summaryHeader)
 	assertNewerKeysKept(t, s, "PATCH naming no array")
@@ -172,7 +172,7 @@ func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 // mentioned exactly as the bytes hold it.
 func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	seedNewerPeer(t, s)
 
 	patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
@@ -251,7 +251,7 @@ func TestAPatchWritesBackOnlyWhatItNamed(t *testing.T) {
 // own.
 func TestAPutKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	seedNewerPeer(t, s)
 
 	document := read(t, s)
@@ -273,7 +273,7 @@ func TestAPutKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 // removed.
 func TestAKnownFieldAWriteLeavesOutIsRemoved(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	s.seedStored(t, newerPeerDoc, func(document map[string]any) {
 		document["mcp_servers"].([]any)[0].(map[string]any)["tool_prefix"] = "tr_"
 	})
@@ -349,7 +349,7 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			s.seedStored(t, newerPeerDoc, tc.seed)
 			before := s.activeDocument(t)
 
@@ -368,7 +368,7 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 	// 7396's null is for and the only way to remove one through this route.
 	t.Run("a key this build knows is deleted by the same gesture", func(t *testing.T) {
 		t.Parallel()
-		s := newSurface(t, nil)
+		s := newSurface(t)
 		seedNewerPeer(t, s)
 		patchOnly(t, s, `{"integrations": {"gitlab": null}}`, summaryHeader)
 		integrations, _ := storedTree(t, s)["integrations"].(map[string]any)
@@ -393,7 +393,7 @@ func TestAnEntityWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	} {
 		t.Run(tc.kind+"/"+tc.id, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
+			s := newSurface(t)
 			seedNewerPeer(t, s)
 
 			entity := s.do(t, http.MethodGet, "/config/"+tc.kind+"/"+tc.id, "", nil)
@@ -415,7 +415,7 @@ func TestAnEntityWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 // store this build's re-encoding of it.
 func TestReloadAndRevertKeepWhatThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	old := seedNewerPeer(t, s)
 
 	if res := s.do(t, http.MethodPost, "/config/reload", "", nil); res.Code != http.StatusCreated {
@@ -439,8 +439,8 @@ func TestReloadAndRevertKeepWhatThisBuildCannotRepresent(t *testing.T) {
 // a caller forwards from an `If-Match` header was answered as a lost race.
 func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	for name, spell := range map[string]func(string) string{
 		"a bare revision id":  func(id string) string { return id },
 		"a quoted entity-tag": func(id string) string { return `"` + id + `"` },

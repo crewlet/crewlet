@@ -28,8 +28,8 @@ mcp_servers:
 // version of this rule is held.
 func TestAMovedListMemberKeepsItsCredentialThroughAPut(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, movableDoc, nil)
+	s := newSurface(t)
+	s.seed(t, movableDoc)
 
 	read := s.do(t, http.MethodGet, "/config", "", nil)
 	if read.Code != http.StatusOK {
@@ -82,8 +82,8 @@ func TestAMovedListMemberKeepsItsCredentialThroughAPut(t *testing.T) {
 // the builder edits exactly what the read serves.
 func TestAReadDocumentSentBackKeepsAnExplicitFalse(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, movableDoc, nil)
+	s := newSurface(t)
+	s.seed(t, movableDoc)
 
 	read := s.do(t, http.MethodGet, "/config", "", nil)
 	if read.Code != http.StatusOK {

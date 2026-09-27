@@ -112,7 +112,8 @@ func wireAPI(
 	// given it here, so the reconciler trusted a plaintext revision, the
 	// config surface stored one and /secrets could seal nothing — three
 	// shapes `crewlet run` never produces. The reconciler reads the
-	// engine's own now, and /secrets refuses to be built without one.
+	// engine's own now, and /config and /secrets refuse to be built
+	// without one.
 	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.

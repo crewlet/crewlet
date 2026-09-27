@@ -121,6 +121,9 @@ type surface struct {
 	vault   *vault
 	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
+	// cipher is the keyring the config surface seals under, which a
+	// revision the case plants is sealed under too.
+	cipher secrets.Cipher
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
 	// seats is the org chart's half: a seat's own document, which the
@@ -156,22 +159,25 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 	return newSurfaceWithApps(t, nil, "")
 }
 
-// newConfigSurface is the config write path over a store of the test's own.
-func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
+// newConfigSurface is the config write path over a store of the test's own,
+// sealing under a keyring of its own — which it returns, because a revision
+// the case plants has to be sealed under it to be read back.
+func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Cipher) {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(),
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
 		Now: func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db
+	return cfg, db, cipher
 }
 
 // newService builds the service over whatever a case names, filling each
@@ -193,7 +199,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 		opts.Company = companySource(t, nil)
 	}
 	if opts.Config == nil {
-		opts.Config, _ = newConfigSurface(t)
+		opts.Config, _, _ = newConfigSurface(t)
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -240,7 +246,7 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _ := newConfigSurface(t)
+	cfg, _, _ := newConfigSurface(t)
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
@@ -291,10 +297,10 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 // not running, or seats that have not come up.
 func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase string) *surface {
 	t.Helper()
-	cfg, db := newConfigSurface(t)
+	cfg, db, cipher := newConfigSurface(t)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
 		status: &statusStore{}, seats: &seatStore{}, externalBase: externalBase,
 	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
@@ -388,14 +394,19 @@ func (s *surface) seed(t *testing.T) {
 	s.seedDocument(t, companyDoc)
 }
 
-// seedDocument stores one document as the active revision.
+// seedDocument stores one document as the active revision, sealed as every
+// writer stores one.
 func (s *surface) seedDocument(t *testing.T, document string) {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(document))
 	if err != nil {
 		t.Fatalf("parse the fixture: %v", err)
 	}
-	payload, err := json.Marshal(cfg)
+	stored, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(s.cipher, stored)
 	if err != nil {
 		t.Fatal(err)
 	}

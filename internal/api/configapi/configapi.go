@@ -94,8 +94,10 @@ type Options struct {
 	// the fleet store is opened on every topology.
 	Plane coord.Plane
 
-	// Cipher opens and seals a stored revision. Nil reads plaintext and
-	// writes plaintext, which is the documented opt-out.
+	// Cipher seals every revision this surface writes and opens every one
+	// it reads, under the keyring every node holds — the engine's own,
+	// which the reconciler authenticates a peer's revision under.
+	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
@@ -111,10 +113,16 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING STORE OR PLANE IS REFUSED rather than served as a narrower surface.
-// `crewlet run` builds this beside an engine that holds both, so a nil here is a
-// wiring mistake, and a surface that quietly shrank around it (an unregistered
-// /config, a write answering 503) would hide exactly that.
+// A MISSING STORE, PLANE OR KEYRING IS REFUSED rather than served as a narrower
+// surface. `crewlet run` builds this beside an engine that holds all three, so a
+// nil here is a wiring mistake, and a surface that quietly shrank around it (an
+// unregistered /config, a write answering 503) would hide exactly that.
+//
+// The keyring most of all, because the surface built without one did not
+// shrink, it changed meaning: it stored every revision in plaintext, which
+// every node holding a keyring — every node — refuses to apply, so the fleet
+// converged on nothing while this surface answered 201. The e2e harness was
+// wired that way until it was noticed by hand.
 func New(opts Options) (*Service, error) {
 	switch {
 	case opts.Store == nil:
@@ -123,6 +131,10 @@ func New(opts Options) (*Service, error) {
 	case opts.Plane == nil:
 		return nil, errors.New("configapi: Options.Plane is required: a revision " +
 			"takes effect only once the fleet's activation pointer names it")
+	case opts.Cipher == nil:
+		return nil, errors.New("configapi: Options.Cipher is required: every " +
+			"revision is sealed under the keyring (secrets.keys) every node holds, " +
+			"and one written without it is a revision no node applies")
 	}
 	now := opts.Now
 	if now == nil {
