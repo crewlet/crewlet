@@ -318,13 +318,22 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 func suitePayload(kind chart.ObjectKind, id string) (chart.OpKind, any, chart.ScopeSet) {
 	switch kind {
 	case chart.KindTree:
+		// THE UNIT AND THE SEAT ARE BOTH CREATED HERE, because from record
+		// version 2 a content record never creates its object: a seat's
+		// content with no structure ahead of it is declined, and the suite
+		// would certify a sequence that writes nothing for the third kind.
 		return chart.OpPlace, chart.PlacementPayload{
 			V: chart.DocumentVersion,
 			Edges: []chart.Edge{
 				{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "engineering"},
-					Lead: "sarah-chen"},
+					Lead: "sarah-chen", Op: chart.OpCreateUnit},
+				{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"},
+					Parent: "engineering", Op: chart.OpCreateSeat},
 			},
-		}, chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermUnit, ID: "engineering"}})
+		}, chart.BatchScope([]chart.ScopeTerm{
+			{Kind: chart.TermUnit, ID: "engineering"},
+			{Kind: chart.TermSeat, Unit: "engineering", ID: "sarah-chen"},
+		})
 	case chart.KindUnit:
 		return chart.OpUpsert, chart.UnitPayload{
 			V: chart.DocumentVersion, Key: id, Name: "The " + id + " team",
