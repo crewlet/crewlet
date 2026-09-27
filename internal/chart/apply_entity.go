@@ -120,10 +120,10 @@ func (a *Applier) declineContent(ctx context.Context, tx *sql.Tx, at applyContex
 		if err != nil {
 			return false, err
 		}
-		a.declineChange(at, "content", ref, refused)
+		a.declineChange(at, declinedContent, ref, refused)
 		return true, nil
 	}
-	return a.declineCreate(ctx, tx, at, "content", ref)
+	return a.declineCreate(ctx, tx, at, declinedContent, ref)
 }
 
 // applySeat writes one seat's own CONTENT. It never touches `unit_key`.
@@ -625,7 +625,7 @@ func (a *Applier) rekeyRefused(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil || refused == nil {
 		return false, err
 	}
-	a.declineChange(at, "rename", ObjectRef{Kind: kind, ID: former}, refused)
+	a.declineChange(at, declinedRename, ObjectRef{Kind: kind, ID: former}, refused)
 	return true, nil
 }
 

@@ -116,9 +116,44 @@ type declineKey struct {
 
 // decline is one change the apply dropped rather than wrote.
 type decline struct {
-	op       string
+	op       declineOp
 	refused  *addressRefusal
 	position statelog.Position
+}
+
+// declineOp is what a decline is counted under: the `op` attribute of
+// [metrics.ChartApplyDeclined], a CLOSED SET the catalogue declares word for
+// word ([declineOps]).
+//
+// A TYPE RATHER THAN A STRING, because the words were spelled at each call
+// site and had drifted: one create counted as `create` where it was held and
+// as `create_unit` or `create_seat` where its parent was missing, and a
+// set_kind on an absent seat under a word the catalogue never declared — so a
+// panel built from the documented values missed some of every kind of
+// decline. [edgeOp] is the one mapping from an edge's verb.
+type declineOp string
+
+const (
+	// declinedPlace is a verb-less edge — a version-1 placement or an
+	// import's — that would have created its object.
+	declinedPlace declineOp = "place"
+
+	// declinedCreate is a create_unit or a create_seat.
+	declinedCreate declineOp = "create"
+
+	declinedMove    declineOp = "move"
+	declinedSetLead declineOp = "set_lead"
+	declinedSetKind declineOp = "set_kind"
+	declinedRename  declineOp = "rename"
+
+	// declinedContent is a content record that met no row.
+	declinedContent declineOp = "content"
+)
+
+// declineOps is every word a decline is counted under.
+var declineOps = []declineOp{
+	declinedPlace, declinedCreate, declinedMove, declinedSetLead,
+	declinedSetKind, declinedRename, declinedContent,
 }
 
 // NewApplier builds the chart's applier for one node.
@@ -150,8 +185,9 @@ func (a *Applier) WithMetrics(r *metrics.Recorder) *Applier {
 // log goes on. What the drop costs is that its writer was told it landed,
 // which is why each one is said at WARN and counted: see [Applier.Committed].
 //
-// OP is what was declined, from the closed set the counter declares.
-func (a *Applier) declineChange(at applyContext, op string, ref ObjectRef,
+// OP is what was declined, from the closed set the counter declares
+// ([declineOps]).
+func (a *Applier) declineChange(at applyContext, op declineOp, ref ObjectRef,
 	refused *addressRefusal) {
 
 	if a.declined == nil {
@@ -205,12 +241,12 @@ func (a *Applier) reportDeclines(ctx context.Context) {
 	for _, key := range keys {
 		one := declined[key]
 		applyLog.WarnContext(ctx, "chart_apply_declined",
-			"op", one.op, "object", key.ref.String(), "reason", one.refused.Reason,
+			"op", string(one.op), "object", key.ref.String(), "reason", one.refused.Reason,
 			"record", key.opID, "position", one.position.String(),
 			"node", a.NodeID, "detail", one.refused.Detail)
 		if a.metrics != nil {
 			a.metrics.Add(metrics.ChartApplyDeclined, 1, metrics.Attrs{
-				"op": one.op, "reason": one.refused.Reason,
+				"op": string(one.op), "reason": one.refused.Reason,
 			})
 		}
 	}

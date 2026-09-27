@@ -83,6 +83,15 @@ func (a *Applier) applyTree(ctx context.Context, tx *sql.Tx, at applyContext) (i
 func (a *Applier) applyPlacement(ctx context.Context, tx *sql.Tx, at applyContext,
 	edges []Edge, fallback ChangeKind) (int, error) {
 
+	// EVERY VERB IS ONE THIS BUILD APPLIES, checked before any edge is: an
+	// edge declined under a unit its record failed to make is counted by
+	// its verb, and a verb nobody declared must fail the record there too
+	// rather than be counted under a word the counter does not have.
+	for _, edge := range edges {
+		if err := checkVerb(at, edge); err != nil {
+			return 0, err
+		}
+	}
 	rows := 0
 	// missing is every unit address an edge of this record meant to make or
 	// keep and did not.
@@ -185,7 +194,7 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 	switch edge.Op {
 	case "":
 		if !present {
-			if declined, refuseErr := a.declineCreate(ctx, tx, at, "place", ref); refuseErr != nil || declined {
+			if declined, refuseErr := a.declineCreate(ctx, tx, at, edgeOp(edge), ref); refuseErr != nil || declined {
 				return 0, false, refuseErr
 			}
 		}
@@ -196,14 +205,14 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 				// which already landed and writes nothing more.
 				return 0, true, nil
 			}
-			a.declineChange(at, "create", ref, &addressRefusal{
+			a.declineChange(at, edgeOp(edge), ref, &addressRefusal{
 				Rule: RuleKeyTaken, Reason: "present",
 				Detail: fmt.Sprintf("%s is already in the chart, so a record "+
 					"creating it would move it: the create is declined and "+
 					"the object stays where it is", ref)})
 			return 0, false, nil
 		}
-		if declined, refuseErr := a.declineCreate(ctx, tx, at, "create", ref); refuseErr != nil || declined {
+		if declined, refuseErr := a.declineCreate(ctx, tx, at, edgeOp(edge), ref); refuseErr != nil || declined {
 			return 0, false, refuseErr
 		}
 	case OpMove, OpSetLead, OpSetKind, OpRename:
@@ -215,16 +224,11 @@ func (a *Applier) placeEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 			if readErr != nil {
 				return 0, false, readErr
 			}
-			a.declineChange(at, string(edge.Op), ref, refused)
+			a.declineChange(at, edgeOp(edge), ref, refused)
 			return 0, false, nil
 		}
 	default:
-		// A VERB THIS BUILD DOES NOT KNOW, on a record at a version it
-		// reads: a writer publishing an operation it never declared. Failing
-		// is what makes that mistake visible, for [Applier.Apply]'s reason.
-		return 0, false, fmt.Errorf("chart: the structural record at %s "+
-			"states %s on %s, which is not an operation this build applies "+
-			"at version %d", at.position, edge.Op, ref, at.record.V)
+		return 0, false, checkVerb(at, edge)
 	}
 	n, err := a.placeOne(ctx, tx, at, edge, changeFor(edge.Op, fallback))
 	return n, err == nil, err
@@ -267,7 +271,7 @@ func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		if err != nil {
 			return 0, false, err
 		}
-		a.declineChange(at, string(OpRename), was, refused)
+		a.declineChange(at, declinedRename, was, refused)
 		return 0, false, nil
 	}
 	switch edge.Object.Kind {
@@ -281,19 +285,49 @@ func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		edge.Object.Kind)
 }
 
-// edgeOp is the word a decline of an edge is counted under: its verb, or
-// `place` for an edge that states none.
-func edgeOp(edge Edge) string {
-	if edge.Op == "" {
-		return "place"
+// checkVerb fails a record whose edge states a verb this build does not apply.
+//
+// A VERB THIS BUILD DOES NOT KNOW, on a record at a version it reads, is a
+// writer publishing an operation it never declared. Failing is what makes that
+// mistake visible, for [Applier.Apply]'s reason.
+func checkVerb(at applyContext, edge Edge) error {
+	switch edge.Op {
+	case "", OpCreateUnit, OpCreateSeat, OpMove, OpSetLead, OpSetKind, OpRename:
+		return nil
 	}
-	return string(edge.Op)
+	return fmt.Errorf("chart: the structural record at %s states %s on %s, "+
+		"which is not an operation this build applies at version %d",
+		at.position, edge.Op, edge.Object, at.record.V)
+}
+
+// edgeOp is the word a decline of an edge is counted under, whichever rule
+// declined it: `place` for an edge that states no verb, `create` for either
+// create — the object's kind is the log line's, not the counter's — and the
+// verb itself for the rest.
+func edgeOp(edge Edge) declineOp {
+	switch edge.Op {
+	case "":
+		return declinedPlace
+	case OpCreateUnit, OpCreateSeat:
+		return declinedCreate
+	case OpMove:
+		return declinedMove
+	case OpSetLead:
+		return declinedSetLead
+	case OpSetKind:
+		return declinedSetKind
+	case OpRename:
+		return declinedRename
+	}
+	// A VERB THIS BUILD DOES NOT KNOW never reaches a decline: [checkVerb]
+	// fails its record before any edge is applied.
+	return declinedPlace
 }
 
 // declineCreate asks every creation's rules of an edge that would create its
 // object, and declines it when they refuse. It reports whether it declined.
 func (a *Applier) declineCreate(ctx context.Context, tx *sql.Tx, at applyContext,
-	op string, ref ObjectRef) (bool, error) {
+	op declineOp, ref ObjectRef) (bool, error) {
 
 	refused, err := refuseAddress(ctx, tx, at, ref.Kind, ref.ID, "")
 	if err != nil || refused == nil {

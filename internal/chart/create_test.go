@@ -1,7 +1,9 @@
 package chart_test
 
 import (
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -194,6 +196,72 @@ func TestAVersionOneRecordLandsWhereItsFirstApplyPutIt(t *testing.T) {
 	if got := h.column(`SELECT key FROM chart_units ORDER BY key`); !slices.Equal(
 		got, []string{"orphans", "tree"}) {
 		t.Errorf("the units are %v after the version-2 placement", got)
+	}
+}
+
+// A DECLINE IS COUNTED BY WHAT WAS DECLINED, WHICHEVER RULE DECLINED IT.
+//
+// A create_seat under a unit whose own create was declined is a declined
+// CREATE, counted as one under the reason `parent` — it used to be counted as
+// `create_seat`, a word the counter never declared, so a panel of the
+// documented values saw the held-address creates and not these. And a set_kind
+// on a seat a removal took is counted under `set_kind`, which is now declared.
+func TestADeclineIsCountedUnderTheWordForWhatWasDeclined(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	recorder := withDeclines(t, h)
+	ledPlatform(h)
+	h.must(create("op-omar", chart.KindSeat, "omar", ""))
+	h.must(record(chart.TreeSubject(), chart.OpRemove, "op-remove",
+		chart.RemovePayload{V: chart.GateRecordVersion, Reason: "left",
+			Objects: []chart.ObjectRef{{Kind: chart.KindSeat, ID: "omar"}}},
+		chart.BatchScope([]chart.ScopeTerm{{Kind: chart.TermSeat, ID: "omar"}})))
+
+	h.must(place("op-stale",
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+			Parent: "product", Op: chart.OpCreateUnit},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"},
+			Parent: "platform", Op: chart.OpCreateSeat, Kind: chart.SeatAgent},
+		chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "omar"},
+			Op: chart.OpSetKind, Kind: chart.SeatHuman}))
+	h.applier.Committed(t.Context())
+
+	want := map[string]uint64{
+		"create/present": 1, "create/parent": 1, "set_kind/removed": 1,
+	}
+	if got := declines(recorder); !maps.Equal(got, want) {
+		t.Errorf("the declines are %v, want %v", got, want)
+	}
+	if got := h.column(`SELECT handle FROM chart_seats`); len(got) != 0 {
+		t.Errorf("the seats are %v, want none — sre was filed under a unit "+
+			"its record never made", got)
+	}
+}
+
+// A VERB NOBODY DECLARED FAILS ITS RECORD, WHEREVER THE EDGE SITS.
+//
+// A writer publishing an operation this build never declared is a mistake the
+// apply makes visible by failing, identically on every node. Checked edge by
+// edge as each was applied, the same verb under a unit its record had failed to
+// make was declined instead — counted under a word the counter does not have —
+// while under any other parent it failed the record.
+func TestAVerbNobodyDeclaredFailsItsRecordWhereverItsEdgeSits(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ledPlatform(h)
+
+	for name, parent := range map[string]string{
+		"under a unit the record failed to make": "platform",
+		"at the root":                            "",
+	} {
+		_, _, err := h.apply(place("op-"+name,
+			chart.Edge{Object: chart.ObjectRef{Kind: chart.KindUnit, ID: "platform"},
+				Parent: "product", Op: chart.OpCreateUnit},
+			chart.Edge{Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "sre"},
+				Parent: parent, Op: chart.OperationKind("promote")}))
+		if err == nil || !strings.Contains(err.Error(), "promote") {
+			t.Errorf("%s: an edge stating an undeclared verb applied (%v)", name, err)
+		}
 	}
 }
 
