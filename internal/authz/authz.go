@@ -94,6 +94,23 @@
 // change and the deployment's to make irreversible, so each takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
+//
+// # One grant here is host access, and the table does not pretend otherwise
+//
+// `config:write` is ONE grant over the whole company configuration, and that
+// configuration runs code: an `mcp_servers` entry is a command every engine
+// host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
+// `cli-agent` provider among them) choose what a seat's children run and which
+// credentials they are handed, a `sandbox` cell of `run_in: self` runs a coding
+// agent on the engine host itself, and a seat's worker grants decide which of
+// its tools a worker runs with. So holding it IS running code on every engine
+// host, and whatever a process there can read — the keyring included — is
+// reachable through it. No row in this table narrows that: the chart's runtime
+// half, a structural write and the settings document all ask for the same
+// grant, and the one split this package has (a removal also asking
+// `fleet:operate`) is about an irreversible gesture, not about bounding it.
+// The grant is conferred like host access, and `internal/config` warns when an
+// identity provider's group mapping confers it.
 package authz
 
 import (

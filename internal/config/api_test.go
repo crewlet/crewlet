@@ -765,6 +765,27 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 		}
 		named(t, b, "group_grants")
 	})
+	// config:write IS HOST ACCESS: the configuration it writes runs
+	// commands on every engine host, so a group that confers it hands a
+	// membership change at the provider shell on this deployment.
+	t.Run("a group that confers host access", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Backend = AuthBackendOIDC
+		b.API.Auth.OIDC = &APIOIDC{
+			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+			GroupsClaim: "groups",
+			GroupGrants: map[string][]iam.Grant{"admins": {iam.GrantConfigWrite}},
+		}
+		named(t, b, "group_grants.admins.config:write")
+		for _, w := range b.Warnings() {
+			if strings.Contains(w.Path, "config:write") &&
+				!strings.Contains(w.Message, "host access") {
+				t.Errorf("the warning does not say it is host access: %s", w.Message)
+			}
+		}
+	})
 }
 
 // THE GROUP WARNINGS COME OUT IN ONE ORDER, whatever order the map ranges in.

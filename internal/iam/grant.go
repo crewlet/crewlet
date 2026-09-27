@@ -109,7 +109,24 @@ const (
 
 	// GrantConfigWrite changes the company: PATCH /config and the epoch
 	// activation that follows, which rebuilds every seat's tools,
-	// providers and MCP children.
+	// providers and MCP children — and the org chart's structure, its
+	// runtime half and the relations authority is derived from.
+	//
+	// IT IS HOST ACCESS, and it is ONE grant by decision rather than by
+	// oversight. The configuration it writes runs code: an `mcp_servers`
+	// entry is a command every engine host executes, a seat's `mcp_env`
+	// and its per-phase model keys (`llm_*`, a `cli-agent` provider among
+	// them) choose what the seat's children run and which credentials they
+	// are handed, a `sandbox` cell of `run_in: self` runs a coding agent on
+	// the engine host, and a seat's worker grants decide which tools a
+	// worker runs with. So a holder can run anything on every engine host
+	// and read whatever a process there can — the keyring included — and
+	// every grant below is transitively theirs. A split grant for "the
+	// part that runs code" was weighed and declined: it would be the whole
+	// of this grant's practical reach under a second name, and a ceiling
+	// that withheld it would withhold every settings edit with it. It is
+	// conferred the way shell on those hosts is, and internal/config warns
+	// when an identity provider's group mapping confers it.
 	//
 	// /setup gets NO GRANT OF ITS OWN, deliberately. It performs no write
 	// of its own — a credential goes through the store /secrets serves
@@ -140,13 +157,20 @@ const (
 	// changing what they carry, suspending them, revoking their sessions,
 	// resetting a second factor, removing them.
 	//
-	// THE GRANT THAT CAN GRANT, which is why it is not folded into
-	// [GrantConfigWrite] although both are administrative. Changing the
-	// company document rebuilds every seat's tools and providers;
-	// changing a person's row decides who may do that tomorrow. An
-	// automation that applies a configuration must not be able to enrol
-	// itself a colleague, and the person who onboards a team has no
-	// business editing `mcp_servers`.
+	// THE GRANT THAT CAN GRANT, and its own grant rather than a part of
+	// [GrantConfigWrite] so that a DIRECTORY change is its own gesture:
+	// changing the company document rebuilds every seat's tools and
+	// providers, changing a person's row decides who may do that tomorrow,
+	// and the two are reviewed by different people for different reasons.
+	// The person who onboards a team has no business editing `mcp_servers`.
+	//
+	// IT IS NOT A BOUND ON A config:write HOLDER, and must not be read as
+	// one. That grant is host access ([GrantConfigWrite]): a holder can run
+	// code on every engine host and reach whatever a process there can,
+	// the keyring and the store this grant writes to included. What the
+	// separation buys is that the ORDINARY path — the one a review, an
+	// audit row and a revocation all watch — puts directory changes in
+	// somebody else's hands, not that the other path is closed.
 	//
 	// IT IS ALSO THE ONE GRANT THAT BOUNDS ITSELF. A caller may not
 	// confer a grant they do not hold — on anybody, themselves included —
@@ -186,6 +210,17 @@ var AllGrants = []Grant{
 // PersonPresentGrants are the grants whose gestures need a PERSON present, and
 // which a machine token therefore never carries, whatever its owner holds:
 // revealing a credential's value, and deciding who may do anything at all.
+//
+// [GrantConfigWrite] IS DELIBERATELY NOT HERE, although it is host access and
+// strictly stronger than either: applying a configuration from a pipeline —
+// `crewlet config import` in a deploy job — is exactly the work a machine token
+// exists for, and a token that could not carry it would send that pipeline back
+// to a Tier A token, which answers to no person and ends only when somebody
+// edits the deployment's own configuration. So a token may be minted with it,
+// and minting one is handing a pipeline shell on every engine host: its owner
+// decides that at the mint, and the token's row says what it carries. This list
+// is for the gestures a pipeline has no business making at all, not a ranking
+// of how dangerous a grant is.
 //
 // HERE, IN THE LEAF, because two packages that cannot see each other both have
 // to enforce it: internal/iamdomain refuses them at a token's mint, and

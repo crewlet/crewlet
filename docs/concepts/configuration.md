@@ -725,6 +725,34 @@ they wrote themselves. Every node's copy says the same: the three travel on the
 activation pointer, so a node adopting the revision from its fleet records the
 writer rather than `peer`.
 
+### `config:write` is host access
+
+The grant that writes this document is **one** grant, and it is conferred the
+way shell on the engine's hosts is — because that is what it is. The
+configuration runs code: an `mcp_servers` entry is a command every engine host
+executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
+`cli-agent` provider among them) decide what the seat's children run and which
+credentials they are handed, a `sandbox` cell of `run_in: self` runs a coding
+agent on the engine host itself, and a seat's worker grants decide which of its
+tools a worker holds. So whoever holds `config:write` can run anything on every
+engine host and read whatever a process there can — the keyring included — and
+with it every other grant. There is deliberately no separate "runtime" grant:
+it would be this one's whole practical reach under a second name, and a
+`max_grants` ceiling that withheld it would withhold every settings edit too.
+
+What that means in practice:
+
+- Grant it to the people and pipelines you would give a shell on those hosts,
+  and no one else. A machine token **can** carry it — applying a configuration
+  from a deploy job is what one is for — so minting one with it is handing that
+  job host access.
+- `crewlet validate` warns when an identity provider's group mapping confers it
+  (below): adding somebody to a group at the provider is an act nobody here
+  reviews.
+- `people:manage` being a separate grant does **not** bound a `config:write`
+  holder. It keeps directory changes a reviewable gesture of their own; a
+  holder of host access can reach the store the directory lives in regardless.
+
 ### What `allow_anonymous_read` was, and why deleting it was the only fix
 
 Reads used to serve without a credential **by default**, on the argument that
@@ -806,7 +834,8 @@ refused by `crewlet validate` on a laptop rather than by a process at bind time:
 ### What `crewlet validate` warns about
 
 Four API postures are **valid** and worth reading before a deployment runs on
-them. None can be a refusal, because each is a configuration that works exactly
+them — every warned group listed in the order of its name, so two runs over one
+file print the same thing. None can be a refusal, because each is a configuration that works exactly
 as written with its consequence somewhere else:
 
 | Warning | Why it is not a refusal |
@@ -814,7 +843,7 @@ as written with its consequence somewhere else:
 | `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
 | An OIDC `scopes` list written without `offline_access` (an unset list asks for it) | Nothing notices a deactivation. An identity provider tells this engine nothing when somebody is disabled, so the session it already minted works until its absolute deadline — and the deactivation probe, which is what would end it early, is a refresh-token exchange with nothing to exchange |
-| A group mapping conferring `secrets:read` or `secrets:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider, and those two grants read and write this company's credentials. Declaring them on the person's own record puts the decision where it is reviewed |
+| A group mapping conferring `secrets:read`, `secrets:write` or `config:write` | Adding somebody to a directory group is an ordinary act performed by whoever administers the identity provider. The first two read and write this company's credentials, and `config:write` is [host access](#configwrite-is-host-access). Declaring them on the person's own record puts the decision where it is reviewed |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a
 forwarded header poses is not "does this deployment sit behind a proxy" but "is

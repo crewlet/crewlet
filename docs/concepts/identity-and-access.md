@@ -188,11 +188,30 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 |---|---|
 | `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
 | `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's, and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn |
+| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart's structure, its runtime half and the relations authority is derived from; the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
 | `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset` and a work item's purge. With `people:manage` beside it, `POST /iam/invalidate-all`; with `config:write` beside it, taking an object out of the org chart — the one structural change nothing undoes |
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
+
+**`config:write` is host access, and is conferred like it.** It is one grant
+by decision: the configuration it writes runs code — an `mcp_servers` entry is
+a command every engine host executes, a seat's `mcp_env` and its per-phase
+model keys (`llm_*`, a `cli-agent` provider among them) decide what the seat's
+children run and which credentials they are handed, a `sandbox` cell of
+`run_in: self` runs a coding agent on the engine host, and a seat's worker
+grants decide which of its tools a worker holds. So a holder can run anything
+on every engine host and read whatever a process there can, the keyring
+included, and every other grant is transitively theirs. A separate "runtime"
+grant would be this one's whole reach under a second name, and a ceiling that
+withheld it would withhold every settings edit with it. Give it to whoever you
+would give a shell on those hosts. A machine token may carry it —
+`iamdomain` mints it onto one deliberately, because applying a configuration
+from a deploy job is what a token is for — so minting a token with it is handing
+that job host access; and `crewlet validate` warns when an identity provider's
+group mapping confers it. `people:manage` being its own grant keeps directory
+changes a reviewable gesture of their own; it is **not** a bound on a
+`config:write` holder, who can reach the store the directory lives in anyway.
 
 **Connecting an integration has no grant of its own.** `/setup` performs no
 write of its own — a credential goes through the store `/secrets` serves, and
@@ -1062,6 +1081,13 @@ signed in through the provider carries nothing, and group-derived authority
 lapses with the session that presented it; a node that has not yet applied a
 brand-new session's row serves its reads on the declared set alone, which only
 ever narrows. `GET /auth/session` shows the effective set.
+
+`crewlet validate` **warns** about a mapping that confers `secrets:read`,
+`secrets:write` or `config:write`: adding somebody to a group is an act
+performed at the provider that nobody here reviews, and those grants hand over
+the company's credentials or — for `config:write` — host access. A warning
+rather than a refusal, because a company may mean it; declaring such a grant on
+the person's own record puts the decision where it is reviewed.
 
 ### The deactivation probe
 

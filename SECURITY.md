@@ -87,7 +87,7 @@ A few things worth knowing when deploying Crewlet:
   `api.auth.max_grants` and no more, and logs a warning on every boot that
   enables it.
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares one of ten grants, and both
+  route and every socket question declares one of eleven grants, and both
   transports are decided by the same registry, so a question cannot be reached
   by choosing a channel. A route registered with no grant is a build failure
   rather than a route that answers to anyone.
@@ -103,6 +103,19 @@ A few things worth knowing when deploying Crewlet:
   holding a valid credential that theirs is invalid for the length of the
   outage — which is how a company gets taught to reset working passwords during
   one.
+- **`config:write` is host access, and should be conferred like it.** It is
+  one grant over the whole company configuration, and that configuration runs
+  code: an `mcp_servers` entry is a command every engine host executes, a
+  seat's `mcp_env` and model keys decide what its children run and which
+  credentials they are handed, and a `run_in: self` sandbox runs a coding agent
+  on the engine host. So a holder can run anything on every engine host and
+  read whatever a process there can, the keyring included. Give it to the
+  people and pipelines you would give a shell on those hosts. A machine token
+  can carry it — a deploy job applying configuration is what one is for — so
+  minting one with it hands that job the same reach, and `crewlet validate`
+  warns when an identity provider's group mapping confers it. `people:manage`
+  is a separate grant so directory changes stay a reviewable gesture of their
+  own, not as a bound on a `config:write` holder.
 - **`api.auth.max_grants` is the ceiling, and it is required.** A person's
   grants live in the replicated store and an identity provider's group mapping
   is written at the provider — neither is in a tier this deployment's operator

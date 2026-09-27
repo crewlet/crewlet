@@ -2225,7 +2225,10 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 		grants = make([]iam.Grant, 0, len(owner))
 		for _, g := range owner {
 			// NEVER THE TWO THAT NEED A PERSON PRESENT: see
-			// [iam.PersonPresentGrants].
+			// [iam.PersonPresentGrants]. And `config:write` IS minted
+			// when the owner holds it, deliberately — it is host
+			// access, and applying a configuration from a pipeline is
+			// what a token is for; that list says why it is not there.
 			if g.Valid() && !slices.Contains(iam.PersonPresentGrants, g) {
 				grants = append(grants, g)
 			}

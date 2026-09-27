@@ -57,6 +57,12 @@ units:
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
+**`contact` and `availability` ride the seat's runtime half** in the [org
+chart](chart-domain.md), beside its model chain and its credentials, so changing
+either takes `config:write` — whoever leads the seat edits its prose, and not
+which accounts are attributed to it. `email` is one of the relations authority
+is derived from, and takes the same grant for the same reason.
+
 **Every `contact` identity is optional.** They are how agents mention and
 reach a person, and how inbound webhooks attribute their activity by name — so
 give a person one for each surface they are on. A person who works only

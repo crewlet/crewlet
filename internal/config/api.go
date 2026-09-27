@@ -1329,6 +1329,26 @@ func checkOrigin(path Path, origin string) error {
 	return p.err()
 }
 
+// groupGrantConsequence is every grant an identity provider's group mapping is
+// warned about, and what adding somebody to that group then hands them.
+//
+// THE GRANTS THAT REACH PAST THE COMPANY'S OWN WORK, each with its consequence
+// in the sentence an operator reads: the two that read and write the company's
+// credentials, and `config:write`, which is HOST ACCESS — the configuration it
+// writes runs commands on every engine host (an `mcp_servers` entry, a seat's
+// `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so whatever a
+// process there can read, the keyring included, is the holder's. A map rather
+// than a condition, so a grant added here arrives with the sentence that says
+// why.
+var groupGrantConsequence = map[iam.Grant]string{
+	iam.GrantSecretRead:  "hands them this company's credentials",
+	iam.GrantSecretWrite: "hands them this company's credentials",
+	iam.GrantConfigWrite: "hands them host access: the configuration " +
+		"config:write writes runs commands on every engine host, so they " +
+		"can run anything there and read whatever a process there can, the " +
+		"keyring included",
+}
+
 // warnings are the API postures that are VALID and worth reading before this
 // deployment runs on them.
 //
@@ -1396,10 +1416,10 @@ func (a API) warnings() []Warning {
 		}
 		// A GROUP MAPPING IS AUTHORITY WRITTEN SOMEWHERE ELSE. Adding
 		// somebody to a directory group is an ordinary act performed by
-		// whoever administers the identity provider, and these two
-		// grants read and write the company's own credentials — so a
-		// mapping that confers them hands the secret store to a
-		// membership change nobody here reviews.
+		// whoever administers the identity provider, and nobody here
+		// reviews it — so a mapping that confers a grant reaching past the
+		// company's own work ([groupGrantConsequence]) hands that reach to
+		// a membership change.
 		//
 		// IN THE GROUPS' OWN ORDER, sorted, because this is a map and
 		// `crewlet validate` prints what it returns: ranged directly, two
@@ -1408,16 +1428,16 @@ func (a API) warnings() []Warning {
 		// that was not there.
 		for _, group := range slices.Sorted(maps.Keys(oidc.GroupGrants)) {
 			for _, g := range oidc.GroupGrants[group] {
-				if g != iam.GrantSecretRead && g != iam.GrantSecretWrite {
+				consequence, warned := groupGrantConsequence[g]
+				if !warned {
 					continue
 				}
 				out = append(out, advisory(
 					at(at(field("api.auth.oidc.group_grants"), group), string(g)),
 					"membership of `"+group+"` confers "+string(g)+
 						", so adding somebody to that group at the identity "+
-						"provider hands them this company's credentials — an "+
-						"act nobody here reviews. Declare it on the person's "+
-						"own record instead"))
+						"provider "+consequence+" — an act nobody here "+
+						"reviews. Declare it on the person's own record instead"))
 			}
 		}
 	}
