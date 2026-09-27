@@ -63,6 +63,13 @@ const ANIMATED: { selector: string; kind: Kind; why: string }[] = [
     why: "A phase waiting on its first answer from the model: live for as long as it waits.",
   },
   {
+    selector: ".task-live-dot",
+    kind: "steady",
+    why:
+      "The dot on a task page's live row: drawn only while a seat's turn is running on " +
+      "THIS task, so the push that ends the turn removes the row rather than playing anything.",
+  },
+  {
     selector: ".prose.stream::after",
     kind: "steady",
     why: "The caret on text being streamed: live for as long as the model is writing.",

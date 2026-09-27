@@ -22,6 +22,10 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	turns         tracker.TaskTurns
+	turnsRef      string
+	turnsCursor   string
+	turnsLimit    int
 	inbox         tracker.InboxAnswer
 	inboxQuery    tracker.InboxQuery
 	routing       tracker.RoutingAnswer
@@ -175,6 +179,13 @@ func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Tim
 func (s *stubWork) Search(_ context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	s.searchText, s.searchLimit, s.searchMode = q.Text, q.Limit, q.Mode
 	return tracker.SearchAnswer{Hits: s.ranked, Outcome: s.searchOutcome}, s.err
+}
+
+func (s *stubWork) TurnsOf(_ context.Context, ref, cursor string, limit int,
+	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+
+	s.turnsRef, s.turnsCursor, s.turnsLimit, s.taskFresh = ref, cursor, limit, fresh
+	return s.turns, s.err
 }
 
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
@@ -350,9 +361,40 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 		map[string]any{"id": "ENG-1"}); err != nil {
 		t.Fatalf("work_item: %v", err)
 	}
+	got := w.taskWants
+	// THE CLOCK IS CHECKED ON ITS OWN, below: a pointer compares by address.
+	got.Clock = nil
 	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
-	if w.taskWants != want {
-		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	if got != want {
+		t.Errorf("work_item asked the reader for %+v, want %+v", got, want)
+	}
+}
+
+// AND IT ASKS ON THE COMPANY'S CLOCK, so the rail's due date stands on the
+// calendar every board's overdue mark was cut on (ADR-0018). Without a clock
+// the answer carries no standing and the task page fell back to the reader's
+// own "1d ago" beside a board drawing the same task two days late.
+func TestTheItemQueryStandsTheDueDateOnTheCompanyClock(t *testing.T) {
+	losAngeles, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2031, time.April, 17, 6, 30, 0, 0, time.UTC)
+	w := &stubWork{}
+	src := queries.Sources{
+		Work:    w,
+		Now:     func() time.Time { return now },
+		Company: func() *config.Company { return &config.Company{Timezone: "America/Los_Angeles"} },
+	}
+	if _, err := askNative(t, src, "work_item", map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	clock := w.taskWants.Clock
+	if clock == nil {
+		t.Fatal("work_item asked the reader with no clock, so no due date can be stood")
+	}
+	if !clock.Now.Equal(now) || clock.Zone.String() != losAngeles.String() {
+		t.Fatalf("work_item asked on %v in %v, want %v in %v", clock.Now, clock.Zone, now, losAngeles)
 	}
 }
 
@@ -377,6 +419,44 @@ func TestTheItemQueryAsksWithTheChart(t *testing.T) {
 	if w.taskWants.Units == nil {
 		t.Error("work_item read the item with no chart, so its unit fields " +
 			"render as a key nobody reads and as a team the chart has lost")
+	}
+}
+
+// A TASK'S TURNS ARE ASKED AT THE CALLER'S CURSOR AND PAGE, HELD TO THE CEILING.
+//
+// The page walks back through a task's turns by the cursor the previous page
+// handed out, and a page bigger than the tracker's own ceiling is the
+// ceiling rather than a refusal or an unbounded read. A task that does not
+// exist is `not_found`, never an empty list a screen would draw as "no agent
+// has worked on this".
+func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
+	w := &stubWork{turns: tracker.TaskTurns{
+		Task: "t-1", Key: "ENG-1",
+		Turns: []tracker.TaskTurn{{TurnID: "run-2", Ordinal: 2, Tokens: 900}},
+		Next:  "41",
+	}}
+	got, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
+		map[string]any{"id": "ENG-1", "cursor": "88", "limit": 500})
+	if err != nil {
+		t.Fatalf("work_item_turns: %v", err)
+	}
+	if w.turnsRef != "ENG-1" || w.turnsCursor != "88" || w.turnsLimit != tracker.MaxTaskTurns {
+		t.Errorf("asked the reader for (%q, %q, %d), want (ENG-1, 88, %d)",
+			w.turnsRef, w.turnsCursor, w.turnsLimit, tracker.MaxTaskTurns)
+	}
+	page, ok := got.(tracker.TaskTurns)
+	if !ok || page.Next != "41" || len(page.Turns) != 1 || page.Turns[0].Ordinal != 2 {
+		t.Errorf("answered %#v, want the reader's page with its cursor", got)
+	}
+
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
+		map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("no id answered %v, want bad_params", err)
+	}
+	gone := &stubWork{err: tracker.ErrNoTask}
+	if _, err := askNative(t, queries.Sources{Work: gone}, "work_item_turns",
+		map[string]any{"id": "ENG-404"}); !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("a task that does not exist answered %v, want not_found", err)
 	}
 }
 
@@ -1005,6 +1085,8 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
 	{"work_comments", "tracker", map[string]any{"item": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
+	{"work_item_turns", "tracker", map[string]any{"id": "ENG-1"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskFresh.Level }, nil},
 	{"work_views", "tracker", map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
 	{"work_catalogue", "tracker", map[string]any{},
@@ -1268,6 +1350,8 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		{"work_item", map[string]any{"id": "ENG-1"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_comments", map[string]any{"item": "ENG-1"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+		{"work_item_turns", map[string]any{"id": "ENG-1"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
 		{"work_views", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},

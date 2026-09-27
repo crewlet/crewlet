@@ -39,6 +39,13 @@ export interface Crumb {
   mono?: boolean;
   /** The workspace's glyph, on the first crumb only. */
   icon?: GlyphName;
+  /**
+   * A short identifier drawn as a chip before a NAMED label — a project's key
+   * beside its name ("ENG Core platform"), the way every row and rail in the
+   * product draws a project. Only where the label is a name: a crumb still
+   * showing the raw key has nothing to add, and would say it twice.
+   */
+  tag?: string;
 }
 
 /** A title for the browser tab, derived from the same trail. */
@@ -51,6 +58,12 @@ export function titleOf(crumbs: Crumb[]): string {
 function named(labels: Labels, key: string): Crumb {
   const label = labels[key];
   return label ? { label } : { label: key, mono: true };
+}
+
+/** A project: its name with its key as a chip, or the key alone until the name arrives. */
+function projectCrumb(labels: Labels, key: string): Crumb {
+  const crumb = named(labels, key);
+  return crumb.mono ? crumb : { ...crumb, tag: key };
 }
 
 export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
@@ -98,14 +111,14 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "work-views":
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
-      return [root(row, true), named(labels, where.key)];
+      return [root(row, true), projectCrumb(labels, where.key)];
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
       // with no lookup. An id names nothing, and the trail is Work › item.
       const project = ITEM_KEY_SHAPE.test(where.id) ? where.id.replace(/-\d+$/, "") : "";
       const item = named(labels, where.id);
       return project
-        ? [root(row, true), { ...named(labels, project), path: ["work", project] }, item]
+        ? [root(row, true), { ...projectCrumb(labels, project), path: ["work", project] }, item]
         : [root(row, true), item];
     }
     case "roster":

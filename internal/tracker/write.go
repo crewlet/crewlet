@@ -1248,6 +1248,87 @@ type TurnRecord struct {
 	Phases []string `json:"phases"`
 	// Spend is what the segment cost.
 	Spend TurnSpend `json:"spend"`
+
+	// Summary is what the segment did, in the agent's own words — the
+	// reviewer's account of what landed, or the executor's artifact — cut
+	// to [MaxTurnSummary]. Empty for a segment that parked before either
+	// was written.
+	//
+	// ON THE RECORD, not read back from the event history at query time,
+	// because a task's turn list is the one account of its work that has
+	// to outlive the thirty days a node keeps its events and has to be
+	// answerable on any node: the event store is per node and the turn may
+	// have run on one that has since left. A card that said "Turn 3" and
+	// nothing about what turn 3 did, once the month turned, would be a
+	// number with no referent.
+	Summary string `json:"summary,omitempty"`
+
+	// Review is the notes of the newest review in the segment that sent
+	// the work back for another pass, cut to [MaxTurnSummary]. Empty when
+	// no review sent it back — which is the ordinary case, and the one a
+	// reader must be able to tell from a send-back nobody explained.
+	Review string `json:"review,omitempty"`
+
+	// Tools is what the segment's executor called, one entry per tool in
+	// first-call order with how many times it was called, at most
+	// [MaxTurnTools] of them. A COUNT rather than the calls, because the
+	// arguments and results are the event history's and belong on the
+	// trace; what a turn card needs is which tools, and how hard.
+	Tools []TurnTool `json:"tools,omitempty"`
+
+	// FailedIn is the phase that failed, for a segment whose [Outcome] is
+	// `failed` because one of its phases did — empty otherwise, and empty
+	// for a failure outside every phase. The phase list says what RAN; a
+	// card that ticked each of them beside a "failed" pill could not say
+	// which step broke, and "failed in review" and "failed in execute" send
+	// a reader to different places.
+	FailedIn string `json:"failed_in,omitempty"`
+}
+
+// TurnTool is one tool a turn segment called, and how often.
+type TurnTool struct {
+	Name  string `json:"name"`
+	Calls int    `json:"calls"`
+}
+
+// MaxTurnSummary bounds [TurnRecord.Summary] and [TurnRecord.Review], in
+// bytes. Six hundred holds the three or four sentences a reviewer's account
+// runs to — the longest the engine's own prompts ask for — and keeps a task's
+// fifty-turn page near 60 KiB with both filled; the whole text stays on the
+// turn's own trace, which a card links to.
+const MaxTurnSummary = 600
+
+// MaxTurnTools bounds [TurnRecord.Tools]. Sixteen distinct tools is more than
+// any turn the engine's prompts shape calls in one segment; past it the card
+// would be a wall of chips, and the trace is where the rest are.
+const MaxTurnTools = 16
+
+// CountTurnTools folds a segment's tool calls, one name per call in call
+// order, into [TurnRecord.Tools]: first-call order, a count each, at most
+// [MaxTurnTools] names. A name past the cap is dropped whole rather than
+// folded into an "other" bucket, because a chip reading "other ×9" names
+// nothing a reader can look for.
+func CountTurnTools(calls []string) []TurnTool {
+	if len(calls) == 0 {
+		return nil
+	}
+	var out []TurnTool
+	at := map[string]int{}
+	for _, name := range calls {
+		if name == "" {
+			continue
+		}
+		if i, seen := at[name]; seen {
+			out[i].Calls++
+			continue
+		}
+		if len(out) == MaxTurnTools {
+			continue
+		}
+		at[name] = len(out)
+		out = append(out, TurnTool{Name: name, Calls: 1})
+	}
+	return out
 }
 
 // recordTurnAttempts bounds how often [Writer.RecordTurn] re-reads a task's
@@ -1291,6 +1372,16 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"makes a segment recorded twice count once", turn.Task)
 	case turn.Task == "":
 		return WriteResult{}, invalid("tracker: a turn names no task")
+	case len(turn.Summary) > MaxTurnSummary, len(turn.Review) > MaxTurnSummary:
+		// REFUSED, NOT CUT: the caller is the engine, which cuts its own
+		// prose to the bound before it writes, so an overlong one here is
+		// a writer that skipped the cut — and every node would store it.
+		return WriteResult{}, invalid("tracker: a turn on task %s carries a "+
+			"summary of %d bytes and a review of %d; each is at most %d",
+			turn.Task, len(turn.Summary), len(turn.Review), MaxTurnSummary)
+	case len(turn.Tools) > MaxTurnTools:
+		return WriteResult{}, invalid("tracker: a turn on task %s names %d "+
+			"tools; at most %d", turn.Task, len(turn.Tools), MaxTurnTools)
 	case w.db == nil:
 		return WriteResult{}, invalid("tracker: this writer holds no " +
 			"replicated estate, and a turn's scope is its task's project, " +

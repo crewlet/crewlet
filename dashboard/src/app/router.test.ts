@@ -404,6 +404,10 @@ describe("the breadcrumb", () => {
     expect(raw[raw.length - 1]?.label).toBe("ENG");
     const named = crumbsFor(["work", "ENG"], { ENG: "Platform" });
     expect(named[named.length - 1]?.label).toBe("Platform");
+    // A NAMED PROJECT CARRIES ITS KEY AS A CHIP; the raw key carries none, or
+    // it would say the key twice.
+    expect(named[named.length - 1]?.tag).toBe("ENG");
+    expect(raw[raw.length - 1]?.tag).toBeUndefined();
   });
 
   // A SEAT IS NAMED BY ITS NAME AND ADDRESSED BY A SLUG, so an unresolved

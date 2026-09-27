@@ -29,9 +29,23 @@
  * window would read as "ada set this" when what happened is "ada made the
  * oldest change we can still see", which is a fact about the page size.
  *
- * That is also why a `created` entry attributes every field it carries: a
- * create genuinely sets them, and for most tasks it is inside the window,
- * which is what makes the line appear at all on a task nobody has edited.
+ * # A create attributes nothing
+ *
+ * A create sets every field at once, and the rail already states who filed the
+ * task and when — its Reporter row and its record — so attributing the create
+ * drew one sentence naming seven fields ("Priority, Assignee, Reporter,
+ * Project, Type, Labels and Due · set by …") under whichever of them came
+ * last, reading as that one field's provenance. The line is for what CHANGED
+ * after the task was filed, which is the question a reader asks of a row; a
+ * field nobody has touched since the create draws none.
+ *
+ * # Named as the person, not the token
+ *
+ * An operator token's change carries `actor_seat`, the seat the token was
+ * bound to, and the line names that seat — the activity beside the rail names
+ * the same change from the same field, and one person drawn two ways on one
+ * page ("founder" in the rail, Jane Founder in the feed) reads as two people.
+ * `actor` stays the credential on the wire, which is the audit trail.
  */
 
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
@@ -58,13 +72,19 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
     // A change with no actor attributes nothing: the line's whole content is
     // who, and "set by" with nobody after it is worse than silence.
     if (!change.actor) continue;
+    if (change.kind === "created") continue;
+    const seat = change.actor_seat ?? "";
     for (const [field, delta] of Object.entries(change.fields ?? {})) {
       if (out.has(field)) continue;
       out.set(field, {
-        actor: change.actor,
-        actorKind: KINDS.has(change.actor_kind ?? "")
-          ? (change.actor_kind as SetBy["actorKind"])
-          : undefined,
+        actor: seat || change.actor,
+        // A BOUND TOKEN'S CHANGE IS A PERSON'S: only a person's seat names an
+        // operator id, so the seat it resolves to is a human one.
+        actorKind: seat
+          ? "human"
+          : KINDS.has(change.actor_kind ?? "")
+            ? (change.actor_kind as SetBy["actorKind"])
+            : undefined,
         turnId: change.turn_id || undefined,
         at: change.at,
         cleared: emptied(delta),

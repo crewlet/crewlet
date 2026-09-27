@@ -330,6 +330,7 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
         const words = (
           <>
             {Glyph && <Glyph size="sm" className="crumb-glyph" aria-hidden="true" />}
+            {crumb.tag && <span className="project-key mono crumb-tag">{crumb.tag}</span>}
             <span className="crumb-text">{crumb.label}</span>
           </>
         );

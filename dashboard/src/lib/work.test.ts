@@ -16,7 +16,8 @@ import {
   SCOPES,
   STATUSES,
   STATUS_TONE,
-  STATUS_MARK,
+  STATUS_SHAPE,
+  statusShape,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -145,15 +146,28 @@ test("no two work types draw the same mark", () => {
   expect([...new Set(marks)].sort()).toEqual([...marks].sort());
 });
 
-// A TYPE IS NEVER DRAWN WITH A STATUS'S MARK. The two sit side by side on a
-// row, and `task` once opened every row with the check a delivered task wears,
-// so a list of work nobody had started read as a list of finished work.
-test("no work type draws a mark a status is drawn with", () => {
-  const statusMarks = new Set<string>(Object.values(STATUS_MARK));
+// A TYPE IS NEVER DRAWN WITH A MARK THAT READS AS A STATUS. The two sit side
+// by side on a row, and `task` once opened every row with the check a
+// delivered task wears, so a list of work nobody had started read as a list of
+// finished work. A status is drawn in its own shapes now, and the kit glyphs
+// that LOOK like one — a ring, a ring with a check — stay off every type.
+test("no work type draws a mark that reads as a status", () => {
+  const statusLike = new Set<string>(["circle", "circle-check"]);
   for (const [type, mark] of Object.entries(TYPE_ICON)) {
-    expect(statusMarks.has(mark), `${type} is drawn as ${mark}`).toBe(false);
+    expect(statusLike.has(mark), `${type} is drawn as ${mark}`).toBe(false);
   }
-  expect(statusMarks.has(typeIcon("an-unknown-type"))).toBe(false);
+  expect(statusLike.has(typeIcon("an-unknown-type"))).toBe(false);
+});
+
+// EVERY STATUS HAS A SHAPE OF ITS OWN, so the state reads without its hue:
+// in progress and in review share the active blue, and were once the same
+// empty ring as to-do.
+test("every status is drawn in a shape no other status uses", () => {
+  const shapes = STATUSES.map((s) => STATUS_SHAPE[s.value]);
+  expect(new Set(shapes).size).toBe(STATUSES.length);
+  expect(STATUS_SHAPE.in_progress).toBe("half");
+  expect(STATUS_SHAPE.done).toBe("check");
+  expect(statusShape("a-status-from-a-newer-build")).toBe("ring");
 });
 
 test("a type takes the company's own name for it", () => {

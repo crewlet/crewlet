@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,5 +263,66 @@ func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 	(&Engine{}).chargeSegment(t.Context(), rec, c)
 	if len(rec.calls) != 1 || rec.calls[0] != "turn/run-1/dispatch" {
 		t.Fatalf("the recorder was asked %v, want the dispatch segment once", rec.calls)
+	}
+}
+
+// A TASK'S TURN RECORD SAYS WHAT THE SEGMENT DID.
+//
+// The task page's turn card is read off the tracker's own row, which outlives
+// the event history and answers on any node — so the summary, the send-back's
+// request and the tools have to ride the record, each cut to the bound the
+// writer holds it to (an overlong one is refused, not cut, over there).
+func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	spend := segmentSpend(1)
+	spend.Review = strings.Repeat("add a test for the timeout path. ", 40)
+	spend.AllTools = []string{"create_branch", "run_sandbox", "run_sandbox",
+		"search_knowledge", "run_sandbox", runner.SubmitWorkTool}
+	res := turn.Result{
+		Decision:   phase.Done,
+		LastReview: &turn.Review{Decision: phase.Done, CompletedWork: "added the retry"},
+	}
+
+	got := dispatchTel(&nativeItem).chargeFor(spend, res, nil, ended).record
+
+	if got.Summary != "added the retry" {
+		t.Errorf("summary = %q, want the reviewer's account of what landed", got.Summary)
+	}
+	if len(got.Review) > tracker.MaxTurnSummary || !strings.HasPrefix(got.Review, "add a test") {
+		t.Errorf("review = %d bytes %q, want the send-back's notes cut to %d",
+			len(got.Review), got.Review, tracker.MaxTurnSummary)
+	}
+	want := []tracker.TurnTool{
+		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
+		{Name: "search_knowledge", Calls: 1},
+	}
+	if !slices.Equal(got.Tools, want) {
+		t.Errorf("tools = %+v, want each tool once in first-call order with its "+
+			"count, and not the phase's own answer %+v", got.Tools, want)
+	}
+}
+
+// A FAILED SEGMENT NAMES THE PHASE THAT BROKE, and only a failed one does: a
+// card ticking every phase that ran beside a "failed" pill could not say which
+// step broke, and a phase name beside a turn that ended otherwise — a person's
+// stop is not a failure — would claim a failure that did not happen.
+func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	spend := segmentSpend(1)
+	spend.FailedIn = "review"
+
+	failed := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Failed},
+		errors.New("provider refused"), ended).record
+	if failed.Outcome != string(phase.Failed) || failed.FailedIn != "review" {
+		t.Errorf("a failed segment recorded outcome %q in %q, want failed in review",
+			failed.Outcome, failed.FailedIn)
+	}
+
+	done := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Done},
+		nil, ended).record
+	if done.FailedIn != "" {
+		t.Errorf("a segment that ended %q names a failed phase %q", done.Outcome, done.FailedIn)
 	}
 }

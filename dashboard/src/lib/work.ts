@@ -133,8 +133,8 @@ export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
  * neutral box rather than to a generated anything.
  */
 export const TYPE_ICON: Record<string, GlyphName> = {
-  // NOT A STATUS'S MARK. `task` was drawn as `circle-check`, which is what
-  // [STATUS_MARK] draws a DELIVERED task with — so every task in To do opened
+  // NOT A STATUS'S MARK. `task` was drawn as `circle-check`, which reads as
+  // the check a DELIVERED task is drawn with ([STATUS_SHAPE]) — so every task in To do opened
   // its row with a check, and a reader scanning for what is done found every
   // task instead. A target: ordinary work with an owner and an end.
   task: "target",
@@ -147,17 +147,34 @@ export const TYPE_ICON: Record<string, GlyphName> = {
 };
 
 /**
- * The marks a STATUS is drawn with (`components/work.tsx` StatusMark): a ring
- * while the work is open, a check once it was delivered.
+ * The SHAPE each status is drawn in (`components/work.tsx` StatusMark) — the
+ * approved artboards' marks: an empty ring for work nobody has started, a ring
+ * filled a HALF while somebody is on it and THREE QUARTERS once it is in
+ * review, a filled disc with a check once it was delivered.
  *
- * DECLARED BESIDE [TYPE_ICON] because the two share a row — a type's mark and
- * a status's sit a few pixels apart on every list — and a type drawn with a
- * status's mark reads as a state it is not. A test holds the two sets apart.
+ * THE SHAPE CARRIES THE STATE, NOT ONLY THE TONE. In progress and in review
+ * share the `active` group's blue, so a set that drew both as the same ring
+ * told them apart by nothing a reader could see — and a reader who does not
+ * see the hue at all could not tell to-do from in-progress either. Cancelled
+ * finished without being delivered, so it wears a struck ring rather than a
+ * check; closed is a quiet filled disc. A test holds every status to a shape
+ * of its own.
  */
-export const STATUS_MARK = { open: "circle", delivered: "circle-check" } as const satisfies Record<
-  string,
-  GlyphName
->;
+export type StatusShape = "ring" | "half" | "most" | "check" | "struck" | "disc";
+
+export const STATUS_SHAPE: Record<WorkStatus, StatusShape> = {
+  todo: "ring",
+  in_progress: "half",
+  in_review: "most",
+  done: "check",
+  cancelled: "struck",
+  closed: "disc",
+};
+
+/** A status this build has never heard of is drawn as the plain ring. */
+export function statusShape(status: string): StatusShape {
+  return STATUS_SHAPE[status as WorkStatus] ?? "ring";
+}
 
 /**
  * The type a task is filed under when nobody named one — the engine's
@@ -736,6 +753,158 @@ function deltaClause(field: string, from: string, to: string, ctx: LabelContext)
     }
   }
   return `${humanize(field)}: ${a || EMPTY_VALUE} → ${b || EMPTY_VALUE}`;
+}
+
+/**
+ * A change's moves as clauses of a SENTENCE about the task — "set priority to
+ * High", "cleared the due date", "added the Acceptance checklist", "ticked 1
+ * of 4 on Acceptance" — for a feed that reads its rows as sentences with the
+ * actor in front ("Jane Founder ticked 1 of 4 on Acceptance").
+ *
+ * NOT [describeChange], which is a LABEL ("Priority: Normal → High") for a
+ * column of changes with no actor in the line. Both read the same deltas
+ * through [deltaValue], so a value is worded one way everywhere; only the
+ * grammar around it differs. A field name is lower-case here because it sits
+ * mid-sentence.
+ *
+ * CHECKLISTS ARE COUNTS PER NAMED LIST (`checklistText` in
+ * `internal/tracker/wake.go`), so the clause compares the two sides list by
+ * list: one only on the new side was added, one only on the old was removed,
+ * and one on both moved its done count or its size. A side this build cannot
+ * parse falls through to the generic clause rather than guessing.
+ */
+export function changeClauses(
+  fields: Record<string, unknown> | undefined,
+  ctx: LabelContext,
+): string[] {
+  const out: string[] = [];
+  for (const [field, raw] of Object.entries(fields ?? {})) {
+    const delta = raw as { from?: unknown; to?: unknown } | null;
+    if (!delta || typeof delta !== "object" || !("from" in delta || "to" in delta)) {
+      const value = deltaValue(field, scalar(raw), ctx);
+      out.push(value ? `set ${fieldWord(field)} to ${value}` : `changed ${fieldWord(field)}`);
+      continue;
+    }
+    const from = scalar(delta.from);
+    const to = scalar(delta.to);
+    if (field === "checklists") {
+      const said = checklistClauses(from, to);
+      if (said) {
+        out.push(...said);
+        continue;
+      }
+    }
+    // A RELATION IS A SET OF OTHER TASKS, so the clause names what joined it
+    // and what left it — "made it block ENG-4" rather than "set the blocking
+    // to ENG-4", which read a derived mirror as a field somebody typed into.
+    const relation = RELATION_WORDS[field];
+    if (relation) {
+      const ids = (side: string) => (side ? side.split(", ") : []);
+      const named = (id: string) => ctx.taskKey?.(id) || id;
+      const was = ids(from);
+      const now = ids(to);
+      const joined = now.filter((id) => !was.includes(id)).map(named);
+      const left = was.filter((id) => !now.includes(id)).map(named);
+      if (joined.length > 0) out.push(`${relation.added} ${joined.join(", ")}`);
+      if (left.length > 0) out.push(`${relation.removed} ${left.join(", ")}`);
+      if (joined.length > 0 || left.length > 0) continue;
+    }
+    let a = deltaValue(field, from, ctx);
+    let b = deltaValue(field, to, ctx);
+    if (from !== to && a === b) {
+      a = field === "due" || field === "start" ? (from ? fmtDateTime(from) : "") : from;
+      b = field === "due" || field === "start" ? (to ? fmtDateTime(to) : "") : to;
+    }
+    if (!b) out.push(`cleared the ${fieldWord(field)}`);
+    else if (!a) out.push(`set the ${fieldWord(field)} to ${b}`);
+    else out.push(`changed the ${fieldWord(field)} from ${a} to ${b}`);
+  }
+  return out;
+}
+
+/**
+ * How a sentence says a task joined or left one of this task's relations —
+ * the three authored kinds, the `blocking` mirror and the parent.
+ */
+const RELATION_WORDS: Record<string, { added: string; removed: string }> = {
+  waiting_on: { added: "made it wait on", removed: "stopped it waiting on" },
+  blocking: { added: "made it block", removed: "stopped it blocking" },
+  linked: { added: "linked it to", removed: "unlinked it from" },
+  duplicates: { added: "marked it a duplicate of", removed: "unmarked it as a duplicate of" },
+  parent: { added: "filed it under", removed: "took it out of" },
+};
+
+/** A field's name mid-sentence: the tracker's own word, lower-case. */
+function fieldWord(field: string): string {
+  switch (field) {
+    case "tags":
+      return "labels";
+    case "due":
+      return "due date";
+    case "start":
+      return "start date";
+    case "routing_unit":
+      return "routing team";
+    default:
+      return humanize(field).toLowerCase();
+  }
+}
+
+/** One side of a checklist delta — see [changeClauses]. */
+interface ListCount {
+  done: number;
+  total: number;
+  promoted: number;
+}
+
+function parseChecklists(side: string): Map<string, ListCount> | null {
+  const lists = new Map<string, ListCount>();
+  if (!side) return lists;
+  const entry = /(.+?): (\d+) of (\d+) done(?: \((\d+) promoted\))?(?:, |$)/gy;
+  let at = 0;
+  for (let m = entry.exec(side); m; m = entry.exec(side)) {
+    lists.set(m[1]!, { done: +m[2]!, total: +m[3]!, promoted: +(m[4] ?? 0) });
+    at = entry.lastIndex;
+  }
+  return at === side.length ? lists : null;
+}
+
+function checklistClauses(from: string, to: string): string[] | null {
+  const before = parseChecklists(from);
+  const after = parseChecklists(to);
+  if (!before || !after) return null;
+  const out: string[] = [];
+  for (const [name, now] of after) {
+    const was = before.get(name);
+    if (!was) {
+      out.push(
+        `added the ${name} checklist${now.total ? ` (${now.total} ${now.total === 1 ? "item" : "items"})` : ""}`,
+      );
+      continue;
+    }
+    if (now.total > was.total) {
+      const n = now.total - was.total;
+      out.push(`added ${n} ${n === 1 ? "item" : "items"} to ${name}`);
+    } else if (now.total < was.total) {
+      const n = was.total - now.total;
+      out.push(`took ${n} ${n === 1 ? "item" : "items"} off ${name}`);
+    }
+    if (now.done > was.done && now.total === was.total) {
+      out.push(`ticked ${now.done - was.done} on ${name} — ${now.done} of ${now.total} done`);
+    } else if (now.done < was.done && now.total === was.total) {
+      out.push(`unticked ${was.done - now.done} on ${name} — ${now.done} of ${now.total} done`);
+    }
+    if (now.promoted > was.promoted) {
+      const n = now.promoted - was.promoted;
+      out.push(
+        `made ${n === 1 ? "an item" : `${n} items`} of ${name} ${n === 1 ? "a sub-task" : "sub-tasks"}`,
+      );
+    }
+  }
+  for (const name of before.keys()) {
+    if (!after.has(name)) out.push(`removed the ${name} checklist`);
+  }
+  return out.length > 0 ? out : null;
 }
 
 /** One value of a snapshot as text. Objects and arrays are rare and shallow. */

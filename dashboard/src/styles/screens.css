@@ -264,7 +264,8 @@
    for, so both of them stop rather than merely slow down. */
 @media (prefers-reduced-motion: reduce) {
   .round.live .round-node::before,
-  .waiting-dot {
+  .waiting-dot,
+  .task-live-dot {
     animation: none;
   }
 }
@@ -2762,6 +2763,20 @@ span.list-position-step {
   display: inline-flex;
   min-width: 0;
 }
+/* IN A PROPERTIES RAIL THE VALUE STARTS ON THE COLUMN, picker or not. The
+   trigger is a small ghost button, and its padding and border put Status,
+   Priority, Type and Labels about ten pixels right of Assignee, Due and the
+   record beside them — one column reading as two. The button keeps its box
+   (the hover and the focus ring are its padding); it is only moved back by
+   that padding, and it draws the value in the rail's own size and ink rather
+   than a button label's. Selected by ELEMENT rather than by the kit's class
+   names: the menu's markup is the kit's, and the one button a `.cell-edit`
+   holds is its trigger (the menu's items are portalled out of it). */
+.props > dd > .cell-edit button {
+  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
+  font-size: inherit;
+  color: inherit;
+}
 
 /* ---- The marks a row and a card share ----------------------------------- */
 
@@ -2795,6 +2810,11 @@ span.list-position-step {
 }
 .work-status-mark.positive {
   color: var(--color-feedback-success-ink);
+}
+/* The delivered check is CUT OUT of its disc: drawn in the page's own ground,
+   so it reads as a hole on a card and on the rail alike, in both themes. */
+.work-status-mark .work-status-cut {
+  stroke: var(--color-surface-background);
 }
 .work-prio {
   display: inline-flex;
@@ -3284,39 +3304,686 @@ span.list-position-step {
 
 /* ---- The peek, and the item page ---------------------------------------- */
 
-.work-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: var(--spacing-4);
-  align-items: start;
-  min-width: 0;
+/* THE TASK PAGE IS THE APPROVED ISSUE ARTBOARD: a reading column and a rail
+   beside it, each its own scroller, flush with the sheet — the same frame the
+   Inbox takes, for the same reason: the rail is read while the column is
+   scrolled, and a rail that scrolled away with it was a rail a reader
+   scrolled back up for. */
+.app .crewlet-app-shell__content:has(> .task-frame) {
+  padding: 0;
+  gap: 0;
 }
-.work-item-main,
-.work-item-side {
+.task-frame {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) 316px;
+  min-height: 0;
+  height: 100%;
+}
+.task-main {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 30px 48px 40px;
+}
+/* THE READING MEASURE, 760px — the artboard's, and the width a paragraph of
+   the engine's own prose stays readable at. */
+.task-col {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
+  gap: 22px;
+  max-width: 760px;
   min-width: 0;
 }
-/* THE SUBTASK LIST MEASURES ITSELF. A named container rather than an
-   anonymous one, because `.page` is a size container too and an unnamed
-   `@container` query binds to the NEAREST one — which would be this card
-   here and the page on any list that forgot the class, i.e. one rule
-   answering two different questions depending on where it was used. The
-   query is in the responsive block at the foot of this file. */
-.work-subtasks {
-  container: subtasks / inline-size;
+.task-rail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px 28px;
+  border-left: 1px solid var(--color-border-default);
+}
+.task-flags {
+  flex-wrap: wrap;
+}
+.task-readonly {
+  margin: 0;
 }
 
-/* ONLY THE RAIL STICKS — the main column is what scrolls past it. */
-.work-item-side {
-  position: sticky;
-  /* `--sticky-top`, NOT 0, for the reason `.work-group-head` gives: the two
-     resolve identically on an item page today because it draws no toolbar, and
-     that is exactly what makes the literal dangerous — it is a rule that goes
-     wrong on the day somebody adds one, with nothing to say it was ever a
-     choice. */
-  top: var(--sticky-top);
+/* The title and the description, each the control that edits it. */
+.task-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+.task-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.task-title-edit,
+.task-body-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+/* A WRITER'S PENCIL IS QUIET until the row it edits is pointed at or focused:
+   eight of them drawn at full ink down a page read as a form. It is never
+   hidden — a keyboard reaches it, and focus shows it. */
+.task-edit {
+  flex: none;
+  opacity: 0.55;
+}
+.task-edit:hover,
+.task-edit:focus-visible,
+.task-title-row:hover .task-edit,
+.task-body:hover .task-edit {
+  opacity: 1;
+}
+.task-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+.task-prose {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.65;
+}
+
+/* The small-caps label every block of the page is headed by. */
+.task-lbl {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+.task-num {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* A checklist: each item a box a writer ticks, a done one struck through. */
+.task-checklist ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.task-check {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: 28px;
+}
+.task-check label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+/* THE NATIVE BOX IS THE CONTROL — focusable, announced and toggled by Space —
+   drawn over by the artboard's 16px square, which is only paint. */
+.task-check-box {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 16px;
+  height: 16px;
+  margin: auto 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.task-check-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: 5px;
+  color: var(--color-text-inverse);
+}
+.task-check[data-done="true"] .task-check-mark {
+  border-color: var(--color-brand-accent);
+  background: var(--color-brand-accent);
+}
+.task-check-box:focus-visible + .task-check-mark {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.task-check-box:disabled {
+  cursor: default;
+}
+.task-check-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-check[data-done="true"] .task-check-name {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+
+/* The sub-tasks: a card, its head a count and a meter, each row a way in. */
+.task-subtasks {
+  overflow: hidden;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+}
+.task-subtasks-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: 40px;
+  padding: 0 14px;
+}
+.task-subtasks-title {
+  font-weight: var(--font-weight-semibold);
+}
+.task-meter {
+  position: relative;
+  width: 80px;
+  height: 4px;
+  margin-left: var(--spacing-1);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+}
+.task-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--color-feedback-success);
+}
+.task-subtask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-top: 1px solid var(--color-border-default);
+  color: inherit;
+}
+.task-subtask:hover {
+  background: var(--color-surface-hover);
+}
+.task-subtask-title {
+  flex: 1 1 auto;
+}
+.task-subtask-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) 14px;
+  border-top: 1px solid var(--color-border-default);
+}
+.task-subtask-add > :first-child {
+  flex: 1 1 16rem;
+}
+.task-add-subtask {
+  align-self: flex-start;
+}
+
+/* ---- Activity ---- */
+
+.task-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.task-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-h2 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+.task-earlier {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+.task-activity-empty {
+  margin: 0;
+}
+/* ONE THREAD DOWN THE LEFT, joining every entry's mark: the timeline is read
+   top to bottom and the line is what says so. */
+.task-feed {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.task-feed::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 13.5px;
+  width: 1px;
+  background: var(--color-border-default);
+}
+.task-entry {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.task-entry-mark {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-background);
+  color: var(--color-text-tertiary);
+}
+.task-entry-avatar {
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+.task-entry-line {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding-top: 5px;
+  color: var(--color-text-secondary);
+}
+.task-entry-line p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.task-entry-line b,
+.task-comment-head b,
+.task-turn-head b {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+.task-when {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* "· Who this reached ›": the change's own disclosure, inline at the end of its
+   line in the link ink — a button, so it takes the base focus ring and says it
+   expands. */
+.task-reached {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-brand-accent-ink);
+  cursor: pointer;
+}
+.task-reached:hover {
+  text-decoration: underline;
+}
+.task-routing {
+  width: 100%;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+/* A comment and a turn are cards on the thread. */
+.task-comment,
+.task-turn {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+}
+.task-comment-head,
+.task-turn-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: 10px 14px;
+}
+.task-turn-head {
+  border-bottom: 1px solid var(--color-border-default);
+}
+.task-comment-body {
+  padding: 0 14px 12px;
+}
+.task-comment-decision {
+  margin: 0 14px 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.task-comment-decision ul {
+  margin: 0;
+  padding-left: var(--spacing-4);
+}
+.task-phases {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.task-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+}
+/* The phase a failed turn broke in: the cross, in the danger ink and border. */
+.task-phase[data-failed] {
+  border-color: var(--color-feedback-danger-ink);
+  color: var(--color-feedback-danger-ink);
+}
+.task-phase-join {
+  width: 8px;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+.task-turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.task-turn-summary {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+/* THE REVIEWER'S REQUEST, on the raised rung inside the card, with the
+   caution ink on its mark: it is what the next pass answered. */
+.task-turn-review {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.task-turn-review > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--color-feedback-warning-ink);
+}
+.task-turn-review p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.task-turn-nosummary {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.task-turn-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* What the turn took, under the chips, read from the left. */
+.task-turn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.task-tool {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+}
+.task-trace {
+  font-size: var(--font-size-xs);
+}
+
+/* THE TURN RUNNING ON THIS TASK NOW, in the working state's own ground and
+   ink — the state that is colour in this product. */
+.task-live {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
+}
+.task-live b {
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+.task-live-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-feedback-info);
+  animation: task-live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes task-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.task-live-go {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-weight: var(--font-weight-medium);
+}
+.task-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-left: 40px;
+}
+.task-compose-reply {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ---- The rail ---- */
+
+.task-rail-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* EVERY HEADING IN THE RAIL IN ONE CASE: the property groups' headings
+   ("Fields", "Record") take the sentence case its own sections (Relations,
+   Pages, Watching) are set in, rather than the frame rail's small caps — one
+   column, one voice, as the artboard sets it. */
+.task-rail-body .props-section {
+  font-size: var(--font-size-xs);
+  letter-spacing: normal;
+  text-transform: none;
+}
+.task-rail-assignee {
+  flex-wrap: wrap;
+}
+/* A DATE AND ITS DISTANCE WRAP AS WHOLE WORDS: "Oct 25, 2026" broken across
+   two lines beside "in 28d" broken across two more reads as four values. */
+.task-date {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--spacing-2);
+}
+.task-date > span {
+  white-space: nowrap;
+}
+/* LATE IS THE DANGER TONE HERE AS ON EVERY ROW AND CALENDAR DAY — the
+   engine's own `overdue`, so the rail cannot read "2 days overdue" in grey
+   beside a board that draws the same task red. */
+.task-date.overdue {
+  color: var(--color-feedback-danger-ink);
+  font-weight: var(--font-weight-medium);
+}
+.task-rail-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.task-rail-edit input {
+  width: 9rem;
+}
+.task-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-default);
+}
+.task-rail-link-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.task-rail-link {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  height: 30px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+}
+.task-rail-status {
+  display: inline-flex;
+  flex: none;
+}
+.task-rail-link:hover {
+  background: var(--color-surface-hover);
+}
+.task-rail-link > .muted {
+  white-space: nowrap;
+}
+.task-rail-link > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.task-cost {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-2);
+  margin: 0;
+}
+/* The term is first in the markup, as a definition list requires, and the
+   figure is drawn above it. */
+.task-cost > div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.task-cost dd {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.task-cost dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.task-handoffs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: var(--spacing-2) 0 0;
+}
+.task-handoffs-full {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-feedback-warning-ink);
+}
+.task-watching {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.task-watching .task-lbl {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.task-watchers {
+  display: inline-flex;
+  gap: 2px;
+}
+.task-peek .task-rail-body {
+  padding-bottom: var(--spacing-2);
+}
+.composer-ask-fieldset {
+  margin: 0;
+  padding: 0;
+  border: none;
 }
 
 /* A metadata list, not a panel layout: two columns sized for compact pairs,
@@ -3354,90 +4021,6 @@ span.list-position-step {
 .work-ask {
   box-shadow: inset 2px 0 0 var(--color-feedback-warning);
 }
-.work-hist {
-  display: flex;
-  flex-direction: column;
-}
-/* AN ENTRY IS AS LONG AS THE CHANGE WAS, so this row is a variable height and
-   every rule below is written for one taller than a line.
-
-   The description carried `.truncate`, which is right for a cell with a shape —
-   a title, a handle, a key — and wrong for this one. A create moves every field
-   the applier compares (`internal/tracker`'s `TaskDeltas`: title, status,
-   assignee, priority, project, type, tags, due, start, estimate, points,
-   capped at `MaxDeltas`) and `describeHistory` renders a clause each, so ~250
-   characters arrived in a cell about 100 wide and the ellipsis fell inside
-   `Status: ` — on a panel with a page of unused height under it.
-
-   A SHORTER STRING IS NOT THE ALTERNATIVE. The panel's whole subject is what
-   moved, so a cap hides the same clauses the clip did — and it would not help at
-   all with the real cost: `quiet` and the `turn →` link were in this same inline
-   box, after the description, so the clip took the row's only control out of
-   sight and left it in the tab order. They have their own track now. */
-.work-hist-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto auto;
-  align-items: baseline;
-  /* A TRACK IS NOT A GAP, which is how this row shipped reading "quiet5m ago".
-     The tail and the timestamp are two `auto` tracks sized to their own
-     content, so with nothing between them a row that carried both painted the
-     marker hard against the instant — and the one place that looked like a gap
-     was the 6px of slack inside the 18px glyph column, which is the glyph's own
-     track and says nothing about the other three boundaries. `--spacing-3` is
-     `.work-feed-row`'s, the sibling grid of the same font size drawing the same
-     kind of line, so the two cannot drift; the tail keeps its tighter
-     `--spacing-2` inside itself, because `quiet` and `turn →` are one group and
-     the tracks around them are columns. */
-  gap: var(--spacing-3);
-  /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--spacing-1` was not: 4px of
-     padding put 8px between two entries while the lines inside one sit 18px
-     apart, so a wrapped panel read as a single block of prose with no boundary
-     anywhere. The hairline is what every other variable-height list here already
-     uses — `.work-feed-row`, `.thread-entry`. */
-  padding: var(--spacing-2) 0;
-  border-bottom: 1px solid var(--color-border-default);
-  font-size: var(--font-size-xs);
-  /* STATED rather than inherited from `body`, because the glyph's offset below
-     is computed from it. */
-  line-height: var(--font-line-height-normal);
-  min-width: 0;
-}
-.work-hist-row:last-child {
-  border-bottom: none;
-}
-.work-hist-row > svg {
-  color: var(--color-text-muted);
-  /* ON THE ENTRY'S FIRST LINE, never in the middle of it. The row aligns on the
-     FIRST baseline, so the timestamp stays level with the opening line; an icon
-     centred in the ROW tracks the row's HEIGHT instead and slides to the middle
-     of a four-line create, pointing at nothing. `start` plus one line's
-     half-leading lands it exactly where `center` landed it while every entry was
-     a single line, so this changes nothing about a one-line row and fixes every
-     taller one. 12px is the `xs` glyph's own edge; `1em` is this row's own font
-     size. */
-  align-self: start;
-  margin-top: calc((1em * var(--font-line-height-normal) - 12px) / 2);
-}
-/* The description, wrapping. `anywhere` rather than `break-word`: a value can be
-   a uuid or a JSON object — `describeHistory`'s `scalar` stringifies both — and
-   neither carries a space to break at, so an unbreakable run would paint over
-   the timestamp beside it once the clip is gone. */
-.work-hist-what {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-/* The tail: what the row's sentence must not be able to swallow. */
-.work-hist-tail {
-  display: flex;
-  gap: var(--spacing-2);
-  white-space: nowrap;
-}
-.work-hist-when {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 /* The activity feed's own grid: when, what, which item, who. */
 .work-feed-row {
   display: grid;
@@ -3489,43 +4072,49 @@ a.work-cal-chip {
    171px body, which is the arrangement the threshold exists to prevent, at
    twenty widths of window. `page` is the shell's own named container. */
 
-/* THE ITEM PAGE'S RAIL SITS BESIDE ITS BODY while both are readable, and the
-   body's floor is the one already measured for the list: 444px is under what
-   a work row needs for a key, a title and an assignee (`LIST_FLOOR` in
-   `app/layout.ts`), and an item page draws that row for
-   every subtask. Beside it the rail is 300, the gap is `--spacing-4` and the
-   page's own inset is `--spacing-5` twice — 56px at normal density and 63.84 at
-   comfortable — so 444 + 300 + 64 = 808, and the WIDEST density is what the
-   one number has to clear, because a container query can no more read the
-   density than a media query can. */
-@container page (max-width: 808px) {
-  .work-item {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .work-item-side {
-    position: static;
+/* THE TASK PAGE'S RAIL SITS BESIDE ITS COLUMN while both are readable: the
+   column's floor is the 444px a sub-task row needs for a key, a title and a
+   holder (`LIST_FLOOR` in `app/layout.ts`), plus its 48px insets either side,
+   plus the 316px rail — 856. Below it the rail follows the column in ONE
+   scroller, with the sheet's own inset back, so nothing is cut and nothing
+   scrolls sideways. Between that and 1100 the insets tighten to 32px, which
+   is where the artboard's 48 starts costing the reading measure. */
+@container page (max-width: 1100px) {
+  .task-main {
+    padding: 24px 32px 32px;
   }
 }
-
-/* A SUBTASK LIST IS A LIST INSIDE A BOX, and the box is 420px in a peek
-   whatever the window is doing. `.work-rows` declares eight tracks and the
-   narrow set below the phone breakpoint is a VIEWPORT query, so a peek on a
-   wide screen got all eight: 90px of fixed tracks, seven gaps and four
-   content-sized cells resolve before the title's `minmax(0, 1fr)` and the
-   title is starved to almost nothing. The same 444px floor decides it, read
-   off the list's own container — one rule that serves the peek, the item page
-   and a phone, where the viewport query could only ever serve the last. */
-@container subtasks (max-width: 444px) {
-  .work-rows {
-    grid-template-columns: var(--work-rows-narrow);
+@container page (max-width: 856px) {
+  /* ONE SCROLLER, the frame's own: above a phone the page still holds the
+     window's height (`useFillScreen`), so the column and rail scroll as one
+     inside it; below a phone the fill is withdrawn and the page scrolls. */
+  .task-frame {
+    display: block;
+    overflow-y: auto;
   }
-  /* DROPPED RATHER THAN EMPTIED, as the phone block does it: a hidden cell
-     still holds a column of nothing. */
-  .work-cell-due,
-  .work-cell-type,
-  .work-cell-who,
-  .work-row .work-row-when {
-    display: none;
+  .task-main,
+  .task-rail {
+    overflow: visible;
+  }
+  .task-main {
+    padding: var(--spacing-5) var(--spacing-4);
+  }
+  .task-rail {
+    padding: var(--spacing-4);
+    border-top: 1px solid var(--color-border-default);
+    border-left: none;
+  }
+  .task-compose {
+    margin-left: 0;
+  }
+}
+/* BELOW A PHONE'S WIDTH THE PAGE SCROLLS, as any other: the fill is
+   withdrawn there, so a frame that kept its own scroller would be a second,
+   nested one holding the whole task inside the window's height. */
+@media (width < 640px) {
+  .task-frame {
+    height: auto;
+    overflow: visible;
   }
 }
 
@@ -5274,7 +5863,7 @@ a.live-row:focus-visible {
   max-width: 820px;
   padding: 0 var(--spacing-8) var(--spacing-6);
 }
-.inbox-composer {
+.composer {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -5283,23 +5872,23 @@ a.live-row:focus-visible {
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-lg);
 }
-.inbox-composer:focus-within {
+.composer:focus-within {
   border-color: var(--color-border-strong);
 }
-.inbox-composer[data-mode="answer"] {
+.composer[data-mode="answer"] {
   border-color: var(--color-brand-accent);
 }
-.inbox-composer-mode {
+.composer-mode {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   font-size: var(--font-size-xs);
   color: var(--color-brand-accent-ink);
 }
-.inbox-composer-field {
+.composer-field {
   position: relative;
 }
-.inbox-composer-field textarea {
+.composer-field textarea {
   width: 100%;
   padding: 0;
   background: transparent;
@@ -5307,15 +5896,15 @@ a.live-row:focus-visible {
   box-shadow: none;
   resize: none;
 }
-.inbox-composer-field textarea:focus-visible {
+.composer-field textarea:focus-visible {
   outline: 2px solid transparent;
 }
-.inbox-composer-foot {
+.composer-foot {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.inbox-mentions {
+.composer-mentions {
   position: absolute;
   bottom: 100%;
   left: 0;
@@ -5329,7 +5918,7 @@ a.live-row:focus-visible {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
 }
-.inbox-mentions li {
+.composer-mentions li {
   display: flex;
   align-items: baseline;
   gap: var(--spacing-2);
@@ -5337,17 +5926,17 @@ a.live-row:focus-visible {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.inbox-mentions li[aria-selected="true"] {
+.composer-mentions li[aria-selected="true"] {
   background: var(--color-brand-accent-soft);
 }
-.inbox-picklist {
+.composer-picklist {
   display: flex;
   flex-direction: column;
   gap: 2px;
   max-height: 16rem;
   overflow-y: auto;
 }
-.inbox-pick {
+.composer-pick {
   display: flex;
   align-items: baseline;
   gap: var(--spacing-2);
@@ -5361,19 +5950,35 @@ a.live-row:focus-visible {
   text-align: left;
   cursor: pointer;
 }
-.inbox-pick:hover {
+.composer-pick:hover {
   background: var(--color-surface-hover);
 }
-.inbox-pick:focus-visible {
+.composer-pick:focus-visible {
   outline: 2px solid var(--color-focus);
 }
-.inbox-pick[aria-checked="true"] {
+.composer-pick[aria-checked="true"] {
   border-color: var(--color-brand-accent);
   background: var(--color-brand-accent-soft);
 }
-.inbox-attach-save {
+.composer-attach-save {
   padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border-default);
+}
+/* THE TASK PAGE'S COMPOSER IS ONE LINE until it is written in, as the
+   artboard draws it: the field, then its marks and the button, on one row
+   that wraps below a comfortable measure. It grows with what is typed. */
+.composer[data-mode="comment"] {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.composer[data-mode="comment"] .composer-field {
+  flex: 1 1 16rem;
+}
+.composer[data-mode="comment"] .composer-field textarea {
+  min-height: 0;
+  field-sizing: content;
+  max-height: 16lh;
 }
 
 /* ONE PANE UNDER THE PHONE WIDTH, with Back. A human teammate answering an

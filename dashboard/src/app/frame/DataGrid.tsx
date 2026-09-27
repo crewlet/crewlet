@@ -463,6 +463,17 @@ function drivingRevision(): number {
   return revision;
 }
 
+/**
+ * Whether ANY grid on screen holds `j` and `k` — for a screen that binds the
+ * same two keys to something of its own (a task page stepping through the list
+ * it was opened from) and must stand aside while a grid on it takes them, so
+ * one press is never two actions.
+ */
+export function useAnyGridDriving(): boolean {
+  useSyncExternalStore(watchDriving, drivingRevision);
+  return drivable.length > 0;
+}
+
 function isDriving(gridId: string): boolean {
   if (touched !== null) return touched === gridId;
   return drivable[0] === gridId;

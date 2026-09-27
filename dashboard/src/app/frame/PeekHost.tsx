@@ -40,16 +40,27 @@ import { PEEKS } from "./peeks.tsx";
 import { PeekBoundary } from "../boundaries.tsx";
 import { refToken, type ObjectRef } from "./objects.ts";
 
-interface Neighbours {
+/** What a list publishes: the order it draws, and what its rows' own pages carry. */
+interface Published {
   refs: ObjectRef[];
-  publish: (refs: ObjectRef[]) => void;
+  /**
+   * The query a page opened from this list carries — the work list's `list=`,
+   * which is what lets a task's own page say "3 of 18" and step to the next
+   * one. The rail's Open is the same link a row's modifier-click follows, so
+   * opening a task through the peek keeps the place it was opened from.
+   */
+  query?: Record<string, string>;
+}
+
+interface Neighbours extends Published {
+  publish: (published: Published) => void;
 }
 
 const NeighbourContext = createContext<Neighbours | null>(null);
 
 export function PeekNeighbours({ children }: { children: ReactNode }) {
-  const [refs, publish] = useState<ObjectRef[]>([]);
-  const value = useMemo(() => ({ refs, publish }), [refs]);
+  const [published, publish] = useState<Published>({ refs: [] });
+  const value = useMemo(() => ({ ...published, publish }), [published]);
   return <NeighbourContext.Provider value={value}>{children}</NeighbourContext.Provider>;
 }
 
@@ -60,19 +71,20 @@ export function PeekNeighbours({ children }: { children: ReactNode }) {
  * rows on every push: an effect depending on the array itself would republish
  * several times a second and re-render the rail with it.
  */
-export function usePeekNeighbours(refs: ObjectRef[]): void {
+export function usePeekNeighbours(refs: ObjectRef[], query?: Record<string, string>): void {
   const host = useContext(NeighbourContext);
   const key = refs.map(refToken).join("|");
+  const queryKey = query ? new URLSearchParams(query).toString() : "";
   const publish = host?.publish;
   useEffect(() => {
     if (!publish) return;
-    publish(refs);
+    publish(query ? { refs, query } : { refs });
     // The list that published last owns the stepper; unmounting clears it so
     // a rail opened from the next screen does not step through the last one's
     // rows.
-    return () => publish([]);
+    return () => publish({ refs: [] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, publish]);
+  }, [key, queryKey, publish]);
 }
 
 export function PeekHost() {
@@ -91,6 +103,10 @@ export function PeekHost() {
   if (!object || !body) return null;
 
   const at = refs.findIndex((r) => refToken(r) === refToken(object));
+  // THE OPEN LINK CARRIES THE LIST only for an object IN it: a peek opened on
+  // something else — a mention, a pasted `peek=` — is not in that list and
+  // its page has no place in it to show.
+  const query = at >= 0 ? host?.query : undefined;
   const step =
     at >= 0 && refs.length > 1
       ? (delta: -1 | 1) => {
@@ -100,7 +116,7 @@ export function PeekHost() {
       : undefined;
 
   return (
-    <DetailRail ref={object} onStep={step}>
+    <DetailRail ref={object} onStep={step} query={query}>
       {/* KEYED ON THE SUBJECT, which is rule 14 for a route and holds for a
           rail: `[` and `]` move the peek from task A to task B by changing
           one query key, so React reconciles ONE body rather than mounting

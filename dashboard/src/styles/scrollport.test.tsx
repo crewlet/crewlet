@@ -52,12 +52,11 @@ import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
  * one whose bands render from plain props. That is now a `DataGrid` — the list
  * and the table collapsed into one renderer with two column sets — so the walk
  * covers `.grid-head` and `.grid-band-head`, the two rules this file used to
- * name as uncovered. Three others take `--sticky-top` and are not walked:
- * `.work-item-side` on an item page, `.list-day` on Activity and
- * `.inbox-detail` on Inbox each draw inside a screen that needs the store, so
- * standing them up would buy less than it would cost to keep honest. The
+ * name as uncovered. One other takes `--sticky-top` and is not walked:
+ * `.list-day` on Activity draws inside a screen that needs the store, so
+ * standing it up would buy less than it would cost to keep honest. The
  * roster is derived from every sheet regardless, so a band added to THIS tree
- * is covered the moment it appears, and the day one of those is rendered here
+ * is covered the moment it appears, and the day that one is rendered here
  * by something else it is covered with no change to this file.
  *
  * (`.work-band` was a fourth, on My work's day. That day is the work grid
@@ -234,7 +233,7 @@ afterEach(cleanup);
 test("the two rosters are read from the sheets at all", () => {
   // A GATE OVER AN EMPTY SET CERTIFIES NOTHING, and both sets come from a scan
   // that a change of idiom in the sheets could silently empty.
-  expect(stickyClasses().has("work-item-side")).toBe(true);
+  expect(stickyClasses().has("list-day")).toBe(true);
   expect(stickyClasses().has("grid-head")).toBe(true);
   expect(stickyClasses().has("grid-band-head")).toBe(true);
   // The page column's own scroller is the kit's, so it is not in our sheets;

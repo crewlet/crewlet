@@ -2461,6 +2461,72 @@ export interface WorkCommentsAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** Another task as a reader names it (`tracker.TaskRef`). */
+export interface WorkTaskRef {
+  id: string;
+  key: string;
+  title: string;
+  status: WorkStatus;
+}
+
+/** One tool a turn called, and how many times (`tracker.TurnTool`). */
+export interface WorkTurnTool {
+  name: string;
+  calls: number;
+}
+
+/** One turn charged to a task, its segments folded (`tracker.TaskTurn`). */
+export interface WorkItemTurn {
+  /** The run the segments share — what the trace link carries. */
+  turn_id: string;
+  /** "Turn n": the task's own count of turns. Zero for a turn with no counted
+   *  segment on this task (more of a turn charged elsewhere). */
+  ordinal: number;
+  seat: string;
+  trigger?: string;
+  /** How many completions were charged here; more than one for a turn that
+   *  parked on a coding run. */
+  segments: number;
+  /** Input plus output, over every segment — what the task's spend sums. */
+  tokens: number;
+  cache_read: number;
+  rounds: number;
+  wall_ms: number;
+  workers?: number;
+  sent_back?: number;
+  /** How the turn ended, off its newest segment: its decision, `failed`, or
+   *  `suspended` while a coding run is still out. */
+  outcome: string;
+  phases: string[];
+  /** The phase that failed, when `outcome` is `failed` because one did.
+   *  `phases` lists it too — it ran — so a card marks that chip rather than
+   *  ticking every phase beside a pill that names none. */
+  failed_in?: string;
+  /** What it did, in the agent's own words. Absent on a turn an older build
+   *  recorded. */
+  summary?: string;
+  /** What the newest review that sent the work back asked for. */
+  review?: string;
+  tools?: WorkTurnTool[];
+  /** When the newest segment landed. */
+  at: string;
+}
+
+/** One page of the turns charged to a task, newest first (`work_item_turns`).
+ *  From the tracker's own rows — the account the task's spend sums — so it
+ *  outlives the event history and answers on any node. */
+export interface WorkItemTurnsAnswer {
+  item: string;
+  key: string;
+  turns: WorkItemTurn[];
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkChange {
   id: string;
   kind: string;
@@ -2675,6 +2741,9 @@ export interface WorkItemDetail {
    *  renderer falls back to the id, which is a value somebody set. */
   keys?: Record<string, string>;
   links?: WorkLink[];
+  /** The task this one is filed under, named — absent for a top-level task
+   *  and for a parent this node holds no row for. */
+  parent?: WorkTaskRef;
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */
   fields?: WorkFieldValue[];
@@ -2697,12 +2766,23 @@ export interface WorkItemDetail {
   comments_cursor?: string;
   /** The person behind each comment an operator token wrote, by comment id. */
   comment_seats?: Record<string, string>;
+  /** The PERSON behind the token that filed this task, off the create's own
+   *  history row: `task.reporter` is the credential, which is the audit trail
+   *  and not a name. Absent for a task a seat filed. */
+  reporter_seat?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** Where the due date stands against the COMPANY's today, computed where
+   *  a row's `overdue` is: whole calendar days to the due day (negative once
+   *  it has passed) and whether it is overdue (open work only). Absent for a
+   *  task with no due date. A renderer never re-derives it from the
+   *  browser's clock, which read "1d ago" beside a board marking the same
+   *  task two days late. */
+  due_standing?: { days: number; overdue?: boolean };
   /** How many times agents may hand this item on before the engine refuses
    *  the next one — the limit `task.reassignments` counts against, served by
    *  the engine that enforces it so no screen carries a figure of its own. */
@@ -3975,6 +4055,7 @@ export interface QueryMap {
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;
+  work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;

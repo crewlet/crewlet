@@ -88,10 +88,13 @@ test("a task's trail names its project as the project's page does", async () => 
   });
   await settle();
 
-  expect(parts()).toEqual(["Work", "Core", "ENG-1"]);
+  // THE NAME WITH ITS KEY AS A CHIP, the way every row and rail draws a
+  // project ("ENG Core platform" in the artboard's bar).
+  expect(parts()).toEqual(["Work", "ENGCore", "ENG-1"]);
   // Still the way to it: the crumb links to the project's page.
   const link = trail().querySelector<HTMLAnchorElement>("a[href='#/work/ENG']");
-  expect(link?.textContent).toBe("Core");
+  expect(link?.querySelector(".crumb-tag")?.textContent).toBe("ENG");
+  expect(link?.querySelector(".crumb-text")?.textContent).toBe("Core");
 });
 
 test("the key is the crumb until the project has answered", async () => {

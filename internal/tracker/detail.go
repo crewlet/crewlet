@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -107,6 +108,14 @@ type DetailWants struct {
 	// an id where a person expects their team's name.
 	Units Units
 
+	// Clock is the company's calendar the task's due date is stood
+	// against — see [TaskDetail.DueStanding]. Nil answers no standing,
+	// which is honest for a caller that draws no due date (a tool reading
+	// a task before it writes one) and never a guess on the process's own
+	// clock and zone, which would put one node's answer a day out from
+	// another's.
+	Clock *DayClock
+
 	// Comment names ONE comment to read WHOLE, and REPLACES the page.
 	//
 	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
@@ -118,6 +127,54 @@ type DetailWants struct {
 	// twenty whole bodies is ten times the ceiling on one tool answer —
 	// which is the reason the page is excerpted in the first place.
 	Comment string
+}
+
+// DayClock is an instant and the company's zone: what "today" is, on the
+// calendar every due band, overdue mark and `due=` token is cut on.
+type DayClock struct {
+	Now  time.Time
+	Zone *time.Location
+}
+
+// DueStanding is where a task's due date stands against the company's today.
+//
+// ON THE ANSWER, never re-derived by a renderer: the task page's rail read
+// "1d ago" in the reader's own clock for a task two company days late that
+// every board and the calendar drew as overdue — two screens, one task, two
+// answers about whether it was late.
+type DueStanding struct {
+	// Days is whole CALENDAR days from the company's today to the due
+	// date's day, negative when the date has passed: 0 is due today, 1
+	// tomorrow, -2 two days ago. Counted on labels rather than instants,
+	// so a day DST made 23 or 25 hours long is still one day.
+	Days int `json:"days"`
+
+	// Overdue is [TaskRow.Overdue]'s predicate exactly — open work whose
+	// due instant is before the company's midnight today — so the rail and
+	// the row it was opened from cannot disagree. A finished task two days
+	// past its date is not overdue; it is done.
+	Overdue bool `json:"overdue,omitempty"`
+}
+
+// dueStanding stands a task's due date against clock, or answers nothing
+// where there is no clock or no date.
+func dueStanding(clock *DayClock, task Task) *DueStanding {
+	if clock == nil || task.DueAt == nil {
+		return nil
+	}
+	today := period.At(period.Day, clock.Now, clock.Zone)
+	due := period.At(period.Day, *task.DueAt, clock.Zone)
+	from, errFrom := time.Parse(time.DateOnly, today.Label)
+	to, errTo := time.Parse(time.DateOnly, due.Label)
+	if errFrom != nil || errTo != nil {
+		// A DATE A LABEL CANNOT SPELL — past year 9999 in this zone —
+		// has no standing to report rather than a wrong one.
+		return nil
+	}
+	return &DueStanding{
+		Days:    int(to.Sub(from).Hours() / 24),
+		Overdue: task.StatusGroup.Open() && task.DueAt.Before(today.Start),
+	}
 }
 
 // DetailHistoryDefault is how many history rows a detail read returns when the
@@ -176,6 +233,25 @@ type TaskDetail struct {
 	// already a seat. Only with the comments it labels.
 	CommentSeats map[string]string `json:"comment_seats,omitempty"`
 
+	// ReporterSeat is the PERSON behind a task an operator token filed —
+	// the seat that token was bound to when it wrote the create, off the
+	// create's own history row — on exactly the terms [CommentSeats] names
+	// the person behind a comment. [Task.Reporter] is the credential, which
+	// is the audit trail and stays the record; a rail drawn from it named
+	// "founder" as the reporter while the activity beside it, which reads
+	// the history row's `actor_seat`, said Jane Founder filed it — one
+	// person with two names on one page.
+	//
+	// FROM THE CREATE ROW rather than from the history page, because the
+	// page is the newest [DetailHistoryDefault] changes and a busy task's
+	// create falls out of it, and rather than from the chart's CURRENT
+	// binding, because a token re-bound since would name somebody who
+	// filed nothing. Only when that row's author IS the reporter — the
+	// create sets the field to its author and nothing else writes it, so
+	// a mismatch is an imported task whose reporter nobody here bound.
+	// Absent for a task a seat filed, whose reporter already is a seat.
+	ReporterSeat string `json:"reporter_seat,omitempty"`
+
 	// Fields are the task's custom-field values with the declaration that
 	// explains each one, and with the values nothing explains reported as
 	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
@@ -203,6 +279,17 @@ type TaskDetail struct {
 	// which.
 	Links []DetailLink `json:"links,omitempty"`
 
+	// Parent is the task this one is filed under, as a reader names it:
+	// its key, its title and where it stands. A task carries its parent's
+	// ID — the record — and a page that says "Part of LEAD-12 · 2.4
+	// release" needed a second read of the whole parent to say it.
+	//
+	// IN THE SAME TRANSACTION as the task, so the name cannot come from a
+	// later instant than the child it heads. ABSENT for a top-level task,
+	// and for a parent this node holds no row for — an id the reader falls
+	// back to rather than a blank name.
+	Parent *TaskRef `json:"parent,omitempty"`
+
 	// Blocked is the SAME predicate [TaskRow.Blocked] carries — an open
 	// dependency edge — computed here rather than derived from Links,
 	// which say what the relations ARE and not whether any blocker is
@@ -213,6 +300,11 @@ type TaskDetail struct {
 	// contradicts its own list a click later, and because deriving it in
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
+
+	// DueStanding is where the due date stands against the company's
+	// today — see [DueStanding]. Only with [DetailWants.Clock], and absent
+	// for a task with no due date.
+	DueStanding *DueStanding `json:"due_standing,omitempty"`
 
 	// ReassignmentBudget is [ReassignmentBudget], served beside the
 	// counter it bounds ([Task.Reassignments]) so a screen saying "hand-off
@@ -228,6 +320,29 @@ type TaskDetail struct {
 	AppliedThrough uint64             `json:"applied_through"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+}
+
+// TaskRef is another task as a reader names it.
+type TaskRef struct {
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Status Status `json:"status"`
+}
+
+// readTaskRef names one task, or nil for an id this node holds no row for.
+func readTaskRef(ctx context.Context, tx *sql.Tx, id string) (*TaskRef, error) {
+	ref := TaskRef{ID: id}
+	err := tx.QueryRowContext(ctx,
+		`SELECT key, title, status FROM tracker_tasks WHERE id = ?`, id).
+		Scan(&ref.Key, &ref.Title, &ref.Status)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("tracker: name task %s: %w", id, err)
+	}
+	return &ref, nil
 }
 
 // TaskUnits is a task's two unit references as a reader renders them.
@@ -353,6 +468,14 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			return err
 		}
 		out.Task = task
+		if task.Parent != nil && *task.Parent != "" {
+			if out.Parent, err = readTaskRef(ctx, tx, *task.Parent); err != nil {
+				return err
+			}
+		}
+		if out.ReporterSeat, err = reporterSeat(ctx, tx, id, task.Reporter); err != nil {
+			return err
+		}
 		switch {
 		case want.Comment != "":
 			// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
@@ -460,6 +583,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// reads no row, so there is nothing to keep consistent with the ones
 	// above.
 	out.Units = taskUnits(want.Units, out.Task)
+	out.DueStanding = dueStanding(want.Clock, out.Task)
 	out.ReassignmentBudget = ReassignmentBudget
 	// THE LEVEL SERVED, never the level asked for. Assigning the argument
 	// here — which is the only thing this function used to do with it —
@@ -470,6 +594,29 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		out.Complete = false
 	}
 	return out, nil
+}
+
+// reporterSeat is the seat bound to the credential that filed this task, off
+// the create's own history row — see [TaskDetail.ReporterSeat].
+//
+// ON THE SUBJECT INDEX (`tracker_history_subject_idx`), whose seek bounds the
+// scan to this task's own rows; a task has exactly one create.
+func reporterSeat(ctx context.Context, tx *sql.Tx, taskID, reporter string) (string, error) {
+	if reporter == "" {
+		return "", nil
+	}
+	var seat string
+	err := tx.QueryRowContext(ctx, `
+		SELECT actor_seat FROM tracker_history
+		WHERE subject_id = ? AND kind = ? AND actor = ? AND actor_seat <> ''
+		ORDER BY log_seq LIMIT 1`, taskID, string(ChangeCreated), reporter).Scan(&seat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("tracker: read who filed %s: %w", taskID, err)
+	}
+	return seat, nil
 }
 
 // resolveTaskID turns an id or a key — current or former — into an id.
@@ -530,9 +677,15 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	var body []byte
 	var entered int64
 	var rank string
+	var spend Spend
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at, rank FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&body, &entered, &rank)
+		`SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
+		        spend_input, spend_output, spend_cache_read, spend_cache_write,
+		        spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
+		   FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&body, &entered, &rank, &spend.Turns, &spend.Rounds, &spend.Input,
+		&spend.Output, &spend.CacheRead, &spend.CacheWrite, &spend.WallMs,
+		&spend.Tokens, &spend.Workers, &spend.SentBack)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, fmt.Errorf("%w: %s", ErrNoTask, id)
@@ -554,6 +707,13 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	// filed or last re-homed at — which a detail read answered as the
 	// card's place long after a drag had moved it.
 	task.Rank = Rank(rank)
+	// AND THE SPEND, for the rank's reason exactly: a turn adds to the
+	// task's COLUMNS in the transaction that inserts its turn row
+	// ([Applier.applyTurn]) and never touches the document, so the
+	// document's copy is whatever the create wrote — zero. Read from the
+	// document, every task page said no agent had ever worked on it, beside
+	// a turn list and a board card counting the turns the columns hold.
+	task.Spend = spend
 	return task, nil
 }
 

@@ -67,9 +67,22 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a decision's option cards and a parked run's answer, made in the pane",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/Composer.tsx": {
-    why: "the pane's reply or answer, and the task link and page it can attach",
+  "components/Composer.tsx": {
+    why:
+      "the Inbox pane's reply or answer and the task page's comment or ask, and the " +
+      "task link and page either can attach",
     suite: "routes/inbox/Inbox.test.tsx",
+  },
+  "routes/work/item/edit.tsx": {
+    why:
+      "the task page's one update_work_item — status, priority, labels, schedule, fields, " +
+      "title and description, a checklist tick, following it — for a writer, and the " +
+      "reason said once for everybody else",
+    suite: "routes/work/WorkItem.test.tsx",
+  },
+  "routes/work/item/Body.tsx": {
+    why: "a sub-task filed under the task from its + (create_work_item with parent)",
+    suite: "routes/work/WorkItem.test.tsx",
   },
   "routes/work/shapes/Board.tsx": {
     why:

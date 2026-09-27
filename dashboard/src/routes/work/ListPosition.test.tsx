@@ -7,7 +7,7 @@
  * the task in the whole answer.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { ListPosition } from "./ListPosition.tsx";
@@ -65,10 +65,25 @@ test("3 of 18 is the engine's placement in the whole list, with a way to either 
     group_limit: 1,
   });
   expect(screen.getByText("3 of 18")).toBeTruthy();
-  const prev = screen.getByRole("link", { name: "Previous: ENG-2" });
+  const prev = screen.getByRole("link", { name: "Previous task: ENG-2" });
   // AND THE NEIGHBOUR CARRIES THE SAME LIST, so stepping keeps counting.
   expect(prev.getAttribute("href")).toBe(`#/work/ENG-2?list=${LIST}`);
-  expect(screen.getByRole("link", { name: "Next: ENG-7" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Next task: ENG-7" })).toBeTruthy();
+  // UP AND DOWN, THEN THE PLACE, as the approved Issue page draws it.
+  const nav = document.querySelector(".list-position")!;
+  expect(nav.lastElementChild?.textContent).toBe("3 of 18");
+});
+
+// `j` AND `k` STEP THROUGH THE LIST, as they step through its rows: on a task
+// opened from a list, the task is that list's row. Each keeps the list, so the
+// next task still knows where it sits.
+test("j and k open the next and the previous task in the list", async () => {
+  mount(`#/work/ENG-4?list=${LIST}`, { position: 3, prev: "ENG-2", next: "ENG-7", total_hint: 18 });
+  await settle();
+  fireEvent.keyDown(window, { key: "j" });
+  expect(location.hash).toBe(`#/work/ENG-7?list=${LIST}`);
+  fireEvent.keyDown(window, { key: "k" });
+  expect(location.hash).toBe(`#/work/ENG-2?list=${LIST}`);
 });
 
 // PAST THE ENGINE'S COUNTING CEILING there is a count and no place in it.
@@ -83,6 +98,9 @@ test("a position the engine could not count to reads as one of a capped total", 
   await settle();
   expect(screen.getByText("one of 10,000+")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Previous/ })).toBeNull();
+  // AND `k` HAS NOWHERE TO GO, so it goes nowhere.
+  fireEvent.keyDown(window, { key: "k" });
+  expect(location.hash).toBe(`#/work/ENG-4?list=${LIST}`);
 });
 
 // NOTHING TRUE TO SAY, NOTHING SAID: a pasted link carries no list, and a task

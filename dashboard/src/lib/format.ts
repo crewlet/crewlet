@@ -662,3 +662,19 @@ export function eventHistoryLabel(seconds: number | null | undefined): string {
   const hours = Math.max(1, Math.round(seconds / 3_600));
   return `the store keeps ${plural(hours, "hour")}`;
 }
+
+/**
+ * The first line of a body that says anything — what a row or a picker shows
+ * of a comment or a question when there is one line to show it in.
+ *
+ * ONE COPY. It was three: the Inbox's list, its composer (which imported it
+ * from the list) and the Home decision row, which kept a private duplicate.
+ */
+export function firstLine(body: string): string {
+  return (
+    body
+      .split("\n")
+      .find((l) => l.trim())
+      ?.trim() ?? ""
+  );
+}

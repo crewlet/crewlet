@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -115,6 +116,20 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	charge.record = tracker.TurnRecord{
 		Task: item.ID, Seat: t.handle, TurnID: t.runID, Trigger: t.trigger.Type,
 		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
+		// WHAT THE SEGMENT DID, cut to the record's own bound here — the
+		// writer refuses an overlong one rather than cut it, since every
+		// node would store it. The same summary the turn's completion
+		// event carries, so the task's card and the trace agree.
+		Summary: textcut.Within(planSummary(res), tracker.MaxTurnSummary),
+		Review:  textcut.Within(spend.Review, tracker.MaxTurnSummary),
+		Tools:   tracker.CountTurnTools(workTools(spend.AllTools)),
+	}
+	// WHICH PHASE BROKE, only where the segment is recorded as failed: a
+	// phase can fail and the turn still end otherwise (a person's stop is
+	// not a failure), and a name beside a success would be a claim about a
+	// turn that did not fail.
+	if charge.record.Outcome == string(phase.Failed) {
+		charge.record.FailedIn = spend.FailedIn
 	}
 	return charge
 }
@@ -198,4 +213,19 @@ func (e *Engine) chargeSegment(ctx context.Context, w turnRecorder, charge segme
 			"detail", "the segment's spend is on the seat's counters and the "+
 				"usage history, and not on the task it worked on")
 	}
+}
+
+// workTools is the calls a segment made that did something, without the ones
+// that only carried the phase's own answer out: `submit_work` is how an
+// executor says what it concluded (`agent/structured`), and a turn card
+// listing it beside the tools that touched the company reads as work done.
+func workTools(calls []string) []string {
+	out := make([]string, 0, len(calls))
+	for _, name := range calls {
+		if name == runner.SubmitWorkTool || name == runner.SubmitReviewTool {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }

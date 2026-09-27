@@ -387,3 +387,36 @@ func TestMedianAndP90AreOrderStatisticsOfTheWholeSet(t *testing.T) {
 		t.Error("an average of dates was answered — a number of microseconds nobody meant")
 	}
 }
+
+// A TASK READ BACK CARRIES THE SPEND ITS TURNS ADDED.
+//
+// A turn adds to the task's columns and never to its document, and the detail
+// read decoded the document — so every task answered a spend of zero however
+// many turns had been charged to it, and the task page said no agent had
+// worked on a task whose turn list showed six. The spend is the columns'.
+func TestADetailReadsTheSpendItsTurnsAdded(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	for _, op := range []string{"turn/run-1/dispatch", "turn/run-2/dispatch"} {
+		if _, err := r.writer.RecordTurn(t.Context(), op, sampleTurn("t-1")); err != nil {
+			t.Fatalf("RecordTurn %s: %v", op, err)
+		}
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), "t-1", tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read the task: %v", err)
+	}
+	want := tracker.Spend{Turns: 2, Rounds: 6, Input: 2000, Output: 800, CacheRead: 1200,
+		CacheWrite: 100, WallMs: 18000, Tokens: 2800, Workers: 4, SentBack: 2}
+	if detail.Task.Spend != want {
+		t.Fatalf("the task reads spend %+v after two turns, want %+v — the columns "+
+			"the turns added to", detail.Task.Spend, want)
+	}
+}

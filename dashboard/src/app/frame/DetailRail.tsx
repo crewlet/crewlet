@@ -159,11 +159,14 @@ export function DetailRail({
   ref: object,
   children,
   onStep,
+  query,
 }: {
   ref: ObjectRef;
   children: ReactNode;
   /** Step to the previous/next object in the list this was opened from. */
   onStep?: (delta: -1 | 1) => void;
+  /** What the object's own page carries from that list — see `PeekHost`. */
+  query?: Record<string, string>;
 }) {
   const { close } = usePeekControls();
   const [width, setWidth] = useState(storedWidth);
@@ -272,7 +275,7 @@ export function DetailRail({
           <ButtonLink
             size="small"
             variant="secondary"
-            href={peekHref(object)}
+            href={query ? href(pathOf(object), query) : peekHref(object)}
             trailingIcon={<ArrowUpRightGlyph size="sm" />}
           >
             Open

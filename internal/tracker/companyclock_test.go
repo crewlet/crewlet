@@ -112,3 +112,82 @@ func TestDueBandsCutAtCompanyMidnight(t *testing.T) {
 		t.Fatalf("on UTC ana's workload counts %d overdue, want 1", got)
 	}
 }
+
+// A TASK PAGE STANDS ITS DUE DATE ON THE COMPANY'S CALENDAR, AND ON THE
+// BOARD'S PREDICATE.
+//
+// The rail used to print the browser's own "1d ago" for a task two company
+// days late that the board and the calendar drew red — so the detail carries
+// the standing, computed where the row's overdue mark is: whole calendar days
+// from the company's today to the due day, and "overdue" only for open work.
+// The UTC half is the control, as in the case above: 23:30 in Los Angeles is
+// already tomorrow in UTC, so a standing cut on UTC reads one day fewer.
+func TestATaskPageStandsItsDueDateOnTheCompanyCalendar(t *testing.T) {
+	t.Parallel()
+	losAngeles, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2031, time.April, 16, 23, 30, 0, 0, losAngeles).UTC()
+	day := func(d int) *time.Time {
+		at := time.Date(2031, time.April, d, 12, 0, 0, 0, losAngeles).UTC()
+		return &at
+	}
+
+	h := newReadHarness(t)
+	h.seed("late", func(task *tracker.Task) { task.DueAt = day(14) })
+	h.seed("today", func(task *tracker.Task) { task.DueAt = day(16) })
+	h.seed("later", func(task *tracker.Task) { task.DueAt = day(28) })
+	h.seed("finished", func(task *tracker.Task) {
+		task.DueAt = day(14)
+		task.Status, task.StatusGroup = "done", tracker.GroupDone
+	})
+	h.seed("undated", nil)
+
+	standing := func(id string, loc *time.Location) *tracker.DueStanding {
+		t.Helper()
+		detail, err := h.reader.Task(t.Context(), id, tracker.DetailWants{
+			Clock: &tracker.DayClock{Now: now, Zone: loc},
+		}, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("Task(%s): %v", id, err)
+		}
+		return detail.DueStanding
+	}
+	for _, c := range []struct {
+		id      string
+		days    int
+		overdue bool
+	}{
+		{"late", -2, true},
+		{"today", 0, false},
+		{"later", 12, false},
+		// PAST ITS DATE AND NOT LATE: finished work is done, not overdue —
+		// the same open-status half [TaskRow.Overdue] carries.
+		{"finished", -2, false},
+	} {
+		got := standing(c.id, losAngeles)
+		if got == nil || got.Days != c.days || got.Overdue != c.overdue {
+			t.Errorf("%s stands %+v on the company's calendar, want days=%d overdue=%v",
+				c.id, got, c.days, c.overdue)
+		}
+	}
+	// THE CONTROL: on UTC's calendar it is already the 17th.
+	if got := standing("today", time.UTC); got == nil || got.Days != -1 || !got.Overdue {
+		t.Fatalf("on UTC the task due today stands %+v, so this case is not inside "+
+			"the window where the two clocks disagree", got)
+	}
+	// NO DATE, NO STANDING — and no clock, no standing either, rather than a
+	// guess on the process's own zone.
+	if got := standing("undated", losAngeles); got != nil {
+		t.Fatalf("an undated task stands %+v", got)
+	}
+	bare, err := h.reader.Task(t.Context(), "late", tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.DueStanding != nil {
+		t.Fatalf("a read with no clock stood the due date anyway: %+v", bare.DueStanding)
+	}
+}

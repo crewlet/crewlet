@@ -453,6 +453,10 @@ func Register(r *Registry, s Sources) {
 		// no bound of its own, so the detail returns its newest page and
 		// this walks the rest. See [Sources.workComments].
 		r.Register("work_comments", s.workComments)
+		// A TASK'S TURNS, PAGED, from the tracker's own rows — the
+		// durable account its cost panel sums. See
+		// [Sources.workItemTurns].
+		r.Register("work_item_turns", s.workItemTurns)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.

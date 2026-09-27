@@ -301,6 +301,31 @@ when the purge landed is dropped on every node rather than stopping them. The
 tokens are still on the seat's own counters and in the spend history; only the
 task's share is gone, with the task.
 
+**A task lists its own turns.** Every charged segment is a row the task keeps
+for good — in the replicated estate, beside the counters it added to — so the
+task's page lists its turns long after the thirty days a node keeps its own
+event history, on any node, including turns that ran on a node that has since
+left. The list is `work_item_turns`: one entry per TURN, its segments folded
+(tokens, rounds and wall time summed; the phases in the order each first ran;
+the outcome, summary and review of its newest segment), newest first, paged by
+the position of each turn's first segment so a turn that gains a segment while
+you read never moves between pages. Each entry is numbered **"Turn n"** by the
+task: the position of its counted segment among every counted segment on the
+task, so the newest turn's number IS `spend_turns` and a card reading "Turn 3"
+sits beside a cost reading "3 turns". A turn whose segments on this task
+counted none — more of a turn charged elsewhere — carries no number.
+
+**What a turn did rides on its record.** Beside its spend, a segment's record
+carries the turn's own account of what it did (the reviewer's summary of what
+landed, or the executor's artifact), the notes of the newest review that sent
+the work back for another pass, and each tool its executor called with how
+many times — each account cut to 600 bytes and at most sixteen tools, bounds
+the writer refuses to exceed rather than cutting for you — and, for a segment
+that failed because one of its phases did, which phase that was. They are record
+version 10: a node on an older build holds such a record back until it is
+upgraded rather than applying it without them. The arguments and results of
+every call stay on the turn's trace, which a task's turn card links to.
+
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
 (input plus output — the `sort=spend_tokens` key, named after the column
@@ -1268,8 +1293,37 @@ screens rather than one:
   a tool call under your name, conditional on the version you were looking at,
   so a change somebody made a moment ago is refused and the sentence names
   them. A task opened from a list carries that list with it, and its page says
-  where it sits — "3 of 18", with the tasks either side — in the whole list
-  rather than in the page that was loaded.
+  where it sits — "3 of 18", with the tasks above and below it a press (or
+  `k` and `j`) away — in the whole list rather than in the page that was
+  loaded, whether you opened it from its row or through the peek's **Open**.
+- **A task** (`#/work/{KEY}`) is one page: the task in the order a person
+  reads one — its title and description, its checklists, its sub-tasks — then
+  its **activity**, and a rail of its fields beside it. The activity is **All**,
+  **Comments**, **Agent turns** or **Changes**: who filed it and who handed it
+  to whom (with the reason they gave), what was said, and a card for every
+  agent turn charged to it — "SWE ran turn 2", the phases it ran (and, for a
+  turn that failed, which phase it failed in), whether a reviewer sent it back
+  and what the reviewer asked for, the tools it called,
+  how long it took and how many tokens, and a link to its trace. While a seat's
+  turn is running on the task, the foot of the activity says so ("SWE is on
+  turn 3 · executing · round 7 of 25") with a way to watch it live. Each
+  announced change has **Who this reached**: the people it woke and why. The
+  three histories are read a page at a time, and **Earlier activity** reads
+  further back — the merged list only ever shows a stretch of time that is
+  complete in all three. The rail ends with **what this task has cost** —
+  turns, tokens and agent time, from the task's own counters — and its
+  hand-offs against the engine's budget.
+
+  **Everything on it is changed as you**: a field from its value in the rail
+  (status, priority, labels, dates, the estimate, a custom field), the title
+  and description in place, a checklist item by its box, a sub-task from the
+  sub-tasks' **+**, a hand-off with its reason, following it with **Watch**,
+  and a comment — or, with **Ask…**, a question put to one seat, with the
+  options to choose between where they are to choose. A field edit is
+  conditional on the version you were looking at, and a race you lost names
+  who won it; a checklist tick and following are gestures applied to the task
+  as it is when they land, so they never lose a race that was not one. A reader
+  who cannot act sees every control, disabled with the sentence that says why.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along its
   filed work is and when that work last changed. A row opens the project

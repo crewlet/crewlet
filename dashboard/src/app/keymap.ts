@@ -144,12 +144,20 @@ const FRAME: KeyRow[] = [
 ];
 
 const PAGE: KeyRow[] = [
-  { id: "list.next", scope: "list", presses: [{ key: "j" }], does: "Next row", by: "dashboard" },
+  // ON A TASK OPENED FROM A LIST the task is that list's row, so the same two
+  // keys step to the task before and after it (`routes/work/ListPosition.tsx`).
+  {
+    id: "list.next",
+    scope: "list",
+    presses: [{ key: "j" }],
+    does: "Next row — or, on a task opened from a list, the next task",
+    by: "dashboard",
+  },
   {
     id: "list.previous",
     scope: "list",
     presses: [{ key: "k" }],
-    does: "Previous row",
+    does: "Previous row — or, on a task opened from a list, the previous task",
     by: "dashboard",
   },
   {

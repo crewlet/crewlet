@@ -94,6 +94,9 @@ var namedRoutes = []struct {
 	// net/http refuses beside /work/projects/{key}: neither is more specific
 	// for "/work/projects/comments", so the mux would not start.
 	{method: "GET", pattern: "/work/comments", what: "work_comments"},
+	// A TASK'S TURNS, beside its thread and for the same reason: a literal
+	// segment with `id=` rather than /work/{id}/turns.
+	{method: "GET", pattern: "/work/turns", what: "work_item_turns"},
 	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
 	// there gives: a literal segment beats the wildcard, so neither is read
 	// as a task whose key is "search" or "routing".

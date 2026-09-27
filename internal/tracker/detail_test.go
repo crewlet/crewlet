@@ -570,6 +570,57 @@ func TestAThreadNamesThePersonBehindAnOperatorsComment(t *testing.T) {
 	}
 }
 
+// A TASK NAMES THE PERSON BEHIND THE TOKEN THAT FILED IT. The reporter stays
+// the credential — the record — and the seat it was bound to rides beside it,
+// read off the create's own row so a create that fell out of the history page
+// still resolves; a task a seat filed gets none, its reporter already being a
+// person.
+func TestATaskNamesThePersonBehindTheTokenThatFiledIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	token := r.writer.As("ops-jane", tracker.AuthorOperator, tracker.Provenance{
+		OperatorID: "ops-jane", Seat: "jane-founder",
+	})
+	filed := newTask("t-filed-by-token")
+	filed.Key = ""
+	filed.Reporter = "ops-jane"
+	if _, err := token.CreateTask(t.Context(), "op-filed", filed, nil); err != nil {
+		t.Fatalf("create as a token: %v", err)
+	}
+	r.drain()
+	// Push the create out of the history page, which is what a busy task's
+	// looks like: the seat must still come back.
+	for i := range 3 {
+		title := fmt.Sprintf("retitled %d", i)
+		if _, err := token.UpdateTask(t.Context(), fmt.Sprintf("op-retitle-%d", i), filed.ID, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
+			t.Fatalf("retitle: %v", err)
+		}
+		r.drain()
+	}
+	got, err := r.reader.Task(t.Context(), filed.ID, tracker.DetailWants{History: true, HistoryLimit: 1},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.Task.Reporter != "ops-jane" {
+		t.Errorf("reporter %q, want the credential ops-jane — the record is unchanged", got.Task.Reporter)
+	}
+	if got.ReporterSeat != "jane-founder" {
+		t.Errorf("reporter seat %q, want jane-founder", got.ReporterSeat)
+	}
+
+	bySeat := r.createTask("filed by a seat")
+	plain, err := r.reader.Task(t.Context(), bySeat.ID, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if plain.ReporterSeat != "" {
+		t.Errorf("a seat's own task names reporter seat %q, want none", plain.ReporterSeat)
+	}
+}
+
 // A COMMENT ID THAT IS NOT ON THIS TASK IS ITS OWN ANSWER.
 //
 // Its own sentinel beside ErrNoTask, because the caller's answer differs: a
@@ -599,5 +650,42 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 				"which a caller cannot tell from a store it could not reach",
 				id, err)
 		}
+	}
+}
+
+// A TASK NAMES THE TASK IT IS FILED UNDER.
+//
+// A task carries its parent's id — the record — and a page heading itself
+// "Part of LEAD-12 · 2.4 release" needed a second read of the parent to say
+// it. The detail answers the parent's key, title and status in its own
+// transaction, and a top-level task names none.
+func TestTheDetailNamesTheTaskItIsFiledUnder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	parent := r.createTask("The 2.4 release")
+	child := r.createTask("Retry PXE boot")
+	if _, err := r.writer.UpdateTask(t.Context(), "op-parent", child.ID, "ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Parent: strptr(parent.ID)}, tracker.ChangeReparented, nil); err != nil {
+		t.Fatalf("re-parent: %v", err)
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), child.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the child: %v", err)
+	}
+	want := tracker.TaskRef{ID: parent.ID, Key: parent.Key, Title: "The 2.4 release",
+		Status: parent.Status}
+	if detail.Parent == nil || *detail.Parent != want {
+		t.Fatalf("the child names its parent as %+v, want %+v", detail.Parent, want)
+	}
+	top, err := r.reader.Task(t.Context(), parent.Key, tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the parent: %v", err)
+	}
+	if top.Parent != nil {
+		t.Errorf("a top-level task names a parent %+v", top.Parent)
 	}
 }

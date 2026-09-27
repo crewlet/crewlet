@@ -101,6 +101,8 @@ type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
 		fresh statelog.Freshness) (tracker.TaskDetail, error)
+	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
+		fresh statelog.Freshness) (tracker.TaskTurns, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
@@ -299,9 +301,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// row holds `eng` — the same seam the board column and the project
 	// directory resolve through, so one screen cannot call a team two
 	// things. See [tracker.TaskDetail.Units].
+	//
+	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
+	// the calendar the board's overdue mark was cut on — see
+	// [tracker.DueStanding].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
+		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -379,6 +386,40 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 		out["incomplete"] = detail.Incomplete
 	}
 	return out, nil
+}
+
+// workItemTurns answers one page of the turns charged to a task, newest first,
+// each numbered "Turn n" by the task — see [tracker.Reader.TurnsOf].
+//
+// ITS OWN QUESTION BESIDE `work_item`, for the reason `work_comments` is: the
+// list has no bound of its own, and the task page asks for it on its Agent
+// turns tab rather than on every poll of the detail.
+//
+// FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
+// a similar-looking question from each node's event store, which keeps thirty
+// days and is scattered across the fleet; this is the task's own durable
+// account — the same rows its `spend` sums — so a turn listed here is a turn
+// the cost panel counted, on any node, at any age.
+func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
+	ref := strings.TrimSpace(p.String("id"))
+	if ref == "" {
+		return nil, badParams("id", "", nil)
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
+		Clamp(p.Int("limit", 0), tracker.DefaultTaskTurns, tracker.MaxTaskTurns), fresh)
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrInvalid):
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
+	}
+	return page, nil
 }
 
 // workViews answers one container's view strip.

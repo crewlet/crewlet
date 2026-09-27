@@ -499,8 +499,12 @@ a.seat-chip:hover {
   align-items: center;
   gap: 2px;
   padding: 2px;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-sm);
+  /* THE TRACK IS DRAWN, border and raised ground, as the approved artboards
+     set it: on the inset ground alone the group had no edge in the dark theme
+     and read as three loose words rather than one choice. */
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   min-width: 0;
   max-width: 100%;
 }
@@ -510,10 +514,10 @@ a.seat-chip:hover {
   gap: var(--spacing-1);
   height: calc(var(--size-control-md) - 6px);
   padding: 0 var(--spacing-3);
-  border-radius: calc(var(--radius-sm) - 1px);
+  border-radius: calc(var(--radius-md) - 2px);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   transition:
     background var(--motion-duration-fast) var(--motion-easing-default),
@@ -529,7 +533,9 @@ a.seat-chip:hover {
 .segmented > button[aria-checked="true"] {
   background: var(--color-surface-subtle);
   color: var(--color-text-primary);
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 1px var(--color-border-default);
 }
 .segmented.sm > button {
   height: calc(var(--size-control-sm) - 4px);

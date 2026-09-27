@@ -693,6 +693,13 @@ a.user-block-who:focus-visible {
   flex: none;
 }
 
+/* A project's key as a chip before its name ([Crumb.tag]): the chip keeps its
+   own weight and ink whether the crumb is a link or the page's heading. */
+.crumb-tag {
+  font-weight: var(--font-weight-regular);
+  line-height: 1.4;
+}
+
 /* THE LABEL IS THE BOX THAT ELLIPSISES. `.crumb-link` and `.crumb-here` are
    flex containers (a glyph and a label, one gap), and text straight inside a
    flex container is an anonymous flex item that `text-overflow` never

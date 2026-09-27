@@ -258,8 +258,24 @@ type Spend struct {
 	// domain's per-seat `sent_back` is, taken from the same records.
 	SentBack int
 
+	// Review is the notes of the NEWEST review that sent the work back —
+	// what the reviewer asked for on the pass that followed. The LAST one,
+	// because a turn sent back twice was answered on the second request;
+	// empty when no review sent it back. A task's turn card quotes it
+	// beside the send-back, which without it is a count of objections
+	// nobody can read.
+	Review string
+
 	// Phases are the phases that completed, in the order each first ran.
 	Phases []string
+
+	// FailedIn is the phase whose record came back FAILED — the newest one,
+	// since a failure ends the turn — and empty when none did (a turn a
+	// person stopped did not fail, nor one that broke outside every phase).
+	// Phases lists a failed phase too, because its record completed; a
+	// task's turn card reads this to mark THAT chip rather than drawing a
+	// tick on every phase beside a "failed" pill that names none.
+	FailedIn string
 }
 
 // Total is the turn's own token count — what its PHASES spent, and what the
@@ -322,8 +338,12 @@ func (s *Spend) record(rec phaseRecord) {
 	if name := rec.Phase.String(); !slices.Contains(s.Phases, name) {
 		s.Phases = append(s.Phases, name)
 	}
+	if rec.Failed {
+		s.FailedIn = rec.Phase.String()
+	}
 	if rec.Phase == phase.Review && rec.Decision == string(phase.SelfIterate) {
 		s.SentBack++
+		s.Review = rec.Notes
 	}
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text

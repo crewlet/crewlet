@@ -646,7 +646,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/{KEY}` | **Project** | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside | `unit=` · `seat=` |
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
@@ -1056,8 +1056,8 @@ would fold into one sentence the day somebody cleared them, with nobody having
 decided that. `0` and `false` are values a property can hold and are rendered,
 never folded into "nothing set".
 
-**One attribution per change, not per row.** A create sets six fields at once,
-so six consecutive rows carried six identical copies of "agent-ceo · 21h ago ·
+**One attribution per change, not per row.** A change can set several fields at
+once, so consecutive rows carried identical copies of "agent-ceo · 21h ago ·
 turn ↗" — one sentence written out six times, which turned three rows of a
 peek into six lines. A **run** of consecutive properties sharing one (actor,
 instant, turn) draws ONE line, naming what it covers, under the last of them:
@@ -1362,7 +1362,7 @@ for the keys is the reader who does not know `?` yet.
 | Where it is live | Keys |
 |---|---|
 | Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `Mod+\` the navigation drawer on a narrow window |
-| In a list | `j` and `k` walk the rows, `Enter` opens one |
+| In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
@@ -1723,6 +1723,87 @@ that prompt alone, for work a move within the page keeps but a closed tab does
 not (the builder's draft, kept in session storage). The page listens for a
 reload only while something holds, because some browsers keep a page with a
 `beforeunload` listener out of their back-forward cache.
+
+### A task's page is one reading
+
+`#/work/{KEY}` is the approved Issue artboard: a reading column and a rail
+beside it, each its own scroller and flush with the sheet (the page asks the
+shell for the window's height, as the Inbox does, and gives it back below a
+phone's width, where the rail follows the column in one scroller). There is no
+header card: the page bar's trail names the project by its name with its key as
+a chip ("Work › ENG Core platform › ENG-412"), and the bar carries ↑ ↓ "3 of 18"
+when the task was opened from a list — by its row's link or through the peek's
+**Open**, which carries the list the peek was opened from — with `k` and `j`
+stepping to the task before and after it (the list's own two keys, standing
+aside while a grid on the page holds them), **Watch live** while a turn is running on it, Restore for a task
+in the trash, and a menu with **Open on the board**.
+
+**The column is the task in the order a person reads one.** The exceptional
+flags only (in the trash, blocked, archived), the title (24px, edited in place),
+the description as prose (edited as its markdown), each named checklist ("Done
+when") as boxes a writer ticks, and the sub-tasks as a card whose head is "1 /
+3" and a meter, each row the child's status mark, key, title and holder. A
+status mark is drawn in the artboards' own shapes, one per status — an empty
+ring for to do, a ring filled a half for in progress and three quarters for in
+review, a filled check for done, a struck ring for cancelled and a quiet disc for
+closed — so the state reads by shape as well as by hue, everywhere a task is
+drawn — with
+a **+** that files a new one under this task. A failed sub-tree read is drawn
+where the rows would have been, because a refusal that drew nothing would say
+the task has no sub-tasks.
+
+**Activity is one timeline read down**, over three histories each read a page
+at a time — `work_activity` for what changed, `work_comments` for what was
+said, `work_item_turns` for the agent turns charged to the task — and merged
+only down to the newest point any of them with more pages stopped at, so a
+stretch it draws is complete in all three; **Earlier activity** reads the
+history that stopped there. All | Comments | Agent turns | Changes narrows it.
+A change is a sentence about the task ("Jane Founder filed this in ENG",
+"CTO assigned it to SWE — “owns the provisioner”", "Jane Founder ticked 1 on
+Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
+its line opening its routing: the reason each person was woken, whether it asked
+anything, and the three different empty answers in three sentences. A comment
+is a card with its ask, answer or choice and a **Reply**. A turn is the
+artboard's card: "SWE ran turn 1", its phases as checked steps — the one a failed
+turn broke in wears a cross in the danger tone, and its pill says "failed in
+review" — a pill for a send-back ("sent back for another pass") or a park, what
+it did in the agent's own words (a turn an older build recorded says "No summary
+recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
+caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
+a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
+so the newest card and the cost panel agree. While a seat's turn is running on
+this task — joined on the item the engine charges it to, and only while the
+seat is `working` — the foot of the timeline is the live row in the working
+state's own ground ("SWE is on turn 3 · executing · round 7 of 25 · for 2m",
+with a pulse that is static under reduced motion) linking to the live trace.
+The composer is last: a comment, a reply, or **Ask…** — a question put to one
+seat, optionally with two to six options, the one recommended and whether the
+answer is the decision or an input to it.
+
+**The rail is the task's fields, each the control that changes it.** Status,
+priority, assignee (with **Reassign**, whose dialog asks why), reporter,
+project, type, labels (the project's declared set), due and start, and the
+estimate, then any custom fields and the record (created, updated, in status
+since, filed into). A row a change touched after the task was filed says who
+last set it, named as the person the activity names — a bound token's change is
+drawn as that token's seat, and the reporter a token filed as is the seat the
+engine names beside it (`reporter_seat`); the create itself draws no line,
+because the reporter row and the record already say who filed it and when. Then the relations — "Part
+of LEAD-12 2.4 release" first, then each link named from this end — the pages
+it cites by their titles, **What this task has cost** (turns, tokens and agent
+time from the task's own counters — tokens only, never money) with the
+hand-offs against the engine's budget, and who is watching with **Watch** /
+**Unwatch**.
+
+**Every change is made as you, and never hidden.** The fields share one
+`update_work_item` and one refusal line, conditional on the version the page
+was drawn from, so a race lost to somebody else names who won it; a checklist
+tick and following are gestures and carry no version. A reader who cannot act
+sees every value as a value, every button disabled with its reason, and the
+reason said once above the title.
+
+The peek (`peek=item:{KEY}`) is the same page in one 420px column: the task's
+identity as its head, the rail above the body, and no cost or record.
 
 ### The attention queue
 
@@ -3360,9 +3441,9 @@ is one of the rules on this page applied to a tracker.
   column one place left. **And how wide the list is has never been a fact
   about the window** — a subtask list is 420px in a peek on a 2000px screen —
   so the narrow track set is a container query over the list's own box rather
-  than a viewport one, and the item page's rail-beside-body threshold is one
-  over the page column, which is the window less the rail, less the sidebar,
-  less an open peek. The narrow set is declared ONCE beside the wide one: a
+  than a viewport one, and the task page's rail-beside-column threshold is one
+  over the page column, which is the window less the sidebar, less an open
+  peek. The narrow set is declared ONCE beside the wide one: a
   track list is positional, so a second copy that missed a reordering hands
   every cell the wrong column and says nothing about it.
 - **And a row's own inset comes out of the tracks at its ends.** A subgrid
@@ -3881,6 +3962,10 @@ a tool arrives in it with the control that sends it. The controls
 | Control | Where | Tool |
 |---|---|---|
 | Assign / Reassign (with a reason) | A task's page | `update_work_item` (`if_match` on the version you are looking at) |
+| Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
+| A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
+| + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
+| Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
 | Pin / Unpin | A saved view's page | `set_pins` |
 | Done · Snooze · Mark unread | The open row in the Inbox | `mark_inbox` (exactly the notices that row holds; every other mark and your read position stay) |

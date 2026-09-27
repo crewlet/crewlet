@@ -9,6 +9,7 @@
  * read one.
  */
 
+import { firstLine } from "~/lib/format.ts";
 import { useMemo } from "react";
 import { EmptyValue, FilterChip, FilterChipGroup, Skeleton, Tag } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -119,15 +120,6 @@ export function rowLine(row: InboxRow): string {
       return plainText(row.notice.excerpt ?? "") || humanize(row.notice.kind);
   }
   return "";
-}
-
-export function firstLine(body: string): string {
-  return (
-    body
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? ""
-  );
 }
 
 /**

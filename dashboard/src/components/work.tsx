@@ -23,7 +23,15 @@ import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/gly
 import { Mark } from "~/ui/glyph.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
-import { fmtCount, fmtDateCompact, fmtDateTime, fmtExact, plural, relTime } from "~/lib/format.ts";
+import {
+  fmtCount,
+  fmtDateCompact,
+  fmtDateTime,
+  fmtExact,
+  humanize,
+  plural,
+  relTime,
+} from "~/lib/format.ts";
 import { shortAge } from "~/lib/seats.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
@@ -31,8 +39,8 @@ import type { CardLive, SeatKind, SeatRing } from "~/lib/seats.ts";
 import {
   DEFAULT_TYPE,
   fmtMinutes,
-  STATUS_MARK,
   statusLabel,
+  statusShape,
   STATUS_TONE,
   typeIcon,
   typeName,
@@ -133,27 +141,61 @@ export function PriorityMark({ priority, word }: { priority?: string; word?: boo
           <i />
         </span>
       ) : null}
-      {word ? <span>{priority}</span> : <span className="sr-only">{priority} priority</span>}
+      {/* THE WORD AS A LABEL READS IT — "Urgent", like every other value in a
+          rail — while the attribute and the title keep the engine's slug. */}
+      {word ? (
+        <span>{humanize(priority)}</span>
+      ) : (
+        <span className="sr-only">{priority} priority</span>
+      )}
     </span>
   );
 }
 
 /**
- * A status as a mark: a hollow ring while the work is open, a check once it
- * was delivered — the approved palette's task row.
+ * A status as a mark, in the shape its state is drawn in ([STATUS_SHAPE]) —
+ * the approved artboards' 14-unit drawings, so a half-filled ring is somebody
+ * on it and a filled check is delivered, whatever the hue.
  *
- * THE SHAPE SAYS "DONE", AND THE TONE IS THE STATUS'S OWN (`STATUS_TONE`):
- * blue while somebody is on it, green once delivered, no hue for work nobody
- * has started or that was closed or cancelled. Cancelled finished without
- * being delivered, so it keeps the hollow ring rather than claiming a check.
+ * DRAWN HERE RATHER THAN FROM THE KIT'S GLYPHS, which have a ring and a
+ * ring-with-check and nothing between: two shapes for six states is what drew
+ * in progress and in review as the same empty ring. The tone is the status's
+ * own (`STATUS_TONE`) and reaches the drawing as `currentColor`; the check is
+ * cut out in the surface colour so it reads on both themes.
  * Decorative: every caller prints the status's word beside it.
  */
 export function StatusMark({ status }: { status: string }) {
   const tone = STATUS_TONE[status] ?? "neutral";
-  const delivered = status === "done";
+  const shape = statusShape(status);
   return (
-    <span className={cx("work-status-mark", tone)} aria-hidden="true">
-      <Mark name={delivered ? STATUS_MARK.delivered : STATUS_MARK.open} size="sm" />
+    <span className={cx("work-status-mark", tone)} aria-hidden="true" data-shape={shape}>
+      <svg viewBox="0 0 14 14" width="14" height="14" focusable="false">
+        {shape === "check" || shape === "disc" ? (
+          <circle cx="7" cy="7" r="6.2" fill="currentColor" />
+        ) : (
+          <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        )}
+        {shape === "half" && <path d="M7 7V3.5A3.5 3.5 0 0 1 7 10.5z" fill="currentColor" />}
+        {shape === "most" && <path d="M7 7V3.5A3.5 3.5 0 1 1 3.5 7z" fill="currentColor" />}
+        {shape === "check" && (
+          <path
+            d="M4.4 7.2 6.2 9l3.4-3.6"
+            className="work-status-cut"
+            fill="none"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+        {shape === "struck" && (
+          <path
+            d="M4.5 9.5 9.5 4.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        )}
+      </svg>
     </span>
   );
 }

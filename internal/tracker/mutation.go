@@ -47,9 +47,11 @@ import (
 // project's lead-owned target date: [Project.TargetDate]. Version 8 is a task
 // write that carries its place through: [MutationRecord.KeepsPlace] — see
 // [keepsPlaceVersion]. Version 9 is a create that says which chat surface and
-// conversation its task was filed from: [TaskCreate.Origin]. Version 10 is
-// the cross-project move's marker on a task patch: [TaskPatch.Moving].
-const RecordVersion = 10
+// conversation its task was filed from: [TaskCreate.Origin]. Version 10 is a
+// turn record's account of what the segment did: [TurnRecord.Summary],
+// [TurnRecord.Review], [TurnRecord.Tools] and [TurnRecord.FailedIn]. Version
+// 11 is the cross-project move's marker on a task patch: [TaskPatch.Moving].
+const RecordVersion = 11
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -198,7 +200,24 @@ var versionedFields = statelog.RecordFields{
 	// carries one.
 	{Name: "TaskCreate.Origin", Since: 9, Op: string(OpCreate),
 		Path: []string{"mutation", "origin"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 10. A build reading 9
+	// WHAT A TURN SEGMENT DID, all four at version 10. A build reading 9
+	// writes the turn row with the record's own bytes and so the same row —
+	// but it has no reader for any of the three, and the rule [TaskCreate.
+	// Origin] states holds here too: a field every node must be able to
+	// serve is held back by a build that cannot, rather than applied by it.
+	// Scoped to the turn op, the only record that carries them; `summary`
+	// and `tools` are keys another payload could come to carry.
+	// (`failed_in` rides the same version: which phase failed is part of
+	// the same account, and a build that cannot serve it holds it back.)
+	{Name: "TurnRecord.Summary", Since: 10, Op: string(OpTurn),
+		Path: []string{"mutation", "summary"}},
+	{Name: "TurnRecord.Review", Since: 10, Op: string(OpTurn),
+		Path: []string{"mutation", "review"}},
+	{Name: "TurnRecord.Tools", Since: 10, Op: string(OpTurn),
+		Path: []string{"mutation", "tools"}},
+	{Name: "TurnRecord.FailedIn", Since: 10, Op: string(OpTurn),
+		Path: []string{"mutation", "failed_in"}},
+	// THE CROSS-PROJECT MOVE'S MARK, at version 11. A build reading 10
 	// decodes the patch by dropping the one field it does not know and
 	// applies the rest — a root re-homed with no mark on that node's row,
 	// where every newer node holds one, and a duty on that node that never
@@ -209,7 +228,7 @@ var versionedFields = statelog.RecordFields{
 	// and nothing else. Scoped to the patch op, the only one that carries
 	// it; `moving` is a key a project or a person document could come to
 	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 10, Op: string(OpPatch),
+	{Name: "TaskPatch.Moving", Since: 11, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
 }
 

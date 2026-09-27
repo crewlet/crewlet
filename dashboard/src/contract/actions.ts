@@ -40,7 +40,10 @@ export const ACTIONS = {
     // person's own create lands, or on the project they are looking at) and
     // "Ask" (the question as the title, `ask` naming the agent who owes the
     // answer, which lands in the asker's inbox).
-    args: ["title", "body", "project", "assignee", "ask"],
+    //
+    // AND THE TASK PAGE'S "+ SUB-TASK": a title filed under the task it is
+    // on (`parent`), in that task's project.
+    args: ["title", "body", "project", "assignee", "ask", "parent"],
     domain: "tracker",
     refreshes: ["work_search"],
     scope: "person",
@@ -58,6 +61,10 @@ export const ACTIONS = {
     // `linked` AND `linked_pages` ARE THE INBOX COMPOSER'S "Link a task" and
     // "Attach a page": each is a delta (`{add: [...]}`) on the item the
     // conversation is about, never the whole relation set.
+    //
+    // THE TASK PAGE EDITS THE REST: the title and description, the labels
+    // (which REPLACE the set), the schedule, a custom field by slug, one
+    // checklist gesture at a time, and whether the person follows it.
     args: [
       "item",
       "assignee",
@@ -67,6 +74,16 @@ export const ACTIONS = {
       "if_match",
       "linked",
       "linked_pages",
+      "title",
+      "body",
+      "labels",
+      "due",
+      "start",
+      "estimate_minutes",
+      "points",
+      "fields",
+      "checklist",
+      "watch",
     ],
     domain: "tracker",
     refreshes: ["work_search"],
@@ -91,7 +108,10 @@ export const ACTIONS = {
     //
     // AND A REPLY IN THE ASK'S OWN THREAD (`reply_to`), which answers
     // nothing: a person asking the asker a question back leaves the ask open.
-    args: ["item", "answers", "choice", "body", "reply_to"],
+    //
+    // AND AN ASK FROM THE TASK PAGE: a question put to one seat (`ask`),
+    // optionally with the options it is to choose between (`decision`).
+    args: ["item", "answers", "choice", "body", "reply_to", "ask", "decision"],
     domain: "tracker",
     refreshes: [],
     scope: "person",

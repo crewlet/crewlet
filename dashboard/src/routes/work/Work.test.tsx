@@ -18,7 +18,7 @@ import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
 import { Board } from "./shapes/Board.tsx";
 import { CalendarView } from "./shapes/Calendar.tsx";
-import { WorkCard, PriorityMark, WorkRow } from "~/components/work.tsx";
+import { WorkCard, PriorityMark, StatusMark, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -516,11 +516,31 @@ test("a priority is drawn as bars filled to its step, and urgent as the alert", 
     cleanup();
     return out;
   };
-  expect(drawn("low")).toEqual({ level: "1", bars: 3, glyph: 0, word: "low" });
-  expect(drawn("normal")).toEqual({ level: "2", bars: 3, glyph: 0, word: "normal" });
-  expect(drawn("high")).toEqual({ level: "3", bars: 3, glyph: 0, word: "high" });
-  expect(drawn("urgent")).toEqual({ level: null, bars: 0, glyph: 1, word: "urgent" });
-  expect(drawn("critical")).toEqual({ level: null, bars: 0, glyph: 0, word: "critical" });
+  expect(drawn("low")).toEqual({ level: "1", bars: 3, glyph: 0, word: "Low" });
+  expect(drawn("normal")).toEqual({ level: "2", bars: 3, glyph: 0, word: "Normal" });
+  expect(drawn("high")).toEqual({ level: "3", bars: 3, glyph: 0, word: "High" });
+  expect(drawn("urgent")).toEqual({ level: null, bars: 0, glyph: 1, word: "Urgent" });
+  expect(drawn("critical")).toEqual({ level: null, bars: 0, glyph: 0, word: "Critical" });
+});
+
+// A STATUS READS BY ITS SHAPE: in progress is a half-filled ring and in review
+// three quarters, in the same blue, and a delivered task a filled check — the
+// kit's two glyphs drew both active states as the empty to-do ring.
+test("a status is drawn in its own shape", () => {
+  const shape = (status: string) => {
+    const { container } = render(<StatusMark status={status} />);
+    const mark = container.querySelector(".work-status-mark")!;
+    const out = {
+      shape: mark.getAttribute("data-shape"),
+      paths: mark.querySelectorAll("path").length,
+    };
+    cleanup();
+    return out;
+  };
+  expect(shape("todo")).toEqual({ shape: "ring", paths: 0 });
+  expect(shape("in_progress")).toEqual({ shape: "half", paths: 1 });
+  expect(shape("in_review")).toEqual({ shape: "most", paths: 1 });
+  expect(shape("done")).toEqual({ shape: "check", paths: 1 });
 });
 
 // ---------------------------------------------------------------------------

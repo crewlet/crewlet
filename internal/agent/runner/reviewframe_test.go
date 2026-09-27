@@ -123,4 +123,11 @@ func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	if len(spend.Phases) != 1 || spend.Phases[0] != "review" {
 		t.Errorf("phases = %v, want the one phase that ran, once", spend.Phases)
 	}
+	// AND WHAT THE LAST SEND-BACK ASKED FOR: the pass that followed it is
+	// the one that answered, so a task's turn card quotes that request —
+	// never the first, and never the acceptance's own empty notes.
+	if spend.Review != "closer" {
+		t.Errorf("review = %q, want the newest send-back's notes %q",
+			spend.Review, "closer")
+	}
 }

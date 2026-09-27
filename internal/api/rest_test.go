@@ -309,6 +309,11 @@ func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, tracker.ErrNoTask
 }
 
+func (stubWorkReader) TurnsOf(context.Context, string, string, int,
+	statelog.Freshness) (tracker.TaskTurns, error) {
+	return tracker.TaskTurns{}, tracker.ErrNoTask
+}
+
 func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
 	return tracker.ViewListing{}, nil
 }

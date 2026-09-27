@@ -490,7 +490,11 @@ function mount(hash: string, view: ReactElement, answers: Record<string, unknown
  * a `title` or an `aria-label` is read as surely as a cell.
  */
 function pricesOnScreen(): string[] {
-  const html = document.body.innerHTML;
+  // A GLYPH'S GEOMETRY IS NOT TEXT: an icon's path data is a run of decimals
+  // (`M2.062 12.348 …`, the eye a Watch button draws), and a scan over it
+  // finds the fixture's 12.34 inside a drawing no reader reads. Every text
+  // node and every attribute a reader or a screen reader does read is kept.
+  const html = document.body.innerHTML.replace(/<svg\b[\s\S]*?<\/svg>/g, "");
   const found: string[] = [];
   for (const [what, pattern] of [
     ["the fixture's price", /12[.,]34/],

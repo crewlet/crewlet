@@ -511,7 +511,13 @@ export function ItemsView({
     () => drawn.map((r) => ({ kind: "item" as const, id: r.key })),
     [drawn],
   );
-  usePeekNeighbours(neighbours);
+  // AND THE QUESTION, so a task opened through the peek's Open carries it like
+  // one opened from its row — see `PeekHost` and `ListPosition`.
+  const listQuery = useMemo(() => {
+    const list = listParam(params);
+    return list ? { list } : undefined;
+  }, [params]);
+  usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
   // its holder's state ring, and — for a bound reader — the coding runs parked

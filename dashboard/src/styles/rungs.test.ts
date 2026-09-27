@@ -158,7 +158,6 @@ describe("the faint rung is decoration", () => {
         "Where the name is also drawn it is a `.muted` span BESIDE the square, " +
         "outside it, so this rung paints the glyph and nothing else.",
     },
-    { selector: ".work-hist-row > svg", why: "The history row's icon — an SVG, never a word." },
     {
       selector: "span.list-position-step",
       why:

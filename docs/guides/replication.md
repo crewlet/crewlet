@@ -473,31 +473,34 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, nine versions past the base carry something a later build
-added. Version 2 is a turn's charge to its task when it counts delegated workers
-or reviews that sent the work back. Version 3 is a person's own record when
-their read position is in a generation after a reanchor — a build reading 2
-stored that position as the bare sequence and lost the generation. Version 4 is
-a comment that asks for a decision or answers one with a choice. Version 5 is
-any change made through an operator token bound to a seat: the record has always
-named that seat, and a build reading 5 stores it on the history row as the
-person to draw — a build reading 4 would apply the change and leave that column
-empty on its copy. So the seat is stored only from records at version 5; a
-change an older build wrote names no seat on any node, whichever build applies
-it. Version 6 is a task filed as a question — the create carries the ask, which
-a build reading 5 would file as a bare task with no question on it. Version 7 is
-a project carrying a target date, which a build reading 6 has no column for.
-Version 8 is every edit, removal and restore of a task: a build reading 8 keeps
-a card where its board was last dragged to, while a build reading 7 re-files it
-at the place it was created at the next time anybody changes it. So a card keeps
-its dragged place only through a change written at version 8; a change an older
-build wrote re-files the card on every node, whichever build applies it, exactly
-as it always did. Version 9 is a task filed from a chat conversation, whose
-create says which surface and conversation it came from. Version 10 is a task
-change carrying a cross-project move's mark: only the root of the subtree
-being moved carries it, and only until the move's walk is done. An old node
-holds those records back, with the task, the person or the project they are
-about, and applies every other write as it arrives.
+In the tracker today, ten versions past the base carry something a later build
+added. Version 2 is a
+turn's charge to its task when it counts delegated workers or reviews that sent
+the work back. Version 3 is a person's own record when their read position is
+in a generation after a reanchor — a build reading 2 stored that position as the
+bare sequence and lost the generation. Version 4 is a comment that asks for a
+decision or answers one with a choice. Version 5 is any change made through an
+operator token bound to a seat: the record has always named that seat, and a
+build reading 5 stores it on the history row as the person to draw — a build
+reading 4 would apply the change and leave that column empty on its copy. So
+the seat is stored only from records at version 5; a change an older build
+wrote names no seat on any node, whichever build applies it. Version 6 is a task
+filed as a question — the create carries the ask, which a build reading 5 would
+file as a bare task with no question on it. Version 7 is a project carrying a
+target date, which a build reading 6 has no column for. Version 8 is every
+edit, removal and restore of a task: a build reading 8 keeps a card where its
+board was last dragged to, while a build reading 7 re-files it at the place it
+was created at the next time anybody changes it. So a card keeps its dragged
+place only through a change written at version 8; a change an older build
+wrote re-files the card on every node, whichever build applies it, exactly as
+it always did. Version 9 is a task filed from a chat conversation, whose create
+says which surface and conversation it came from. Version 10 is a turn's
+account of what it did on its task — its summary, its review, the tools it
+called and the phase it failed in. Version 11 is a task change carrying a
+cross-project move's mark: only the root of the subtree being moved carries it,
+and only until the move's walk is done. An old node holds those records back,
+with the task, the person or the project they are about, and applies every
+other write as it arrives.
 
 In the knowledge base, one kind of record does: a container's settings, at
 version 2, because they carry the activation that wrote them — a later

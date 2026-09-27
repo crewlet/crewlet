@@ -65,11 +65,25 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	spend := tracker.TurnSpend{Turns: 1, Input: 100, Output: 50}
+	turn := tracker.TurnRecord{
+		Task: "suite-task", Seat: "dev", TurnID: "run-1", Outcome: "done",
+		Phases: []string{"execute"},
+	}
 	switch field.Name {
 	case "TurnSpend.Workers":
 		spend.Workers = 2
 	case "TurnSpend.SentBack":
 		spend.SentBack = 1
+	case "TurnRecord.Summary":
+		turn.Summary = "added the retry and its test"
+	case "TurnRecord.Review":
+		spend.SentBack = 1
+		turn.Review = "the timeout path has no test"
+	case "TurnRecord.Tools":
+		turn.Tools = []tracker.TurnTool{{Name: "run_sandbox", Calls: 2}}
+	case "TurnRecord.FailedIn":
+		turn.Outcome = "failed"
+		turn.FailedIn = "review"
 	case "Person.SeenThrough.Generation":
 		// A PERSON PAST A REANCHOR: the one record whose position carries
 		// a generation the older applier stored as the bare sequence.
@@ -246,10 +260,8 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)
 	}
-	body, err := json.Marshal(tracker.TurnRecord{
-		Task: "suite-task", Seat: "dev", TurnID: "run-1", Outcome: "done",
-		Phases: []string{"execute"}, Spend: spend,
-	})
+	turn.Spend = spend
+	body, err := json.Marshal(turn)
 	if err != nil {
 		return nil, err
 	}

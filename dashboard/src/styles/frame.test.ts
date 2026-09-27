@@ -1124,44 +1124,31 @@ test("no stylesheet negates a var() with a unary minus", () => {
   expect(found, "a minus in front of var() drops the declaration — use calc(-1 * …)").toEqual([]);
 });
 
-describe("a work item's history", () => {
-  // A HISTORY ENTRY IS AS LONG AS THE CHANGE WAS.
+describe("a task's activity", () => {
+  // AN ENTRY IS AS LONG AS THE CHANGE WAS.
   //
-  // The work item's history row held its description in `.truncate`: one line,
-  // ellipsed. A create moves every field `TaskDeltas` compares and
-  // `describeHistory` renders a clause each, so the cut landed inside `Status: `
-  // — and took the `quiet` marker and the `turn →` link with it, clipped out of
-  // sight and still in the tab order, on a panel with a page of unused height
-  // beneath it.
+  // The work item's history row once held its description in `.truncate`: one
+  // line, ellipsed. A create moves every field `TaskDeltas` compares and the
+  // sentence renders a clause each, so the cut landed inside `Status: ` — and
+  // took the `turn →` link with it, clipped out of sight and still in the tab
+  // order. The task page's activity keeps the rule: every line a change, a
+  // turn's account or a reviewer's request is written in WRAPS.
   //
   // IN THE SHEET because there is nowhere else: jsdom computes no layout, so
-  // every case that renders this panel stays green whether the cell wraps or
-  // ellipses. The other direction is covered already — `.work-hist-what` is
-  // declared here and written only by WorkItem.tsx, so classes.test.ts fails if
-  // either side alone goes back.
-  test("a work item's history entry wraps rather than ellipsing what changed", () => {
+  // every case that renders these stays green whether the text wraps or
+  // ellipses. The other direction is covered already — each class is declared
+  // here and written only by `routes/work/item/Activity.tsx`, so
+  // classes.test.ts fails if either side alone goes back.
+  test("a task's activity wraps rather than ellipsing what changed", () => {
     const css = sheet("screens.css");
-    const what = block(css, ".work-hist-what");
-    expect(what).toMatch(/overflow-wrap:\s*anywhere/);
-    // The three halves of `.truncate`, none of which may come back here.
-    expect(what).not.toMatch(/white-space:\s*nowrap/);
-    expect(what).not.toMatch(/text-overflow/);
-    expect(what).not.toMatch(/overflow:\s*hidden/);
-
-    // AND THE ROW AROUND IT IS BUILT FOR MORE THAN ONE LINE. A centred glyph
-    // tracks the row's height and slides to the middle of a four-line entry;
-    // entries 8px apart whose own lines are 18px apart have no boundary. And the
-    // tail has a track of its own, so the sentence cannot swallow the control.
-    expect(block(css, ".work-hist-row > svg")).toMatch(/align-self:\s*start/);
-    const row = block(css, ".work-hist-row");
-    expect(row).toMatch(/border-bottom:\s*1px solid var\(--color-border-default\)/);
-    expect(row).toMatch(/align-items:\s*baseline/);
-    expect(row).toMatch(/grid-template-columns:\s*18px minmax\(0, 1fr\) auto auto/);
-    // AND ITS TRACKS ARE SEPARATED. See the rule below for the class of
-    // defect; this is the row it was found on, and `--spacing-3` is the
-    // sibling `.work-feed-row`'s so the two grammars cannot drift.
-    expect(row).toMatch(/gap:\s*var\(--spacing-3\)/);
-    expect(block(css, ".work-feed-row")).toMatch(/gap:\s*var\(--spacing-3\)/);
+    for (const selector of [".task-entry-line p", ".task-turn-summary", ".task-turn-review p"]) {
+      const rule = block(css, selector);
+      expect(rule, selector).toMatch(/overflow-wrap:\s*anywhere/);
+      // The three halves of `.truncate`, none of which may come back here.
+      expect(rule, selector).not.toMatch(/white-space:\s*nowrap/);
+      expect(rule, selector).not.toMatch(/text-overflow/);
+      expect(rule, selector).not.toMatch(/overflow:\s*hidden/);
+    }
   });
 });
 

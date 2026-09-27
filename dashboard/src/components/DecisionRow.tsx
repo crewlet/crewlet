@@ -21,6 +21,7 @@
  * rule for which button is primary would disagree the first time it moved.
  */
 
+import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
 import { ButtonLink, EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -375,13 +376,4 @@ export function ReassignItem({ item }: { item: string }) {
   const task = read.data?.task;
   if (!task) return null;
   return <AssignButton item={item} version={task.version} assignee={task.assignee ?? ""} />;
-}
-
-function firstLine(body: string): string {
-  return (
-    body
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? ""
-  );
 }

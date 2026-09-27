@@ -126,6 +126,12 @@ func (emptyWork) Task(context.Context, string, tracker.DetailWants,
 	return tracker.TaskDetail{}, nil
 }
 
+func (emptyWork) TurnsOf(context.Context, string, string, int,
+	statelog.Freshness) (tracker.TaskTurns, error) {
+
+	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
+}
+
 func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
 	return tracker.ViewListing{}, nil
 }

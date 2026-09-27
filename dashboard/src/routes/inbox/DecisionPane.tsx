@@ -52,10 +52,11 @@ import type {
   WorkDecisionEvidence,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
-import { firstLine, rowKey, rowWho, type Who } from "./NoticeList.tsx";
+import { rowKey, rowWho, type Who } from "./NoticeList.tsx";
+import { firstLine } from "~/lib/format.ts";
 import { NoticeActions } from "./SnoozeMenu.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
-import { Composer, type ComposeMode, type ComposerHandle } from "./Composer.tsx";
+import { Composer, type ComposeMode, type ComposerHandle } from "~/components/Composer.tsx";
 import type { InboxRow } from "./model.ts";
 
 interface PaneProps {
