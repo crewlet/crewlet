@@ -61,6 +61,22 @@ export interface GridColumn<T> {
   label?: string;
   /** Shrink to content and never wrap. */
   shrink?: boolean;
+  /**
+   * On a grid drawn with `phoneRows="compact"`, a cell of the row's FIRST line
+   * — what the row is (a key, a title) — where every other cell is a fact
+   * about it on the line under. Ignored on the labelled card and at any width
+   * with columns.
+   */
+  phoneLead?: boolean;
+  /**
+   * Left off the COMPACT phone row, whose contract is two lines: the lead,
+   * then one line of facts. A fact the row's own page answers one click away
+   * (when it last moved) is the one that gives way there — drawn, it wrapped
+   * onto an orphan third line on every task with a status and a due date, and
+   * the rows of one list stood at three heights. Ignored on the labelled card
+   * and at any width with columns, where [drop] decides instead.
+   */
+  phoneOmit?: boolean;
   width?: string;
   /** Hidden unless named in `cols=`. */
   optional?: boolean;
@@ -470,6 +486,7 @@ export function DataGrid<T>({
   loadedNote,
   name,
   colsName,
+  phoneRows = "labelled",
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -517,6 +534,19 @@ export function DataGrid<T>({
    * Defaults to `name`, which is what every grid with one column set wants.
    */
   colsName?: string;
+  /**
+   * HOW A ROW IS DRAWN ON A PHONE, where there are no columns.
+   *
+   * `labelled` — the default — is a card of one labelled line per value: every
+   * grid can take it, whatever its columns are, because each value names
+   * itself. `compact` is two lines with no labels: the [GridColumn.phoneLead]
+   * cells, then every other value as a run of marks. It is for a grid whose
+   * values are marks that read without a name (a status pill, an avatar, a
+   * date) and whose reader is scanning MANY rows — the work list, where the
+   * labelled card stood eight lines and 230px tall per task and a phone showed
+   * two and a half of them.
+   */
+  phoneRows?: "labelled" | "compact";
 }) {
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
   const columnSet = colsName ?? name;
@@ -786,6 +816,8 @@ export function DataGrid<T>({
       <span
         key={column.key}
         className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
+        data-lead={column.phoneLead || undefined}
+        data-phone-omit={column.phoneOmit || undefined}
         data-label={
           (typeof column.header === "string" && column.header ? column.header : column.label) ||
           undefined
@@ -885,6 +917,7 @@ export function DataGrid<T>({
     <div
       ref={setWrap}
       className="grid-wrap"
+      data-phone-rows={phoneRows === "compact" ? "compact" : undefined}
       style={{ gridTemplateColumns: template }}
       onPointerDown={claimKeyboard}
     >

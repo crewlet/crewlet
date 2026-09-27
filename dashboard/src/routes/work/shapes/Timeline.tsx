@@ -25,7 +25,7 @@ import {
   type TimelineBar,
 } from "~/lib/timeline.ts";
 import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
-import { EmptyState, Tag, cx } from "@crewlethq/ui";
+import { Button, EmptyState, Tag, cx } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
 
@@ -47,6 +47,66 @@ const NAME_PX = 260;
  * letter, which reads as a rendering fault rather than as a date.
  */
 const LABEL_INSIDE_DAYS = 6;
+
+/** The gap between a narrow bar and the label drawn beside it. */
+const ASIDE_GAP_PX = 4;
+
+/**
+ * The room a label needs after its bar before it is drawn there — about
+ * twenty characters at the compact size — and below which it goes on the
+ * side with more.
+ */
+const ASIDE_MIN_PX = 160;
+
+/**
+ * Where a narrow bar's label goes, as the style that places it: after the bar
+ * where the strip has room, before it where the bar is near the strip's end,
+ * and never wider than the room it has.
+ *
+ * A label written after a bar four days from the end ran off the strip and
+ * was cut mid-word at its edge ("GPU schedu"), with nothing to say there was
+ * more. Bounded, it ellipsises — and its full title is the bar's own `title`
+ * and the names column beside it.
+ */
+export function asideAt(
+  from: number,
+  to: number,
+  days: number,
+): { left?: number; right?: number; maxWidth: number } {
+  const after = (days - to) * DAY_PX - 2 * ASIDE_GAP_PX;
+  const before = from * DAY_PX - 2 * ASIDE_GAP_PX;
+  if (after >= ASIDE_MIN_PX || after >= before) {
+    return { left: to * DAY_PX + ASIDE_GAP_PX, maxWidth: Math.max(0, after) };
+  }
+  return { right: (days - from) * DAY_PX + ASIDE_GAP_PX, maxWidth: before };
+}
+
+/**
+ * How wide a MILESTONE is: a task with a due date and no start.
+ *
+ * A POINT, drawn as one — a filled diamond in its status tone, centred on its
+ * day. It was a one-day box, dashed on every side to say its start was never
+ * stated, and over a planned task's pale ground that read as an EMPTY
+ * placeholder: the one thing a deadline is not, since its date is the single
+ * fact the timeline knows for certain. Twelve pixels squared is seventeen on
+ * the diagonal, inside a 26px day and a 22px bar's height.
+ */
+const MILESTONE_PX = 12;
+
+/**
+ * Where a bar sits on the strip, as the style that places it: its day columns,
+ * or for a milestone the centre of its one day.
+ */
+export function barBox(
+  bar: Pick<TimelineBar, "from" | "to" | "kind">,
+  row: number,
+): { left: number; width: number; top: number } {
+  const top = row * ROW_PX + 4;
+  if (bar.kind === "deadline") {
+    return { left: bar.from * DAY_PX + (DAY_PX - MILESTONE_PX) / 2, width: MILESTONE_PX, top };
+  }
+  return { left: bar.from * DAY_PX, width: (bar.to - bar.from) * DAY_PX, top };
+}
 
 /** Where a bar's tone comes from — the same vocabulary the rest of the
  *  tracker uses, so a blocked bar and a blocked card read alike. */
@@ -183,18 +243,14 @@ function Band({
                   data-kind={bar.kind}
                   href={hrefOf(bar.row)}
                   title={`${bar.row.key} · ${bar.row.title} — ${barTitle(bar)}`}
-                  style={{
-                    left: bar.from * DAY_PX,
-                    width: (bar.to - bar.from) * DAY_PX,
-                    top: i * ROW_PX + 4,
-                  }}
+                  style={barBox(bar, i)}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                     e.preventDefault();
                     onOpen(bar.row);
                   }}
                 >
-                  {bar.to - bar.from >= LABEL_INSIDE_DAYS && (
+                  {bar.kind !== "deadline" && bar.to - bar.from >= LABEL_INSIDE_DAYS && (
                     <span className="tl-bar-label">{bar.row.title}</span>
                   )}
                 </a>
@@ -204,11 +260,11 @@ function Band({
                   box, which `overflow: hidden` is what keeps the wide ones
                   tidy. */}
               {line.bars.map((bar, i) =>
-                bar.to - bar.from >= LABEL_INSIDE_DAYS ? null : (
+                bar.kind !== "deadline" && bar.to - bar.from >= LABEL_INSIDE_DAYS ? null : (
                   <span
                     key={`${bar.row.id}-label`}
                     className="tl-bar-aside"
-                    style={{ left: bar.to * DAY_PX + 4, top: i * ROW_PX + 4 }}
+                    style={{ ...asideAt(bar.from, bar.to, line.days), top: i * ROW_PX + 4 }}
                   >
                     {bar.row.title}
                   </span>
@@ -307,6 +363,7 @@ export function TimelineView({
   onOpen,
   selected,
   now,
+  more,
 }: {
   rows: WorkSummary[];
   groups: { key: string; label?: string; count: number; rows: WorkSummary[] }[];
@@ -315,6 +372,11 @@ export function TimelineView({
   onOpen: (row: WorkSummary) => void;
   selected: string;
   now: number;
+  /**
+   * The rest of an ungrouped answer, where it carried a cursor. A grouped one
+   * has none: each band carries its own count and holds a page of its own.
+   */
+  more?: { load: () => void; note: string };
 }) {
   if (groups.length === 0 && rows.length === 0) {
     return (
@@ -358,6 +420,17 @@ export function TimelineView({
         selected={selected}
         now={now}
       />
+      {/* THE AXIS IS DERIVED FROM THE ROWS PRESENT, so a later page may widen
+          it — which is the honest drawing of more rows, and the only way to the
+          five-hundred-and-first bar at all. */}
+      {more && (
+        <div className="tl-more">
+          <span className="t-caption">{more.note}</span>
+          <Button size="small" variant="secondary" onClick={more.load}>
+            Load more
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

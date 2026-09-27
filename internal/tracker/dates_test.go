@@ -189,6 +189,28 @@ func TestAnUnknownTokenIsRefused(t *testing.T) {
 	}
 }
 
+// AN INSTANT IS READ AS THE MACHINE WROTE IT. The keywords are case-blind, so
+// the token was lowercased before anything was matched — and RFC 3339's `T`
+// and `Z` with it, which `time.Parse` then refused. Every timestamp a client
+// sent (the dashboard bounds a calendar day with two, because its cells are
+// the READER's days and a bare date resolves on the company's) came back
+// "not a date".
+func TestAnRFC3339InstantIsAnInstant(t *testing.T) {
+	t.Parallel()
+	for _, token := range []string{"2031-04-16T22:30:00Z", "2031-04-17T00:30:00+02:00"} {
+		got, err := tracker.ResolveDate(token, wednesday, berlin)
+		if err != nil {
+			t.Fatalf("%q was refused: %v", token, err)
+		}
+		if want := time.Date(2031, 4, 16, 22, 30, 0, 0, time.UTC); !got.At.Equal(want) {
+			t.Errorf("%q resolved to %v, want %v", token, got.At, want)
+		}
+		if got.AllDay {
+			t.Errorf("%q is an instant, not a day", token)
+		}
+	}
+}
+
 // THE VENDOR'S ALIASES EXPAND INTO THIS GRAMMAR RATHER THAN BESIDE IT.
 //
 // An alias implemented separately drifts from the token it means the first

@@ -1,1 +1,0 @@
-import{gn as e}from"./media-FPBiLIUN.js";import{Pt as t}from"./index-Xa-k2VCL.js";function n(n,r,i=`section`){let a=r[0],[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};

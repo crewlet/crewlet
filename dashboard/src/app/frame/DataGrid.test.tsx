@@ -726,3 +726,32 @@ describe("the grid, laid out", () => {
     expect(container.querySelector(".grid-foot")).toBeNull();
   });
 });
+
+// A COMPACT GRID SAYS SO, AND SAYS WHICH CELLS LEAD. The sheet draws a phone row
+// from these two attributes and nothing else (styles/frame.test.ts), so the DOM
+// half is that the wrap carries the choice and only the lead columns' cells are
+// marked — and that the default, which every other grid takes, carries neither.
+test("a compact grid marks its wrap and its lead cells", () => {
+  const columns = [
+    { key: "id", header: "Id", phoneLead: true, cell: (r: Row) => r.id },
+    { key: "mark", header: "Mark", cell: () => <span>·</span> },
+  ];
+  const compact = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} phoneRows="compact" />
+    </Router>,
+  );
+  const wrap = compact.container.querySelector(".grid-wrap")!;
+  expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
+  const cells = [...wrap.querySelectorAll(".grid-row > .grid-cell")];
+  expect(cells.map((c) => c.hasAttribute("data-lead"))).toEqual(ROWS.flatMap(() => [true, false]));
+  cleanup();
+  const labelled = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+    </Router>,
+  );
+  expect(labelled.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(
+    false,
+  );
+});

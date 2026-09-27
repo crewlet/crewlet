@@ -315,7 +315,7 @@ workspace it declares, chords are unique, no reserved segment has the shape of
 a key the engine mints — and holds the table below against the resolver in
 both directions.
 
-### A filter is a chip; an arrangement is a menu
+### A filter is a chip; an arrangement says what it is set to
 
 The grammar above says where a control LIVES. This says what a control is, and
 it is the boundary the work screens lost first: a bar of eleven controls, five
@@ -326,14 +326,34 @@ three tabs.
 
 Two kinds, and nothing is both:
 
-- A **filter** narrows the answer. It is added from one **Filter** menu, it is
-  drawn as a removable **chip** under the bar, and there is no chip for a
-  filter that is off — so an unfiltered list has no chip row at all. Taking a
-  chip off clears the one URL key it names.
+- A **filter** narrows the answer. It is added from one **+ Filter** menu at
+  the end of the chip row, it is drawn as a removable **chip** in that row, and
+  there is no chip for a filter that is off — so an unfiltered list's row is
+  "+ Filter" alone. Taking a chip off clears the one URL key it names.
 - An **arrangement** decides how the same answer is DRAWN — the shape, the
-  grouping, the order, the grid's columns. All of it lives in one **Display**
-  menu, whose button says what is on, so the arrangement is readable without
-  opening anything.
+  grouping, the order, the grid's columns, the board lanes put away — and it
+  is drawn as a control that SAYS WHAT IT IS SET TO, so the arrangement is
+  readable without opening anything. The three a reader changes all day are
+  on screen: the five shapes are a row of pressed buttons ahead of the saved
+  views, and **Group by** and **Sort** sit at the far end of the chip bar,
+  each showing its value — the default order named for what it is ("Manual",
+  "Recently updated", "Start date") rather than "Default". What a reader sets
+  once and forgets — the second axis, the grid's columns, what a board's
+  cards show, the lanes a board has put away — is the **Display** menu. They
+  were all in that one menu for a while, and a menu button cannot say what
+  four things are set to: the board, the shape a team lives in, was two
+  presses away. Its way back to "this view's own shape" is offered only while
+  a SAVED view is running in another shape: over a plain board it pointed at
+  a view nobody had open.
+
+  **A board's arrangement is what its cards show** (`card_hide=`, the
+  facts put away): size, priority, labels, due date and tokens, each a box
+  in the Display menu, ticked while it is drawn. Only the DESCRIPTIVE facts
+  are offered. The key, the holder, the title and the STATES — blocked,
+  "blocks N", open asks, the live band — are what a board is triaged by, and
+  a board that could hide them would report a quiet project that is not one.
+  The facts are one declaration (`CARD_FACTS` in `components/work.tsx`) that
+  the menu and the card both read.
 
   **A screen whose grid has an optional column has a menu to reach it.** The
   columns half is one component, `ColumnChooser` in `DataGrid.tsx`, drawn by
@@ -352,8 +372,8 @@ Two kinds, and nothing is both:
 
 `URL_HOMES` in `lib/work.ts` is where that is declared per key rather than per
 paragraph: every URL key the work list carries names the control that owns it —
-chip, menu, or one of the three that are deliberately neither and carry their
-reason at the entry. `routes/work/toolbar/grammar.test.tsx` holds it against
+chip, arrangement, or one of the three that are deliberately neither and carry
+their reason at the entry. `routes/work/toolbar/grammar.test.tsx` holds it against
 the SCREEN in both directions, reading the key set out of `ItemsView.tsx`
 rather than listing it: every key the list puts on the address has a home, and
 every home is a key the list actually writes. Both halves fail silently
@@ -362,14 +382,24 @@ address, which `unit=` was for its chip's whole life while the Clear control
 walked past it, and a key with two is two controls for one fact that disagree
 the first time either writes.
 
-The one control outside both is the **scope** switch (open / closed /
-everything), which is always set to something: as a chip it would either be
+The one control outside both is the **scope** picker (**Show**: Open / Recent /
+Closed / All, at the bar's far end beside Group by and Sort), which is always
+set to something: as a chip it would either be
 permanently present, which is not a chip, or absent on its default, which hides
-the one segment that decides whether finished work is on screen at all. Its
-third value has a NAME (`all`) rather than the empty string, because a key set
-to `""` is a key the router deletes — so the segment snapped back to its
-fallback on the next render, and the one segment whose whole job is to show
-finished work could not be selected.
+the one control that decides whether finished work is on screen at all. Its
+last value has a NAME (`all`) rather than the empty string, because a key set
+to `""` is a key the router deletes — so the scope snapped back to its
+fallback on the next render, and the one choice whose whole job is to show
+finished work could not be selected. **Recent** is the one scope that is not
+a status group: it is open work plus whatever finished since the start of the
+week, sent as the engine's own `closed_since=sow` so the week is the COMPANY's
+rather than the browser's. The engine refuses it beside `show_closed`, so the
+scope the reader chose replaces whichever of the two a saved view carried
+rather than adding a second answer to one question. A **board opens on it**,
+where every other shape opens on Open: a board's last lane is Done, and under
+Open that lane is a column nothing can ever fall into — the workflow drawn with
+its end cut off. A view that said anything about finished work keeps what it
+said.
 
 **A key that is there and empty is not a key that is missing.** The scope's
 third value has a NAME for one half of this; the column narrowing has the other
@@ -451,7 +481,7 @@ each the answer to one thing that went missing at one item:
   not drawn.
 - **An empty list is a function of what was ASKED.** One sentence answered
   three questions that send a reader to three different places, and it blamed
-  filters on a screen with no chip row at all. So: a narrowing is on and
+  filters on a screen with no chip on it at all. So: a narrowing is on and
   nothing matched → "Nothing matches", with the control that clears it rather
   than a description of one; nothing is narrowing and this container has
   nothing in this SCOPE → "Nothing open here", naming the switch, with a number
@@ -1234,7 +1264,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
-| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px |
+| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |
@@ -1242,7 +1272,12 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 
 **Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
 sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
-pane: a `DataGrid`'s rows become labelled cards, the Settings column stacks
+pane: a `DataGrid`'s rows become labelled cards — or, on a grid that asks for
+`phoneRows="compact"`, two unlabelled lines: what the row IS (its
+`phoneLead` cells), then its marks. The work list takes the compact row,
+because it is scanned by the dozen and its labelled card stood eight lines
+and 230px per task; the table keeps the labels, since its question is a field
+at a time. The Settings column stacks
 above its section, and the page bar's controls take a line of their own and
 scroll. Both are the kit's numbers, written as media-query literals that
 `frame.test.ts` holds against `app/layout.ts`, which reads them from the kit.
@@ -1377,7 +1412,11 @@ must not also open the grid row behind the field.
 
 ### The page bar wraps by what it holds
 
-The bar holds the trail, who is working now, the star and Copy link, and LAST
+The bar holds the trail, who is working now (on a project's page, the seats
+whose running turn is charged to that project's work — "2 agents on ENG" —
+rather than the company's), the star and Copy link — which is what the
+approved artboards label **Share**: sharing a page here IS its address, since
+anyone the link reaches reads it under their own token — and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
 primary action ("New task") ends the row where the approved designs put it.
 On a phone, where the controls take a line of their own that scrolls from its
@@ -3187,7 +3226,7 @@ is one of the rules on this page applied to a tracker.
   poll, which is what lets the sidebar carry a number at all: see
   [the sidebar](#the-sidebar).
 - **A SHAPE is a drawing, a VIEW is a query, and only the query was saved by
-  anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-is-a-menu)
+  anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-says-what-it-is-set-to)
   states the general rule; what is the tracker's own is where the line falls.
   The engine ships SIX builtin views — one per shape, plus the trash — and
   neither the strip nor the sidebar draws them, for two different reasons worth
@@ -3195,9 +3234,30 @@ is one of the rules on this page applied to a tracker.
   somebody saved: mixed in beside an arranged query, the two read as the same
   kind of thing, which is why `view=` and `shape=` are two keys. The SIDEBAR
   drops them because a builtin carries no id, so there is no row to address.
-  The five shapes live in **Display**; the strip is the container's own tab,
-  whatever was saved, and `All views →`. That it is drawn even when nothing was
+  The five shapes are the first row's own buttons; after a divider the strip is
+  the container's own tab, the views THIS reader pinned (★) plus whichever one
+  is running, **+ View** — the query on screen saved under a name, shared or
+  kept to the person who saved it, with the shape as its type and without its
+  paging or a calendar's month — and `All views →`. That it is drawn even when nothing was
   saved is [the sparse state](#the-sparse-state)'s rule, not this one.
+- **The second row is how the answer is cut, and it is the last row above the
+  work.** The chips open it, ending in **+ Filter** — what narrows the answer
+  is what a reader reads first, and the control that adds a narrowing sits
+  after the ones it adds to, as the approved Board draws it. At the far end,
+  one cluster: **Show** (the scope), Group by, Sort, a board's lanes out of
+  view and the count, so a row made narrow by an open peek or a 1280 window
+  moves them down together rather than leaving the count alone on a line. The
+  scope was four segments opening the row; it is a picker because it is the
+  same kind of choice as Group by and Sort, and as segments it took the start
+  of the row from the chips. NOTHING ELSE sits between this bar and the work:
+  the Tasks screen's introduction and the board's "cards move in the manual
+  order" line each cost a row on every visit to say something needed once, so
+  the first lives in these docs and the empty state and the second is said
+  when somebody tries to drag outside the manual order (and in the Sort
+  control's title on a board). On a phone the
+  row is the sticky band, so it stays ONE line that scrolls sideways, like the
+  shape tabs above it: wrapped, it stood three rows tall and covered the
+  board's lane heads as the page scrolled under it.
 - **The landing shape is the CLIENT's fallback, not a builtin the engine marks
   `default`.** Why it is the list is under [the sparse state](#the-sparse-state);
   why it lives here is that exactly one view row may carry `default` and the
@@ -3213,7 +3273,11 @@ is one of the rules on this page applied to a tracker.
   is read the same way. `show_closed` travels with it, because a removed task
   is very often a finished one and the status predicate is ANDed otherwise: the
   one listing whose whole job is "what did my assistant delete" would hide
-  every deletion of anything already done. Its three extra columns APPEND to
+  every deletion of anything already done. On the list that is the Show
+  segment's DEFAULT under `removed=true` (All rather than Open), so the trash
+  reads the same whether it was reached from the Filter menu or from its own
+  address, and a Show picked on the bar still overrides it. Its three extra
+  columns APPEND to
   whichever set is active, so the trash is readable as a list too, and the
   removal's actor and instant come from the activity feed rather than from the
   row — the row carries no tombstone, and a row the loaded page of the feed
@@ -3249,32 +3313,39 @@ is one of the rules on this page applied to a tracker.
   difference is its own axis.** A board is `group_by` and no cursor, because
   across a set of columns there is no single order to be after. A list and a
   table are one page with a sort — the same rows, the same grouping, the same
-  hundred — so a second arm for the table would be a second copy of one paging
-  rule. A calendar is a DATE RANGE and no grouping, because its axis IS the
+  hundred, and the same cursor followed on Load more — so a second arm for the
+  table would be a second copy of one paging rule. A calendar is a DATE RANGE and no grouping, because its axis IS the
   grammar's one `due` key: the month on screen spends it, the Overdue chip is
-  not offered there, and the count says what it counted. A timeline is a big
-  unpaged page ordered by start, because its window is derived from the rows
-  present and a second page would redraw the first one's axis. What no shape
+  not offered there, and the count says what it counted. A timeline is a
+  page of five hundred ordered by start, because its window is derived from the
+  rows present — a later page may widen it, which is the honest drawing of
+  more rows and the only way to the five-hundred-and-first bar. A bar too
+  narrow for its title carries it beside it, on a plate of the strip's own
+  ground so a week rule stops at its edge rather than striking through a word,
+  on the side with room — before the bar near the strip's end — and bounded by
+  that room, so it ellipsises rather than running off the strip. What no shape
   does is narrow differently — the FILTERS mean one thing on all four, and a
   shape that reinterpreted them would be a second idea of what the reader asked.
-- **A view SETS the scope segment, and the segment is read once rather than
-  per reader.** Open / Closed / All is the single authority on the status group a
-  read asks for: the screen spreads a view's saved parameters and then writes
-  that one key from the segment. So a segment defaulting to a constant made a
+- **A view SETS the scope (the Show picker), and the scope is read once
+  rather than per reader.** Open / Recent / Closed / All is the single
+  authority on which finished work a read asks for — the status group, or
+  Recent's `closed_since`: the screen spreads a view's saved parameters and
+  then writes that key from the scope. So a scope defaulting to a constant made a
   view saved over closed work unrunnable — it opened on `Open`, overwrote the
-  view's own group, and named a scope its rows did not match. The segment
-  therefore takes its DEFAULT from the chosen view. Two absences land on `Open`
-  for different reasons: a view naming no group at all is not a view asking for
-  everything, and a view naming a group the three segments cannot express
+  view's own group, and named a scope its rows did not match. The scope
+  therefore takes its DEFAULT from the chosen view — Recent where the view
+  carries `closed_since`, and on a board that says nothing about finished work.
+  Two absences land on `Open` for different reasons: a view naming no group at all is not a view asking for
+  everything, and a view naming a group the scopes cannot express
   (`active` alone) has no reading that answers it as saved — only a choice of
   which wider set to show, and `Open` is the one nearer what its author asked
   for. The exception is a view that WIDENED — `show_closed` with no group —
   which opens on `All`, because seeding `Open` there writes the narrow group
   back over exactly the half the view asked for. And a `scope=` off the address
-  that names none of the three reads as `All` in ONE place rather than per
+  that names none of the four reads as `All` in ONE place rather than per
   reader: spelled separately, a hand-edited `?scope=opne` drew an unset switch
   over a query showing every closed task, which is the one combination the
-  segment exists to make impossible.
+  scope exists to make impossible.
 - **A row is a table, and its columns belong to the LIST.** This is the
   EMBEDDED list — a seat's queue, a person's day, an item's subtasks, which
   draw the same compact row inside somebody else's panel; the work screen's
@@ -3305,19 +3376,124 @@ is one of the rules on this page applied to a tracker.
   character on the front. An end track states the inset as well as the
   column — in both sets, which is a second reason the narrow one is declared
   once rather than twice.
-- **A card is not a row, so it holds nothing open.** The dashed "nobody"
-  square exists to keep a row's assignee COLUMN from collapsing; a card is
-  inline flow and has no column to keep. So a card draws its foot only when
-  something goes in it — blocked, a due date, a size, an assignee — and a task
-  nobody has touched is a key and a title. Drawn unconditionally, the foot of
-  such a card was that dashed square alone under the title, which reads as a
-  control somebody could press rather than as the absence of five facts. One
-  fact brings the foot back, and the square with it: "nobody holds this, and
-  it is due on Monday" is the pair a board column is scanned for. The
-  predicate that asks restates each mark's own emptiness rule, which is the
-  price of asking BEFORE rendering — a container cannot ask a child that drew
-  nothing whether it did — so a mark that gains a field is a mark that adds it
-  there.
+- **A card is four fixed rows, and only the last one comes and goes.** The
+  identity row is the type — drawn only where it is not the default `task`, so
+  a board of tasks carries no mark and a bug or a milestone is what the eye
+  finds across a lane — the key, the size and — at its end, as the approved
+  board draws it — the holder, a squircle for an agent and a circle for a
+  person with the seat's STATE as the ring round it; the dashed "nobody" square
+  sits there when nobody holds the task, so an unclaimed card says so on every
+  card rather than floating alone in a foot. Then the title, clamped to two
+  lines. Then the facts: priority, blocked, the labels, the due date, "blocks N"
+  (the live tasks waiting on this one — the reason to pick it first), the open
+  questions and, at the end, what the task has cost in TOKENS. A card on a task
+  nobody has touched has no fact row at all rather than an empty band, and the
+  predicate that decides restates each mark's own emptiness rule — the price of
+  asking BEFORE rendering — so a mark that gains a field adds it there. The
+  last row is a STATE and the only part of a card with a hue: blue while a
+  seat's turn is on the task ("SWE · executing · round 7 of 20 · 6m"), amber
+  while a coding run on it is parked waiting for the READER. The turn is joined
+  on the item the engine CHARGES it to (`live_call.work_item`), never on the
+  trigger's `work_key`, which names whatever a webhook mentioned; and a run
+  waiting on somebody else is a fact on the task page, not a call to this
+  person. Labels, "blocks N", the open questions and the tokens are opt-in row
+  facts (`fields=`) the board asks for and no agent's listing carries.
+- **A status is coloured by its GROUP.** Somebody is on it — `in_progress` and
+  `in_review` alike — is blue, finished is green, nothing happening is no hue.
+  `in_review` was amber once, the hue reserved across the product for NEEDS
+  YOU, so every task in review read as a task waiting on the reader.
+- **A drag is a write, made as the reader.** Dropping a card calls
+  `place_work_item` as the person the token is bound to, naming the card it went
+  above — or the last card of the lane it went to the bottom of — and, across
+  lanes, the lane's status, conditional on the card's version. Never an index:
+  the engine mints the place between the neighbours as the board stands when
+  the move lands, and on the company's board a card of another project is no
+  neighbour, since a rank is an order within one project. It is CONFIRMED, NOT
+  OPTIMISTIC: the card is drawn where it was dropped with a pending mark — the
+  two lanes' counts moving by one with it, since a heading still reading the
+  old tally over the card drawn beneath it is two claims that disagree — a
+  refusal puts card and counts back and says why in the engine's words, and an
+  applied move is re-read. A lane change whose place was refused after the status landed
+  (`placed: false`) stays in its new lane — snapping it back would draw a
+  status that is no longer true — and the sentence says the place was not
+  taken. A drag moves cards only in the MANUAL order (a project's default, or
+  Sort → Manual), because in any other a dropped card jumps back to where its
+  date puts it, which reads as a refusal that was not one; `Alt` with an arrow
+  is the same gesture for a keyboard. A drag tried in any other order is
+  caught — a card is a link, and an uncaught drag is the browser dragging its
+  address — and answered with the order that moves cards, which the Sort
+  control's title on a board also says. A reader the engine will not move
+  cards for is told why once, above the lanes, in the sentence every write
+  control uses.
+- **A card's mark row is one line.** Priority, blocked, due, "blocks N" and
+  open asks stay whole and the token count stays at the row's right end; the
+  LABELS give way first, to a "+N" that names the rest in its title and to a
+  screen reader. The row wrapped once, and the count stood on a line of its
+  own under a full row of chips.
+- **A lane is headed by its status's own mark** — the ring while the work is
+  open, the check once it was delivered, in the status's tone — the mark the
+  palette and a decision's task already draw, and the one a list band on the
+  status axis carries too. A task TYPE is never drawn with either: `task` wore
+  the delivered check once, and a list of work nobody had started read as a
+  list of finished work (`lib/work.ts` holds `TYPE_ICON` and `STATUS_MARK`
+  apart, and a test says so).
+- **A board shows whole lanes and names the rest.** A lane is sized from the
+  board's own width: as many whole lanes as fit at a 260px floor, sharing the
+  width exactly with no gap after the last, so the scroller's edge falls
+  between two lanes and never through a card, and a scroll snaps to a lane's
+  start. A fixed 276px lane fitted the approved four at exactly one window
+  width — at 1440 the fourth ended 8px past the scroller and every Done card
+  lost its edge, and at 1280 Done was cut mid-title. The lanes past the edge
+  are COUNTED at the end of the bar in one phrasing at every width ("2 more
+  lanes ›", "‹ 1 earlier lane" — the names are the button's accessible name
+  and tooltip, because a bare "Cancelled, Closed" read as two status words
+  rather than as a control), a button that pages to them, with a shadow on that side of the board: a Recent
+  board has six lanes, and its scrollbar sits under its tallest lane, usually
+  below the fold, so the last two were on the page with nothing on screen to
+  say so. On a phone a lane is the screen less a gutter, and the next lane's
+  edge is the cue.
+- **A lane has a count, a ⋯ and a way to the rest.** The count is over the
+  whole lane; ⋯ opens it as a list or puts it away (`hide=`, which the Display
+  menu names and brings back, because a hidden lane on an address somebody else
+  sent is a column of work nobody can tell is missing); and past its fifty
+  cards the lane ends in "N more", which is the list narrowed to that lane —
+  "N more this week" on a finished lane under Recent, since that is all the lane
+  holds there. A turn ending on a card the board draws is a card that just
+  changed, so the board asks again then rather than a poll later.
+- **A row is edited in place, as the reader.** A writer's list and table rows
+  draw the status, the priority and the holder as the same badge, mark and face
+  a reader sees, each the trigger of a menu of its values — never a select box
+  in every row. Each change is `update_work_item` conditional on the version
+  the row was drawn at (`if_match`), so a change somebody made a second ago is
+  refused rather than overwritten, and the refusal NAMES who made it ("changed
+  by Maya since you opened it"), read from the task's newest history entry. A
+  reader who cannot change tasks sees the values and one sentence above the
+  grid saying why, rather than a hundred pickers that each refuse.
+- **Every row is reachable.** A list and a table are a page of a hundred, a
+  calendar and a timeline a page of five hundred, and the rest follow the
+  answer's cursor on **Load more** beside "N of M loaded"; a busy calendar
+  day's "+N more" is the list narrowed to that day, bounded by the READER's own
+  midnights because the cell is the reader's day. `[` and `]` walk the rows in
+  the order they are DRAWN — lanes left to right, bands top to bottom — and a
+  task opened from a list carries that list's question (`list=`), so its own
+  page asks the engine where it sits in the WHOLE answer (`around=`) and says
+  "3 of 18" with the tasks either side, rather than counting the page that
+  happened to be loaded.
+- **A filter's operator is the client's, and the wire gets a list.** Priority
+  is / is not / ≥ is expanded on the way out — `≥ normal` is
+  `priority=normal,high,urgent` — and read back off the list's shape, so a
+  saved view stays a plain list any reader can run and a pasted link draws the
+  chip that wrote it. Labels take the grammar's own three modes: any of them
+  (bare, the engine's default), all of them (`all:`), or none of them
+  (`none:`).
+- **Every row is filtered on its own** (`subtasks=separate`), on every shape
+  and over any saved view. The grammar's default filters ROOTS and lets their
+  subtrees ride along unfiltered, which suits a surface that folds a tree under
+  its root — and no shape here draws one. Under that default the Open list
+  listed the finished subtasks of every open parent, and a person's own day
+  drew subtasks somebody else held, with nothing on a flat row to say which
+  rows matched and which rode along. A task's own subtasks are its page's
+  list.
 - **A board draws every lane the scope admits, and a list draws only the
   bands that hold something.** The engine mints the lanes: on a closed axis
   — status, status group, priority and the due bands — `work_items` carries
@@ -3378,9 +3554,9 @@ is one of the rules on this page applied to a tracker.
   should overlay below about 1500. That measured a peek the tracker's own
   screen owned as a column of its own body grid; the frame took the peek over,
   the rules enforcing 1500 matched an attribute nothing ever set, and they are
-  gone. A board's answer to a narrow body is horizontal scroll — lanes keep
-  their width and the reader pushes them — which is why the list, not the
-  board, is what sets the number.
+  gone. A board's answer to a narrow body is fewer whole lanes and a pager to
+  the rest — see **A board shows whole lanes** above — which is why the list,
+  not the board, is what sets the number.
 - **The item's peek is the page's header with NO facts under it.** A header and
   a properties rail stacked in one 420px column are one reading: the header's
   line said Status, Type and Assignee and the rail said all three again a

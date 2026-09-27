@@ -115,6 +115,23 @@ export const ACTIONS = {
     refreshes: ["knowledge"],
     scope: "person",
   },
+  place_work_item: {
+    // A BOARD DRAG: the card dropped `before` a neighbour, or `after` the last
+    // card of a lane, and into another lane with `status`. The engine mints
+    // the place between the neighbours as the board stands when it lands.
+    args: ["item", "before", "after", "status", "if_match"],
+    domain: "tracker",
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  save_work_view: {
+    // "+ VIEW": the query on screen, saved under a name on this container,
+    // shared or kept to the person who saved it.
+    args: ["container", "name", "type", "params", "owner"],
+    domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",

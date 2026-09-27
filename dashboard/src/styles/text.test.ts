@@ -85,7 +85,9 @@ describe("how this product cuts text", () => {
     const declared = block(sheet("base.css"), "@property --clamp-lines");
     expect(declared).toMatch(/inherits:\s*false/);
     expect(declared).toMatch(/initial-value:\s*2/);
-    expect(block(sheet("screens.css"), ".work-card-title")).toMatch(/--clamp-lines:\s*3/);
+    // THE CARD SAYS ITS OWN COUNT — two lines, as the approved board draws a
+    // title — on the card, rather than leaning on the initial value.
+    expect(block(sheet("screens.css"), ".work-card-title")).toMatch(/--clamp-lines:\s*2/);
   });
 
   // ONE IMPLEMENTATION. `.work-card-title` hand-rolled the same declarations

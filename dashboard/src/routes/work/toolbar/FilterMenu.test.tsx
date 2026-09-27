@@ -208,7 +208,7 @@ const PICKS: { field: string; option: string; param: string; value: string }[] =
   // opens a board to ask for.
   { field: "Assignee", option: "Unassigned", param: "assignee", value: "none" },
   { field: "Assignee", option: "Ada Okonkwo", param: "assignee", value: "ada" },
-  { field: "Tag", option: "Platform", param: "tag", value: "platform" },
+  { field: "Labels", option: "Platform", param: "tag", value: "platform" },
   // A DUE ALIAS THE ENGINE EXPANDS ITSELF, never a window this control
   // composed: `internal/tracker/dates.go` resolves the word on the chip.
   { field: "Due", option: "Overdue", param: "due", value: "overdue" },

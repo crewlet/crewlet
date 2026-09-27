@@ -122,7 +122,7 @@ function inkOnFill(css: string): string[] {
  * that does not exist" — and the empty states, "No project has been created
  * yet." included. All at three to one, in both themes, at 11px.
  *
- * What is left is ten marks, named here with the reason each is one. Two-sided:
+ * What is left is the marks named here with the reason each is one. Two-sided:
  * a new rule reaching for this rung fails until somebody writes down why it is
  * a mark, and an entry whose rule is gone fails so the list cannot outlive what
  * it excuses.
@@ -155,10 +155,17 @@ describe("the faint rung is decoration", () => {
       selector: ".work-nobody",
       why:
         'The unassigned mark: a UserGlyph with an `.sr-only` "Unassigned". ' +
-        "Where the name is also drawn it is a `.muted` span of its own, so this " +
-        "rung paints the glyph and nothing else.",
+        "Where the name is also drawn it is a `.muted` span BESIDE the square, " +
+        "outside it, so this rung paints the glyph and nothing else.",
     },
     { selector: ".work-hist-row > svg", why: "The history row's icon — an SVG, never a word." },
+    {
+      selector: "span.list-position-step",
+      why:
+        "The task page's previous or next chevron where there is no neighbour to " +
+        "step to — an `aria-hidden` glyph, drawn so the count between the two keeps " +
+        "its place; the live one is an anchor on the secondary rung.",
+    },
   ];
 
   const faint = SHEETS.flatMap((name) => {

@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The derived columns: values the applier COMPUTES from the rows it already
@@ -31,6 +32,9 @@ import (
 //   - A task history row's `reassignments`, the hand-off count that commit
 //     left, carried forward in log order as each row is written and walked
 //     again by [rederiveHandOffs] — see apply_handoffs.go.
+//   - A task's `updated_at`, the effective instant of the newest record that
+//     changed it — the `effective_at` of its newest history row — written by
+//     [Applier.applyTask] and recomputed by [restampUpdated].
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
@@ -38,11 +42,12 @@ import (
 // high bits: `seen_through` had been written as the bare sequence and every
 // inbox entry's position was whatever the caller sent. 3 is a project's
 // `active_count`, the part of its open work somebody has started. 4 is a task
-// history row's `reassignments`, the hand-off count that commit left. Bumped by ANY change to
+// history row's `reassignments`, the hand-off count that commit left. 5 is a
+// task's `updated_at`, which only its create had ever written. Bumped by ANY change to
 // what a derived column holds, the first one a column adds included — the bump
 // is what fills a new column on a node upgrading onto rows its predecessor
 // wrote without it.
-const DerivationVersion = 4
+const DerivationVersion = 5
 
 var _ statelog.Deriver = (*Applier)(nil)
 
@@ -113,7 +118,91 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + persons + active + handOffs, nil
+	updated, err := restampUpdated(ctx, tx, "")
+	if err != nil {
+		return 0, err
+	}
+	return reopens + persons + active + handOffs + updated, nil
+}
+
+// restampUpdated is every task's `updated_at` recomputed as the newest
+// `effective_at` among its own history rows — every task's when id is empty,
+// and the one task's otherwise.
+//
+// THE SAME INSTANT THE INCREMENTAL RULE WRITES: [Applier.applyTask] stamps the
+// task with [effectiveAt] at the record it applies, and the history row that
+// apply writes carries that same value — so the newest history row IS the
+// newest stamp, and a row this build maintained re-derives to itself. Only
+// rows that differ are written, which is how an upgrade with nothing to repair
+// reports none.
+//
+// ONE TASK is the late record's half of the same rule. A record applied below
+// the task's version changes no document, but its history row still RAISES
+// every successor's effective instant (see [Applier.raiseSuccessors]) — so
+// the task's newest instant moved while its stamp did not, and a node that
+// applied the same records in log order would hold the raised one. Restamping
+// that task from its history is what keeps the two nodes identical.
+//
+// THE DOCUMENT MOVES WITH THE COLUMN. A task page reads the document and a
+// list reads the column, and a repair of one would draw two different "last
+// changed" instants for one task — so both are rewritten, in Go, because the
+// document's instant is RFC 3339 text and the column's is the store's integer.
+func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
+	// The one task's filter sits INSIDE the aggregate, so a late record
+	// reads its own history rows through the subject index rather than
+	// grouping the company's whole history to keep one group of it.
+	scope, args := "", []any{string(KindTask)}
+	if id != "" {
+		scope, args = " AND subject_id = ?", append(args, id)
+	}
+	query := `
+		SELECT t.id, t.document, h.newest
+		FROM tracker_tasks t
+		JOIN (SELECT subject_id, MAX(effective_at) AS newest
+		        FROM tracker_history WHERE subject_kind = ?` + scope + `
+		       GROUP BY subject_id) h ON h.subject_id = t.id
+		WHERE h.newest > 0 AND t.updated_at <> h.newest`
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: read the tasks whose last change moved: %w", err)
+	}
+	type repair struct {
+		id       string
+		document []byte
+		newest   int64
+	}
+	var repairs []repair
+	for rows.Next() {
+		var r repair
+		if err := rows.Scan(&r.id, &r.document, &r.newest); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("tracker: read a task's last change: %w", err)
+		}
+		repairs = append(repairs, r)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("tracker: read the tasks whose last change moved: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("tracker: read the tasks whose last change moved: %w", err)
+	}
+	for _, r := range repairs {
+		var task Task
+		if err := json.Unmarshal(r.document, &task); err != nil {
+			return 0, fmt.Errorf("tracker: decode task %s to stamp its last change: %w", r.id, err)
+		}
+		task.UpdatedAt = store.DecodeTime(r.newest).UTC()
+		document, err := json.Marshal(task)
+		if err != nil {
+			return 0, fmt.Errorf("tracker: encode task %s: %w", r.id, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`,
+			r.newest, document, r.id); err != nil {
+			return 0, fmt.Errorf("tracker: stamp task %s's last change: %w", r.id, err)
+		}
+	}
+	return len(repairs), nil
 }
 
 // rederiveActiveCounts is every project's `active_count` recounted from its

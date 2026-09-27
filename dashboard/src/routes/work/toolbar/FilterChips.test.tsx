@@ -20,6 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { FilterChips } from "./FilterChips.tsx";
 import { ItemsView, type ItemsHost } from "../ItemsView.tsx";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { filterChips, NO_FILTERS, URL_HOMES, type TrackerFilters } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -27,7 +28,15 @@ import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -134,12 +143,24 @@ test("a unit the answer could not name says its own key", () => {
   expect(screen.getByText("eng")).toBeTruthy();
 });
 
-// DRAWN ONLY WHERE SOMETHING IS ON: an unfiltered list has no chip row at all,
+// DRAWN ONLY WHERE SOMETHING IS ON: an unfiltered list has no chip at all,
 // which is the whole difference from a bar of controls drawn whether or not
 // they were set.
 test("nothing narrowing draws no row, not an empty one", () => {
   const { container } = drawChips({});
   expect(container.innerHTML).toBe("");
+  expect(screen.queryByText("Clear")).toBeNull();
+});
+
+// "+ FILTER" ENDS THE ROW, and with nothing on it is the row: the place a
+// narrowing is read is the place one is added, as the approved board draws it.
+// There is no Clear beside it, because there is nothing to clear.
+test("with nothing narrowing, the row is the control that adds a narrowing", () => {
+  render(
+    <FilterChips chips={[]} onRemove={vi.fn()} onClear={vi.fn()} add={<button>Filter</button>} />,
+  );
+  const row = screen.getByRole("group", { name: "Filters" });
+  expect(row.textContent).toBe("Filter");
   expect(screen.queryByText("Clear")).toBeNull();
 });
 
@@ -235,7 +256,9 @@ const HOST: ItemsHost = {
 const mountList = (host?: ItemsHost) =>
   render(
     <Router>
-      <ItemsView host={host} />
+      <ViewerProvider>
+        <ItemsView host={host} />
+      </ViewerProvider>
     </Router>,
   );
 
@@ -249,7 +272,7 @@ test("the locked assignee draws no chip, and an assignee key on the address draw
   const query = serving({ work_items: answered });
   mountList(HOST);
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
-  expect(document.querySelector(".work-chips")).toBeNull();
+  expect(document.querySelector(".work-chip-field")).toBeNull();
   // AND THE LOCK IS WHAT REACHED THE WIRE, not the key somebody typed.
   const items = query.mock.calls.filter((c) => c[0] === "work_items");
   expect(items.length).toBeGreaterThan(0);

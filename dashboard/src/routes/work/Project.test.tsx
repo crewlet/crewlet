@@ -22,7 +22,15 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -234,18 +242,18 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  // THE LENS ROW BY NAME, because the Items lens brings a tab row of its own:
+  // THE LENS ROW BY NAME, because the Items lens brings a row of its own:
   // the list's view strip is drawn whether or not anybody has saved a view, and
-  // its first tab is this container's own list. Read as "every tab on the
-  // screen" this case would fail the day either row gains a member, which is
-  // not what it is about.
+  // its first button is this container's own list, pressed while no saved view
+  // runs. Read as "every tab on the screen" this case would fail the day either
+  // row gains a member, which is not what it is about.
   const lenses = screen.getByRole("tablist", { name: "Lens" });
   expect(
     within(lenses)
       .getAllByRole("tab")
       .map((el) => el.textContent),
   ).toEqual(["Items12", "Overview", "History"]);
-  expect(screen.getByRole("tab", { name: "All in this project" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "All in this project", pressed: true })).toBeTruthy();
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to the

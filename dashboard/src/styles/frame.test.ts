@@ -106,6 +106,20 @@ function mediaWidths(css: string): { prelude: string; width: number; written: st
   );
 }
 
+/** The body of the first at-rule whose prelude is exactly `prelude`, braces balanced. */
+function atRuleBody(css: string, prelude: string): string {
+  const at = css.indexOf(prelude);
+  expect(at, `${prelude} is not in the sheet`).toBeGreaterThan(-1);
+  const open = css.indexOf("{", at);
+  let depth = 1;
+  let i = open + 1;
+  for (; i < css.length && depth > 0; i++) {
+    if (css[i] === "{") depth++;
+    else if (css[i] === "}") depth--;
+  }
+  return css.slice(open + 1, i - 1);
+}
+
 /** The phone breakpoint's query, as every sheet writes it. */
 const PHONE = `@media (width < ${PHONE_BREAKPOINT}px)`;
 
@@ -474,6 +488,31 @@ describe("the frame's layout", () => {
     expect(narrow.slice(narrow.indexOf(".grid-cell[data-label]::before"))).toMatch(
       /flex:\s*0 0 \d/,
     );
+  });
+
+  // A LIST SCANNED BY THE DOZEN IS TWO LINES A ROW, not a labelled card. The
+  // work list's card stood eight lines — 230px — per task at 390px, so a phone
+  // showed two and a half; `phoneRows="compact"` draws what the row is, then its
+  // marks. ONE FLEX RUN THAT BREAKS ONCE: the lead cells first, the row's own
+  // full-width `::after` next, every other cell after it — and no label on any
+  // of them, which is what makes it two lines rather than eight.
+  test("a compact grid draws a phone row as its lead, then a line of marks", () => {
+    const css = sheet("frame.css");
+    const narrow = css.slice(css.indexOf(PHONE));
+    const C = '.grid-wrap[data-phone-rows="compact"]';
+    const row = block(narrow, `${C} .grid-row`);
+    expect(row).toMatch(/display:\s*flex/);
+    expect(row).toMatch(/flex-wrap:\s*wrap/);
+    const brk = block(narrow, `${C} .grid-row::after`);
+    expect(brk).toMatch(/flex-basis:\s*100%/);
+    expect(brk).toMatch(/order:\s*1/);
+    expect(block(narrow, `${C} .grid-cell`)).toMatch(/order:\s*2/);
+    expect(block(narrow, `${C} .grid-cell[data-lead]`)).toMatch(/order:\s*0/);
+    expect(block(narrow, `${C} .grid-cell[data-label]::before`)).toMatch(/content:\s*none/);
+    // TWO LINES, NEVER THREE: a cell declared `phoneOmit` is not drawn there,
+    // or the list's "3h ago" wrapped onto a line of its own under every task
+    // with a status and a due date.
+    expect(block(narrow, `${C} .grid-cell[data-phone-omit]`)).toMatch(/display:\s*none/);
   });
 
   // AND THAT BASIS IS A WIDTH, NOT A REQUEST.
@@ -943,7 +982,12 @@ describe("the frame's layout", () => {
 
   test("the page bar wraps by what it holds, and breaks for good only on a phone", () => {
     const css = sheet("frame.css");
-    const atBreak = css.slice(css.indexOf(`@container page (width < ${PHONE_BREAKPOINT}px)`));
+    // THE BREAK'S OWN BODY, braces balanced — not everything after it. Sliced
+    // to the end of the file, the "nothing else reorders at this break" case
+    // below read every later `@media` rule as if it were inside this one, and
+    // failed on the compact grid row's `order`, a phone rule about a different
+    // element at a different query.
+    const atBreak = atRuleBody(css, `@container page (width < ${PHONE_BREAKPOINT}px)`);
     const base = css.slice(0, css.indexOf("@container page ("));
 
     // A FLOOR RATHER THAN A HEIGHT, so the second line the bar can create is

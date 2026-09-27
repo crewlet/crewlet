@@ -1141,7 +1141,7 @@ export function labelOf(
       switch (row?.stopped_reason) {
         case "paused": {
           const by = row.paused?.by ? `Paused by ${nameOf(row.paused.by)}` : "Paused";
-          const since = row.paused?.at ? ago(row.paused.at, now) : "";
+          const since = row.paused?.at ? shortAge(row.paused.at, now) : "";
           return since ? `${by} · ${since}` : by;
         }
         case "unplaced":
@@ -1231,11 +1231,64 @@ export function stateLine(
     }
     case "idle": {
       const last = row?.last_turn?.ended_at;
-      return last ? `Idle · last turn ${ago(last, now)} ago` : "Idle";
+      return last ? `Idle · last turn ${shortAge(last, now)} ago` : "Idle";
     }
     default:
       return labelOf(row, now, nameOf);
   }
+}
+
+/**
+ * What a task's card says about the turn running on it: "SWE · executing ·
+ * round 7 of 20", "AI Systems · 3 workers running", "SWE · coding run".
+ *
+ * JOINED ON THE ITEM THE ENGINE CHARGES THE TURN TO — `live_call.work_item`,
+ * then the turn's own — and never on a `work_key`, which is the unit of work a
+ * TRIGGER named and says nothing about which task the turn is spending on. A
+ * card that joined on it drew a strip on whichever task the webhook happened
+ * to mention.
+ *
+ * ONLY A WORKING SEAT, by the engine's own word (`activity`): a seat that
+ * stopped mid-turn is not running anything on the task, and the ring round its
+ * avatar already says which state it is in.
+ */
+export interface CardLive {
+  /** The seat running the turn. */
+  handle: string;
+  /** The words after the seat's name. */
+  doing: string;
+  /** When the turn began, for the elapsed time at the strip's end. */
+  since?: string;
+}
+
+/** Every working seat's turn, keyed on the task key the turn is charged to. */
+export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
+  const out = new Map<string, CardLive>();
+  for (const row of rows) {
+    if (row.activity !== "working") continue;
+    const key = row.live_call?.work_item?.key || row.turn?.work_item?.key || "";
+    const handle = row.handle ?? "";
+    if (!key || !handle) continue;
+    out.set(key, {
+      handle,
+      doing: doingWords(row),
+      since: row.turn?.started_at ?? row.live_call?.started_at,
+    });
+  }
+  return out;
+}
+
+/** The words a working seat's strip carries after its name. */
+function doingWords(row: AgentRow): string {
+  if (row.turn?.stage === "parked") return "coding run";
+  const workers = delegatedWorkers(row.live_call);
+  if (workers > 0) return `${plural(workers, "worker")} running`;
+  const phase = row.live_call?.phase ?? row.current_phase ?? "";
+  const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
+  const round = row.live_call?.round_num;
+  const max = row.live_call?.max_rounds;
+  if (!round) return verb;
+  return max ? `${verb} · round ${round} of ${max}` : `${verb} · round ${round}`;
 }
 
 /**
@@ -1249,8 +1302,18 @@ export function handleLabel(handle: string | null | undefined): string {
   return h ? `@${h}` : "";
 }
 
-/** "12m", "3h", "2d" — the age of an instant against the reader's clock. */
-function ago(at: string, now: number): string {
+/**
+ * "12m", "3h", "2d" — the AGE of an instant against the reader's clock: how
+ * long something has been going on, which is what a seat's pause, its last
+ * turn and a card's live band all say.
+ *
+ * NOT THE INBOX'S `shortWhen`, which is the other compact rule and answers a
+ * different question — WHEN a notice arrived, so past a day it names the
+ * weekday or the date. "Parked · Tue" says when a run stopped; "Parked · 2d"
+ * says how long it has waited, which is what a reader deciding whether to go
+ * and look needs.
+ */
+export function shortAge(at: string | undefined, now: number): string {
   const then = parseUTC(at)?.getTime() ?? Number.NaN;
   if (!Number.isFinite(then)) return "";
   const minutes = Math.max(0, Math.round((now - then) / 60_000));

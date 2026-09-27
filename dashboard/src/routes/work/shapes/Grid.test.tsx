@@ -216,6 +216,19 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
+// AND A TOKEN BOUND TO A SEAT NAMES THE PERSON, as the change log names the
+// same removal: the token is the audit trail (`actor`), the person is who the
+// row is about (`actor_seat`). The trash drew "founder" beside a log saying
+// Jane Founder.
+test("a removal made through a bound token names the person, not the token", () => {
+  const removals = new Map([
+    ["t-1", removal({ actor: "founder", actor_kind: "operator", actor_seat: "ada" })],
+  ]);
+  mount("table", [row({})], removals);
+  expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.queryByText("founder")).toBeNull();
+});
+
 // ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
 // variant an identity badge has and it is STRUCTURAL — who holds the seat — so
 // it cannot depend on which set is drawing. It did: `SeatCell` took a kind and
@@ -303,4 +316,23 @@ test("the title keeps a floor and the status is drawn whole, in both sets", () =
     expect(template, shape).toContain("max-content");
     cleanup();
   }
+});
+
+// ON A PHONE THE LIST IS TWO LINES A TASK — the key and the title, then the
+// marks — and the table keeps the labelled card, whose question is a field at a
+// time. The lead is exactly what the task IS; a status or an assignee leading
+// would push the title onto the second line.
+test("the list is compact on a phone with its key and title leading, the table is labelled", () => {
+  const list = mount("list", [row({ assignee: "iris" })]);
+  const wrap = list.container.querySelector(".grid-wrap")!;
+  expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
+  const leads = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-lead]")];
+  expect(leads.map((c) => c.getAttribute("data-label"))).toEqual(["Key", "Title"]);
+  // AND ITS LINE OF FACTS LEAVES OUT WHEN IT LAST MOVED — the one fact that
+  // wrapped a third line — and nothing else.
+  const omitted = [...wrap.querySelectorAll(".grid-row > .grid-cell[data-phone-omit]")];
+  expect(omitted.map((c) => c.getAttribute("data-label"))).toEqual(["Updated"]);
+  cleanup();
+  const table = mount("table", [row()]);
+  expect(table.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(false);
 });

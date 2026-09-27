@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { WorkGrid } from "~/routes/work/shapes/Grid.tsx";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
@@ -198,22 +201,31 @@ const group = (key: string, ids: string[]): WorkGroup => ({
  * a row.
  */
 function grouped() {
+  // AND A CLIENT AND A VIEWER, because a grid's status, priority and holder
+  // cells are writes that ask who is reading before they draw a picker.
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  socket.query = (() => Promise.resolve({})) as typeof socket.query;
   return render(
-    <Router>
-      <WorkGrid
-        shape="list"
-        rows={[]}
-        groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
-        axis="status"
-        chrome={{}}
-        now={Date.parse("2031-04-16T00:00:00Z")}
-        workspace
-        hrefOf={(r) => `#/work/${r.key}`}
-        onOpen={() => {}}
-        onOverflow={() => {}}
-        overflowHref={() => "#/work"}
-      />
-    </Router>,
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <WorkGrid
+            shape="list"
+            rows={[]}
+            groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
+            axis="status"
+            chrome={{}}
+            now={Date.parse("2031-04-16T00:00:00Z")}
+            workspace
+            hrefOf={(r) => `#/work/${r.key}`}
+            onOpen={() => {}}
+            onOverflow={() => {}}
+            overflowHref={() => "#/work"}
+          />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
   );
 }
 

@@ -131,10 +131,14 @@ export function firstLine(body: string): string {
 }
 
 /**
- * How long ago, as few characters as a row can spare: "now", "12m", "3h",
- * then the weekday inside a week and the date past it.
+ * WHEN, as few characters as a row can spare: "now", "12m", "3h", then the
+ * weekday inside a week and the date past it.
+ *
+ * A MOMENT, NOT AN AGE — which is why it is not `lib/seats.ts`' `shortAge`
+ * ("2d"): a notice list is read as a timeline, where "Tue" places a row and
+ * "4d" makes the reader count back.
  */
-export function shortAge(at: string | undefined, now: number): string {
+export function shortWhen(at: string | undefined, now: number): string {
   const t = Date.parse(at ?? "");
   if (!Number.isFinite(t)) return "";
   const minutes = Math.max(0, Math.floor((now - t) / 60_000));
@@ -366,7 +370,7 @@ function Row({
             </span>
             <span className="inbox-row-where">{where}</span>
             <span className="inbox-row-age t-num">
-              {shortAge(row.at, now) || <EmptyValue label="No time recorded" />}
+              {shortWhen(row.at, now) || <EmptyValue label="No time recorded" />}
             </span>
           </span>
           <span className="inbox-row-line">{rowLine(row)}</span>

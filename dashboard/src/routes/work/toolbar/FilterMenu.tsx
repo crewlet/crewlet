@@ -34,20 +34,27 @@
 
 import { useMemo, useState } from "react";
 import { Button, Input, Popover, Tag } from "@crewlethq/ui";
-import {
-  CheckGlyph,
-  ChevronLeftGlyph,
-  SearchGlyph,
-  SlidersVerticalGlyph,
-} from "@crewlethq/icons/glyphs";
+import { CheckGlyph, ChevronLeftGlyph, SearchGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import {
   DUE_FILTERS,
   PRIORITIES,
+  PRIORITY_OPS,
+  priorityFilter,
+  readPriorityFilter,
+  readTagFilter,
   STATUSES,
   statusLabel,
+  TAG_MODES,
+  tagFilter,
+  type PriorityOp,
   type Shape,
+  type TagMode,
   type TrackerFilters,
 } from "~/lib/work.ts";
+// OURS, for the reason `ItemsView` gives: the kit's segmented control selects
+// as the arrows move, and a relation that re-asked the engine on every arrow
+// would be three queries for one choice.
+import { Segmented } from "~/ui/primitives.tsx";
 import { humanize } from "~/lib/format.ts";
 import type { WorkFieldDef, WorkProjectTag, WorkStatusDef, WorkTypeDef } from "~/protocol/index.ts";
 
@@ -104,10 +111,13 @@ export function FilterMenu(props: FilterMenuProps) {
       label="Filter by"
       align="start"
       trigger={(open, toggle) => (
+        // "+ FILTER", AT THE END OF THE CHIP ROW, as the approved board draws
+        // it: the control that adds a narrowing sits after the narrowings it
+        // adds to, so the row reads as one sentence with a way to extend it.
         <Button
           size="small"
           variant="ghost"
-          leadingIcon={<SlidersVerticalGlyph size="sm" />}
+          leadingIcon={<PlusGlyph size="sm" />}
           aria-expanded={open}
           aria-haspopup="dialog"
           onClick={toggle}
@@ -180,7 +190,10 @@ function useFilterFields({
     if (tags && tags.length > 0) {
       out.push({
         param: "tag",
-        label: "Tag",
+        // THE WORD EVERY OTHER SURFACE USES — the card, the task rail, the
+        // About lens and the New task sheet all say Labels; a menu calling the
+        // same field "Tag" read as a second thing to filter by.
+        label: "Labels",
         options: tags.filter((t) => !t.archived).map((t) => ({ value: t.slug, label: t.label })),
       });
     }
@@ -392,6 +405,33 @@ function FilterPanel({
   }
 
   const current = applied(chosen);
+  // THE TWO FIELDS WITH AN OPERATOR get a panel of their own: a relation
+  // above the values, and — for tags — a SET rather than one value.
+  if (chosen.param === "priority" && chosen.options) {
+    return (
+      <PriorityPanel
+        label={chosen.label}
+        options={chosen.options}
+        current={current}
+        onBack={() => setParam("")}
+        onSet={(value) => {
+          onSet("priority", value);
+          close();
+        }}
+      />
+    );
+  }
+  if (chosen.param === "tag" && chosen.options) {
+    return (
+      <TagPanel
+        label={chosen.label}
+        options={chosen.options}
+        current={current}
+        onBack={() => setParam("")}
+        onSet={(value) => onSet("tag", value)}
+      />
+    );
+  }
   return (
     <div className="work-menu">
       <div className="work-menu-head">
@@ -464,6 +504,133 @@ function FilterPanel({
           />
         </>
       )}
+    </div>
+  );
+}
+
+/** The panel's back control, which is the field's own name. */
+function PanelHead({ label, onBack }: { label: string; onBack: () => void }) {
+  return (
+    <div className="work-menu-head">
+      <Button
+        size="small"
+        variant="ghost"
+        leadingIcon={<ChevronLeftGlyph size="sm" />}
+        onClick={onBack}
+      >
+        {label}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Priority, with its relation: is, is not, or that step and above.
+ *
+ * THE RELATION IS THE CLIENT'S AND THE WIRE GETS A LIST — see
+ * [priorityFilter] — so what this panel shows as pressed is read back off the
+ * list the address holds, and a list somebody wrote by hand that is none of
+ * the three shapes is drawn as "is" over its values.
+ */
+function PriorityPanel({
+  label,
+  options,
+  current,
+  onBack,
+  onSet,
+}: {
+  label: string;
+  options: FilterOption[];
+  current: string;
+  onBack: () => void;
+  onSet: (value: string) => void;
+}) {
+  const read = current ? readPriorityFilter(current) : null;
+  const [op, setOp] = useState<PriorityOp>(read?.op ?? "is");
+  const pressed = read && read.op === op && read.values.length === 1 ? read.values[0]! : "";
+  // `≥ none` IS EVERYTHING, so the scale starts at low for that relation.
+  const shown = op === "atleast" ? options.filter((o) => o.value !== "none") : options;
+  return (
+    <div className="work-menu">
+      <PanelHead label={label} onBack={onBack} />
+      <div className="work-menu-ops">
+        <Segmented
+          value={op}
+          onChange={(value) => setOp(value as PriorityOp)}
+          ariaLabel="How the priority compares"
+          options={PRIORITY_OPS.map((o) => ({ value: o.value, label: o.label }))}
+        />
+      </div>
+      <ValueRows
+        options={shown}
+        current={pressed}
+        onPick={(value) => onSet(value ? priorityFilter(op, value) : "")}
+      />
+    </div>
+  );
+}
+
+/**
+ * Tags, as a set and a mode: any of them, all of them, or none of them — the
+ * grammar's own three (`internal/tracker/query.go` `parseTags`).
+ *
+ * A SET, SO THE PANEL STAYS OPEN: each row toggles one tag in or out and the
+ * filter follows, which is what "any of these three" takes to say at all.
+ */
+function TagPanel({
+  label,
+  options,
+  current,
+  onBack,
+  onSet,
+}: {
+  label: string;
+  options: FilterOption[];
+  current: string;
+  onBack: () => void;
+  onSet: (value: string) => void;
+}) {
+  const read = readTagFilter(current);
+  const [mode, setMode] = useState<TagMode>(read.mode);
+  const chosen = read.tags;
+  return (
+    <div className="work-menu">
+      <PanelHead label={label} onBack={onBack} />
+      <div className="work-menu-ops">
+        <Segmented
+          value={mode}
+          onChange={(value) => {
+            setMode(value as TagMode);
+            if (chosen.length > 0) onSet(tagFilter(value as TagMode, chosen));
+          }}
+          ariaLabel="How the tags match"
+          options={TAG_MODES.map((m) => ({ value: m.value, label: m.label }))}
+        />
+      </div>
+      <div className="work-menu-list">
+        {options.map((option) => {
+          const on = chosen.includes(option.value);
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className="work-menu-row"
+              aria-pressed={on}
+              onClick={() =>
+                onSet(
+                  tagFilter(
+                    mode,
+                    on ? chosen.filter((t) => t !== option.value) : [...chosen, option.value],
+                  ),
+                )
+              }
+            >
+              <span className="work-menu-check">{on ? <CheckGlyph size="sm" /> : null}</span>
+              <span className="truncate">{option.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

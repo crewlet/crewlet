@@ -46,7 +46,15 @@ vi.mock("~/app/Shell.tsx", () => ({ usePageCoverage: vi.fn(), useSectionCounts: 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {

@@ -25,6 +25,7 @@ import {
   civilAt,
   civilKey,
   fmtDate,
+  fromWall,
   fmtDateTime,
   humanize,
   parseUTC,
@@ -132,7 +133,11 @@ export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
  * neutral box rather than to a generated anything.
  */
 export const TYPE_ICON: Record<string, GlyphName> = {
-  task: "circle-check",
+  // NOT A STATUS'S MARK. `task` was drawn as `circle-check`, which is what
+  // [STATUS_MARK] draws a DELIVERED task with — so every task in To do opened
+  // its row with a check, and a reader scanning for what is done found every
+  // task instead. A target: ordinary work with an owner and an end.
+  task: "target",
   bug: "bug",
   epic: "zap",
   story: "book-open",
@@ -140,6 +145,30 @@ export const TYPE_ICON: Record<string, GlyphName> = {
   chore: "wrench",
   milestone: "flag",
 };
+
+/**
+ * The marks a STATUS is drawn with (`components/work.tsx` StatusMark): a ring
+ * while the work is open, a check once it was delivered.
+ *
+ * DECLARED BESIDE [TYPE_ICON] because the two share a row — a type's mark and
+ * a status's sit a few pixels apart on every list — and a type drawn with a
+ * status's mark reads as a state it is not. A test holds the two sets apart.
+ */
+export const STATUS_MARK = { open: "circle", delivered: "circle-check" } as const satisfies Record<
+  string,
+  GlyphName
+>;
+
+/**
+ * The type a task is filed under when nobody named one — the engine's
+ * `tracker.DefaultTaskType`, a builtin every company has.
+ *
+ * A CARD DRAWS NO MARK FOR IT. A board is mostly tasks, and a mark on every
+ * card says nothing a reader can use; drawn only for the exceptions, the bug
+ * and the milestone are what a reader's eye finds across a lane — which is how
+ * the approved board draws a card.
+ */
+export const DEFAULT_TYPE = "task";
 
 export function typeIcon(slug: string | undefined): GlyphName {
   return TYPE_ICON[slug ?? ""] ?? "package";
@@ -412,7 +441,23 @@ export const SORTS: { value: string; label: string }[] = [
   { value: "-priority", label: "Most important" },
   { value: "-created", label: "Newest" },
   { value: "title", label: "Title" },
+  // TOKENS, NEVER MONEY: the engine keeps each task's spend as the tokens its
+  // turns were charged (`internal/tracker`'s `spend_tokens`), and that is the
+  // one measure of cost this dashboard draws.
+  { value: "-spend_tokens", label: "Most tokens" },
 ];
+
+/**
+ * Whether the rows are in the MANUAL order — the one order a drag can change.
+ *
+ * `rank` said out loud, or nothing said inside a project, whose default IS the
+ * manual order; across the company the default is the most recently touched,
+ * so an unsorted company list is not a manual one and a drag there would
+ * place a card in an order nobody is looking at.
+ */
+export function manualOrder(sort: string, project: string): boolean {
+  return sort === "rank" || (sort === "" && project !== "");
+}
 
 // ---------------------------------------------------------------------------
 // Rendering a change
@@ -966,7 +1011,8 @@ export function anyFilter(f: TrackerFilters): boolean {
 }
 
 /**
- * WHICH CONTROL OWNS A KEY. A filter is a chip; an arrangement is a menu.
+ * WHICH CONTROL OWNS A KEY. A filter is a chip; an arrangement is a control
+ * that says what it is set to.
  *
  * The rule is the design's, stated once in
  * `docs/reference/dashboard-design.md`, and it is the boundary these screens
@@ -974,15 +1020,16 @@ export function anyFilter(f: TrackerFilters): boolean {
  * not they were set, so the two that were narrowing looked exactly like the
  * nine that were not. What a key IS decides where it is set and where it is
  * taken off — a narrowing is added from the **Filter** menu and removed from
- * its own chip, and a drawing is chosen in the **Display** menu, whose button
- * says what is on.
+ * its own chip, and a drawing is chosen by an ARRANGEMENT control: the shape
+ * row, Group by and Sort at the bar's end, and the **Display** menu for what a
+ * reader sets once (the second axis, the columns, the lanes put away).
  *
  * A key that is BOTH is two controls for one fact, and they disagree the
  * first time either writes; a key that is NEITHER is a state a reader can
  * reach only by editing the address, with nothing on screen to say it is on.
  * Three keys are deliberately neither, and each carries the reason below.
  */
-export type ControlHome = "chip" | "menu" | "bar" | "strip" | "shape";
+export type ControlHome = "chip" | "arrangement" | "bar" | "strip" | "shape";
 
 /**
  * Every key the work list carries on the address, and what draws it.
@@ -1022,14 +1069,15 @@ export const URL_HOMES: Record<string, ControlHome> = {
   "f.": "chip",
 
   // THE ARRANGEMENT. None of these narrows anything, which is exactly why
-  // they are one menu rather than chips: they decide how the same answer is
-  // DRAWN.
-  shape: "menu",
-  group_by: "menu",
-  group_by2: "menu",
-  sort: "menu",
+  // none is a chip: they decide how the same answer is DRAWN. The shape is
+  // the first row's tabs, Group by and Sort sit at the bar's end where their
+  // value is always on screen, and the Display menu holds the rest.
+  shape: "arrangement",
+  group_by: "arrangement",
+  group_by2: "arrangement",
+  sort: "arrangement",
   /** The chosen columns, per grid shape: `cols.<shape>` — see `shapes/Grid.tsx`. */
-  "cols.": "menu",
+  "cols.": "arrangement",
 
   // AND THE THREE THAT ARE NEITHER, each for a reason the design states.
   //
@@ -1046,6 +1094,14 @@ export const URL_HOMES: Record<string, ControlHome> = {
   // header: a month is not a narrowing somebody added and not another drawing
   // of one answer, it is WHICH answer that shape asks for.
   month: "shape",
+  // THE LANES A READER PUT AWAY are a drawing of the same answer — the query
+  // still counts them — so the key is the arrangement's: a lane's own ⋯ menu
+  // hides it, and the Display menu names what is hidden and brings it back.
+  hide: "arrangement",
+  // AND THE CARD FACTS A READER PUT AWAY (`CARD_FACTS` in
+  // `components/work.tsx`): how a board's cards are drawn, so the Display
+  // menu's own.
+  card_hide: "arrangement",
 };
 
 /**
@@ -1124,6 +1180,18 @@ function itemsParams(args: {
   // and the weaker one, since it would run after the engine had already
   // decided.
   const params: Record<string, unknown> = { ...view, container };
+  // EVERY ROW IS FILTERED ON ITS OWN, because no shape here draws a tree. The
+  // grammar's default (`collapsed`) is a predicate on the ROOT that lets the
+  // whole subtree ride along unfiltered — right for a surface that folds a
+  // tree under its root, and wrong for five flat drawings: under Open a list
+  // listed the DONE subtasks of every open parent, a board dealt them into its
+  // Done lane, and `#/me`, locked to one person, drew subtasks held by
+  // somebody else. Nothing on a flat row says which rows matched and which
+  // rode along, so the reader believes the chips over the rows. OVERRULED
+  // rather than defaulted, for the reason `list_work_items` overrules it: a
+  // saved view may carry a mode chosen for a surface that draws the tree, and
+  // this screen still draws none. A task's own subtasks are its page's list.
+  params.subtasks = "separate";
 
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
@@ -1170,14 +1238,30 @@ function itemsParams(args: {
   // every value of `show_closed` is inert, since each of the three arms in
   // that switch either adds nothing or adds a predicate the group already
   // implies. Measured, all three answer identically.
-  if (filters.scope === "open") {
-    params.status_group = SCOPE_GROUPS.open;
-  } else if (filters.scope === "closed") {
-    params.status_group = SCOPE_GROUPS.closed;
-    if (!params.show_closed) params.show_closed = "true";
-  } else {
+  //
+  // RECENT IS THE ONE SEGMENT THAT IS NOT A GROUP. It is `closed_since` — open
+  // work plus whatever finished since the token — and the engine refuses a
+  // query naming that and `show_closed` together, because both say which
+  // finished work is in the answer. So Recent deletes a view's own
+  // `show_closed` rather than flooring it, and every other segment deletes a
+  // view's own `closed_since`: the segment the reader pressed is the answer
+  // to that question, and a key left behind from the view would be a second
+  // one the engine refuses.
+  if (filters.scope === "recent") {
     delete params.status_group;
-    if (!params.show_closed) params.show_closed = "true";
+    delete params.show_closed;
+    params.closed_since = RECENT_SINCE;
+  } else {
+    delete params.closed_since;
+    if (filters.scope === "open") {
+      params.status_group = SCOPE_GROUPS.open;
+    } else if (filters.scope === "closed") {
+      params.status_group = SCOPE_GROUPS.closed;
+      if (!params.show_closed) params.show_closed = "true";
+    } else {
+      delete params.status_group;
+      if (!params.show_closed) params.show_closed = "true";
+    }
   }
 
   if (filters.blocked) params.blocked = true;
@@ -1195,7 +1279,9 @@ function itemsParams(args: {
   // narrowed the window it widened to keeps its own value.
   if (filters.removed) {
     params.removed = "true";
-    if (!params.show_closed) params.show_closed = "true";
+    // AND NOT UNDER RECENT, whose `closed_since` already admits the finished
+    // work it asks for — the engine refuses the pair rather than choosing.
+    if (!params.show_closed && !params.closed_since) params.show_closed = "true";
   }
 
   // THE COMPANY'S OWN FIELDS, PASSED THROUGH VERBATIM. The grammar for a
@@ -1229,7 +1315,12 @@ function itemsParams(args: {
 
   if (shape === "board") {
     params.group_by = axis || "status";
-    params.group_limit = 50;
+    params.group_limit = BOARD_LANE_ROWS;
+    // THE CARD'S OWN FACTS, which no other shape draws: its labels, what it
+    // blocks, the questions still open on it and what it has cost. OPT-IN on
+    // the wire (`fields=`), because `list_work_items` — the row a model reads
+    // on every turn — must not grow by four facts it never uses.
+    params.fields = CARD_FIELDS;
     delete params.limit;
     delete params.cursor;
     delete params.group;
@@ -1266,7 +1357,8 @@ function itemsParams(args: {
     // had asked for them.
     if (range) params.due = `range:${range.from}..${range.to}`;
     else delete params.due;
-    params.limit = 500;
+    // A PAGE OF THE MONTH, and the cursor offers the rest — see the timeline's.
+    params.limit = SPREAD_PAGE;
     params.sort = "due";
     return params;
   } else if (shape === "timeline") {
@@ -1289,7 +1381,10 @@ function itemsParams(args: {
     // MORE ROWS THAN A LIST, because a bar is one line where a list row is
     // three or four and the window is derived from the rows present: a
     // timeline paged at a hundred would draw a different axis on every page.
-    params.limit = 500;
+    // A PAGE, NOT A CEILING: past five hundred the answer carries a cursor
+    // and the shape offers the rest, because a timeline that stopped at row
+    // five hundred drew the busiest quarter as the end of the plan.
+    params.limit = SPREAD_PAGE;
     // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
     // otherwise, so the bars descend rather than zig-zag. The builtin view
     // carries the same value; this is what holds when a saved view or a
@@ -1313,7 +1408,11 @@ function itemsParams(args: {
     // THE ONE SHAPE PAIR A SECOND AXIS IS DRAWN IN: a band inside a band, down
     // one column, which is what nesting means where every row is a line.
     setSubAxis();
-    params.limit = 100;
+    // A PAGE, AND THE CURSOR IS FOLLOWED. This was a hundred with nothing
+    // after it: the hundred-and-first task was unreachable from the list, and
+    // the foot said only that more existed. `usePagedItems` asks for the next
+    // page on "Load more".
+    params.limit = LIST_PAGE;
   }
 
   // THE SORT IS OMITTED where nobody asked for one, so the engine's own
@@ -1326,6 +1425,39 @@ function itemsParams(args: {
   else delete params.sort;
   return params;
 }
+
+/**
+ * How many rows one page of a list or a table carries.
+ *
+ * A HUNDRED, because a page is what a reader scans before deciding to narrow:
+ * past a hundred rows the next move is a filter, not a scroll, and the engine
+ * reads a page by keyset so a smaller one costs a round trip per screenful.
+ */
+export const LIST_PAGE = 100;
+
+/**
+ * How many rows one page of a calendar or a timeline carries.
+ *
+ * FIVE TIMES A LIST'S, because each row is one chip or one bar rather than a
+ * line of text, and both shapes derive their drawing from the rows present —
+ * a month or a date axis cut every hundred rows would redraw on every page.
+ */
+export const SPREAD_PAGE = 500;
+
+/**
+ * How many cards a board lane carries before its "N more".
+ *
+ * FIFTY: a lane is read top-down to its first screenful, and a column of
+ * fifty cards is already three screens tall; its count is over the whole set
+ * and the rest is a link to the list narrowed to that lane.
+ */
+export const BOARD_LANE_ROWS = 50;
+
+/**
+ * The opt-in row facts a board card draws (`fields=`), as the wire spells
+ * them. See [buildItemsParams]'s board branch for why they are opt-in.
+ */
+export const CARD_FIELDS = "tags,dependents_count,open_asks,spend";
 
 /**
  * Where a board column's overflow lands: the same rows as a list.
@@ -1402,7 +1534,13 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
   if (f.type)
     out.push({ param: "type", label: "Type", verb: "is", value: typeName(f.type, ctx.types) });
   if (f.priority) {
-    out.push({ param: "priority", label: "Priority", verb: "is", value: humanize(f.priority) });
+    const read = readPriorityFilter(f.priority);
+    out.push({
+      param: "priority",
+      label: "Priority",
+      verb: PRIORITY_VERB[read.op],
+      value: read.values.map(humanize).join(", "),
+    });
   }
   if (f.assignee) {
     out.push({
@@ -1416,11 +1554,15 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
     });
   }
   if (f.tag) {
+    const read = readTagFilter(f.tag);
     out.push({
       param: "tag",
-      label: "Tag",
-      verb: "is",
-      value: ctx.tags?.find((t) => t.slug === f.tag)?.label ?? f.tag,
+      // "Labels", as the Filter menu and every other surface names the field.
+      label: "Labels",
+      verb: tagVerb(read),
+      value: read.tags
+        .map((slug) => ctx.tags?.find((t) => t.slug === slug)?.label ?? slug)
+        .join(", "),
     });
   }
   if (f.unit) {
@@ -1466,6 +1608,120 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// The two filters with an operator
+// ---------------------------------------------------------------------------
+
+/**
+ * How a priority filter compares: equal to one step, anything but one step,
+ * or that step and everything above it.
+ *
+ * THE WIRE HAS ONE SPELLING FOR ALL THREE — a list of priorities
+ * (`internal/tracker/query.go` `parsePriorities`) — so the operator is the
+ * CLIENT's and it is EXPANDED on the way out: `≥ normal` is
+ * `priority=normal,high,urgent`, and `is not low` is every other step. The
+ * grammar gains no operator and a saved view carrying either stays a plain
+ * list any other reader can run. The address holds the list too, and
+ * [readPriorityFilter] reads the operator back off its shape, so a pasted
+ * link and a chip agree.
+ */
+export type PriorityOp = "is" | "not" | "atleast";
+
+/** The operators in the order the Filter menu offers them, with their words. */
+export const PRIORITY_OPS: readonly { value: PriorityOp; label: string }[] = [
+  { value: "is", label: "is" },
+  { value: "not", label: "is not" },
+  { value: "atleast", label: "≥" },
+];
+
+/** What a chip calls each operator. */
+const PRIORITY_VERB: Record<PriorityOp, string> = { is: "is", not: "is not", atleast: "≥" };
+
+/** A priority filter as the list the wire takes. */
+export function priorityFilter(op: PriorityOp, value: string): string {
+  const at = PRIORITIES.indexOf(value as (typeof PRIORITIES)[number]);
+  if (at < 0) return value;
+  if (op === "not") return PRIORITIES.filter((p) => p !== value).join(",");
+  if (op === "atleast") return PRIORITIES.slice(at).join(",");
+  return value;
+}
+
+/**
+ * A priority list read back as the operator that wrote it.
+ *
+ * IN THE ORDER A READER WOULD SAY IT: one step is "is"; a run from a step to
+ * the top is "≥" (so `≥ low` beats "is not none", which is the same set); the
+ * scale minus one step is "is not"; anything else — written by hand or by a
+ * seat — is "is" over the list as given, which says exactly what it holds.
+ */
+export function readPriorityFilter(csv: string): { op: PriorityOp; values: string[] } {
+  const values = csv
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const set = new Set(values);
+  const known = values.every((v) => (PRIORITIES as readonly string[]).includes(v));
+  if (values.length === 1 || !known) return { op: "is", values };
+  const from = PRIORITIES.findIndex((p) => set.has(p));
+  const run = PRIORITIES.slice(from);
+  if (from > 0 && run.length === set.size && run.every((p) => set.has(p))) {
+    return { op: "atleast", values: [PRIORITIES[from]!] };
+  }
+  const missing = PRIORITIES.filter((p) => !set.has(p));
+  if (missing.length === 1 && set.size === PRIORITIES.length - 1) {
+    return { op: "not", values: missing };
+  }
+  return { op: "is", values };
+}
+
+/**
+ * How a tag filter matches: any of the tags, all of them, or none of them —
+ * the grammar's own three modes (`any:`, `all:`, `none:`), spelled here as
+ * the engine spells them.
+ */
+export type TagMode = "any" | "all" | "none";
+
+export const TAG_MODES: readonly { value: TagMode; label: string }[] = [
+  { value: "any", label: "any of" },
+  { value: "all", label: "all of" },
+  { value: "none", label: "not" },
+];
+
+/**
+ * A tag filter as the grammar takes it.
+ *
+ * `any` IS WRITTEN BARE, because it is the engine's own default mode and a
+ * bare list is what every address and saved view already holds: prefixing
+ * it would make two spellings of one filter, and a chip or a gate comparing
+ * them would see two.
+ */
+export function tagFilter(mode: TagMode, tags: string[]): string {
+  const list = tags.filter(Boolean).join(",");
+  if (!list) return "";
+  return mode === "any" ? list : `${mode}:${list}`;
+}
+
+/** A tag filter read back into its mode and tags. */
+export function readTagFilter(value: string): { mode: TagMode; tags: string[] } {
+  const [head, rest] = value.includes(":") ? value.split(/:(.*)/s, 2) : ["", value];
+  const mode: TagMode = head === "all" || head === "none" || head === "any" ? head : "any";
+  const body = head === mode ? (rest ?? "") : value;
+  return {
+    mode,
+    tags: body
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean),
+  };
+}
+
+/** What a tag chip's verb says: one tag reads as "is", several name the mode. */
+function tagVerb({ mode, tags }: { mode: TagMode; tags: string[] }): string {
+  if (mode === "none") return "not";
+  if (tags.length === 1) return "is";
+  return mode === "all" ? "all of" : "any of";
+}
+
 /**
  * The due filters a person is offered, which are the ENGINE'S OWN ALIASES.
  *
@@ -1492,7 +1748,38 @@ export const DUE_FILTERS: { value: string; label: string }[] = [
 
 /** What a due filter reads as, or the value itself for one written by hand. */
 export function dueFilterLabel(value: string): string {
+  const day = dayOfRange(value);
+  if (day) return `on ${dayLabel(day)}`;
   return DUE_FILTERS.find((d) => d.value === value)?.label ?? value;
+}
+
+/**
+ * One of the READER's days, as the `due` filter that selects exactly it.
+ *
+ * TWO INSTANTS, NEVER TWO DATES. The calendar buckets a task into the reader's
+ * day ([dayKey], in the zone the preferences chose) and the engine reads a bare
+ * date on the COMPANY's clock — so `range:2031-04-16..2031-04-17` is a
+ * different day for every reader not in the company's zone, and a task due at
+ * 23:30 in the cell would be missing from the list its "+N more" opened. The
+ * instants are the reader's own midnights, and the range is half-open like
+ * every range the grammar takes.
+ */
+export function dayRange(day: string): string {
+  const start = fromWall(`${day}T00:00`);
+  const next = civilAt(day);
+  const end = next === null ? null : fromWall(`${civilKey(next + 86_400_000)}T00:00`);
+  if (start === null || end === null) return "";
+  return `range:${new Date(start).toISOString()}..${new Date(end).toISOString()}`;
+}
+
+/** The reader's day a [dayRange] filter selects, or "" for any other value. */
+export function dayOfRange(value: string): string {
+  const m = /^range:(\S+)\.\.(\S+)$/.exec(value);
+  if (!m) return "";
+  const from = Date.parse(m[1]!);
+  if (Number.isNaN(from) || !m[1]!.includes("T")) return "";
+  const day = readerDay(from);
+  return dayRange(day) === value ? day : "";
 }
 
 /**
@@ -1536,6 +1823,148 @@ export function shownRows(items: WorkSummary[], groups: WorkGroup[]): WorkSummar
 }
 
 /**
+ * EVERY ROW IN THE ORDER IT IS DRAWN — what `[` and `]` walk.
+ *
+ * It walked `items`, which a grouped answer does not carry, so on a board and
+ * on every grouped list the peek's stepper had nothing to step through and the
+ * two keys did nothing at all. The drawing order is the board read left to
+ * right and each lane top to bottom, and a band with sub-bands is drawn
+ * through its sub-bands — the same order the engine's `around=` places a task
+ * in, so a peek and a task page count the same "3 of 18".
+ *
+ * `hidden` is the lanes a reader put away (`hide=`): a lane that is not on
+ * screen is not stepped through.
+ */
+export function drawnRows(
+  items: WorkSummary[],
+  groups: WorkGroup[],
+  hidden: ReadonlySet<string> = new Set(),
+): WorkSummary[] {
+  if (groups.length === 0) return items;
+  const out: WorkSummary[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    if (hidden.has(group.key)) continue;
+    const rows = group.subgroups?.length ? group.subgroups.flatMap((sub) => sub.rows) : group.rows;
+    for (const row of rows) {
+      // A LABEL BOARD DRAWS ONE TASK IN EVERY COLUMN IT IS TAGGED INTO, and the
+      // stepper visits it where it is first drawn — the engine's own rule for
+      // `around=` — rather than twice.
+      if (seen.has(row.key)) continue;
+      seen.add(row.key);
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+/**
+ * The lanes of a board that hold FINISHED work, by key — where a lane's
+ * "N more" under the Recent scope is this week's, not the company's.
+ *
+ * ON THE TWO STATUS AXES ONLY, from [STATUSES]' own groups: on any other axis a
+ * lane mixes finished and open work and no lane is the finished one.
+ */
+export function finishedLanes(axis: string): Set<string> {
+  if (axis === "status") {
+    return new Set(
+      STATUSES.filter((s) => s.group === "done" || s.group === "closed").map((s) => s.value),
+    );
+  }
+  if (axis === "status_group") return new Set(["done", "closed"]);
+  return new Set();
+}
+
+/**
+ * The lanes a reader put away, off `hide=`.
+ *
+ * KEYS, comma separated, and the UNSET lane — whose key is the empty string —
+ * is spelled `-`, the same stand-in the lanes already use as a React key: a
+ * list of empty strings is a list nobody can read back.
+ */
+export function hiddenLanes(value: string): Set<string> {
+  const out = new Set<string>();
+  for (const part of value.split(",")) {
+    if (!part) continue;
+    out.add(part === UNSET_LANE ? "" : part);
+  }
+  return out;
+}
+
+/** How `hide=` spells the lane holding the rows with no value on its axis. */
+export const UNSET_LANE = "-";
+
+/** `hide=` written back from a set of lane keys, in the order given. */
+export function hideParam(keys: Iterable<string>): string {
+  return [...keys].map((key) => (key === "" ? UNSET_LANE : key)).join(",");
+}
+
+/**
+ * The list a task was opened from, as the one query key a task page carries.
+ *
+ * `list=` HOLDS THE QUESTION, never the rows: the task page asks the engine the
+ * same question with `around=<key>` and is told where the task sits in the
+ * WHOLE answer — "3 of 18", and the keys either side — rather than in whichever
+ * page the list had loaded. What paging is (`limit`, `cursor`, `group_limit`)
+ * and what the card draws (`fields`) are left out, because they are about the
+ * list's drawing and not about which tasks are in it.
+ */
+export function listParam(params: Record<string, unknown>): string {
+  const out = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (LIST_DRAWING_KEYS.has(key) || value === undefined || value === null) continue;
+    out.set(key, String(value));
+  }
+  return out.toString();
+}
+
+/**
+ * The query on screen as a saved view's `params`: the grammar's own keys, as
+ * strings, for `save_work_view`.
+ *
+ * WITHOUT THE CONTAINER, which the view is saved ON rather than with, and
+ * without what is about drawing one page of it ([LIST_DRAWING_KEYS]). A
+ * CALENDAR'S WINDOW AND ORDER are its own axis rather than a narrowing
+ * somebody chose — [buildItemsParams] writes both from the month on screen —
+ * so a calendar view saves neither, or it would open on that month for ever.
+ */
+export function viewQuery(params: Record<string, unknown>, shape: Shape): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "container" || LIST_DRAWING_KEYS.has(key)) continue;
+    if (shape === "calendar" && (key === "due" || key === "sort")) continue;
+    if (value === undefined || value === null) continue;
+    out[key] = String(value);
+  }
+  return out;
+}
+
+/** The keys of a list's query that are about drawing it, not about what is in it. */
+const LIST_DRAWING_KEYS = new Set(["limit", "cursor", "group_limit", "fields"]);
+
+/**
+ * A task page's `around=` question, from the `list=` it was opened with — or
+ * null where it carries none.
+ *
+ * ONE ROW AND ONE CARD PER LANE, because the answer this page reads is the
+ * `around` block and nothing else: the engine places the task over the whole
+ * drawing order whatever the page size (`internal/tracker/around.go`), so a
+ * full page of rows would be a board's worth of bytes for three numbers.
+ */
+export function aroundParams(list: string, key: string): Record<string, unknown> | null {
+  if (!list || !key) return null;
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of new URLSearchParams(list)) {
+    if (!LIST_DRAWING_KEYS.has(name)) out[name] = value;
+  }
+  if (!out.container) return null;
+  out.around = key;
+  if (out.group_by) out.group_limit = 1;
+  else out.limit = 1;
+  return out;
+}
+
+/**
  * The project filter's options: the COMPANY's own listing, falling back to
  * whatever is on the page.
  *
@@ -1565,6 +1994,22 @@ export function totalHint(hint: number, shown: number, capped?: boolean): string
   // screen, and when there is not, the row count already said it.
   if (hint <= shown) return "";
   return `of ${hint} matching`;
+}
+
+/**
+ * What a paged list says beside its "Load more": how many rows are loaded, out
+ * of how many match.
+ *
+ * THE ENGINE'S COUNT, capped where it said so — `10000+` rather than a number
+ * it stopped counting at — and just the loaded figure where the hint is no
+ * larger, because "100 of 100" states one number twice and a cursor can still
+ * be outstanding over a count the engine could not finish.
+ */
+export function loadedOf(loaded: number, hint: number, capped?: boolean): string {
+  const count = loaded.toLocaleString();
+  if (capped) return `${count} of ${hint.toLocaleString()}+ loaded`;
+  if (hint > loaded) return `${count} of ${hint.toLocaleString()} loaded`;
+  return `${count} loaded`;
 }
 
 /**
@@ -1720,8 +2165,21 @@ export function pageNote(shown: number, more: boolean, one: string, many?: strin
  * meaningful or the type must refuse it; here it could not be meaningful, so
  * the value has a name.
  */
-export const SCOPES = ["open", "closed", "all"] as const;
+export const SCOPES = ["open", "recent", "closed", "all"] as const;
 export type Scope = (typeof SCOPES)[number];
+
+/**
+ * WHERE THE RECENT SEGMENT'S WINDOW STARTS: the start of this week on the
+ * COMPANY's clock, as the grammar's own date token.
+ *
+ * A TOKEN RATHER THAN A DATE, so the engine resolves it: `closed_since` goes
+ * through the same calendar every `due=` bound does (`internal/tracker/dates.go`),
+ * which is what makes "this week" the week the `due:bucket` bands and the Done
+ * lane's "N more this week" mean. A date computed here would be the browser's
+ * week, and a reader in another zone than the company would see a Done lane
+ * that started a day early or late.
+ */
+export const RECENT_SINCE = "sow";
 
 /**
  * WHICH STATUS GROUPS EACH SEGMENT ADMITS, as the wire spells it.
@@ -1742,6 +2200,11 @@ export type Scope = (typeof SCOPES)[number];
  */
 export const SCOPE_GROUPS: Record<Scope, string> = {
   open: "not_started,active",
+  // RECENT NAMES NO GROUP: it is every open task plus what finished since the
+  // start of the week, which is `closed_since` rather than a group — the
+  // engine answers open work and recently finished work as one predicate, so
+  // no status group can express it.
+  recent: "",
   closed: "done,closed",
   all: "",
 };
@@ -1761,7 +2224,20 @@ export function asScope(value: string): Scope {
   return SCOPES.includes(value as Scope) ? (value as Scope) : "all";
 }
 
-/** A view's `status_group` mapped back onto the three segments. */
+/**
+ * A view's own params mapped back onto the four segments.
+ *
+ * `closed_since` FIRST, because it is the one segment a status group cannot
+ * spell: a view saved from the Recent segment carries no `status_group` at
+ * all, and read through [scopeOf] alone it came back as All — the segment
+ * that also shows every task finished last year.
+ */
+export function scopeOfParams(view: Record<string, unknown> | undefined): Scope {
+  if (typeof view?.closed_since === "string" && view.closed_since.trim()) return "recent";
+  return scopeOf(typeof view?.status_group === "string" ? view.status_group : undefined);
+}
+
+/** A view's `status_group` mapped back onto the segments a group can spell. */
 export function scopeOf(group: string | undefined): Scope {
   if (group === SCOPE_GROUPS.open) return "open";
   if (group === SCOPE_GROUPS.closed) return "closed";
@@ -1805,12 +2281,23 @@ export function scopeOf(group: string | undefined): Scope {
  * round trip no test could reach: deleting it left every suite green while the
  * tracker opened on every closed task the company has.
  */
-export function seededScope(view: Record<string, string> | undefined): Scope {
+export function seededScope(
+  view: Record<string, string> | undefined,
+  shape: Shape = LANDING_SHAPE,
+): Scope {
   const group = view?.status_group;
-  const scope = scopeOf(group);
+  const scope = scopeOfParams(view);
   if (scope !== "all") return scope;
   const widened = (view?.show_closed ?? "").trim();
   if (!group && widened && widened !== "false") return "all";
+  // A BOARD OPENS ON RECENT, where every other shape opens on Open. A board's
+  // last lane is Done, and under Open that lane is a column the predicate
+  // admits nothing into — the workflow drawn with its end cut off. Recent is
+  // open work plus what finished this week, so the Done lane holds the
+  // week's deliveries and says how many more there are. Only where the view
+  // said nothing about finished work: a group or an explicit `show_closed`
+  // is the author's choice, and the branches above have answered it.
+  if (shape === "board" && !group && !widened) return "recent";
   return "open";
 }
 

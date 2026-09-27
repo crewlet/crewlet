@@ -17,6 +17,7 @@
 import { useMemo, useState } from "react";
 import {
   Button,
+  Checkbox,
   FormField,
   Input,
   Modal,
@@ -30,6 +31,7 @@ import {
   CornerDownLeftGlyph,
   MessageSquareGlyph,
   UserPlusGlyph,
+  PlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton } from "./WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -246,6 +248,148 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
     >
       {pinned ? "Unpin" : "Pin"}
     </WriteButton>
+  );
+}
+
+/**
+ * "+ View": the query on screen, saved under a name on the container it is
+ * about.
+ *
+ * WHAT IS SAVED IS THE QUESTION, in the grammar's own keys — the filters, the
+ * scope, the grouping and the order — and the SHAPE as the view's type, so
+ * the saved view opens drawn the way it was saved. Paging and a shape's own
+ * window are not saved (the caller strips them): a view that carried the
+ * calendar's month would open on that month for ever.
+ *
+ * SHARED unless the person keeps it to themselves, which makes it theirs alone
+ * (`owner`): a shared view is in everybody's strip, and saving somebody's
+ * private query into it is a change to their screen too.
+ *
+ * On `applied` it hands the new view's id back, so the screen opens it.
+ */
+export function SaveViewButton({
+  container,
+  type,
+  params,
+  onSaved,
+}: {
+  /** `workspace` or `project:<KEY>`. */
+  container: string;
+  /** The shape the view opens as. */
+  type: string;
+  /** The query, as the grammar spells it. */
+  params: Record<string, string>;
+  /** The saved view's id, once the engine has it. */
+  onSaved?: (id: string) => void;
+}) {
+  const write = useAct("save_work_view");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="ghost"
+        leadingIcon={<PlusGlyph />}
+        showRefusal={false}
+        onPress={() => setOpen(true)}
+      >
+        View
+      </WriteButton>
+      {open && (
+        <SaveViewDialog
+          container={container}
+          type={type}
+          params={params}
+          write={write}
+          onClose={(id) => {
+            write.dismiss();
+            setOpen(false);
+            if (id) onSaved?.(id);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function SaveViewDialog({
+  container,
+  type,
+  params,
+  write,
+  onClose,
+}: {
+  container: string;
+  type: string;
+  params: Record<string, string>;
+  write: ReturnType<typeof useAct<"save_work_view">>;
+  onClose: (id?: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [mine, setMine] = useState(false);
+  const as = write.access.can ? write.access.as : "";
+  const submit = async () => {
+    const title = name.trim();
+    if (!title) return;
+    const result = await write.run(
+      { container, name: title, type, params, ...(mine && as ? { owner: as } : {}) },
+      { done: `Saved the view ${title}` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      const id = (result.receipt as { id?: unknown } | null)?.id;
+      onClose(typeof id === "string" ? id : undefined);
+    }
+  };
+  return (
+    <Modal
+      open
+      size="sm"
+      title="Save this view"
+      icon={<PinGlyph />}
+      onClose={() => onClose()}
+      onSubmit={() => void submit()}
+      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => onClose()} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            showRefusal={false}
+            onPress={() => void submit()}
+            blocked={name.trim() ? undefined : "Give the view a name first."}
+          >
+            Save view
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="col gap-3">
+        <FormField
+          label="Name"
+          htmlFor="save-view-name"
+          helper="The tab's label, in the strip above the work."
+        >
+          <Input
+            id="save-view-name"
+            value={name}
+            maxLength={80}
+            onChange={(event) => setName(event.target.value)}
+            autoFocus
+          />
+        </FormField>
+        <Checkbox
+          checked={mine}
+          onChange={(event) => setMine(event.target.checked)}
+          label="Only for me"
+          description="Kept in your own strip. Otherwise everybody who opens this list sees it."
+        />
+        <RefusalNote write={write} />
+      </div>
+    </Modal>
   );
 }
 

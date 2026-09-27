@@ -84,6 +84,7 @@ import {
   typeName,
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { ListPosition } from "./ListPosition.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { AssignButton, RestoreButton } from "~/components/writes.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -387,6 +388,9 @@ export function WorkItem({ id }: { id: string }) {
           [ObjectHeader] per object exists to end. What stays here is the way
           OUT, which the header has no room for and the bar is for. */}
       <PageActions>
+        {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM, and the way to
+            its neighbours — see [ListPosition]. */}
+        {item && <ListPosition itemKey={item.key} />}
         {/* THE CHANGE THIS PAGE OFFERS, made as you. A task in the trash is
             offered the way back rather than a hand-off: assigning something
             nobody can see on a board is a change that reaches nobody. */}

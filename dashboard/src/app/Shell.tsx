@@ -91,12 +91,14 @@ export interface PageContext {
   setLabels: (labels: Labels) => void;
   setCoverage: (coverage: CoverageFacts | null) => void;
   setCounts: (counts: Record<string, string>) => void;
+  setWorkingIn: (project: string) => void;
 }
 
 const noop: PageContext = {
   setLabels: () => {},
   setCoverage: () => {},
   setCounts: () => {},
+  setWorkingIn: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -185,6 +187,24 @@ export function useSectionCounts(counts: Record<string, string>): void {
 }
 
 /**
+ * Narrow the header's "who is working" to one project's work.
+ *
+ * A PROJECT'S PAGE ASKS WHO IS ON ITS WORK, not who is working anywhere: the
+ * faces at the head of `#/work/ENG` are the seats whose running turn is
+ * charged to a task in ENG (`live_call.work_item.project`), which is the
+ * question a lead opening their board is asking. Everywhere else the header
+ * keeps the company's. Cleared when the screen goes, for the reason
+ * [usePageLabels] gives: the frame outlives it.
+ */
+export function useWorkingScope(project: string): void {
+  const { setWorkingIn } = usePageContext();
+  useEffect(() => {
+    setWorkingIn(project);
+    return () => setWorkingIn("");
+  }, [project, setWorkingIn]);
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * and how much is waiting on them.
  *
@@ -242,6 +262,7 @@ function Frame({ children }: { children: ReactNode }) {
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
   const [counts, setCounts] = useState<Record<string, string>>({});
+  const [workingIn, setWorkingIn] = useState("");
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -318,7 +339,10 @@ function Frame({ children }: { children: ReactNode }) {
     remember({ path, label: where, workspace }, named);
   }, [path, where, named, workspace]);
 
-  const page: PageContext = useMemo(() => ({ setLabels, setCoverage, setCounts }), []);
+  const page: PageContext = useMemo(
+    () => ({ setLabels, setCoverage, setCounts, setWorkingIn }),
+    [],
+  );
 
   const openToken = useCallback(() => setTokenOpen(true), []);
   const openPaletteOn = useCallback((scope: ScopeId = "all") => setPalette(scope), []);
@@ -369,7 +393,14 @@ function Frame({ children }: { children: ReactNode }) {
         toggleLabel="Navigation"
         sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
         topbar={
-          <PageHeader crumbs={crumbs} row={row} counts={counts} title={where} workspace={workspace}>
+          <PageHeader
+            crumbs={crumbs}
+            row={row}
+            counts={counts}
+            title={where}
+            workspace={workspace}
+            workingIn={workingIn}
+          >
             <StateBar degraded={degraded} coverage={coverage} />
           </PageHeader>
         }

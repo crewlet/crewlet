@@ -51,8 +51,19 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// and its own guard makes THAT idempotent.
 		// NO DELTAS: this record changed no document, so there is
 		// nothing for the history row to say moved.
-		return a.writeHistory(ctx, tx, c,
+		history, werr := a.writeHistory(ctx, tx, c,
 			subjectKeys{Project: current.Project, Key: current.Key}, nil)
+		if werr != nil {
+			return 0, werr
+		}
+		// A LATE RECORD STILL MOVES WHEN THE TASK LAST CHANGED: its
+		// history row raised every successor's effective instant, and
+		// the stamp follows the newest of them — see [restampUpdated].
+		restamped, rerr := restampUpdated(ctx, tx, id)
+		if rerr != nil {
+			return 0, rerr
+		}
+		return history + restamped, nil
 	}
 
 	next, err := mergeTask(current, held, c)
@@ -60,6 +71,21 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	next.Version = uint64(c.packed)
+
+	// WHEN THE TASK LAST CHANGED IS THE APPLIER'S, on the rule the finish
+	// stamps below follow: the fleet-agreed instant of the record that
+	// changed it — the same `effective_at` its history row takes in this
+	// apply — and never a writer's clock. It was nobody's: the create stamped
+	// `updated_at` and no later record moved it, so every list's Updated
+	// column and its "recently updated" order read the day a task was FILED,
+	// however much had happened to it since. See [restampUpdated] for the
+	// same rule over rows a build without it wrote.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	updated, err := effectiveAt(ctx, tx, id, c)
+	if err != nil {
+		return 0, err
+	}
+	next.UpdatedAt = updated.UTC()
 
 	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
 	// task has just entered rather than carried by the record.

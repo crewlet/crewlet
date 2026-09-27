@@ -1,5 +1,7 @@
 /**
- * What the Display menu offers, and what each control writes.
+ * What the arrangement controls offer, and what each one writes: the shape
+ * row, Group by and Sort at the bar's end, and the Display menu that holds
+ * the rest.
  *
  * Every case here is an arrangement that, drawn wrong, is a control whose
  * effect the reader cannot see: a grouping a shape drops on the way to the
@@ -8,19 +10,21 @@
  * throws and none is visible in a diff — the screen simply draws something
  * nobody arranged.
  *
- * TWO HALVES. The menu itself is props in and callbacks out, so most of this
- * renders it directly and reads the calls. The last section mounts the list it
- * sits in, because two of its claims are about the ADDRESS rather than about a
- * callback: the column key is per shape, and switching the drawing must not
- * throw the order away.
+ * TWO HALVES. The controls themselves are props in and callbacks out, so most
+ * of this renders them directly and reads the calls. The last section mounts
+ * the list they sit in, because two of its claims are about the ADDRESS rather
+ * than about a callback: the column key is per shape, and switching the
+ * drawing must not throw the order away.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";
+import { ArrangeControls, ShapeTabs, defaultOrderLabel } from "./WorkBar.tsx";
 import { ItemsView } from "../ItemsView.tsx";
 import { columnChoices } from "../shapes/Grid.tsx";
+import { CARD_FACTS } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { pick } from "~/testing.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -31,7 +35,15 @@ import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  // THE AGENTS PUSH, which the list reads for the turn running on each card:
+  // no seat is working in these cases, so the push is empty.
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useAgents: () => [],
+  };
 });
 
 afterEach(() => {
@@ -40,14 +52,14 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** The five callbacks, so a case can say which one a control wrote through. */
+/** The menu's callbacks, so a case can say which one a control wrote through. */
 function wrote() {
   return {
     onShape: vi.fn(),
-    onGroupBy: vi.fn(),
     onGroupBy2: vi.fn(),
-    onSort: vi.fn(),
     onCols: vi.fn(),
+    onShowLane: vi.fn(),
+    onCardHidden: vi.fn(),
   };
 }
 
@@ -57,20 +69,37 @@ function openDisplay(over: Partial<DisplayMenuProps> = {}) {
   render(
     <DisplayMenu
       shape="list"
-      axis=""
       workspace
       viewShape="list"
       groupBy=""
       groupBy2=""
-      sort=""
       cols=""
+      hidden={[]}
+      cardHidden={new Set()}
       {...calls}
       {...over}
     />,
   );
-  const trigger = screen.getByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ });
+  const trigger = screen.getByRole("button", { name: "Display" });
   fireEvent.click(trigger);
   return { ...calls, trigger };
+}
+
+/** Group by and Sort, as the bar draws them. */
+function arrange(
+  over: Partial<{ shape: Shape; workspace: boolean; groupBy: string; sort: string }> = {},
+) {
+  const calls = { onGroupBy: vi.fn(), onSort: vi.fn() };
+  render(
+    <ArrangeControls
+      shape={over.shape ?? "list"}
+      workspace={over.workspace ?? true}
+      groupBy={over.groupBy ?? ""}
+      sort={over.sort ?? ""}
+      {...calls}
+    />,
+  );
+  return calls;
 }
 
 /**
@@ -90,64 +119,60 @@ function optionsOf(name: string): string[] {
 
 /** The column checkboxes, in the order the menu draws them. */
 const columnBoxes = (): string[] =>
-  [...document.querySelectorAll(".grid-cols-choice")].map((el) => el.textContent ?? "");
+  [...document.querySelectorAll(".grid-cols-choices:not([data-card-facts]) .grid-cols-choice")].map(
+    (el) => el.textContent ?? "",
+  );
 
 // ---------------------------------------------------------------------------
-// The button, and the shapes
+// The shapes, and the button
 // ---------------------------------------------------------------------------
 
-// THE BUTTON SAYS WHAT IS ON, so the arrangement is readable without opening
-// anything — which is what the strip of shape tabs used to do and what a bare
-// "Display" would have taken away.
-test("the button names the shape, and the axis where there is one", () => {
-  const { trigger } = openDisplay({ shape: "board", axis: "status" });
-  expect(trigger.textContent).toBe("Board · Status");
-  cleanup();
-  // AND `due:bucket` IS CALLED "Due" — the one axis that is not a stored
-  // value, named the way the picker names it rather than by its wire key.
-  expect(openDisplay({ axis: "due:bucket" }).trigger.textContent).toBe("List · Due");
-  cleanup();
-  expect(openDisplay({ axis: "" }).trigger.textContent).toBe("List");
-  cleanup();
-  // AN AXIS THIS BUILD DOES NOT OFFER names nothing rather than printing a key
-  // the reader has no control for.
-  expect(openDisplay({ axis: "invented" }).trigger.textContent).toBe("List");
-});
-
-// THE FIVE SHAPES ARE HERE AND NOT IN THE VIEW STRIP: a shape is a way of
-// drawing any query, and mixed in with the queries somebody saved the two read
-// as the same kind of thing.
-test("each of the five shapes writes its own value", () => {
+// THE FIVE SHAPES ARE THE FIRST ROW'S OWN BUTTONS, in the approved board's
+// order, and not the view strip: a shape is a way of drawing any query, and
+// mixed in with the queries somebody saved the two read as the same kind of
+// thing. They were inside the Display menu for a while, which put the board —
+// the shape a team lives in — two presses away.
+test("each of the five shapes writes its own value, and the one that is on says so", () => {
   const shapes: { label: string; value: Shape }[] = [
     { label: "List", value: "list" },
     { label: "Board", value: "board" },
-    { label: "Table", value: "table" },
-    { label: "Calendar", value: "calendar" },
     { label: "Timeline", value: "timeline" },
+    { label: "Calendar", value: "calendar" },
+    { label: "Table", value: "table" },
   ];
-  const { onShape } = openDisplay({ shape: "board" });
-  expect(columnShapeLabels()).toEqual(shapes.map((s) => s.label));
+  const onShape = vi.fn();
+  render(<ShapeTabs shape="board" onShape={onShape} />);
+  const row = screen.getByRole("group", { name: "Draw as" });
+  expect(
+    within(row)
+      .getAllByRole("button")
+      .map((el) => el.textContent),
+  ).toEqual(shapes.map((s) => s.label));
   for (const { label, value } of shapes) {
-    fireEvent.click(shapeButton(label));
+    fireEvent.click(within(row).getByRole("button", { name: label }));
     expect(onShape).toHaveBeenLastCalledWith(value);
   }
-  // AND THE ONE THAT IS ON SAYS SO, which is what a reader looks for before
-  // pressing anything.
-  expect(shapeButton("Board").getAttribute("aria-pressed")).toBe("true");
-  expect(shapeButton("List").getAttribute("aria-pressed")).toBe("false");
+  expect(within(row).getByRole("button", { name: "Board" }).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(within(row).getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe(
+    "false",
+  );
 });
 
-const shapeButtons = (): HTMLElement[] => [
-  ...document.querySelectorAll<HTMLElement>(".work-display-shape"),
-];
-const columnShapeLabels = (): string[] => shapeButtons().map((el) => el.textContent ?? "");
-function shapeButton(label: string): HTMLElement {
-  const found = shapeButtons().find((el) => el.textContent === label);
-  if (!found) throw new Error(`no ${label} shape: ${columnShapeLabels().join(", ")}`);
-  return found;
-}
+// THE MENU IS "DISPLAY" AND HOLDS WHAT A READER SETS ONCE. What it used to say
+// on its button — the shape and the axis — is on screen without it now, in the
+// shape row and the Group by picker, so the button stopped restating it.
+test("the menu holds the second axis, the columns and the lanes, and nothing the bar holds", () => {
+  openDisplay({ shape: "list", groupBy: "status" });
+  expect(screen.getByRole("combobox", { name: "Then by" })).toBeTruthy();
+  expect(screen.getByText("Columns")).toBeTruthy();
+  expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+  expect(document.querySelector(".work-display-shape")).toBeNull();
+});
 
-// WHAT THE VIEW ITSELF WAS SAVED AS, and the way back to it. A reader who has
+// WHAT A SAVED VIEW WAS SAVED AS, and the way back to it. A reader who has
 // overridden the shape has no other way to tell that they have: the strip
 // shows which view is running, not which drawing it was saved with.
 test("the way back to a view's own shape appears only where one is overridden", () => {
@@ -157,6 +182,12 @@ test("the way back to a view's own shape appears only where one is overridden", 
   expect(onShape).toHaveBeenCalledWith("board");
   cleanup();
   openDisplay({ shape: "board", viewShape: "board" });
+  expect(screen.queryByRole("button", { name: /Back to this view/ })).toBeNull();
+  cleanup();
+  // AND NOWHERE WITHOUT A SAVED VIEW. A plain board is a shape the reader
+  // chose over the builtin list, not a saved view drawn another way — offered
+  // there, the way back pointed at a view nobody had open.
+  openDisplay({ shape: "board", viewShape: undefined });
   expect(screen.queryByRole("button", { name: /Back to this view/ })).toBeNull();
 });
 
@@ -169,7 +200,7 @@ test("the way back to a view's own shape appears only where one is overridden", 
 // `internal/tracker/client_gate_test.go`, so a value invented here would take
 // the whole board down with a refusal.
 test("the group axis options are the ones the grammar takes, per shape and scope", () => {
-  openDisplay({ shape: "list", workspace: true });
+  arrange({ shape: "list", workspace: true });
   expect(optionsOf("Group by")).toEqual(groupAxisOptions("list", true).map((o) => o.label));
   // EVERY OTHER SHAPE CAN BE UNGROUPED, so it leads with that row.
   expect(optionsOf("Group by")[0]).toBe("No grouping");
@@ -178,7 +209,7 @@ test("the group axis options are the ones the grammar takes, per shape and scope
   // A BOARD IS ALWAYS GROUPED — it is what a board IS — so there is no "No
   // grouping" row and Status is the axis's own entry rather than a second row
   // reading the same word.
-  openDisplay({ shape: "board", workspace: true });
+  arrange({ shape: "board", workspace: true });
   const board = optionsOf("Group by");
   expect(board).toEqual(groupAxisOptions("board", true).map((o) => o.label));
   expect(board).not.toContain("No grouping");
@@ -187,7 +218,7 @@ test("the group axis options are the ones the grammar takes, per shape and scope
 
   // AND PROJECT ONLY AT WORKSPACE SCOPE: inside a project every row is in one
   // project, and the grammar refuses the question.
-  openDisplay({ shape: "list", workspace: false });
+  arrange({ shape: "list", workspace: false });
   expect(optionsOf("Group by")).not.toContain("Project");
 });
 
@@ -195,7 +226,7 @@ test("the group axis options are the ones the grammar takes, per shape and scope
 // or not anybody said so, so a picker built from the URL key alone sat on
 // nothing over a board whose columns were statuses.
 test("a board with no chosen axis shows the one it is grouped by anyway", () => {
-  openDisplay({ shape: "board", groupBy: "" });
+  arrange({ shape: "board", groupBy: "" });
   expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Status");
 });
 
@@ -229,10 +260,15 @@ test("Then by is drawn on a grid shape with a first axis, and nowhere else", () 
 });
 
 test("the calendar offers neither a grouping nor an order, because it spends both", () => {
-  openDisplay({ shape: "calendar" });
+  arrange({ shape: "calendar" });
   expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Order by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+  cleanup();
+  // AND ITS DISPLAY MENU SAYS THERE IS NOTHING LEFT TO ARRANGE rather than
+  // opening on an empty panel.
+  openDisplay({ shape: "calendar" });
   expect(screen.queryByText("Columns")).toBeNull();
+  expect(screen.getByText(/Nothing more to arrange on this shape/)).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -242,22 +278,85 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
 // THE ORDERINGS ARE THE GRAMMAR'S, `-` AND ALL: `-updated` is the key the
 // engine takes, and a picker that wrote "updated desc" or "recent" would be
 // refused at the read rather than sorted differently.
-test("Order by offers the grammar's own keys and writes them as written", () => {
-  const { onSort } = openDisplay();
-  expect(optionsOf("Order by")).toEqual(["Default order", ...SORTS.map((s) => s.label)]);
-  pick(screen.getByRole("combobox", { name: "Order by" }), "Recently updated");
+test("Sort offers the grammar's own keys and writes them as written", () => {
+  const { onSort } = arrange();
+  expect(optionsOf("Sort")).toEqual([
+    defaultOrderLabel("list", true),
+    ...SORTS.map((s) => s.label),
+  ]);
+  pick(screen.getByRole("combobox", { name: "Sort" }), "Recently updated");
   expect(onSort).toHaveBeenCalledWith("-updated");
   expect(SORTS.find((s) => s.label === "Recently updated")?.value).toBe("-updated");
+  // AND THE ONE MEASURE OF COST IS TOKENS, never money.
+  expect(SORTS.find((s) => s.label === "Most tokens")?.value).toBe("-spend_tokens");
 });
 
-// AND "DEFAULT ORDER" IS A VALUE THE SCREEN RESOLVES, not a deletion this
-// control performs: `""` out of the callback means off, and turning a view's
-// own order off is the screen's to write because only it knows what the view
-// carries.
+// THE DEFAULT SAYS WHICH ORDER IT IS, because it is a different one per
+// container and shape: "Default" alone named none of them, and a lead could not
+// tell whether a drag would stick.
+test("the default order is named for what it is", () => {
+  expect(defaultOrderLabel("board", false)).toBe("Manual (default)");
+  expect(defaultOrderLabel("list", true)).toBe("Recently updated (default)");
+  expect(defaultOrderLabel("timeline", false)).toBe("Start date (default)");
+});
+
+// AND THE DEFAULT IS A VALUE THE SCREEN RESOLVES, not a deletion this control
+// performs: `""` out of the callback means off, and turning a view's own order
+// off is the screen's to write because only it knows what the view carries.
 test("choosing the default order hands back the empty string", () => {
-  const { onSort } = openDisplay({ sort: "-updated" });
-  pick(screen.getByRole("combobox", { name: "Order by" }), "Default order");
+  const { onSort } = arrange({ sort: "-updated" });
+  pick(screen.getByRole("combobox", { name: "Sort" }), defaultOrderLabel("list", true));
   expect(onSort).toHaveBeenCalledWith("");
+});
+
+// ---------------------------------------------------------------------------
+// The lanes put away
+// ---------------------------------------------------------------------------
+
+// A HIDDEN LANE IS NAMED, AND ONE PRESS BRINGS IT BACK. It is a column of work
+// nobody can tell is missing otherwise — on an address somebody else sent.
+test("the lanes put away are named, and each comes back on its own or all at once", () => {
+  const { onShowLane } = openDisplay({
+    shape: "board",
+    hidden: [
+      { key: "done", label: "Done" },
+      { key: "", label: "No value" },
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show the Done lane" }));
+  expect(onShowLane).toHaveBeenLastCalledWith("done");
+  fireEvent.click(screen.getByRole("button", { name: "Show every lane" }));
+  expect(onShowLane).toHaveBeenLastCalledWith();
+  cleanup();
+  // ONLY A BOARD HAS LANES, so no other shape offers them back.
+  openDisplay({ shape: "list", hidden: [{ key: "done", label: "Done" }] });
+  expect(screen.queryByText("Hidden lanes")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// The card facts
+// ---------------------------------------------------------------------------
+
+// A BOARD'S ARRANGEMENT IS WHAT ITS CARDS SHOW, as a grid's is its columns —
+// so the board's Display menu is never the empty panel it was, which said
+// "nothing more to arrange" over the one shape with the most on each item.
+// Every descriptive fact is offered, ticked while it is drawn, and a tick
+// hands back the set with that one fact moved.
+test("the board offers what its cards show, and a tick moves exactly that fact", () => {
+  const { onCardHidden } = openDisplay({ shape: "board", cardHidden: new Set(["labels"]) });
+  expect(screen.queryByText(/Nothing more to arrange/)).toBeNull();
+  const boxes = [...document.querySelectorAll("[data-card-facts] .grid-cols-choice")];
+  expect(boxes.map((b) => b.textContent)).toEqual(CARD_FACTS.map((f) => f.label));
+  expect((screen.getByLabelText("Labels") as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByLabelText("Due date") as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByLabelText("Due date"));
+  expect([...(onCardHidden.mock.lastCall![0] as Set<string>)].sort()).toEqual(["due", "labels"]);
+  fireEvent.click(screen.getByLabelText("Labels"));
+  expect([...(onCardHidden.mock.lastCall![0] as Set<string>)]).toEqual([]);
+  cleanup();
+  // ONLY A BOARD HAS CARDS.
+  openDisplay({ shape: "list" });
+  expect(screen.queryByText("Card shows")).toBeNull();
 });
 
 // ---------------------------------------------------------------------------
@@ -373,10 +472,7 @@ const mountList = () =>
 
 /** The Display menu of the mounted list, opened. */
 async function openOnScreen() {
-  const trigger = await screen.findByRole("button", {
-    name: /^(List|Board|Table|Calendar|Timeline)/,
-  });
-  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("button", { name: "Display" }));
 }
 
 // THE COLUMN KEY IS THE SHAPE'S OWN. `cols=` carries an ORDER as well as a
@@ -431,8 +527,8 @@ test("switching the shape keeps the order and the view the reader is on", async 
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  await openOnScreen();
-  fireEvent.click(shapeButton("Board"));
+  const shapes = await screen.findByRole("group", { name: "Draw as" });
+  fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
   await waitFor(() => expect(location.hash).toContain("shape=board"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("view=arranged");
@@ -451,6 +547,7 @@ test("moving to another saved view keeps the arrangement", async () => {
         type: "list",
         container: { kind: "workspace", id: "" },
         builtin: false,
+        pinned: true,
         params: {},
       })),
       complete: true,
@@ -458,7 +555,7 @@ test("moving to another saved view keeps the arrangement", async () => {
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  fireEvent.click(await screen.findByRole("tab", { name: "Two" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Two" }));
   await waitFor(() => expect(location.hash).toContain("view=two"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("shape=table");

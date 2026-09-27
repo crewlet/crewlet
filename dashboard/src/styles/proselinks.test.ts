@@ -45,14 +45,6 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    where: "routes/work/shapes/Board.tsx",
-    why:
-      "The `N more →` link at the foot of a column. It is a standalone call to " +
-      "action on its own line, not a word in a sentence, and `.work-col-foot a` " +
-      "draws it — so the reset is right and there is no prose for an underline " +
-      "to separate it from.",
-  },
-  {
     where: "routes/work/shapes/Grid.tsx",
     why:
       "The same `N more →` link at the foot of a band, drawn by " +

@@ -97,20 +97,13 @@ import {
 } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
-import {
-  Assignee,
-  DueMark,
-  PriorityMark,
-  StatusBadge,
-  TypeIcon,
-  blockedBy,
-  type RowChrome,
-} from "~/components/work.tsx";
+import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
+import { AssigneeCell, InlineEdits, PriorityCell, StatusCell } from "./cells.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
@@ -198,6 +191,8 @@ interface ColumnContext {
   /** A blocker's KEY from its id, where this page holds its row — see
    *  [blockedBy]. The list's title cell names what holds a task up. */
   keyOf?: (id: string) => string | undefined;
+  /** Who can hold a task, for a writer's inline assignee picker. */
+  seats?: readonly { handle: string; name: string; human?: boolean }[];
 }
 
 /**
@@ -227,12 +222,16 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       header: "",
       label: "Priority",
       shrink: true,
-      cell: (row) => <PriorityMark priority={row.priority} />,
+      // A WRITER'S PICKER, drawn as the same mark — see `shapes/cells.tsx`.
+      cell: (row) => <PriorityCell row={row} />,
     },
     {
       key: "key",
       header: "Key",
       shrink: true,
+      // THE KEY AND THE TITLE ARE THE PHONE ROW'S FIRST LINE — what the task
+      // is — and every other mark is the line under them.
+      phoneLead: true,
       // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
       // over it; the nearest thing is `created`, which is a different
       // claim and is not on the row at all.
@@ -245,11 +244,12 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE, for the reason the table's own status column gives:
       // there is no ordering over a company's own status words, and
       // `group_by=status` is what a reader asking this actually wants.
-      cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
+      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("title", {
       header: "Title",
       sortValue: (row) => row.title,
+      phoneLead: true,
       // THE CELL IS ALREADY A FLEX ROW WITH A GAP, so the title and its mark
       // are two children of it rather than a box inside a box.
       cell: (row) => (
@@ -308,7 +308,14 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and a project with no lead routes to nobody at all, so it is a state
       // worth seeing down a queue.
       cell: (row) => (
-        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+        <AssigneeCell
+          row={row}
+          chrome={chrome}
+          seats={ctx.seats ?? []}
+          readOnly={
+            <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+          }
+        />
       ),
     },
     updatedColumn(now),
@@ -357,28 +364,37 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and alphabetical order over them means nothing. `group_by=status`
       // is what a reader asking this actually wants, and the filter bar
       // already offers it.
-      cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
+      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("priority", {
       header: "Priority",
       shrink: true,
       sortValue: (row) => row.priority ?? "",
-      cell: (row) => <PriorityMark priority={row.priority} word />,
+      cell: (row) => <PriorityCell row={row} word />,
     }),
     {
       key: "assignee",
       header: "Assignee",
       shrink: true,
-      cell: (row) =>
-        row.assignee ? (
-          <SeatCell
-            handle={row.assignee}
-            name={chrome.seatName?.(row.assignee)}
-            kind={chrome.seatKind?.(row.assignee)}
-          />
-        ) : (
-          <EmptyValue label="Nobody holds this" />
-        ),
+      cell: (row) => (
+        <AssigneeCell
+          row={row}
+          chrome={chrome}
+          seats={ctx.seats ?? []}
+          named
+          readOnly={
+            row.assignee ? (
+              <SeatCell
+                handle={row.assignee}
+                name={chrome.seatName?.(row.assignee)}
+                kind={chrome.seatKind?.(row.assignee)}
+              />
+            ) : (
+              <EmptyValue label="Nobody holds this" />
+            )
+          }
+        />
+      ),
     },
   ];
   if (workspace) out.push(projectColumn(false));
@@ -481,6 +497,10 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
+    // THE FIRST TO GIVE WAY ON A PHONE as it is at 1280 ([LIST_GIVES_WAY]):
+    // what the task's page answers one click away, and on the compact row it
+    // wrapped onto a third line of its own.
+    phoneOmit: true,
     sortValue: (row) => row.updated ?? "",
     cell: (row) => <DateCell at={row.updated} now={now} />,
   });
@@ -601,6 +621,8 @@ export function WorkGrid({
   overflowHref,
   removals,
   foot,
+  seats,
+  more,
 }: {
   /** Which column set, and which `cols=` key. */
   shape: GridShape;
@@ -636,6 +658,13 @@ export function WorkGrid({
    * which is the count the toolbar above it already carries.
    */
   foot?: string;
+  /** Who can hold a task, for a writer's inline assignee picker. */
+  seats?: readonly { handle: string; name: string; human?: boolean }[];
+  /**
+   * THE REST OF THE LIST, where the answer carried a cursor: "Load more", and
+   * what is loaded out of how many match. Absent on a complete answer.
+   */
+  more?: { load: () => void; note: string };
 }) {
   const ctx = useMemo<ColumnContext>(() => {
     // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
@@ -660,8 +689,9 @@ export function WorkGrid({
       workspace,
       removals,
       keyOf: (id: string) => keys.get(id),
+      seats,
     };
-  }, [rows, groups, chrome, detail, now, workspace, removals]);
+  }, [rows, groups, chrome, detail, now, workspace, removals, seats]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 
@@ -701,7 +731,7 @@ export function WorkGrid({
     }));
   }, [groups, axis, subAxis, chrome, labels, onOverflow, overflowHref]);
 
-  return (
+  const grid = (
     <DataGrid
       rows={bands ? undefined : rows}
       bands={bands}
@@ -724,6 +754,11 @@ export function WorkGrid({
       // AND THE COLUMN SET IS THE SHAPE'S, which is the one key the two shapes
       // may not share — see the header.
       colsName={shape}
+      // THE LIST IS SCANNED BY THE DOZEN, so on a phone a task is two lines —
+      // key and title, then its marks. The table keeps the labelled card: its
+      // question is a field at a time, and there the name beside each value is
+      // the point.
+      phoneRows={shape === "list" ? "compact" : "labelled"}
       empty={
         removals
           ? {
@@ -737,8 +772,14 @@ export function WorkGrid({
             }
       }
       footer={foot}
+      onLoadMore={more?.load}
+      loadedNote={more?.note}
     />
   );
+  // A REMOVED TASK IS NOT EDITED FROM THE TRASH — it is restored first — so the
+  // trash grid is drawn without the inline writes and every cell reads.
+  if (removals) return grid;
+  return <InlineEdits seatName={chrome.seatName}>{grid}</InlineEdits>;
 }
 
 /**
@@ -816,13 +857,12 @@ function trashColumns(
         const record = removals.get(row.id);
         if (!record?.actor)
           return <EmptyValue label="Its removal is older than the loaded history" />;
+        // THE PERSON, NOT THE TOKEN — `actor_seat` where an operator token
+        // bound to a seat removed it, as the change log names the same row.
+        const who = record.actor_seat || record.actor;
         return (
           <span className="row gap-1">
-            <SeatCell
-              handle={record.actor}
-              name={chrome.seatName?.(record.actor)}
-              kind={chrome.seatKind?.(record.actor)}
-            />
+            <SeatCell handle={who} name={chrome.seatName?.(who)} kind={chrome.seatKind?.(who)} />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
                 a person removing one task look identical without it.

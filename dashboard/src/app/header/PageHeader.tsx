@@ -69,6 +69,7 @@ export function PageHeader({
   counts,
   title,
   workspace,
+  workingIn = "",
   children,
 }: {
   crumbs: Crumb[];
@@ -79,6 +80,8 @@ export function PageHeader({
   /** The page's own name, for the star. */
   title: string;
   workspace: string;
+  /** The project the page is about, whose working seats the header draws. */
+  workingIn?: string;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
@@ -95,7 +98,7 @@ export function PageHeader({
               only when the frame already knows there are controls could never
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
-          <WorkingNow />
+          <WorkingNow project={workingIn} />
           <StarPage path={route.path} label={title} workspace={workspace} />
           <CopyLink />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
@@ -117,9 +120,16 @@ export function PageHeader({
  * working: a header reading "0 agents working" on every page is a line a
  * reader learns to skip, and then skips on the day it says something.
  */
-function WorkingNow() {
+export function WorkingNow({ project }: { project: string }) {
   const agents = useAgents();
-  const working = agents.filter((a) => a.activity === "working");
+  // ON A PROJECT'S PAGE, THE SEATS ON ITS WORK — the item the engine charges
+  // each running turn to, never a guess from what the seat is called.
+  const working = agents.filter(
+    (a) =>
+      a.activity === "working" &&
+      (!project ||
+        (a.live_call?.work_item?.project || a.turn?.work_item?.project || "") === project),
+  );
   if (working.length === 0) return null;
   return (
     <a className="working-now" href={href(["live"])}>
@@ -134,7 +144,9 @@ function WorkingNow() {
           ring: "info" as const,
         }))}
       />
-      <span>{plural(working.length, "agent")} working</span>
+      <span>
+        {plural(working.length, "agent")} {project ? `on ${project}` : "working"}
+      </span>
     </a>
   );
 }

@@ -16,6 +16,7 @@ import {
   SCOPES,
   STATUSES,
   STATUS_TONE,
+  STATUS_MARK,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -45,6 +46,8 @@ import {
   NO_FILTERS,
   projectKeys,
   scopeOf,
+  scopeOfParams,
+  RECENT_SINCE,
   seededScope,
   shapeOf,
   shiftMonth,
@@ -140,6 +143,17 @@ test("every shipped type has its own icon and an unknown one falls back", () => 
 test("no two work types draw the same mark", () => {
   const marks = Object.values(TYPE_ICON);
   expect([...new Set(marks)].sort()).toEqual([...marks].sort());
+});
+
+// A TYPE IS NEVER DRAWN WITH A STATUS'S MARK. The two sit side by side on a
+// row, and `task` once opened every row with the check a delivered task wears,
+// so a list of work nobody had started read as a list of finished work.
+test("no work type draws a mark a status is drawn with", () => {
+  const statusMarks = new Set<string>(Object.values(STATUS_MARK));
+  for (const [type, mark] of Object.entries(TYPE_ICON)) {
+    expect(statusMarks.has(mark), `${type} is drawn as ${mark}`).toBe(false);
+  }
+  expect(statusMarks.has(typeIcon("an-unknown-type"))).toBe(false);
 });
 
 test("a type takes the company's own name for it", () => {
@@ -1494,8 +1508,20 @@ test("the scope segment and the query read one mapping", () => {
       view: {},
       filters: { ...NO_FILTERS, scope },
     });
-    expect(scopeOf(params.status_group as string | undefined), scope).toBe(scope);
+    // READ BACK THROUGH THE VIEW'S OWN PARAMS, which is what a saved view
+    // holds: Recent is `closed_since` rather than a group, and read through
+    // the group alone it came back as All.
+    expect(scopeOfParams(params as Record<string, unknown>), scope).toBe(scope);
     expect(params.status_group ?? "", scope).toBe(SCOPE_GROUPS[scope]);
+    // ONE SEGMENT, ONE QUESTION ABOUT FINISHED WORK: the engine refuses
+    // `closed_since` beside `show_closed`, so Recent carries only the one and
+    // every other segment never the other.
+    if (scope === "recent") {
+      expect(params.closed_since).toBe(RECENT_SINCE);
+      expect(params.show_closed).toBeUndefined();
+    } else {
+      expect(params.closed_since).toBeUndefined();
+    }
   }
 });
 

@@ -1962,33 +1962,131 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 
-/* ---- The view strip ----------------------------------------------------- */
+/* ---- The first row: shapes, views, search and Display ------------------- */
 
-/* THE ROW THAT NAMES THE PAGE INSIDE ITS OWN CONTENT COLUMN, and it is drawn
-   whether or not anybody has saved a view — so it is the top edge of this
-   screen on a company that is one day old, which is the only state every
-   company starts in.
+/* WHAT IS DRAWN, as one row of underlined tabs — the approved board's second
+   band. It is the top edge of this screen's content on every company, one day
+   old or a thousand, so it is drawn whether or not anybody has saved a view.
 
-   THE LINK IS BESIDE THE TABS, NOT PUSHED TO THE FAR EDGE. A trailing element
-   at `margin-left: auto` in a 1500px column is chrome stranded a screen's width
-   from the thing it belongs to; flowed after the last tab it reads as the end
-   of the strip, which is what it is. It wraps rather than scrolls, because a
-   company's saved views are a handful and a row that scrolls hides the one
-   element that is always there. */
-.work-strip {
+   IT WRAPS RATHER THAN SCROLLS. A company's pinned views are a handful, and a
+   row that scrolled would hide the search box and the Display menu at its end —
+   the controls a reader reaches for most — behind a scroll nobody sees. At a
+   phone's width the tabs take one line and the rest wraps under them. */
+.work-tabs {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacing-3);
+  column-gap: var(--spacing-4);
+  row-gap: var(--spacing-2);
+  min-height: var(--size-target-min);
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
+}
+.work-tabs-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+/* A TAB IS ITS WORD AND ITS UNDERLINE: the pressed one is the ink step up and
+   the rule under it in the primary text colour — where the reader IS, drawn in
+   ink rather than in the accent, which the primary action at the head of the
+   page already spends. */
+.work-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 220px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  min-width: 0;
+}
+.work-tab:hover {
+  color: var(--color-text-primary);
+}
+.work-tab[aria-pressed="true"] {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-text-primary);
+}
+.work-tabs-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-strong);
+  flex: none;
 }
 .work-strip-more {
   flex: 0 0 auto;
   font-size: var(--font-size-compact);
   white-space: nowrap;
 }
+/* THE TOOLS — the box and the Display menu — are ONE flex item on the row, with a
+   basis of what they need at their narrowest. A wrapping row breaks lines on
+   each item's basis before anything shrinks, so as three items the box never
+   gave way and the Display button dropped onto a line of its own at 1280px;
+   as one, the cluster shares the line while it fits and moves down together,
+   right-aligned, when it does not. */
+.work-tabs-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  flex: 1 1 320px;
+  min-width: 0;
+}
+/* THE BOX IS THE ONE CONTROL A PERSON TYPES INTO, so it is drawn at a width
+   that reads — the approved 200px — and gives way before the menus do. */
+.work-bar-find {
+  display: flex;
+  align-items: center;
+  flex: 0 1 220px;
+  min-width: 140px;
+}
+/* ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS, never four and a stray: a
+   wrapped row of five left Table alone under the other four, with the divider
+   hanging at the start of the next line. The row scrolls inside itself, so the
+   page never does; the divider goes, because the views start a line of their
+   own there. */
+@container page (width < 640px) {
+  .work-tabs > .work-tabs-group:first-child {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .work-tabs-sep {
+    display: none;
+  }
+  .work-tab {
+    flex: none;
+  }
+}
 
-/* ---- The bar, the chips and the two menus ------------------------------- */
+/* ---- The arrangement at the bar's end ------------------------------------ */
+
+.work-arrange {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+}
+.work-arrange-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  white-space: nowrap;
+}
+
+/* ---- The bar: the chips, "+ Filter" and the arrangement ------------------ */
 
 /* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
    `--z-index-sticky`, opaque, wrapping, and a `--toolbar-h` floor. The scroller's
@@ -1997,28 +2095,56 @@ details > summary.int-summary::-webkit-details-marker {
    another class name is what left the grid's column heads parked underneath an
    opaque band.
 
-   IT HOLDS FOUR THINGS NOW rather than eleven controls in three groups: the
-   Filter menu, the substring mark, the scope switch and the Display menu, with
-   the count at the edge. So the wrap rules the three groups needed are gone —
-   there is nothing left to wrap. */
+   IT IS THE SECOND ROW AND THE LAST: the chips ending in "+ Filter" on the
+   left, and at the far end which work is shown, Group by, Sort, a board's
+   lanes out of view and the count. It wraps where the window is narrow, the
+   far cluster moving under the chips as one run. Nothing sits between it and
+   the lanes, as the approved board draws them. */
 .work-bar {
   column-gap: var(--spacing-3);
 }
-/* SEARCH IS THE ONE CONTROL A PERSON TYPES INTO, so it takes the slack when it
-   is open and nothing at all when it is not — which is most of the time, and is
-   the whole reason it collapses to a mark. */
-.work-bar-find {
-  display: flex;
+.work-bar-end {
+  margin-left: auto;
+  display: inline-flex;
   align-items: center;
-  gap: var(--spacing-1);
-  flex: 1 1 220px;
-  max-width: 380px;
-  min-width: 160px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+/* THE BOARD'S LANES OUT OF VIEW, named in the bar (`shapes/Board.tsx` portals
+   its pager here) — and nothing at all when every lane is in view. */
+.work-bar-lanes {
+  display: inline-flex;
+  align-items: center;
+}
+.work-bar-lanes:empty {
+  display: none;
+}
+.work-bar-lanes .work-board-pager {
+  margin-left: 0;
+}
+/* ON A PHONE THE ROW IS ONE LINE THAT SCROLLS, like the shapes above it. It is
+   the sticky band: wrapped to three rows it stood 142px tall over a 390px
+   screen and covered the board's lane heads as the page scrolled under it. The
+   controls are all still there, a swipe along the row away. */
+@container page (width < 640px) {
+  .work-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .work-bar > *,
+  .work-bar-end,
+  .work-bar .work-chips,
+  .work-arrange {
+    flex: none;
+    flex-wrap: nowrap;
+  }
 }
 /* The coverage cluster ends the bar, so how fresh and how complete an answer is
    sits beside the count it qualifies rather than above the rows. */
 .work-summary {
-  margin-left: auto;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -2036,16 +2162,15 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The chips ---------------------------------------------------------- */
 
-/* ONE ROW, AND IT EXISTS ONLY WHEN A FILTER DOES. An unfiltered list has no
-   chip row at all, so the rows start directly under the bar; a filtered one
-   states the whole narrowing in a line. It is NOT sticky: what is narrowing the
-   list is read once, where the bar is reached for constantly. */
+/* THE START OF THE BAR: a chip per narrowing, then "+ Filter" and Clear. An
+   unfiltered list's row is "+ Filter" alone; a filtered one states the whole
+   narrowing in a line. */
 .work-chips {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) 0;
+  padding: 0;
   min-width: 0;
 }
 /* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
@@ -2062,7 +2187,7 @@ details > summary.int-summary::-webkit-details-marker {
   font-weight: var(--font-weight-medium);
 }
 
-/* ---- The two menus ------------------------------------------------------ */
+/* ---- The two menus: Filter and Display ---------------------------------- */
 
 /* A PANEL, not a page: bounded in both axes, scrolling its own list. The width
    is the widest thing it holds — a field name beside the URL key it writes —
@@ -2171,35 +2296,28 @@ details > summary.int-summary::-webkit-details-marker {
   padding: var(--spacing-3);
   min-width: 300px;
 }
-/* THE SHAPES ARE A ROW OF FIVE, each a mark over its own name: a shape is
-   identity, and identity is carried by a name, a mark and a position. */
-.work-display-shapes {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--spacing-1);
-}
-.work-display-shape {
+/* THE LANES PUT AWAY, each a chip that brings it back — named, because a
+   hidden lane is otherwise work nobody can tell is missing. */
+.work-display-lanes {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: var(--spacing-2) 2px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  font-size: var(--font-size-2xs);
-  cursor: pointer;
+  gap: var(--spacing-2);
+  align-items: flex-start;
 }
-.work-display-shape:hover {
-  border-color: var(--color-border-strong);
-  color: var(--color-text-primary);
+.work-display-label {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
-.work-display-shape[aria-pressed="true"] {
-  background: var(--color-brand-accent-soft);
-  border-color: transparent;
-  color: var(--color-brand-accent-ink);
+.work-display-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+/* THE RELATION ABOVE A FIELD'S VALUES — priority's is / is not / ≥, tags' any
+   / all / not — divided from the values by the panel's own rule. */
+.work-menu-ops {
+  padding: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
 }
 .work-display-row {
   display: flex;
@@ -2245,97 +2363,219 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The board ---------------------------------------------------------- */
 
-.work-board {
-  display: flex;
-  /* EVERY LANE IS THE SAME HEIGHT. A column is a LANE — the place work in
-     that state lives — and one that stopped at its single card read as a
-     panel that had finished rather than as a lane with room in it. The
-     body's own max-height is what bounds them all. */
-  align-items: stretch;
-  gap: var(--spacing-3);
-  overflow-x: auto;
-  padding-bottom: var(--spacing-2);
+/* THE FRAME IS WHAT A LANE IS MEASURED AGAINST. A lane was a fixed 276px, so
+   the board fitted the approved four lanes at exactly one window width: at
+   1440 the fourth lane ended 8px past the scroller and every Done card lost
+   its right border, at 1280 Done was cut mid-title, and the lanes past it sat
+   wholly off-screen with nothing on the page to say they existed. So a lane is
+   sized FROM THE BOARD: as many whole lanes as fit at a 260px floor, and when
+   more lanes exist than fit, each in-view lane is followed by its GAP — the
+   last one's included — so the scroller's edge falls in the gap after a lane
+   and never on a card. Sharing the width exactly, with no gap after the last,
+   put that lane's right border AT the edge, under the fade that says the
+   board goes on: at 1280 In review read as a lane cut off. `cqi`
+   resolves against the nearest container, and a scroller cannot be measured
+   in its own units, hence a frame around it.
+
+   The frame is also where the EDGE FADE is drawn — over the side that has
+   more — and `BoardPager` (`shapes/Board.tsx`) is what names the lanes out of
+   view above them, because a board's scrollbar is under its tallest lane and
+   usually under the fold. */
+.work-board-frame {
+  container: board / inline-size;
+  position: relative;
   min-width: 0;
-  scroll-snap-type: x proximity;
 }
-/* A LANE IS A RECESS IN THE PAGE, and `--color-surface-inset` is the token whose
-   job that is — an overlay that darkens the ground in light and lifts it in
-   dark, so the lane reads as a surface under the cards in BOTH. The retired
-   `--bg-sunken` was the wrong one: it resolved to the panel colour, ABOVE the
-   page in either theme, so a recess in the page was drawn as a thing standing
-   on it — and an empty column read as a hole nobody could see, which made the
-   one lane with room in it the one that looked absent. */
+.work-board {
+  /* The steps are where one more whole lane fits: n lanes at 260px, each
+     with its 16px gap after it, and the two insets. */
+  --lanes: 1;
+  /* THE INSET is the room a lane's body takes past its own edge for a card's
+     focus ring (`.work-col-body`'s 2px). Unpadded, the last lane's overhang
+     was 2px of scroll past it, so a paged board came to rest 2px short and
+     cut the first lane in view. */
+  --board-inset: 2px;
+  --lane-w: calc(
+    (100cqi - 2 * var(--board-inset) - var(--lanes) * var(--spacing-4)) / var(--lanes)
+  );
+  display: grid;
+  grid-auto-flow: column;
+  /* FEWER LANES THAN FIT SHARE THE WIDTH, edge to edge; more than fit take
+     exactly the share and scroll, a gap's room past the last one in view. */
+  grid-auto-columns: minmax(var(--lane-w), 1fr);
+  align-items: start;
+  gap: var(--spacing-4);
+  overflow-x: auto;
+  padding: 0 var(--board-inset) var(--spacing-2);
+  scroll-padding-inline: var(--board-inset);
+  min-width: 0;
+  /* MANDATORY, so a scroll lands on a lane's start and the whole-lanes rule
+     holds after a scroll as it does before one. */
+  scroll-snap-type: x mandatory;
+  /* A PAGE OF LANES GLIDES rather than jumps, so a reader sees which way the
+     board went; base.css takes it back under reduced motion. */
+  scroll-behavior: smooth;
+}
+@container board (width >= 556px) {
+  .work-board {
+    --lanes: 2;
+  }
+}
+@container board (width >= 832px) {
+  .work-board {
+    --lanes: 3;
+  }
+}
+@container board (width >= 1108px) {
+  .work-board {
+    --lanes: 4;
+  }
+}
+@container board (width >= 1384px) {
+  .work-board {
+    --lanes: 5;
+  }
+}
+@container board (width >= 1660px) {
+  .work-board {
+    --lanes: 6;
+  }
+}
+/* ON A PHONE ONE LANE, and the next one's edge shows: the one width where a
+   lane cut at the edge IS the cue, since a single lane leaves no room for a
+   pager's words beside the lane it is on. */
+@container board (width < 556px) {
+  .work-board {
+    --lane-w: calc(100cqi - 2 * var(--board-inset) - var(--spacing-8));
+  }
+}
+/* THE FADE, on the side that has more: a shadow at the scroller's edge saying
+   the board goes on. Over the lanes rather than a mask on them, and it takes
+   no pointer: a card under it is still a card. */
+.work-board-frame::before,
+.work-board-frame::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: var(--spacing-2);
+  /* NARROW: every lane in view is whole, so the fade sits over the last one's
+     edge — a card's border and padding, never its words. */
+  width: var(--spacing-3);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-default);
+  z-index: 1;
+}
+.work-board-frame::before {
+  left: 0;
+  background: linear-gradient(to right, var(--color-surface-background), transparent);
+}
+.work-board-frame::after {
+  right: 0;
+  background: linear-gradient(to left, var(--color-surface-background), transparent);
+}
+.work-board-frame[data-more-start="true"]::before,
+.work-board-frame[data-more-end="true"]::after {
+  opacity: 1;
+}
+/* THE ROW ABOVE THE LANES: why cards do not move, where that is so, and the
+   lanes out of view — one line, so neither costs the board a row of its own
+   when the other is absent. */
+.work-board-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+.work-board-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-left: auto;
+}
+/* A LANE IS A COLUMN OF THE SHEET, NOT A BOX ON IT. The approved board draws
+   its lanes as a heading and a run of cards on the page's own ground — the
+   cards are the objects, on the CARD rung, and a lane drawn as a recessed box
+   around them was a fifth surface the four-rung system does not have. What
+   says "this is a lane" is the heading and the column the cards keep. */
 .work-col {
-  flex: 0 0 auto;
-  width: min(292px, 82vw);
   display: flex;
   flex-direction: column;
-  background: var(--color-surface-inset);
-  border: 1px solid var(--color-border-default);
+  gap: var(--spacing-2);
   border-radius: var(--radius-md);
   scroll-snap-align: start;
   min-width: 0;
+}
+/* WHERE A DRAGGED CARD WILL LAND is the lane under the pointer, outlined in
+   the accent — the reader's own gesture, which is what the accent is for. */
+.work-col.drop-target {
+  outline: 2px dashed var(--color-brand-accent-soft-strong);
+  outline-offset: 4px;
 }
 .work-col-head {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-wide);
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
+  height: 28px;
+  padding: 0 var(--spacing-1);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
   min-width: 0;
 }
-.work-col-head .count-chip {
-  margin-left: auto;
+.work-col-name {
+  font-weight: var(--font-weight-semibold);
+}
+.work-col-count {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 .work-col-body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  padding: 0 var(--spacing-2) var(--spacing-2);
-  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
+  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. The ceiling is
+     what keeps every lane's head, where the counts are, on one screen. */
   overflow-y: auto;
-  /* A LANE IS A RANGE, NOT A CEILING. `flex: 1 1 auto` below fills whatever
-     height the TALLEST lane sets, which answers a short column next to a long
-     one and nothing else: a board whose lanes are all short — one status, one
-     card — had no tall lane to take a height from, so the body closed
-     directly under its single card (measured at 105px, in a column 138px tall
-     head and all) and read as a stray panel somebody left on the screen
-     rather than as a place work belongs.
-     260px is two cards' worth of lane: a card with a title, a foot and the
-     gap under it measures ~97px, so two plus the column's own bottom inset is
-     ~210px, and the rest is the empty run that says this lane takes more.
-     The ceiling stays, and the two are a real range rather than one bound:
-     under a viewport shorter than ~420px the `62dvh` term falls below the
-     floor and the floor wins, which is the right way round — a lane that can
-     hold one card and scroll beats a lane too short to hold one. */
-  min-height: 260px;
-  max-height: min(62dvh, 620px);
-  flex: 1 1 auto;
+  max-height: min(70dvh, 760px);
+  /* Room for a card's shadow and focus ring, which the scroll box would clip. */
+  padding: 2px;
+  margin: -2px;
 }
-.work-col-foot {
-  padding: var(--spacing-2) var(--spacing-3);
-  font-size: var(--font-size-xs);
+.work-col-slot {
+  display: flex;
+  flex-direction: column;
+}
+/* THE GAP A DROP WILL OPEN, drawn above the card the pointer is over. */
+.work-col-slot[data-drop-above="true"]::before {
+  content: "";
+  height: 3px;
+  margin-bottom: var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
+}
+/* THE REST OF THE LANE — a link to the list narrowed to it, drawn as the
+   approved dashed row at the lane's foot. */
+.work-col-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
   color: var(--color-text-tertiary);
-  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  text-decoration: none;
 }
-/* IT ANSWERS THE POINTER. `.work-col-foot a` is (0,1,1) and so is the
-   `a:hover` colour step, and this sheet is imported second — so pinning the
-   colour here silently took the step away, and while the baseline still
-   underlined on hover nobody could see that it had. With the underline reset,
-   hovering `N more →` changed nothing whatsoever. (0,2,1) puts the step back
-   where the tie cannot reach it. */
-.work-col-foot a {
-  color: var(--color-brand-accent-ink);
-}
-.work-col-foot a:hover {
+.work-col-more:hover {
+  background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
 .work-col-empty {
   padding: var(--spacing-4) var(--spacing-3);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   text-align: center;
@@ -2347,23 +2587,33 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3) var(--spacing-3);
+  padding: var(--spacing-3);
   background: var(--color-surface-subtle);
   border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   min-width: 0;
+  overflow: hidden;
   transition:
     border-color var(--motion-duration-fast) var(--motion-easing-default),
     box-shadow var(--motion-duration-fast) var(--motion-easing-default);
 }
 .work-card:hover {
   border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-md);
 }
 .work-card.selected {
   border-color: var(--color-brand-accent-soft-strong);
   box-shadow: var(--shadow-md);
+}
+.work-card[draggable="true"] {
+  cursor: grab;
+}
+/* A MOVE THE ENGINE HAS NOT ANSWERED: drawn where it was dropped, visibly not
+   settled — the card is quieter and its outline is dashed — until the answer
+   redraws it or puts it back. */
+.work-card[data-pending="true"] {
+  opacity: 0.6;
+  border-style: dashed;
 }
 /* A BLOCKED CARD WEARS A RAIL, the same idiom a stopped seat's card does:
    the badge says it in words and the rail makes a column of forty scannable
@@ -2379,24 +2629,137 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--spacing-2);
   min-width: 0;
 }
+.work-card-points {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
 /* THE CLAMP IS `.clamp` IN base.css, which this element carries. What stays
-   here is the card's own type register and the COUNT: three is a fact about how
-   tall a work card may be, not a fact about clamping, and the declarations that
-   do the clamping are written once so a second spelling of them cannot appear
-   beside this one and drift. This copy already had — it never carried
-   `min-width: 0`, so a long unbroken title could refuse to shrink inside its
-   flex parent. */
+   here is the card's own type register and the COUNT: two lines, as the
+   approved board draws a title, so a column of cards keeps one rhythm and a
+   long title is read on the task. */
 .work-card-title {
-  --clamp-lines: 3;
+  --clamp-lines: 2;
   font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
   line-height: var(--font-line-height-snug);
   color: var(--color-text-primary);
 }
+/* ONE LINE, ALWAYS: the labels give way to a "+N" (`fitTags` in
+   components/work.tsx) so the token count keeps its place at the row's end
+   rather than wrapping onto a line of its own. */
 .work-card-foot {
+  position: relative;
   display: flex;
   align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+.work-card-foot > * {
+  flex: none;
+}
+.work-card-foot > .spacer {
+  flex: 1 1 0;
+}
+/* A LABEL THAT DID NOT FIT is out of the flow but still laid out, so it keeps
+   a width to measure when the card grows again. */
+.work-card-tag-over {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+.work-card-tokens {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* THE BAND UNDER A CARD, while something is happening on its task: the card's
+   full width, flush with its edges, in the state's own soft ground and ink —
+   blue while a seat works on it, amber while a run waits on the reader. */
+.work-card-live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px calc(-1 * var(--spacing-3)) calc(-1 * var(--spacing-3));
+  padding: var(--spacing-2) var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  min-width: 0;
+}
+.work-card-live[data-tone="working"] {
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
+}
+.work-card-live[data-tone="needs"] {
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
+}
+.work-card-age {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- The pages after the first ------------------------------------------ */
+
+.work-cal-page,
+.tl-more {
+  display: inline-flex;
+  align-items: center;
   gap: var(--spacing-2);
-  flex-wrap: wrap;
+}
+.tl-more {
+  justify-content: flex-end;
+  padding: var(--spacing-2) var(--spacing-3);
+}
+
+/* ---- Where a task sits in the list it came from -------------------------- */
+
+.list-position {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.list-position-step {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+a.list-position-step:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+span.list-position-step {
+  color: var(--color-text-muted);
+}
+.list-position-where {
+  padding: 0 var(--spacing-1);
+}
+
+/* ---- A field a writer edits in place ------------------------------------ */
+
+/* THE PICKER IS DRAWN AS THE VALUE — the badge, the mark, the face — so a
+   writer's row reads exactly like a reader's, and it sits ABOVE the row's
+   stretched link, whose own anchor would otherwise take the click. */
+.cell-edit {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
   min-width: 0;
 }
 
@@ -2488,13 +2851,6 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--color-feedback-danger-ink);
   font-weight: var(--font-weight-medium);
 }
-.work-size {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex: none;
-}
 /* NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
    the project's lead, and a project with no lead routes to nobody at all. A
    dashed empty square rather than a blank, so a column of unclaimed work
@@ -2510,10 +2866,6 @@ details > summary.int-summary::-webkit-details-marker {
   border: 1px dashed var(--color-border-hover);
   color: var(--color-text-muted);
   flex: none;
-}
-.work-nobody .muted {
-  margin-left: var(--spacing-2);
-  white-space: nowrap;
 }
 
 /* ---- The list ----------------------------------------------------------- */
@@ -3580,6 +3932,8 @@ a.work-cal-chip {
 
 .tl-bar {
   position: absolute;
+  /* Over the week rules, the arrows and a neighbour's label plate. */
+  z-index: 2;
   height: 22px;
   display: flex;
   align-items: center;
@@ -3628,10 +3982,25 @@ a.work-cal-chip {
   border-color: var(--color-feedback-danger-ink);
   color: var(--color-feedback-danger-ink);
 }
-/* A ONE-DAY BAR IS A MARKER, not a span: the two dashed ends say the other
-   end of the span was never stated, so nobody reads it as work that takes
-   exactly one day. */
-.tl-bar[data-kind="deadline"],
+/* A DEADLINE IS A MILESTONE: a filled diamond in its status tone, centred on
+   its day (`barBox` in `shapes/Timeline.tsx` sizes and places it). A one-day
+   box dashed on every side read as an empty placeholder — the one thing a
+   task whose date is certain is not. */
+.tl-bar[data-kind="deadline"] {
+  height: 12px;
+  margin-top: 5px;
+  padding: 0;
+  min-width: 0;
+  border-radius: 2px;
+  transform: rotate(45deg);
+  background: currentColor;
+  border-color: currentColor;
+}
+.tl-bar[data-kind="deadline"][data-tone="planned"] {
+  color: var(--color-text-secondary);
+}
+/* WORK THAT BEGAN AND WAS NEVER GIVEN AN END keeps a dashed box: its end is
+   the one that was never stated, so nobody reads it as a day's work. */
 .tl-bar[data-kind="began"] {
   border-style: dashed;
 }
@@ -3708,14 +4077,25 @@ a.work-cal-chip {
 }
 /* A NARROW BAR'S LABEL, beside it. `pointer-events: none` so it never eats a
    click meant for the bar it names or for one further along the row. */
+/* A NARROW BAR'S LABEL, beside it. ON A PLATE OF THE STRIP'S OWN GROUND, so a
+   week rule passing under it stops at its edge rather than striking through a
+   word ("MIG partition dis|covery"); bounded by `asideAt` (`Timeline.tsx`) and
+   ellipsised at that bound rather than cut at the strip's edge. Above the rules
+   and the arrows, below the bars. */
 .tl-bar-aside {
   position: absolute;
+  z-index: 1;
   height: 22px;
-  display: flex;
-  align-items: center;
+  display: block;
+  line-height: 22px;
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
   font-size: var(--font-size-compact);
   color: var(--color-text-tertiary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
 
@@ -3848,6 +4228,13 @@ a.work-cal-chip {
   overflow-wrap: anywhere;
 }
 .write-refusal .t-caption {
+  color: var(--color-text-secondary);
+}
+/* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
+   quiet, because it is a standing fact about the reader rather than an answer
+   to something they just did. */
+.work-write-note {
+  margin: 0;
   color: var(--color-text-secondary);
 }
 

@@ -65,7 +65,13 @@ func ResolveDate(token string, now time.Time, loc *time.Location) (DateAnchor, e
 	if loc == nil {
 		loc = time.UTC
 	}
-	token = strings.ToLower(strings.TrimSpace(token))
+	// THE KEYWORDS ARE CASE-BLIND AND AN INSTANT IS NOT. RFC 3339 spells its
+	// separators `T` and `Z`, and `time.Parse` matches them exactly — so a
+	// timestamp lowercased along with the keywords never parsed at all, and
+	// every `due=range:<instant>..<instant>` a machine sent was refused as
+	// "not a date". The raw token is kept for the instant branch below.
+	raw := strings.TrimSpace(token)
+	token = strings.ToLower(raw)
 	today := period.At(period.Day, now, loc)
 	week := period.At(period.Week, now, loc)
 	month := period.At(period.Month, now, loc)
@@ -121,7 +127,7 @@ func ResolveDate(token string, now time.Time, loc *time.Location) (DateAnchor, e
 	// An absolute instant. Both spellings, because a person types a date
 	// and a machine sends a timestamp — and a date is a DAY LABEL, so it is
 	// read by the calendar that writes them.
-	if at, err := time.Parse(time.RFC3339, token); err == nil {
+	if at, err := time.Parse(time.RFC3339, raw); err == nil {
 		return DateAnchor{At: at.UTC()}, nil
 	}
 	if day, err := period.Parse(period.Day, token, loc); err == nil {

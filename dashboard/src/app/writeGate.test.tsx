@@ -71,6 +71,18 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "the pane's reply or answer, and the task link and page it can attach",
     suite: "routes/inbox/Inbox.test.tsx",
   },
+  "routes/work/shapes/Board.tsx": {
+    why:
+      "a board card dragged, or moved with Alt and an arrow, into its new place — a " +
+      "gesture with no button, so the reason it cannot act is one line above the lanes",
+    suite: "routes/work/shapes/Board.test.tsx",
+  },
+  "routes/work/shapes/cells.tsx": {
+    why:
+      "a list or table row's status, priority and assignee set in place — pickers " +
+      "for a writer, the value and one sentence above the grid for everybody else",
+    suite: "routes/work/shapes/cells.test.tsx",
+  },
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +
@@ -101,6 +113,10 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
     props: { item: "LEAD-12", comment: "c-2", asker: "CEO", question: "Which vendor?" },
     name: /^Reply$/,
   },
+  SaveViewButton: {
+    props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
+    name: /^View$/,
+  },
 };
 
 /** The tool each control makes its change through, so a reader the engine does not serve it is refused. */
@@ -111,6 +127,7 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   AnswerAskButtons: "comment_on_work_item",
   AnswerRunButton: "answer_run",
   ReplyAskButton: "comment_on_work_item",
+  SaveViewButton: "save_work_view",
 };
 
 const EVERY_TOOL = Object.values(TOOLS);

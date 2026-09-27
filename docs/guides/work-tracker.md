@@ -240,6 +240,7 @@ answer is that there is no such work.
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
 | **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
 | **reopens** | how many times the task left a finished status for an unfinished one. |
+| **updated** | when the task last changed: the fleet-agreed instant of the newest record that changed it — the same instant its newest history entry carries — never a writer's clock. It is what `sort=-updated`, `updated=` and every list's Updated column read. |
 
 ### Status groups
 
@@ -698,10 +699,11 @@ begins at the first. The week is the ISO week, Monday to Monday.
 
 ### The timeline
 
-A task's `start` and `due` are its bar. A task carrying only one of them gets
-a one-day marker with a dashed edge, because "due on the 20th" and "a day's
-work on the 20th" are different facts and drawing them the same way would
-claim knowledge nobody entered. A task carrying neither sits in an
+A task's `start` and `due` are its bar. A task carrying only a `due` is a
+**milestone** — a filled diamond on its day, in its status's tone — and one
+carrying only a `start` is a one-day marker with a dashed edge, because "due
+on the 20th", "began on the 20th" and "a day's work on the 20th" are different
+facts and drawing them the same way would claim knowledge nobody entered. A task carrying neither sits in an
 **Unscheduled** band under the axis with a count — never placed on today,
 which would invent a deadline nobody set.
 
@@ -872,6 +874,15 @@ lane it was **dropped into**, whatever the card reads now: a drop into the lane
 the card is already in, on a card nobody changed since, writes nothing on the
 task, so sending it is always safe. A drag is never a move to another project —
 that re-keys what it carries, and is `move_work_item`.
+
+**On the dashboard** a drag is made as the person your token is bound to, and
+only in the manual order — a project's default, or **Sort → Manual order** —
+because in any other a dropped card would jump straight back to where its date
+or priority puts it; a drag tried in another order says so. The card is drawn where you dropped it until the engine
+answers: a refusal puts it back and says why, and a `placed: false` answer
+leaves it in the lane it went to and says the place was not taken. `Alt` with
+an arrow key moves a focused card the same way — up and down past its
+neighbours of the same project, left and right to the top of the next lane.
 
 During a rolling upgrade a card keeps its dragged place only through edits
 written by an upgraded node; an edit an older node writes puts it back where it
@@ -1221,21 +1232,44 @@ screens rather than one:
   has saved a default view for lands on the list shape, because a board's
   information is the comparison across its lanes — the best shape once work is
   moving and the worst on a company with three items in one status. The board
-  is one press away. Two menus decide what is on the list and how it is drawn —
-  **Filter** adds a narrowing, and each one is a removable chip under the bar;
-  **Display** holds the shape (list, board, table, calendar, timeline), the
-  grouping, the order and — on the list and the table, which are one grid with
-  a column set each — the columns. Grouped on a status, a
-  status group or a priority, the board and the list draw every value the
-  company declares and say which of them are empty, because those three are
-  closed sets whose order means something; grouped on an assignee, a tag or a
-  label they draw only the values work is actually in. The trash is a filter
-  here rather than a tab, which is what the engine says it is: a listing
-  carrying `removed=true`. The strip above the bar holds the views somebody
-  SAVED, never the five shapes, and it ends in a link to the whole inventory.
-  A list with nothing on it says which of three things emptied it — a narrowing
+  is one press away. The first row is **what is drawn**: the five shapes (List,
+  Board, Timeline, Calendar, Table), then the views you pinned — the strip
+  holds what somebody SAVED, never the shapes — **+ View**, which saves the
+  query on screen under a name (shared, or kept to you), and a link to the
+  whole inventory; then the search box (`/` focuses it) and **Display**, which
+  holds what you set once: a list's second grouping, the columns of the list
+  and the table (one grid with a column set each), and the board lanes you put
+  away. The second row is **how the answer is cut**, and the work starts right
+  under it: a removable chip per narrowing, ending in **+ Filter** — priority
+  by *is*, *is not* or *≥* a step, labels by *any of*, *all of* or *not* — and
+  at the far end **Show** — **Open**, **Recent** (open work and what finished
+  this week, the board's own default, so its Done lane holds the week's
+  deliveries), **Closed** and **All** — **Group by** and **Sort**, each
+  showing what it is set to, and on a board the lanes past its edge. Grouped on a status, a status group or a
+  priority, the board and the list draw every value the company declares and
+  say which of them are empty, because those three are closed sets whose order
+  means something; grouped on an assignee, a tag or a label they draw only the
+  values work is actually in. The trash is a filter here rather than a tab,
+  which is what the engine says it is: a listing carrying `removed=true`. A
+  list with nothing on it says which of three things emptied it — a narrowing
   that matched nothing, a scope with nothing in it, or a tracker nothing has
-  been filed into — and a complete one closes by saying so.
+  been filed into — and a complete one closes by saying so; one with more
+  ends in **Load more** and how many of how many are loaded, so no task is
+  past the end of a page. A card says what it has cost in **tokens**, what it
+  blocks, its labels and — while a seat's turn is on it — who is doing what
+  ("SWE · executing · round 7 of 20"), matched on the task the engine charges
+  that turn to. A card's labels give way to a "+N" before its mark row
+  wraps, so the token count keeps its place.
+
+  **What you change here is made as you.** Drag a card — in the manual order,
+  which is a project's default — to reorder it or move it to another lane
+  (`Alt` with an arrow does the same from the keyboard); set a row's status,
+  priority or holder from the value itself on the list and the table. Each is
+  a tool call under your name, conditional on the version you were looking at,
+  so a change somebody made a moment ago is refused and the sentence names
+  them. A task opened from a list carries that list with it, and its page says
+  where it sits — "3 of 18", with the tasks either side — in the whole list
+  rather than in the page that was loaded.
 - **Projects** (`#/work/projects`) is the directory: every project with its
   lead, the unit that owns it, its three maintained counts, how far along its
   filed work is and when that work last changed. A row opens the project
@@ -1732,8 +1766,8 @@ somebody *else* put in order, with a flag on the Priorities choice. See
 [Humans in the org](../concepts/humans-in-the-org.md) for the binding.
 
 **The Queue is the work list, narrowed to one person.** It is the same
-screen `#/work` is — the Filter menu, the Display menu, the Open/Closed/All
-switch, the five shapes, the columns, the count line — with the assignee fixed
+screen `#/work` is — the five shapes, the Filter and Display menus, the
+scope switch, Group by and Sort, the columns, the count line — with the assignee fixed
 and every other choice yours and in the address. What is fixed is not a filter:
 there is no chip to take off and no `assignee=` on the URL, because that is
 what the section *is* rather than something you narrowed it to. Whose day it is

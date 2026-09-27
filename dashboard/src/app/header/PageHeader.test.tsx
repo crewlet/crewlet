@@ -12,7 +12,10 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { Breadcrumb, CopyLink, StarPage } from "./PageHeader.tsx";
+import { Breadcrumb, CopyLink, StarPage, WorkingNow } from "./PageHeader.tsx";
+import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -141,5 +144,59 @@ describe("the breadcrumb", () => {
     for (const link of trail().querySelectorAll("a.crumb-link")) {
       expect(link.querySelector(":scope > .crumb-text")).not.toBeNull();
     }
+  });
+});
+
+// ON A PROJECT'S PAGE THE HEADER COUNTS THE SEATS ON ITS WORK — the task each
+// running turn is charged to — and elsewhere every seat working anywhere. A
+// seat on OPS work is not "on ENG" because the reader is looking at ENG.
+describe("who is working", () => {
+  function mount(project: string) {
+    const store = new Store();
+    store.applyAgents([
+      {
+        id: "a1",
+        role: "SWE",
+        activity: "working",
+        live_call: { work_item: { key: "ENG-1", project: "ENG" } },
+      },
+      {
+        id: "a2",
+        role: "SRE",
+        activity: "working",
+        live_call: { work_item: { key: "OPS-2", project: "OPS" } },
+      },
+      // BETWEEN CALLS the turn still carries its task, and still counts.
+      {
+        id: "a3",
+        role: "PM",
+        activity: "working",
+        turn: { work_item: { key: "ENG-7", project: "ENG" } },
+      },
+      { id: "a4", role: "CTO", activity: "idle" },
+    ] as never);
+    const socket = new LiveSocket(store);
+    return render(
+      <Router>
+        <ClientContext.Provider value={{ store, socket }}>
+          <WorkingNow project={project} />
+        </ClientContext.Provider>
+      </Router>,
+    );
+  }
+
+  test("a project's page counts the seats on that project's work alone", () => {
+    const { container } = mount("ENG");
+    expect(container.querySelector(".working-now")?.textContent).toContain("2 agents on ENG");
+  });
+
+  test("every other page counts every working seat", () => {
+    const { container } = mount("");
+    expect(container.querySelector(".working-now")?.textContent).toContain("3 agents working");
+  });
+
+  test("a project nobody is working on draws nothing", () => {
+    const { container } = mount("LEAD");
+    expect(container.querySelector(".working-now")).toBeNull();
   });
 });

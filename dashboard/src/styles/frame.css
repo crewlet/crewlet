@@ -2071,4 +2071,50 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     text-overflow: clip;
     overflow-wrap: anywhere;
   }
+
+  /* ---- THE COMPACT ROW (`phoneRows="compact"`) ---------------------------
+     TWO LINES, NO LABELS: what the row is, then its marks. A labelled line
+     per value is right for a grid of prose facts and wrong for a list of
+     marks a reader scans by the dozen — the work list's card was eight lines
+     for a task, key and title included, and a phone held two and a half.
+
+     ONE FLEX RUN THAT BREAKS ONCE. The lead cells are ordered first; the
+     row's own `::after` is a zero-height item of the full width ordered
+     between them and the rest, which is the one way a wrapping flex line is
+     told where to break without a wrapper the positional wide layout has no
+     room for. Every other cell follows as a mark, in column order. */
+  .grid-wrap[data-phone-rows="compact"] .grid-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-2);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-row::after {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+    height: 0;
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell {
+    order: 2;
+    padding: 0;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead] {
+    order: 0;
+  }
+  /* THE TITLE TAKES THE REST OF THE FIRST LINE, beside the key. */
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(.shrink) {
+    flex: 1 1 0;
+    min-width: 0;
+    font-weight: var(--font-weight-medium);
+  }
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-label]::before {
+    content: none;
+  }
+  /* TWO LINES, NEVER THREE: see `GridColumn.phoneOmit`. */
+  .grid-wrap[data-phone-rows="compact"] .grid-cell[data-phone-omit] {
+    display: none;
+  }
 }

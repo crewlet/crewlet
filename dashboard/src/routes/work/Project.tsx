@@ -37,7 +37,7 @@
 import { useMemo, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
-import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageLabels, useWorkingScope } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 // THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
@@ -103,6 +103,8 @@ export function Project({ projectKey }: { projectKey: string }) {
   // page never showed.
   usePageLabels(detail?.name ? { [projectKey]: detail.name } : {});
   usePageCoverage(detail);
+  // THE FACES AT THE HEAD ARE THE SEATS ON THIS PROJECT'S WORK.
+  useWorkingScope(projectKey);
 
   const nothingFiled = !!detail && filed(detail.task_counts) === 0 && !inTrash;
 
