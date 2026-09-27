@@ -238,10 +238,8 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verifier, err := s.hasher.Hash(in.Password)
-	if err != nil {
-		log.ErrorContext(r.Context(), "api_bootstrap_hash_failed", "error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	verifier, hashed := s.hash(w, r, adm, in.Password, "bootstrap")
+	if !hashed {
 		return
 	}
 	// THE FIRST OPERATOR IS THE CODE'S, DERIVED rather than minted — see

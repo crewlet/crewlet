@@ -949,20 +949,35 @@ mechanisms close it and none is sufficient alone:
    delay becomes the oracle it was added to prevent. Keyed on the typed value,
    a name nobody holds climbs the curve exactly as a real one does.
 2. **A subject that does not exist is still verified against**, with a
-   fixed-cost decoy, so the two arms do the same shape of work rather than one
-   of them returning immediately. It is an HMAC and not a real argon2id
-   derivation: a decoy that ran the password cost would let a stranger spend
-   64 MiB and a hundred milliseconds of the node's budget per request against
-   names that do not exist.
+   decoy, so the two arms do the same shape of work rather than one of them
+   returning immediately. The decoy takes the same **turn** at the node's
+   verify cap a real verification does and holds its slot for as long as one
+   takes, measured on the node — and derives nothing once it knows that
+   measure, so a name that does not exist costs no memory and no CPU, and no
+   more capacity than a real one.
 3. **Both arms answer at one deadline measured from admission** — the instant
    the throttle let the attempt through, which is the last instant both arms
    share. That is the only one of the three that equalises the *timing*,
-   because argon2id's cost varies with load and a decoy's does not.
+   because argon2id's cost varies with load and a decoy's hold is a measure of
+   it rather than the thing itself.
 
-Under enough load to push a real verification past the deadline the arms
-separate again. That is stated rather than hidden: at that point every request
-on the node is already slow, and the leak is one an attacker has to generate a
-load spike to open.
+**The verify cap is shared out by address, one turn at a time.** A node runs
+as many argon2id derivations at once as it has cores, because each holds
+64 MiB. Every verification and every decoy a request causes waits for its
+address's turn — the client's address as the trusted proxies resolve it, an
+IPv6 client by its `/64` — and an address holds at most one turn, its other
+attempts waiting behind it in arrival order, while addresses are served in
+turn. So one address sending a flood cannot fill the cap, cannot make anybody
+elsewhere wait behind its queue, and cannot push anybody's verification past
+the deadline. Nor can it separate the arms by queueing its own real names
+behind each other, because its decoys queue in the same line for the same
+time. A request that goes away while it waits gives up its place: nothing is
+derived for it, it is answered `503`, and it counts as no attempt. What still
+separates the arms is a load spike from at least as many addresses as the
+node has cores, and then both arms queue alike and differ only by how far a
+derivation is from the node's measure of one. The cost falls on the address
+that sent the flood — including anybody sharing it, which for a deployment
+behind a proxy it was not told to trust is everybody.
 
 The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a
@@ -1006,11 +1021,12 @@ name at all, kept every sign-in from that office, that VPN or that proxy at
 `429`, the right passwords included; and since an attempt still being checked
 counted against it, a dozen colleagues signing in at once met the same `429`
 with nobody failing. What that leaves unslowed by a curve is one password tried
-against many names from one address. What bounds that is the twelve-character
-floor and its blocklist, the argon2id cost a real name pays behind the node's
-verify cap, and the pad on every answer; what shows it is the audit trail's
-per-client, per-minute failure tally, which counts how many different names
-one client tried.
+against many names from one address. What bounds that is the address's one
+turn at the verify cap — one name per derivation, however many it sends at once
+— its allowance of fresh names the fleet is asked about, the twelve-character
+floor and its blocklist, and the pad on every answer; what shows it is the
+audit trail's per-client, per-minute failure tally, which counts how many
+different names one client tried.
 
 A credential that **names nobody** — an invitation link, a founder's one-time
 code, an identity provider's round trip — meets no curve at all: there is no

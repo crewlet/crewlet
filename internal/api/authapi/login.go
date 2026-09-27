@@ -147,7 +147,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in loginRequest
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err = json.Unmarshal(body, &in); err != nil {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
@@ -171,12 +171,13 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE DECOY RUNS ON THE MISS, and it is not optional. Without it the
 	// no-such-login arm returns in microseconds and the wrong-password arm
-	// pays an argon2 verify — a difference a stopwatch reads as a roster.
-	// internal/iam/credential owns the cost; this is the branch that
-	// spends it.
+	// pays an argon2 verify in its source's turn — a difference a stopwatch
+	// reads as a roster. internal/iam/credential owns the cost; this is the
+	// branch that spends it.
 	if held.ID == "" {
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, adm, attempt, "no such "+method)
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "no such "+method)
+		}
 		return
 	}
 	if !stageAdmits(held.Stage) {
@@ -184,8 +185,9 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// suspension measurable: an attacker with a known-good password
 		// would learn from the timing alone which accounts had been
 		// turned off, which is the roster again in a different shape.
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, adm, attempt, "stage "+string(held.Stage))
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "stage "+string(held.Stage))
+		}
 		return
 	}
 
@@ -194,11 +196,17 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		// A PERSON WITH NO PASSWORD — enrolled through a provider, or
 		// invited and not yet redeemed. The decoy again, for the same
 		// reason the stage arm pays it.
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, adm, attempt, "no password credential")
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "no password credential")
+		}
 		return
 	}
-	proved, stale := s.hasher.Verify(verifier.Verifier, in.Password)
+	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
+		verifier.Verifier, in.Password)
+	if err != nil {
+		abandoned(w, r, adm.source, err)
+		return
+	}
 	if !proved {
 		s.refuseSignIn(w, r, adm, attempt, "password mismatch")
 		return

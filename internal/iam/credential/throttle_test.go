@@ -1288,11 +1288,10 @@ func TestTheDecoyAndTheRealPathLandInsideOneDeadline(t *testing.T) {
 	heavyClock.advance(180 * time.Millisecond)
 	heavy.Pad(ctx, heavyArrived)
 
-	// THE DECOY ARM: the fixed-cost HMAC for a subject that does not
-	// exist, then the pad, from its own arrival.
+	// THE DECOY ARM: a subject that does not exist, whose decoy took a
+	// millisecond, then the pad, from its own arrival.
 	light, lightClock, lightPad := newThrottle(t, newAttempts())
 	lightArrived := lightClock.now()
-	light.Decoy("whatever-was-presented")
 	lightClock.advance(time.Millisecond)
 	light.Pad(ctx, lightArrived)
 
@@ -1389,17 +1388,18 @@ func TestTheDecoyAndTheRealPathLandInsideOneDeadlineUnderLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build a throttle: %v", err)
 	}
-	// A cap of TWO, so the real arm's verifications queue behind each
-	// other — which is the load the pad has to survive.
+	// A cap of TWO, and every request from a source of its own, so the
+	// verifications queue behind each other for the cap — which is the load
+	// the pad has to survive.
 	hasher := credential.NewHasher(credential.Params{
 		Memory: 8 * 1024, Time: 1, Threads: 1, KeyLen: 32,
 	}, 2)
-	verifier, err := hasher.Hash("a-long-enough-password")
+	verifier, err := hasher.Hash(t.Context(), "", "a-long-enough-password")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
 
-	soonest := func(arm func()) time.Duration {
+	soonest := func(arm func(source string)) time.Duration {
 		var wg sync.WaitGroup
 		took := make([]time.Duration, runs)
 		for i := range runs {
@@ -1407,7 +1407,7 @@ func TestTheDecoyAndTheRealPathLandInsideOneDeadlineUnderLoad(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				start := time.Now()
-				arm()
+				arm(fmt.Sprintf("198.51.100.%d", i))
 				th.Pad(t.Context(), start)
 				took[i] = time.Since(start)
 			}()
@@ -1420,13 +1420,17 @@ func TestTheDecoyAndTheRealPathLandInsideOneDeadlineUnderLoad(t *testing.T) {
 		return best
 	}
 
-	decoy := soonest(func() { th.Decoy("a-long-enough-password") })
-	real := soonest(func() { hasher.Verify(verifier, "a-long-enough-password") })
+	decoy := soonest(func(source string) {
+		_ = hasher.Decoy(t.Context(), source, "a-long-enough-password")
+	})
+	real := soonest(func(source string) {
+		_, _, _ = hasher.Verify(t.Context(), source, verifier, "a-long-enough-password")
+	})
 
-	// THE CONTROL IS THIS LINE. The decoy's own work is microseconds, so
-	// without the pad it answers in microseconds — and an attacker
-	// taking the minimum over a few hundred requests reads the roster
-	// straight off it.
+	// THE CONTROL IS THIS LINE. A decoy at this cost holds its turn for a
+	// few milliseconds, so without the pad it answers in a few
+	// milliseconds — and an attacker taking the minimum over a few hundred
+	// requests reads the roster straight off it.
 	if decoy < deadline {
 		t.Errorf("the fastest decoy request answered in %s, inside the %s "+
 			"deadline — a subject that does not exist answers sooner, which "+

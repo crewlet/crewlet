@@ -239,8 +239,8 @@ func assertRehashed(t *testing.T, e *estate, current credential.Params,
 		t.Errorf("the verifier moved from %q to %q with no re-hash "+
 			"asked for", before, pw.Verifier)
 	}
-	if ok, _ := credential.NewHasher(current, 1).Verify(pw.Verifier,
-		password); !ok {
+	if ok, _, _ := credential.NewHasher(current, 1).Verify(t.Context(), "",
+		pw.Verifier, password); !ok {
 		t.Error("the stored verifier no longer verifies the password")
 	}
 }
@@ -250,7 +250,7 @@ func assertRehashed(t *testing.T, e *estate, current credential.Params,
 // or a newer build's — and answers the verifier it stored.
 func storeVerifierAt(t *testing.T, e *estate, cost credential.Params) string {
 	t.Helper()
-	verifier, err := credential.NewHasher(cost, 1).Hash(password)
+	verifier, err := credential.NewHasher(cost, 1).Hash(t.Context(), "", password)
 	if err != nil {
 		t.Fatal(err)
 	}

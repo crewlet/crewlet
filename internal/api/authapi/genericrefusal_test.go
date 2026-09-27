@@ -145,7 +145,7 @@ func (p *padRecorder) take() []time.Duration {
 func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	t.Parallel()
 	hasher := credential.NewHasher(cheap, 1)
-	verifier, err := hasher.Hash(rightPassword)
+	verifier, err := hasher.Hash(t.Context(), "", rightPassword)
 	if err != nil {
 		t.Fatal(err)
 	}

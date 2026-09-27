@@ -44,36 +44,34 @@ import (
 //
 // # 2. A subject that does not exist is still verified against
 //
-// [Throttle.Decoy] is a fixed-cost HMAC run when there is no verifier to check
-// — so the two arms DO the same shape of work rather than one of them doing
-// none and returning immediately.
-//
-// It is an HMAC and NOT an argon2id derivation, which looks like the weaker
-// choice and is not: a decoy that ran the real password cost would let an
-// unauthenticated stranger spend [Memory] and a hundred milliseconds of this
-// node's budget per request against names that do not exist, which is a denial
-// of service dressed as a defence. The decoy exists to make the two arms
-// similar in SHAPE; what makes them indistinguishable in TIME is the pad.
+// [Hasher.Decoy] spends the turn a verification would when there is no
+// verifier to check — in the same source's lane, holding a slot of the verify
+// cap for as long as a derivation takes — so the two arms do the same shape of
+// work rather than one of them doing none and returning immediately, and wait
+// for the same things. It derives nothing once the hasher has measured a
+// derivation: holding the slot costs no memory and no CPU, and a stranger
+// with no real name to try costs no more than one who has one — one slot, in
+// their own turn (turns.go).
 //
 // # 3. Both arms are padded to ONE deadline, measured from admission
 //
 // [Throttle.Pad] sleeps until a fixed interval after the instant the request
 // was ADMITTED — the last instant before anything about the subject is looked
 // up — not after the verification started, and not for a fixed duration. That
-// is the only one of the three that actually equalises the timing: argon2id's
-// own cost varies with load and with how many verifications are queued behind
-// [VerifyCap], and a decoy's does not vary at all, so without a common
-// deadline the two curves are different shapes however similar their means.
-// Admission rather than arrival, because admission can include the curve's own
-// delay: that delay is the same for a name that exists and one that does not,
-// and a deadline it had already spent would leave the verification after it
-// unpadded.
+// is the one of the three that actually equalises the timing: argon2id's own
+// cost varies with load, and a decoy's hold is a measure of it rather than the
+// thing itself, so without a common deadline the two arms are different shapes
+// however similar their means. Admission rather than arrival, because
+// admission can include the curve's own delay: that delay is the same for a
+// name that exists and one that does not, and a deadline it had already spent
+// would leave the verification after it unpadded.
 //
 // WHAT IT DOES NOT PROMISE: under enough load to push a real verification past
-// the deadline, the pad has nothing left to add and the arms separate again.
-// That is stated rather than hidden — at that point every request is slow, the
-// node is already at its verify cap, and the leak is one an attacker has to
-// generate a load spike to open.
+// the deadline, the pad has nothing left to add. The turn a decoy takes keeps
+// the two arms queueing alike even then, so what separates them is only the
+// difference between a derivation and the measure a decoy holds — and what
+// generates that load is at least [VerifyCap] sources each holding its one
+// turn, because one address holds one slot however much it sends.
 
 // THE CURVE, AND WHY IT IS NEVER A LOCKOUT.
 //
@@ -111,11 +109,14 @@ import (
 // already does.
 //
 // WHAT THAT LEAVES UNBOUNDED BY A CURVE is one password tried against many
-// names from one address — every pair is fresh. What bounds it is the password
-// floor and the blocklist, [VerifyCap] on the argon2id work a real name costs,
-// and the pad on every answer; what makes it seen is the audit trail's
-// per-client, per-minute failure tally, which counts the distinct names a
-// client tried.
+// names from one address — every pair is fresh. What bounds it is the turn:
+// every verification and every decoy a source causes waits for that source's
+// one turn at the verify cap (turns.go), so one address is served one name per
+// derivation, however many it sends at once, and never ahead of another
+// address's turn; and its fleet cost is its allowance of fresh pairs
+// ([FreshPairBurst]). Past that, the password floor and the blocklist. What
+// makes it seen is the audit trail's per-client, per-minute failure tally,
+// which counts the distinct names a client tried.
 //
 // AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link, a
 // founder's one-time code, a provider's round trip. There is no subject to key
@@ -327,13 +328,13 @@ type Attempt struct {
 	Subject string
 }
 
-// Throttle is the sign-in curve with the two timing defences around it.
+// Throttle is the sign-in curve, and the pad that makes both arms of a sign-in
+// answer at one deadline.
 //
 // SAFE FOR CONCURRENT USE.
 type Throttle struct {
 	attempts coord.Attempts
 	key      []byte
-	decoy    []byte
 	deadline time.Duration
 	now      func() time.Time
 	sleep    func(context.Context, time.Duration)
@@ -392,13 +393,6 @@ func build(deps ThrottleDeps) *Throttle {
 	}
 	t := &Throttle{
 		attempts: deps.Attempts, key: key,
-		// THE DECOY KEY IS PER-PROCESS AND RANDOM, which is correct here
-		// and would be wrong for anything that verifies across nodes:
-		// nothing compares a decoy result to anything, on this node or
-		// any other. It exists to be COMPUTED, never to be checked, so
-		// the only property it needs is that it cost what a real HMAC
-		// costs.
-		decoy:    randomKey(),
 		deadline: deps.Deadline,
 		now:      deps.Now, sleep: deps.Sleep, logger: deps.Logger,
 		pairs:   newKeyed(LocalKeys, func() *standing { return &standing{} }),
@@ -637,26 +631,6 @@ func (k *Ticket) Release() {
 		}
 	}
 }
-
-// Decoy does the work the real arm would have done, for a subject that does
-// not exist.
-//
-// ITS RESULT IS DISCARDED BY CONSTRUCTION — it returns nothing — because a
-// decoy whose answer a caller could branch on would be a second oracle. What
-// it produces is TIME and nothing else.
-func (t *Throttle) Decoy(presented string) {
-	mac := hmac.New(sha256.New, t.decoy)
-	mac.Write([]byte(presented))
-	// The sum is taken and dropped. A compiler that elided the whole call
-	// would reopen the gap, which is why the digest is written into a
-	// package-level sink rather than left as an unused value.
-	sink.Store(mac.Sum(nil))
-}
-
-// sink is where a decoy's digest goes, so the computation cannot be optimised
-// away as dead. A [sync.Map]-free atomic pointer, because nothing ever reads
-// it and a mutex here would serialise the one path that must not queue.
-var sink atomicBytes
 
 // Pad sleeps until deadline after the instant the request was admitted, so
 // both arms of an authentication answer at the same moment.

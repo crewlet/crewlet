@@ -234,7 +234,7 @@ func newSignInRig(t *testing.T) *signInRig {
 func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	t.Helper()
 	hasher := credential.NewHasher(cheap, 1)
-	verifier, err := hasher.Hash(password)
+	verifier, err := hasher.Hash(t.Context(), "", password)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package credential
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -73,7 +76,9 @@ const (
 // caller turning a sign-in endpoint into 64 MiB per concurrent request — at a
 // hundred in flight that is 6.4 GiB, which is an out-of-memory kill rather
 // than a slow login. Above the cap requests QUEUE, which is the correct
-// failure: a slow sign-in under attack, rather than a dead node.
+// failure: a slow sign-in under attack, rather than a dead node — and they
+// queue by SOURCE, one slot per source at a time, served in turn, so the
+// address sending the flood is the address that waits for it (turns.go).
 //
 // It divides by [Threads] because that is what one verification actually
 // occupies. With Threads at 1 the two are the same number, and stating the
@@ -98,7 +103,19 @@ func VerifyCap() int {
 // SAFE FOR CONCURRENT USE.
 type Hasher struct {
 	params Params
-	admit  chan struct{}
+	turns  *turns
+
+	// took is how long a derivation takes here, in nanoseconds: a moving
+	// average over every one this hasher has run, or zero until one has.
+	// It is what a decoy holds its turn for ([Hasher.Decoy]).
+	took atomic.Int64
+
+	// work is the derivation, and hold how a decoy spends its turn. A
+	// hasher's own suite replaces them, to decide from outside when a
+	// derivation ends and to see what a decoy was asked to hold; nothing
+	// else ever does.
+	work func(password string, salt []byte, params Params) []byte
+	hold func(ctx context.Context, d time.Duration)
 }
 
 // Params are one hasher's cost settings.
@@ -128,25 +145,34 @@ func NewHasher(params Params, cap int) *Hasher {
 	if cap <= 0 {
 		cap = VerifyCap()
 	}
-	return &Hasher{params: params, admit: make(chan struct{}, cap)}
+	return &Hasher{params: params, turns: newTurns(cap),
+		work: argon2id, hold: sleepUntil}
 }
 
 // Params is this hasher's cost, for a caller that has to report it.
 func (h *Hasher) Params() Params { return h.params }
 
-// Hash produces a verifier for a password.
+// Hash produces a verifier for a password, in source's turn — the address the
+// request that chose it came from.
 //
 // IT DOES NOT CHECK STRENGTH. [CheckStrength] is a separate call because the
 // two answer different people: a strength failure is told to somebody choosing
 // a password and must say what is wrong, while a hash is also produced for an
 // imported credential and for a test. Folding them would make every caller
 // handle a refusal it cannot act on.
-func (h *Hasher) Hash(password string) (string, error) {
+//
+// The error is ctx's when the request went away before its turn came, and
+// nothing was derived.
+func (h *Hasher) Hash(ctx context.Context, source, password string) (string, error) {
 	salt := make([]byte, SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: read a salt: %w", err)
 	}
-	return h.encode(salt, h.derive(password, salt, h.params)), nil
+	digest, err := h.derive(ctx, source, password, salt, h.params)
+	if err != nil {
+		return "", err
+	}
+	return h.encode(salt, digest), nil
 }
 
 // Verify reports whether a password matches a verifier, and whether the
@@ -173,27 +199,84 @@ func (h *Hasher) Hash(password string) (string, error) {
 //
 // AN UNPARSEABLE VERIFIER IS A REFUSAL AND NOT AN ERROR PATH THE CALLER
 // BRANCHES ON: a row somebody corrupted must not be distinguishable, from
-// outside, from a wrong password.
+// outside, from a wrong password — so it spends the turn a decoy would, and
+// answers no.
 //
-// UNDER THE SAME CAP AS A HASH ([VerifyCap]). A verification holds the stored
-// verifier's memory cost for as long as it runs, and it is the half an
-// UNAUTHENTICATED caller reaches — every sign-in, every step-up, every retry
-// of a held redemption — so it is the half the cap exists for. It used to call
-// argon2 directly: only setting a password queued, and the sign-in endpoint
-// ran one 64 MiB derivation per concurrent request, however many arrived.
-func (h *Hasher) Verify(verifier, password string) (ok bool, rehash bool) {
+// UNDER THE SAME CAP AS A HASH ([VerifyCap]), in source's turn. A
+// verification holds the stored verifier's memory cost for as long as it
+// runs, and it is the half an UNAUTHENTICATED caller reaches — every sign-in,
+// every step-up, every retry of a held redemption — so it is the half the cap
+// exists for. It used to call argon2 directly: only setting a password
+// queued, and the sign-in endpoint ran one 64 MiB derivation per concurrent
+// request, however many arrived.
+//
+// The error is ctx's when the request went away before its turn came: nothing
+// was derived and nothing was decided, and the caller answers as for any
+// attempt that reached no verdict.
+func (h *Hasher) Verify(ctx context.Context, source, verifier, password string) (
+	ok bool, rehash bool, err error) {
+
 	params, salt, want, err := decode(verifier)
 	if err != nil {
-		return false, false
+		return false, false, h.Decoy(ctx, source, password)
 	}
-	got := h.derive(password, salt, params)
+	got, err := h.derive(ctx, source, password, salt, params)
+	if err != nil {
+		return false, false, err
+	}
 	// CONSTANT TIME. A byte-by-byte compare over a digest leaks it one
 	// byte at a time to anybody who can time the endpoint — and this
 	// endpoint is deliberately reachable with no other credential.
 	if subtle.ConstantTimeCompare(got, want) != 1 {
-		return false, false
+		return false, false, nil
 	}
-	return true, params.weakerThan(h.params)
+	return true, params.weakerThan(h.params), nil
+}
+
+// Decoy spends the turn a verification would have, in source's lane, for a
+// subject that has no verifier to check — nobody by that name, a person who
+// may not act, a person with no password.
+//
+// # It takes a turn, and holds its slot as long as a derivation takes
+//
+// The sign-in pad makes the two arms answer at one deadline, and that holds
+// only while a verification finishes inside it. A decoy that queued for
+// nothing let one address separate the arms below the pad by itself: fire a
+// handful of attempts at once, and the real names queue behind each other in
+// the address's lane and answer late while the decoys answer on time — the
+// roster, read off the order the answers came back in. So a decoy waits for
+// its turn in the same lane and holds a slot of the cap for [Hasher]'s
+// measured derivation time, and an address's answers come back in the same
+// rhythm whichever of its names exist.
+//
+// # It derives nothing, once it knows how long deriving takes
+//
+// Holding the slot costs no memory and no CPU. Until this hasher has run a
+// derivation there is no measure to hold for, so that decoy derives once, at
+// this hasher's own cost, and the measure is taken from it. What that costs a
+// stranger with no real name to try is one derivation per process, and past it
+// no more than a real name costs: one slot, in their own turn.
+//
+// ITS RESULT IS DISCARDED BY CONSTRUCTION — it returns nothing a caller could
+// branch on, because a decoy whose answer could be read would be a second
+// oracle. What it produces is TIME. The error is ctx's when the request went
+// away before its turn came.
+func (h *Hasher) Decoy(ctx context.Context, source, presented string) error {
+	release, err := h.turns.take(ctx, sourceKeyOf(source))
+	if err != nil {
+		return err
+	}
+	defer release()
+	if took := time.Duration(h.took.Load()); took > 0 {
+		h.hold(ctx, took)
+		return nil
+	}
+	salt := make([]byte, SaltLen)
+	// crypto/rand does not fail: it aborts the process rather than return
+	// an error, so there is nothing here to handle.
+	_, _ = rand.Read(salt)
+	h.timed(presented, salt, h.params)
+	return nil
 }
 
 // weakerThan reports whether p is a WEAKER cost than q: below it in at least
@@ -240,18 +323,20 @@ func (p Params) weakerThan(q Params) bool {
 // not at all, and a slot once taken runs to the end — argon2 is not
 // interruptible, and abandoning a derivation already paid for would spend the
 // cost and keep nothing.
+//
+// IN NOBODY'S LANE: the sign-in that asked for it has already had its turn and
+// answered, so it takes a slot only while no source is waiting for one.
 func (h *Hasher) Rehash(password string) (string, error) {
-	select {
-	case h.admit <- struct{}{}:
-	default:
+	release, ok := h.turns.tryTake()
+	if !ok {
 		return "", ErrSaturated
 	}
-	defer func() { <-h.admit }()
+	defer release()
 	salt := make([]byte, SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: read a salt: %w", err)
 	}
-	return h.encode(salt, argon2id(password, salt, h.params)), nil
+	return h.encode(salt, h.timed(password, salt, h.params)), nil
 }
 
 // ErrSaturated reports a [Hasher.Rehash] that found every slot of the
@@ -259,26 +344,52 @@ func (h *Hasher) Rehash(password string) (string, error) {
 var ErrSaturated = errors.New("credential: every derivation slot is taken, " +
 	"and a rewrite nobody is waiting on does not queue for one")
 
-// derive runs the cost at params, under the concurrency cap: this hasher's own
-// for a new verifier, the stored verifier's for a verification — and, with
-// [Hasher.Rehash], the only two callers of [argon2id], so no derivation this
-// package runs can skip the cap.
+// derive runs the cost at params in source's turn: this hasher's own cost for
+// a new verifier, the stored verifier's for a verification. With
+// [Hasher.Rehash] and [Hasher.Decoy] it is the only caller of [Hasher.timed],
+// so no derivation this package runs can skip the cap.
 //
-// IT WAITS FOR A SLOT FOR AS LONG AS THAT TAKES: a sign-in VERIFYING is the
-// caller the cap queues rather than refuses, and one given up on would answer
-// as a wrong password.
-func (h *Hasher) derive(password string, salt []byte, params Params) []byte {
-	// THE CAP IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
+// IT WAITS FOR ITS TURN FOR AS LONG AS ITS REQUEST DOES: a sign-in VERIFYING
+// is the caller the cap queues rather than refuses, and one refused would
+// answer as a wrong password — but a request that went away gives up its
+// place, and nothing is derived for nobody.
+func (h *Hasher) derive(ctx context.Context, source, password string, salt []byte,
+	params Params) ([]byte, error) {
+
+	// THE TURN IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it
 	// across a store read as well would make one slow database turn the
 	// password cost into a queue, which is the shape that takes a node
 	// down under exactly the load the cap exists for.
-	h.admit <- struct{}{}
-	defer func() { <-h.admit }()
-	return argon2id(password, salt, params)
+	release, err := h.turns.take(ctx, sourceKeyOf(source))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return h.timed(password, salt, params), nil
+}
+
+// timed runs one derivation and folds how long it took into [Hasher]'s
+// measure: an eighth of the way towards each new one, so the measure follows
+// the load the node is under without one slow derivation moving it far.
+// Called only with a slot of the cap held.
+func (h *Hasher) timed(password string, salt []byte, params Params) []byte {
+	start := time.Now()
+	digest := h.work(password, salt, params)
+	took := int64(time.Since(start))
+	for {
+		was := h.took.Load()
+		next := took
+		if was > 0 {
+			next = was + (took-was)/8
+		}
+		if h.took.CompareAndSwap(was, next) {
+			return digest
+		}
+	}
 }
 
 // argon2id is the one derivation, and it is called only with a slot of the
-// cap held — by [Hasher.derive] and [Hasher.Rehash].
+// cap held — through [Hasher.timed].
 func argon2id(password string, salt []byte, params Params) []byte {
 	return argon2.IDKey([]byte(password), salt, params.Time, params.Memory,
 		params.Threads, params.KeyLen)

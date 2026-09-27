@@ -232,10 +232,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	verifier, err := s.hasher.Hash(in.Password)
-	if err != nil {
-		log.ErrorContext(r.Context(), "api_invite_hash_failed", "error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	verifier, hashed := s.hash(w, r, adm, in.Password, "invite")
+	if !hashed {
 		return
 	}
 

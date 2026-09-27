@@ -27,26 +27,36 @@
 //     delay itself becomes the oracle. [Throttle.Admit] takes the SOURCE and
 //     the subject as the caller typed it, and a name nobody holds climbs the
 //     curve exactly as a real one does.
-//   - A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST, with a decoy of
-//     fixed cost, so the two arms do the same work rather than one of them
-//     doing none.
+//   - A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST, with a decoy
+//     that takes the same turn at the verify cap a verification does and holds
+//     it as long, so the two arms do the same work and wait for the same
+//     things rather than one of them doing none.
 //   - BOTH ARMS ARE PADDED TO ONE DEADLINE measured from the instant the
 //     attempt was ADMITTED. The first two make the two arms similar; only this
 //     makes them indistinguishable, because argon2id's own cost varies with
-//     load and a decoy's does not.
+//     load and a decoy's hold is a measure of it rather than the thing.
 //
 // # A failure costs delay, never a lockout
 //
 // A hard refusal after N failures is a lockout an outsider can cause — keyed
 // on a login, of that person; keyed on an address, of everybody behind it. So
 // each failure doubles the wait before its key's next attempt, one second to
-// thirty, and a correct credential after the wait always succeeds. Two keys
-// catch two runs: the (typed subject, source) PAIR a run at one account, and
-// the SOURCE a run across many; a success clears its own pair and strikes
-// that pair's failures from its source, and nothing else, because clearing a
-// whole source let anybody holding an account wipe the record of their
-// guesses at somebody else's by signing in as themselves. throttle.go carries
-// the whole argument.
+// thirty, and a correct credential after the wait always succeeds. The key is
+// the (typed subject, source) PAIR, which catches a run at one account, and a
+// success clears its own pair and nothing else, because clearing a whole
+// source let anybody holding an account wipe the record of their guesses at
+// somebody else's by signing in as themselves. throttle.go carries the whole
+// argument.
+//
+// # And the source is bounded by what it costs, never refused
+//
+// A run across many names meets a fresh pair every time, so no curve slows it
+// — and a curve on the source alone was a refusal anybody sharing the address
+// held shut for everybody else. What bounds one address instead is COST: every
+// verification and decoy it causes waits for its one turn at the verify cap,
+// served in turn with every other address (turns.go), and the fleet is asked
+// about its fresh pairs only as fast as its allowance refills
+// ([FreshPairBurst]).
 //
 // # No new modules
 //

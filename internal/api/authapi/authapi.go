@@ -643,13 +643,50 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 		httpjson.Throttled(w, credential.RetryAfter(err))
 		return admission{}, false
 	}
-	// THE WAIT ENDED WITH THE REQUEST — the caller went away, or this node
-	// is shutting down. Nothing was attempted; the answer is for a node
-	// that will take it later.
-	log.DebugContext(r.Context(), "api_sign_in_wait_abandoned",
-		"error", err, "source", attempt.Source)
-	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+	abandoned(w, r, attempt.Source, err)
 	return admission{}, false
+}
+
+// abandoned answers an attempt whose wait ended with its request — for its
+// place on the curve, or for its source's turn at the verify cap: the caller
+// went away, or this node is stopping. Nothing was attempted and nothing was
+// decided, so the answer is for a node that will take the attempt later, and a
+// caller that defers [credential.Ticket.Release] counts it as nothing.
+func abandoned(w http.ResponseWriter, r *http.Request, source string, err error) {
+	log.DebugContext(r.Context(), "api_sign_in_wait_abandoned",
+		"error", err, "source", source)
+	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+}
+
+// decoy spends the turn a verification would have, for a subject with no
+// verifier to check, answering false once it has answered a request that went
+// away before its turn came — see [credential.Hasher.Decoy].
+func (s *Service) decoy(w http.ResponseWriter, r *http.Request, in admission,
+	presented string) bool {
+
+	if err := s.hasher.Decoy(r.Context(), in.source, presented); err != nil {
+		abandoned(w, r, in.source, err)
+		return false
+	}
+	return true
+}
+
+// hash is a new password's verifier, derived in the turn of the source that
+// chose it, or false once it has answered.
+func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
+	password, route string) (string, bool) {
+
+	verifier, err := s.hasher.Hash(r.Context(), in.source, password)
+	switch {
+	case err == nil:
+		return verifier, true
+	case r.Context().Err() != nil:
+		abandoned(w, r, in.source, err)
+	default:
+		log.ErrorContext(r.Context(), "api_"+route+"_hash_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+	return "", false
 }
 
 // uncounted is the admission of an attempt whose credential names nobody — a

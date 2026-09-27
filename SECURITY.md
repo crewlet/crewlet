@@ -47,10 +47,14 @@ A few things worth knowing when deploying Crewlet:
   decides before anything is looked up (a throttle keyed on who the subject
   resolved to is one only real people can trigger, so its delay becomes the
   oracle); a subject that does not exist is still verified against, with a
-  fixed-cost decoy; and both arms answer at one deadline measured from the
-  instant the attempt was admitted. Under enough load to push a real
-  verification past that deadline the arms separate again — stated rather than
-  hidden, and at that point every request on the node is slow.
+  decoy that takes the same turn at the node's verify cap a verification does
+  and holds it as long; and both arms answer at one deadline measured from the
+  instant the attempt was admitted. The verify cap is shared out one turn per
+  source address at a time, so one address cannot fill it, cannot push
+  anybody else's verification past that deadline, and cannot separate its own
+  arms by queueing them behind each other. What remains is a load spike from at
+  least as many addresses as the node has cores, and then both arms queue
+  alike — stated rather than hidden.
 - **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
   wait before the next attempt on its key, one second to thirty, and a correct
   credential after the wait always succeeds — a lockout is something an

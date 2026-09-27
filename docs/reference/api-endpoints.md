@@ -306,12 +306,17 @@ Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#c
 `POST /auth/login` answers `401 sign_in_refused` for every way it can fail — a
 login nobody holds, a wrong password, a person suspended, a person removed, a
 second factor that does not check out — at the same wall-clock instant,
-measured from when the request arrived.
+measured from when the request was admitted.
 
 **Both halves are needed.** A code that distinguished the arms would make the
 timing pad pointless, and a delay that distinguished them would make the single
-code pointless. A miss pays the same argon2 verify a hit does, through a
-fixed-cost decoy, because otherwise the *absence* of that cost is the answer.
+code pointless. A miss takes the same turn at the node's verify cap that a
+hit's argon2 verification does, through a decoy that holds it for as long as a
+verification takes, because otherwise the *absence* of that cost is the answer.
+Every verification and decoy waits for its own address's turn — one at a time
+per address, served in turn — so one address's flood queues behind itself
+rather than in front of everybody, and a request that goes away while it waits
+is answered `503` and counts as no attempt at all.
 
 What that buys is that this surface is not a roster: a caller cannot learn who
 works here, nor test a list of addresses against it.

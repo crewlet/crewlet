@@ -315,11 +315,17 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	verifier, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
-		s.throttle.Decoy(in.Password)
-		s.refuseSignIn(w, r, adm, attempt, "step-up: no password credential")
+		if s.decoy(w, r, adm, in.Password) {
+			s.refuseSignIn(w, r, adm, attempt, "step-up: no password credential")
+		}
 		return
 	}
-	proved, stale := s.hasher.Verify(verifier.Verifier, in.Password)
+	proved, stale, err := s.hasher.Verify(r.Context(), adm.source,
+		verifier.Verifier, in.Password)
+	if err != nil {
+		abandoned(w, r, adm.source, err)
+		return
+	}
 	if !proved {
 		s.refuseSignIn(w, r, adm, attempt, "step-up: password mismatch")
 		return
