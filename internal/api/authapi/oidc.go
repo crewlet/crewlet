@@ -300,7 +300,11 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // and the step-up exists to prove somebody is. This route is unguarded, so
 // the guard hands a request it could not resolve through rather than
 // answering it — and a node that cannot establish who is signed in says so
-// with a 503, never the 401 that tells a browser to sign in again.
+// with a 503, never the 401 that tells a browser to sign in again. A request
+// presenting a BEARER is refused before any of that, alike whatever the
+// bearer: the guard's bearer curve stands only in front of guarded routes, so
+// an answer here that told a matching bearer from a refused one would be an
+// oracle nothing slows.
 func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 	want oidc.Flight, window iam.Recency) (oidc.Flight, bool) {
 
@@ -311,6 +315,19 @@ func (s *Service) stepUpFlight(w http.ResponseWriter, r *http.Request,
 				"inside: " + string(iam.RecencyStepUp) + " or " +
 				string(iam.RecencySensitive) + ", the window a " +
 				"step_up_required refusal carries"})
+		return oidc.Flight{}, false
+	}
+	// EVERY PRESENTED BEARER IS REFUSED ALIKE, matched, refused or
+	// uncheckable, and before its resolution is read. This route is
+	// unguarded, so the curve a bearer meets on a guarded route does not
+	// stand in front of it, and an answer that differed for a good bearer
+	// and a bad one — a step-up refusal for one, a 401 for the other — was
+	// a way to test bearer values nothing throttled. Nothing is lost by it:
+	// the provider confirms a BROWSER's own session, and a bearer has none.
+	if auth.PresentedBearer(r.Context()) {
+		refuseStepUp(w, window, "a bearer credential proves nobody is "+
+			"present, so the identity provider cannot confirm it; confirm "+
+			"from the browser the person signed in with")
 		return oidc.Flight{}, false
 	}
 	principal, how := iam.From(r.Context())

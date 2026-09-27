@@ -1031,6 +1031,36 @@ failure: that is the link's holder, or a mail scanner re-reading it. Counted, a
 scanner re-fetching one old link put the address it scans from on the curve.
 A guesser who does not hold the link can never reach the difference.
 
+### A bearer meets the same curve
+
+The password routes are not the only place a guess is answered. Every guarded
+route compares the bearer it is handed — a Tier A token or a machine token —
+and whether it matched is the whole of what the caller learns: `401`, or the
+route's own answer. That comparison used to run as fast as requests arrived, on
+every route, `POST /auth/token` among them. The request guard now admits each
+presented bearer on the **source's** curve before comparing it: ten refusals in
+the window free, then the same doubling wait, `429` with a `Retry-After` past
+five seconds.
+
+- **Admitted before the comparison**, because a curve consulted afterwards
+  would let a correct guess through whatever it said. So a valid bearer from a
+  source that is spraying waits with it — one more reason to name your proxy
+  in `api.trusted_proxies`, since otherwise every source is the proxy's.
+- **A match clears nothing.** It proves the caller holds one credential, not
+  that the other values from their address were theirs; clearing the source
+  would let anybody holding a token wipe the record of their guesses at
+  another by presenting their own between them.
+- **Local to the node.** The curve never touches the coordination store: a
+  Tier A token is the way back in when the provider or the store is down, and
+  a shared window a spray could fill would make that way back in something an
+  outsider can close fleet-wide.
+- **Only where the guard relies on the bearer.** A bearer this node could not
+  check (`503`) counts as nothing, and an unguarded route's own credential —
+  the Forge relay's JWT on `/webhooks/forge` — never meets the curve. That
+  line holds only while no unguarded route answers differently for a good
+  bearer and a bad one, which is why the provider step-up start refuses every
+  presented bearer alike.
+
 ---
 
 ## Machine tokens: a person's own, and a service account's

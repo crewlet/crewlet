@@ -39,6 +39,15 @@
 // supplies the POSTURE — which credentials exist and what ceiling their grants
 // are cut to — never the existence of a check.
 //
+// # A bearer meets a curve before it is compared
+//
+// On a guarded route a presented bearer is admitted by this node's own curve,
+// keyed on the source, before any comparison runs — ten refusals free, then a
+// wait that doubles to thirty seconds, `429` with a `Retry-After` past five.
+// Without it every guarded route answered a guessed bearer as fast as it
+// arrived. bearers.go carries the argument, including why the curve is local
+// and why a match clears nothing.
+//
 // # And two gates beside it
 //
 // [CSRF] refuses a state change a cross-site page could have caused, and
@@ -58,6 +67,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -332,6 +342,11 @@ type Guard struct {
 	// audit is where a refused credential is counted and a Tier A
 	// token's use and overreach are recorded. See audit.go.
 	audit Audit
+
+	// bearers is the curve a presented bearer meets before it is
+	// compared: this node's own, keyed on the source alone. See
+	// bearers.go.
+	bearers *credential.Throttle
 }
 
 // BindSeats installs the seams that let a bound credential act as its seat, and
@@ -362,7 +377,7 @@ func New(b *config.Bootstrap) *Guard {
 		// AND NO CEILING, which grants nothing rather than everything
 		// — see [intersect] for why that direction is the only safe
 		// one.
-		return &Guard{now: time.Now}
+		return &Guard{now: time.Now, bearers: credential.LocalThrottle(log)}
 	}
 	auth := b.API.Auth
 	tokens := tokensOf(b)
@@ -373,7 +388,7 @@ func New(b *config.Bootstrap) *Guard {
 	return &Guard{
 		tokens: tokens, ceiling: auth.MaxGrants,
 		proof: windowsOf(auth.Session), now: time.Now,
-		clients: NewClients(b),
+		clients: NewClients(b), bearers: credential.LocalThrottle(log),
 	}
 }
 
@@ -544,6 +559,15 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 		markNoStore(w, path)
 
+		// A PRESENTED BEARER MEETS ITS CURVE BEFORE IT IS COMPARED, on a
+		// guarded route — see bearers.go. Released here if nothing below
+		// decides it.
+		bearer, admitted := g.admitBearer(w, r)
+		if !admitted {
+			return
+		}
+		defer bearer.release()
+
 		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and
 		// the credential is resolved for both. A route that does not
 		// REQUIRE one can still be told who presented one — the
@@ -566,6 +590,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// both uses below as new contexts.
 		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
+		//nolint:contextcheck // the resolved request's; see where Resolve is called
+		bearer.settle(r.Context(), r, how)
 		if Unguarded(path) {
 			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
 			// ever a credential whose SEAT is gone, or a session that

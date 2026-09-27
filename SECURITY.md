@@ -56,7 +56,9 @@ A few things worth knowing when deploying Crewlet:
   credential after the wait always succeeds — a lockout is something an
   outsider can cause, against any login they can type. A success clears only
   its own (subject, source) pair, so holding one account never wipes the
-  record of guesses at another. Behind a proxy, name it in
+  record of guesses at another. The same curve, keyed on the source, stands in
+  front of every bearer a guarded route compares, so an API token is not
+  guessable at line rate either. Behind a proxy, name it in
   `api.trusted_proxies`: otherwise every caller is the proxy, and one
   guesser's failures slow the whole company.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character

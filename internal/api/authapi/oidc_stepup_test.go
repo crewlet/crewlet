@@ -458,3 +458,40 @@ func TestAProviderStepUpForSomebodyElseReplacesNothing(t *testing.T) {
 			"opened %+v", closes, starts)
 	}
 }
+
+// THE STEP-UP START ANSWERS EVERY BEARER ALIKE.
+//
+// The start is unguarded, so the curve a bearer meets on a guarded route does
+// not stand in front of it — and it read the guard's resolution: a Tier A
+// token that matched was a `403 step_up_required`, one that did not was a
+// `401`. That difference was a way to test bearer values that nothing
+// throttled. Every presented bearer is now the same refusal, in the same
+// bytes, before its resolution is read — through the REAL guard here, since
+// the property is about what the guard hands the route. Mutation: read the
+// resolution first and the wrong value answers 401 while the right one
+// answers 403.
+func TestAProviderStepUpStartAnswersEveryBearerAlike(t *testing.T) {
+	t.Parallel()
+	r := newProviderStepUp(t)
+	b := bootstrapFor(t)
+	guarded := auth.New(&b).Middleware(r.mux)
+	answer := func(bearer string) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCStart+
+			"?step_up="+string(iam.RecencySensitive), nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	rightStatus, rightBody := answer(b.API.Auth.Tokens[0].Token)
+	wrongStatus, wrongBody := answer("a-value-no-entry-holds-at-all")
+	if rightStatus != http.StatusForbidden {
+		t.Fatalf("a Tier A bearer answered %d (%s), want 403 step_up_required",
+			rightStatus, rightBody)
+	}
+	if wrongStatus != rightStatus || wrongBody != rightBody {
+		t.Errorf("a wrong bearer answered %d %s and the right one %d %s: the "+
+			"start says which bearers match", wrongStatus, wrongBody,
+			rightStatus, rightBody)
+	}
+}
