@@ -283,17 +283,17 @@ func (a *Applier) renameEdge(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, false, err
 	}
 	if !present {
-		done, through, err := structuralMark(ctx, tx,
+		done, through, markErr := structuralMark(ctx, tx,
 			ObjectRef{Kind: edge.Object.Kind, ID: key})
-		if err != nil {
-			return 0, false, err
+		if markErr != nil {
+			return 0, false, markErr
 		}
 		if done && through >= at.packed {
 			return 0, true, nil
 		}
-		refused, err := absentRefusal(ctx, tx, was)
-		if err != nil {
-			return 0, false, err
+		refused, readErr := absentRefusal(ctx, tx, was)
+		if readErr != nil {
+			return 0, false, readErr
 		}
 		a.declineChange(at, declinedRename, was, refused)
 		return 0, false, nil
