@@ -208,3 +208,76 @@ func TestALeadsPatchOfAFieldAuthorityComesFromIsRefusedAsTheTableRefuses(t *test
 		t.Errorf("after the company's grant the seat manages %v, want [founder]", got)
 	}
 }
+
+// A PATCH ON AN OBJECT THE CHART DOES NOT HOLD IS THE DOMAIN'S REFUSAL, `422
+// refused`, NAMING THE ROUTE THAT CREATES ONE — AND NOTHING IS PUBLISHED.
+//
+// A content write never creates: a creation takes an address, which is exact
+// only on the tree's one subject, and a content write contends on its object's
+// own. Through the surface that refusal used to read `400 invalid_body`, which
+// told the caller their body was malformed when it was the request's object
+// that did not exist. And on a REMOVED seat the answer names the removal and
+// its reason rather than sending somebody to create a seat dissolved on
+// purpose. Mutation: answer the domain's refusal `400 invalid_body` again and
+// both cases fail on the status; let the decide fall through to an upsert and
+// the first fails on the log.
+func TestAPatchOnAnObjectNobodyCreatedIsRefusedNamingTheBatch(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "omar", ""))
+	if _, err := r.writer.WriteSeat(t.Context(), "op-seed", chart.SeatContent{
+		Handle: "omar", Name: "Omar",
+	}); err != nil {
+		t.Fatalf("seed the seat: %v", err)
+	}
+	if _, err := r.writer.WithHolders(noHolders{}).WriteRemoval(t.Context(),
+		"op-remove", chart.Batch{Reason: "left the company",
+			Operations: []chart.Operation{
+				op(chart.OpRemoveObject, chart.KindSeat, "omar", ""),
+			}}); err != nil {
+		t.Fatalf("remove omar: %v", err)
+	}
+	r.drain()
+	s := serveChart(r, signedIn(iam.GrantConfigWrite), "sarah-chen", "omar")
+
+	refused := func(rec *httptest.ResponseRecorder) (code, detail string) {
+		var body struct {
+			Error  string `json:"error"`
+			Detail string `json:"detail"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		return body.Error, body.Detail
+	}
+
+	before, err := r.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	rec := s.send(http.MethodPatch, "/chart/seats/sarah-chen",
+		`{"name":"Sarah Chen","goal":"ship the thing"}`)
+	code, detail := refused(rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "refused" ||
+		!strings.Contains(detail, "POST /chart/batch") {
+		t.Errorf("a PATCH on a seat nobody created answered %d %s, want 422 "+
+			"refused naming POST /chart/batch", rec.Code, rec.Body)
+	}
+	after, err := r.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	if after != before {
+		t.Errorf("the log moved from %d to %d — a refused PATCH published a record",
+			before, after)
+	}
+	if got := r.column(`SELECT handle FROM chart_seats WHERE handle = 'sarah-chen'`); len(got) != 0 {
+		t.Errorf("the chart holds %v, want no seat created by a content write", got)
+	}
+
+	rec = s.send(http.MethodPatch, "/chart/seats/omar", `{"name":"Omar"}`)
+	code, detail = refused(rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "refused" ||
+		!strings.Contains(detail, "left the company") {
+		t.Errorf("a PATCH on a removed seat answered %d %s, want 422 refused "+
+			"naming the removal's reason", rec.Code, rec.Body)
+	}
+}

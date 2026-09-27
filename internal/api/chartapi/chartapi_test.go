@@ -637,10 +637,10 @@ func TestAWriteRefusedOnItsBodyNamesTheGrant(t *testing.T) {
 // Whether a lead's body CHANGES a seat's `manages`, its project, its space or
 // its email is a comparison against the row, which only the domain's decide
 // can make — so the route admits the lead and the domain refuses the fields.
-// Rendered as the chart's own rule (`400 invalid_body`), that refusal told the
-// caller their body was malformed and never which grant would have admitted
-// it; it is `403 unauthorized`, `no_grant`, the grants, and the fields that
-// asked. Mutation: drop the arm and the refusal answers 400.
+// Rendered as one of the chart's own rules (`422 refused`), that refusal told
+// the caller the request would never land and never which grant would have
+// admitted it; it is `403 unauthorized`, `no_grant`, the grants, and the fields
+// that asked. Mutation: drop the arm and the refusal answers 422.
 func TestADomainGrantRefusalIsTheTablesRefusal(t *testing.T) {
 	t.Parallel()
 	r := serve(t, nil, leadOf(), rel{seats: map[[2]string]bool{{"cto", "sre"}: true}})
@@ -1000,12 +1000,15 @@ func TestASeatsKindTravelsAsStructure(t *testing.T) {
 	}
 }
 
-// AND IT ANSWERS THE DOMAIN'S REFUSAL, NOT 200.
+// AND IT ANSWERS THE DOMAIN'S REFUSAL, NOT 200 — and as the domain's refusal,
+// `422 refused`, not as a malformed body.
 //
 // A rename used to be decided on the new address's own subject, so one that
 // lost to a create of the same address was accepted and then dropped at the
 // apply — and this route answered 200 for a rename that never happened. On the
 // tree's subject the decide refuses it, and the refusal is what comes back.
+// It came back `400 invalid_body`, which told the caller to reshape a body
+// that was never wrong: the address was taken, and no body would change that.
 func TestARenameAnswersTheRefusalRatherThan200(t *testing.T) {
 	t.Parallel()
 	r := serve(t, nil, leadOf(iam.GrantConfigWrite), leads())
@@ -1016,8 +1019,15 @@ func TestARenameAnswersTheRefusalRatherThan200(t *testing.T) {
 		Detail: `unit "platform" is already in the chart`}
 
 	rec := post(r.mux, "/chart/units/engineering/rename", `{"to":"platform"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("a refused rename answered %d, want 400: %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a refused rename answered %d, want 422: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Error != string(httpjson.CodeRefused) {
+		t.Errorf("error = %q, want %q", body.Error, httpjson.CodeRefused)
 	}
 	if !strings.Contains(rec.Body.String(), chart.RuleKeyTaken) {
 		t.Errorf("the answer does not carry the rule it broke: %s", rec.Body)

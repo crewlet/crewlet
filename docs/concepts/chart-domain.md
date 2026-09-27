@@ -372,8 +372,8 @@ a claim on the new address's own subject, which contended with other claims on
 that address and with nothing else: a create of the same address was decided
 without seeing the claim, the log could apply it second, and it then met the
 renamed unit on its address and moved it. On one subject whichever of the two is
-decided second sees the other and is refused, so a rename that loses is a `400`
-naming the rule rather than a `200` for a change that never happened. A batch
+decided second sees the other and is refused, so a rename that loses is a `422
+refused` naming the rule rather than a `200` for a change that never happened. A batch
 names each object by the address it has **at that point**, so an operation after
 a rename uses the new key, and a unit renamed twice in one batch retires only the
 address the batch found it at — an address it held between two operations of

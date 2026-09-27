@@ -566,9 +566,9 @@ may neither change that half nor read it back: a lead's `PATCH` of a seat's
 prose lands and the seat keeps its model chain and its credentials. Taking the
 half away is `"clear_runtime": true`, never an empty or absent `runtime` — a
 clear that could be spelled by leaving something out is one a caller makes by
-accident. A `runtime` of `null` is refused `400`, since it could mean either,
-and one stated beside `clear_runtime` is refused too. A stated `runtime` must
-be a JSON object.
+accident. A `runtime` of `null` is refused `400`, since it could mean either;
+one stated beside `clear_runtime` is refused `422 refused`, and so is a stated
+`runtime` that is not a JSON object.
 
 **Every chart write asks for a proof inside `step_up`**, a lead's edit of their
 own team included: it changes what the company executes. The reads — the import
@@ -593,10 +593,10 @@ Without that flag a company whose seats declare no runtime at all renders
 exactly like a caller who was silently stripped.
 
 **A content write never creates its object.** A `PATCH` naming a unit or a seat
-the chart does not hold is refused (`400`) naming `POST /chart/batch`, which is
-where an object is created — or, where the chart knows why it is not there, the
-removal that took it (with who made it and the reason given) or the address it
-was renamed to. The write first waits for this node to apply everything the
+the chart does not hold is refused (`422 refused`), and nothing is published. The
+refusal names `POST /chart/batch`, which is where an object is created — or,
+where the chart knows why it is not there, the removal that took it (with who
+made it and the reason given) or the address it was renamed to. The write first waits for this node to apply everything the
 structure had been written by, so a `PATCH` straight after the `202` of the
 batch that created its object lands rather than being refused — a batch that
 creates a new object on another one's retired address, or renames an object
@@ -648,8 +648,8 @@ that kind reads:
 | `remove` | nothing | The removal is named by the address the chart holds the object at — the one it answered to when the batch began — because it is published as a record of its own and applied against the chart as the batch found it. A rename earlier in the same batch is superseded: the object is removed from the address it held, its identity is tombstoned beside it, and the address the rename would have given it is never tombstoned, so it stays free |
 
 An empty `parent` is the org root and an empty `lead` clears the unit's own
-lead. A field the kind does not take is refused `400` (`the operation does not
-take the field`) rather than dropped, because a batch that dropped it would
+lead. A field the kind does not take is refused `422 refused` (`the operation
+does not take the field`) rather than dropped, because a batch that dropped it would
 answer as though it asked for less than it said.
 
 A batch whose only effect is removals — its other operations, if any, being a
@@ -677,7 +677,9 @@ post-state or a structural gesture, so a dropped field would answer `200` for a
 request that asked for more than landed. So is a body holding anything after its
 one JSON value but whitespace — a stray `}` or `]`, or a second value.
 
-A refusal by the chart's own rules is `400`, a contention another writer won is
+A refusal by the chart's own rules is `422 refused`, with the rule's own sentence
+as its `detail` — the body was well formed and the chart will not take it, so no
+reshaping of the body would change the answer — a contention another writer won is
 `409 stale` (re-read and write again — nothing about the request was wrong), and
 a node that cannot decide **authority** is `503` rather than `403`: a node that
 is booting or behind the log cannot say who leads a unit, and `403` would send
@@ -708,7 +710,7 @@ See [The org chart](../concepts/chart-domain.md).
 The route publishes a batch of one `rename` operation, so it is ordered against
 every other structural write: a create of the same address is decided against
 the rename and refused, never applied on top of it. Its refusals are the
-batch's — `400` naming the rule for an address that is taken, reserved, removed,
+batch's — `422 refused` naming the rule for an address that is taken, reserved, removed,
 somebody's identity or the one the object already answers to — and `rename` is
 equally an operation you can put in a `POST /chart/batch` beside others.
 

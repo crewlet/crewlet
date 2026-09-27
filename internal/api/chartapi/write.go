@@ -221,7 +221,16 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 		refuseGrant(w, grant)
 		return
 	case errors.Is(err, chart.ErrRefused):
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+		// THE DOMAIN'S OWN REFUSAL, and not a malformed body: a body that
+		// did not decode as this route's is refused before a writer is
+		// asked anything (`400 invalid_body`), so what arrives here is a
+		// well-formed request the chart's rules will not take — an
+		// address somebody holds, a seat a removal took, a content write
+		// on an object nobody created. Answered as `invalid_body`, each
+		// told its caller to reshape a body that was never wrong. `422
+		// refused` is the human write surface's code for the same thing,
+		// and the detail is the rule's own sentence.
+		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused,
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
@@ -278,9 +287,9 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 // is a comparison against the row, which the route cannot read. So the route
 // admits a lead to the write and the domain refuses the fields — and a refusal
 // on authority must say the same thing wherever it was made, or a client that
-// learned to read `grants` off one would find `invalid_body` on the other and
-// be sent to fix a body that was never wrong. `fields` names what asked, so
-// the person refused knows which edit to take back.
+// learned to read `grants` off one would find `refused` on the other and be
+// told the change can never land, when one grant would land it. `fields` names
+// what asked, so the person refused knows which edit to take back.
 func refuseGrant(w http.ResponseWriter, refusal *chart.GrantRefusal) {
 	detail := authz.RefusalDetail(authz.ReasonNoGrant, refusal.Grants)
 	if len(refusal.Fields) > 0 {
