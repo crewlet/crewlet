@@ -305,15 +305,25 @@ func (e *Engine) publishStagedChart(ctx context.Context) error {
 	if err != nil || !found {
 		return err
 	}
+	// EVERY FAILURE PAST THE TAKE HAS ONE REMEDY, and it is the import's:
+	// the stage is spent, and nothing but re-running the import puts a
+	// chart back — against a running node this time, which publishes it
+	// directly. So each carries it, rather than a remedy of its own: a
+	// stage an older build wrote in the clear is refused by the keyring
+	// with an error naming no command, and `crewlet config seal`, which
+	// the refusal used to name, seals a revision and never a stage.
+	spent := func(what string, err error) error {
+		return fmt.Errorf("engine: %s the chart staged from %s: %w; the stage "+
+			"is spent, so re-run the import against a running node, which "+
+			"publishes the chart directly", what, staged.SourcePath, err)
+	}
 	body, err := secrets.Open(e.cipher, staged.Payload)
 	if err != nil {
-		return fmt.Errorf("engine: open the chart staged from %s: %w",
-			staged.SourcePath, err)
+		return spent("open", err)
 	}
 	var authored chart.Authored
 	if err = json.Unmarshal(body, &authored); err != nil {
-		return fmt.Errorf("engine: decode the chart staged from %s: %w",
-			staged.SourcePath, err)
+		return spent("decode", err)
 	}
 	edges := authored.Edges()
 	if len(edges) == 0 {
@@ -323,12 +333,11 @@ func (e *Engine) publishStagedChart(ctx context.Context) error {
 	// the same operation rather than a second one.
 	result, err := writer.WriteImport(ctx, "staged:"+staged.ID, staged.ID, edges)
 	if err != nil {
-		return fmt.Errorf("engine: publish the chart staged from %s: %w",
-			staged.SourcePath, err)
+		return spent("publish", err)
 	}
 	last, err := e.seedContent(ctx, writer, authored, staged.ID)
 	if err != nil {
-		return err
+		return spent("publish the seats of", err)
 	}
 	if last.Seq == 0 {
 		last = result.Position
@@ -361,9 +370,8 @@ func (e *Engine) publishStagedChartAtBoot(ctx context.Context) {
 	if err := e.publishStagedChart(at); err != nil {
 		log.WarnContext(ctx, "chart_staged_publish_failed", "error", err,
 			"detail", "this node could not publish the org chart an offline "+
-				"`crewlet config import` staged for it. The stage is spent, so "+
-				"re-run that import — against a running node this time, which "+
-				"publishes it directly")
+				"`crewlet config import` staged for it; the error says what "+
+				"brings it back")
 	}
 }
 

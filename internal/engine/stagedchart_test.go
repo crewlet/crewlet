@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,41 @@ func TestAStagedChartIsPublishedOnceAndThenGone(t *testing.T) {
 	// the take and the publish cost a re-run rather than a wrong company.
 	if err := e.PublishStagedChartForTest(t.Context()); err != nil {
 		t.Errorf("publishing with nothing staged failed: %v", err)
+	}
+}
+
+// A STAGE THAT DOES NOT OPEN SAYS THE ONE THING THAT BRINGS IT BACK.
+//
+// An offline import by a build older than the mandatory keyring staged its
+// chart in the clear, and the keyring refuses to open that. The stage is taken
+// before it is opened, so it is spent either way, and the remedy is the
+// import's own: re-run it against a running node — which every failure past
+// the take says, so the boot's warning carries it whatever went wrong.
+//
+// Mutation: return the open's error without the stage's remedy and the case
+// fails.
+func TestAStageThatDoesNotOpenNamesTheImport(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	body, err := json.Marshal(chart.Authored{
+		Units: []chart.AuthoredUnit{{Key: "clear-team", Name: "Clear Team"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backends().Store.StagedCharts().Stage(t.Context(), store.StagedChart{
+		ID: "file:clear", Payload: body, SourcePath: "company.yaml", StagedBy: "ops",
+	}); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	err = e.PublishStagedChartForTest(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("publishing a stage stored in the clear = %v, want it refused unsealed", err)
+	}
+	for _, says := range []string{"company.yaml", "re-run the import against a running node"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
 	}
 }
 

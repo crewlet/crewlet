@@ -728,6 +728,16 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
+	// AND IT SAYS WHERE THE BODY CAME FROM AND WHO FIXES IT: the node that
+	// published it, with the command that seals its revision. The receiving
+	// node's own `crewlet config seal` would re-seal its own active revision
+	// and do nothing about this body.
+	for _, says := range []string{"coordination store", "forged", "that node",
+		"crewlet config seal"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
 	if got := node.recon.Applied(); got == forged.Epoch {
 		t.Error("the node applied the epoch an unsealed revision was published at")
 	}
@@ -759,6 +769,45 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	}
 	if _, held, err := node.store.Configs().Get(t.Context(), sealedTarget.RevisionID); err != nil || !held {
 		t.Errorf("the sealed revision was not kept (held=%v err=%v)", held, err)
+	}
+}
+
+// THIS NODE'S OWN UNSEALED COPY IS NAMED AS ITS OWN.
+//
+// The fleet can point at a revision this node already holds, and an older
+// build stored its copy in the clear. That is not a body somebody else
+// published: the remedy is `crewlet config seal` HERE, which seals this node's
+// active revision and activates it for the fleet, so the refusal says it is
+// this node's own copy.
+//
+// Mutation: answer the local copy with the peer's wording and the case fails.
+func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	document := yamlToJSON(t, grownCompanyDoc)
+	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", Summary: "an older build's",
+		Payload: document, CreatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("store the revision: %v", err)
+	}
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "an older build's", Payload: document, At: pinnedNow,
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	err = p.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
+	}
+	for _, says := range []string{"this node's own copy", id, "crewlet config seal"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	if strings.Contains(err.Error(), "forged") {
+		t.Errorf("this node's own copy was answered as a forgery: %v", err)
 	}
 }
 

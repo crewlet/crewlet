@@ -535,8 +535,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	}
 	document, err := secrets.Open(r.cipher, revision.Payload)
 	if err != nil {
-		return configplane.StatusError, nil, fmt.Errorf("engine: open revision %s: %w",
-			target.RevisionID, err)
+		return configplane.StatusError, nil, openRefusal(target.RevisionID, found, err)
 	}
 	// The STORED-form reader, not the authored one. A revision carries
 	// providers.llm_order — the declaration order of a Go map, which exists
@@ -686,9 +685,7 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 			store.ErrNoRevision, target.RevisionID)
 	}
 	if _, err = secrets.Open(r.cipher, payload); err != nil {
-		return store.Revision{}, fmt.Errorf("engine: the fleet's revision %s does "+
-			"not open under this node's keyring, so it is neither applied nor "+
-			"kept: %w", target.RevisionID, err)
+		return store.Revision{}, openRefusal(target.RevisionID, false, err)
 	}
 	// THE AUTHOR IS THE POINTER'S, which carries the three the writing
 	// node recorded. This said `peer`, so a revision named whoever wrote it
@@ -707,6 +704,39 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 				"history will not show it and it will be re-fetched next time")
 	}
 	return revision, nil
+}
+
+// openRefusal is why a revision the fleet is on did not open here, and what
+// fixes it — which depends on WHERE the bytes came from, so the error the
+// secrets package answers names no remedy of its own.
+//
+// A body that arrived through the coordination store unsealed was either
+// forged by something that reaches the broker, or published by a node holding
+// a revision an older build stored in the clear; the remedy is on THAT node,
+// where `crewlet config seal` seals its active revision and activates it again.
+// This node's own copy stored unsealed is the same command run here. A body
+// sealed under a key this keyring does not hold is a keyring that is missing a
+// key the fleet seals under.
+func openRefusal(revisionID string, local bool, err error) error {
+	switch {
+	case errors.Is(err, secrets.ErrUnsealedWithKey) && local:
+		return fmt.Errorf("engine: this node's own copy of revision %s is stored "+
+			"without a seal, which a build older than the mandatory keyring "+
+			"wrote, so it is not applied; run `crewlet config seal` on this node, "+
+			"which seals its active revision and activates it for the fleet: %w",
+			revisionID, err)
+	case errors.Is(err, secrets.ErrUnsealedWithKey):
+		return fmt.Errorf("engine: the fleet's revision %s arrived through the "+
+			"coordination store without a seal, so it is neither applied nor "+
+			"kept: either something that reaches the broker forged it, or a node "+
+			"published a revision an older build stored unsealed — that node has "+
+			"to run `crewlet config seal`, which seals it and activates it again: %w",
+			revisionID, err)
+	default:
+		return fmt.Errorf("engine: revision %s does not open under this node's "+
+			"keyring, so it is neither applied nor kept; every node has to hold "+
+			"the key the fleet seals under in secrets.keys: %w", revisionID, err)
+	}
 }
 
 // record writes this node's outcome twice, to two surfaces with two
