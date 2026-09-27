@@ -87,6 +87,13 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 			wire(server.NewJSStreamWrongLastSequenceError(7)), faultRejected},
 		{"a lost race, clustered",
 			wire(server.NewJSStreamWrongLastSequenceConstantError()), faultRejected},
+		// NEITHER IS A REFUSAL, though the broker named both: each says
+		// this operation's record may yet land.
+		{"this operation's own record in flight",
+			wire(server.NewJSStreamDuplicateMessageConflictError()), faultUnsettled},
+		{"a store closed under an entry raft committed",
+			wire(server.NewJSStreamStoreFailedError(server.ErrStoreClosed,
+				server.Unless(server.ErrStoreClosed))), faultUnsettled},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -107,14 +114,16 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 }
 
 // THE SERVER'S OWN WORDS ARE PINNED, because the classification above
-// compares them whole and a reworded server would otherwise move a full log
-// to an unnamed refusal with nothing going red. The codes are pinned for the
-// same reason: the client exports neither.
+// compares them whole and a reworded server would otherwise move a full log —
+// or a record that may yet land — to an unnamed refusal with nothing going
+// red. The codes are pinned for the same reason: the client exports none of
+// them.
 func TestTheStoreRefusalsMatchTheServersOwn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ name, ours, theirs string }{
 		{"a full log", storeFailedMaxBytes, server.ErrMaxBytes.Error()},
 		{"a message too large", storeFailedTooLarge, server.ErrMsgTooLarge.Error()},
+		{"a store closed", storeFailedClosed, server.ErrStoreClosed.Error()},
 	} {
 		if c.ours != c.theirs {
 			t.Errorf("%s is compared as %q and the server says %q", c.name,
@@ -129,6 +138,8 @@ func TestTheStoreRefusalsMatchTheServersOwn(t *testing.T) {
 		{"a store failure", codeStreamStoreFailed, server.JSStreamStoreFailedF},
 		{"a per-message limit", codeStreamMessageExceedsMaximum,
 			server.JSStreamMessageExceedsMaximumErr},
+		{"a message id in process", codeStreamDuplicateMessageConflict,
+			server.JSStreamDuplicateMessageConflict},
 	} {
 		if got := server.ApiErrors[c.theirs].ErrCode; uint16(c.ours) != got {
 			t.Errorf("%s is matched as code %d and the server sends %d", c.name,

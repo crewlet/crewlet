@@ -287,6 +287,11 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
 			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused},
 		{"nobody answered", errors.New("nats: timeout"), statelog.RefuseNoQuorum},
+		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
+		// the broker answered, and what it said is that the entry may
+		// yet land — which clears exactly as a missed quorum does.
+		{"a store closed under it", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "store is closed"}, statelog.RefuseNoQuorum},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

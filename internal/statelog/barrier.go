@@ -266,7 +266,11 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 // `log_full`, the refusal the read vocabulary has for it, was reachable only
 // from a test's fake appender that returned one ready-made.
 //
-// What nobody answered stays unclassified, and is the missed quorum it was.
+// What nobody answered stays unclassified, and is the missed quorum it was —
+// and so does an answer saying the barrier may yet land ([faultUnsettled]): a
+// barrier carries no message id, so the one such answer it can meet is a
+// store that closed under an entry raft had committed, which is a stream
+// restarting and clears exactly as a missed quorum does.
 func barrierAppendFailed(subject string, err error) error {
 	switch f, detail := classify(err); f {
 	case faultFull:

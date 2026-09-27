@@ -53,6 +53,11 @@ type Appender interface {
 // max_payload, and anything else the broker refused is the broker's own words.
 // Folded into one, a record too large was told to raise a ceiling it was
 // nowhere near.
+//
+// AND ONE ANSWER IS NOT A REFUSAL AT ALL although the broker named it: an
+// error saying this operation's record may yet land ([faultUnsettled]). The
+// broker answered, so it is not the no-answer either — and it is the one
+// answer after which a probe finding nothing proves nothing.
 type fault int
 
 const (
@@ -72,11 +77,47 @@ const (
 	// retry does makes the record smaller.
 	faultTooLarge
 
-	// faultRefused is any other refusal the broker made and named: a
-	// decision, so not ambiguous, and one this framework has no remedy
-	// for — so it is reported with the broker's words rather than
-	// retried, and rather than dressed as one of the refusals above.
+	// faultRefused is any other refusal the broker made and named, and
+	// one this framework has no remedy for — so it is reported with the
+	// broker's words rather than retried, and rather than dressed as one
+	// of the refusals above.
+	//
+	// FINAL ONLY BECAUSE [faultUnsettled] IS CARVED OUT OF IT FIRST. A
+	// named error is a decision about THIS append only when it also says
+	// the record will not be stored; the two that say the opposite are
+	// classified before anything reaches here.
 	faultRefused
+
+	// faultUnsettled is the broker ANSWERING that this operation's record
+	// may yet land, which it does in two ways on a clustered stream:
+	//
+	//   - 10158, "duplicate message id is in process". A clustered leader
+	//     stages a record's message id the moment it PROPOSES it, and a
+	//     second append under the same id before that proposal applies is
+	//     answered with this. The second append is this write's own —
+	//     the id is the op id — re-sent after an earlier round's append
+	//     went unanswered while its commit was slow, or by a caller
+	//     retrying an `unknown` under the same operation, which is the
+	//     retry this framework tells every caller to make.
+	//   - 10077 whose store error is "store is closed". A clustered leader
+	//     answers that when its store closes under an entry raft has
+	//     ALREADY committed — a shutdown, a stream reset — so the record
+	//     is applied by every member that replays the entry, the leader
+	//     included once it comes back.
+	//
+	// Reported as a refusal, either one told a caller "asking again changes
+	// nothing" about a record that committed and applied a moment later —
+	// and a caller that believed it and re-filed under a fresh op id wrote
+	// the change twice. Resolved like an ambiguous append, then, with one
+	// difference that is the whole reason this is not [faultUnknown]: a
+	// probe that finds nothing of this write's does NOT mean nothing
+	// landed, because the record may be committed and not yet visible. A
+	// snapshot retaken there decides against a state about to hold this
+	// very write — a create would be told its own record already exists —
+	// so what the probe cannot settle is answered `unknown`, whose only
+	// retry is the same op id, and that retry gets the broker's duplicate
+	// acknowledgement once the record lands.
+	faultUnsettled
 
 	// faultUnknown is no answer: the append may or may not have landed,
 	// and nothing here can tell which.
@@ -108,11 +149,12 @@ const (
 // # Why a store failure's description IS compared, whole
 //
 // 10077 is the server's one code for "the stream would not store this", and
-// it covers a log at its ceiling and a message too large for the file store
-// alike — the reason travels only as the text of the server's own store
-// error. The two have opposite remedies, so they are told apart by comparing
-// that text WHOLE against the server's declared errors ([storeFailedMaxBytes],
-// [storeFailedTooLarge]), which a test pins to the vendored server's own
+// it covers a log at its ceiling, a message too large for the file store and
+// a store that closed under the append alike — the reason travels only as the
+// text of the server's own store error. The three have opposite remedies, so
+// they are told apart by comparing that text WHOLE against the server's
+// declared errors ([storeFailedMaxBytes], [storeFailedTooLarge],
+// [storeFailedClosed]), which a test pins to the vendored server's own
 // values: never a substring, never a parse. A wording this build does not
 // know is [faultRefused] carrying the words verbatim, so a reworded server
 // costs a less specific remedy and never a wrong one — which is what reading
@@ -133,7 +175,16 @@ func classify(err error) (fault, string) {
 				return faultFull, apiErr.Description
 			case storeFailedTooLarge:
 				return faultTooLarge, apiErr.Description
+			case storeFailedClosed:
+				// A STORE THAT CLOSED UNDER AN ENTRY RAFT HAD
+				// COMMITTED, on a clustered leader: every member
+				// that replays the entry applies it.
+				return faultUnsettled, apiErr.Description
 			}
+		case codeStreamDuplicateMessageConflict:
+			// THIS OPERATION'S OWN RECORD, proposed and not yet
+			// applied: the message id is the op id.
+			return faultUnsettled, apiErr.Description
 		case codeStreamMessageExceedsMaximum:
 			// THE STREAM'S OWN PER-MESSAGE LIMIT, a structured code of
 			// its own. No state log declares one, so reaching it means
@@ -141,10 +192,11 @@ func classify(err error) (fault, string) {
 			// still a record too large, not a log that is full.
 			return faultTooLarge, apiErr.Description
 		}
-		// ANY OTHER API ERROR is a decision the server made and named,
-		// so it is not ambiguous — but it is not one this framework
-		// knows how to act on, so it is reported with its code and its
-		// words rather than retried or passed off as a full log.
+		// ANY OTHER API ERROR is a refusal the server made and named —
+		// the two that say the record may yet land are settled above —
+		// and it is not one this framework knows how to act on, so it
+		// is reported with its code and its words rather than retried
+		// or passed off as a full log.
 		return faultRefused, fmt.Sprintf("code %d: %s", apiErr.ErrorCode,
 			apiErr.Description)
 	}
@@ -167,21 +219,25 @@ func classify(err error) (fault, string) {
 }
 
 // codeStreamStoreFailed is the server's "the stream would not store this"
-// code, and codeStreamMessageExceedsMaximum its "larger than this stream's
-// own per-message limit". Neither is exported by the client, so each is
-// written down here with what it covers rather than left as a literal at the
-// switch.
+// code, codeStreamMessageExceedsMaximum its "larger than this stream's own
+// per-message limit", and codeStreamDuplicateMessageConflict its "a record
+// under this message id is proposed and not yet applied". None is exported by
+// the client, so each is written down here with what it covers rather than
+// left as a literal at the switch.
 const (
-	codeStreamStoreFailed           jetstream.ErrorCode = 10077
-	codeStreamMessageExceedsMaximum jetstream.ErrorCode = 10054
+	codeStreamStoreFailed              jetstream.ErrorCode = 10077
+	codeStreamMessageExceedsMaximum    jetstream.ErrorCode = 10054
+	codeStreamDuplicateMessageConflict jetstream.ErrorCode = 10158
 )
 
-// storeFailedMaxBytes and storeFailedTooLarge are the two store errors a
-// 10077 carries that this framework has a remedy for, spelled exactly as the
-// server declares them (ErrMaxBytes and ErrMsgTooLarge in its store). A test
-// holds both against the vendored server, so a bump that rewords one fails
-// the build instead of turning a full log into an unnamed refusal.
+// storeFailedMaxBytes, storeFailedTooLarge and storeFailedClosed are the
+// store errors a 10077 carries that this framework reads, spelled exactly as
+// the server declares them (ErrMaxBytes, ErrMsgTooLarge and ErrStoreClosed in
+// its store). A test holds each against the vendored server, so a bump that
+// rewords one fails the build instead of turning a full log — or a record
+// that may yet land — into an unnamed refusal.
 const (
 	storeFailedMaxBytes = "maximum bytes exceeded"
 	storeFailedTooLarge = "message too large"
+	storeFailedClosed   = "store is closed"
 )

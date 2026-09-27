@@ -577,6 +577,34 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		// there is no rejection to discriminate: take a fresh snapshot.
 		return Result{Rounds: round}, dispRetake, nil
 
+	case faultUnsettled:
+		// THE BROKER SAID THIS OPERATION'S RECORD MAY YET LAND — its own
+		// record in flight under this op id, or a store closed under an
+		// entry raft had committed. Resolved exactly as an unanswered
+		// append is, because the record may already be visible and then
+		// the ledger answers for it.
+		res, err := p.classifyAmbiguous(ctx, req, snap, detail)
+		res.Rounds = round
+		if err != nil || res.Outcome != "" {
+			return res, dispDone, err
+		}
+		// AND NEVER A RETAKE, which is the one difference from the arm
+		// above. There a probe finding nothing of this write's means
+		// nothing landed; here the broker has just said a record under
+		// this op id is committed or about to be, so a fresh snapshot
+		// would decide against a state about to hold this very write —
+		// a create would be told its own record already exists. Nor a
+		// refusal, which is what this was: "asking again changes
+		// nothing" about a record that applied a moment later, and a
+		// caller that re-filed under a fresh op id wrote it twice. The
+		// only safe retry is the same op id, and that one gets the
+		// broker's duplicate acknowledgement once the record lands.
+		p.logger.Warn("statelog_publish_unsettled",
+			"domain", p.domain.Name(), "subject", p.subjectOf(req.Subject),
+			"op_id", req.OpID, "publish_error", detail)
+		return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round},
+			dispDone, nil
+
 	case faultRejected:
 		p.count(metrics.StatelogPublishRejections, metrics.Attrs{
 			"domain": p.domain.Name(), "subject_kind": req.Subject.Kind,

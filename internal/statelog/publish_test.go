@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -984,4 +987,87 @@ func (f *laterFence) Evicted(ctx context.Context) (bool, error) {
 		return f.fakeFence.Evicted(ctx)
 	}
 	return f.answer()
+}
+
+// AN APPEND THE BROKER SAYS MAY YET LAND IS NEVER A REFUSAL, AND NEVER A
+// RETAKE.
+//
+// A clustered leader stages a record's message id when it PROPOSES it, and a
+// second append under the same id before that proposal applies is answered
+// 10158, "duplicate message id is in process". The id is the op id, so the
+// second append is this write's own: an earlier round's append went unanswered
+// while its commit was slow, or a caller retried an `unknown` under the same
+// operation. A leader whose store closes under an entry raft already committed
+// answers 10077 "store is closed" for a record every member then applies.
+//
+// Both were `broker_refused` — "asking again changes nothing" — about a record
+// that applied a moment later, and a caller that re-filed under a fresh op id
+// wrote the change twice. What the probe cannot settle is `unknown` with the
+// op id, and nothing is re-decided: a fresh snapshot would decide against a
+// state about to hold this very write.
+//
+// The rows are the server's own answers, built by its constructors; the
+// append either never reaches the stream (the proposal is still in flight) or
+// lands with its answer lost.
+func TestAnAppendTheBrokerSaysMayYetLandIsNeverRefused(t *testing.T) {
+	t.Parallel()
+	wire := func(e *server.ApiError) error {
+		return fmt.Errorf("nats: %w", &jetstream.APIError{
+			Code: e.Code, ErrorCode: jetstream.ErrorCode(e.ErrCode),
+			Description: e.Description,
+		})
+	}
+	inFlight := wire(server.NewJSStreamDuplicateMessageConflictError())
+	closed := wire(server.NewJSStreamStoreFailedError(server.ErrStoreClosed,
+		server.Unless(server.ErrStoreClosed)))
+	for _, c := range []struct {
+		name   string
+		err    error
+		landed bool
+		want   statelog.Outcome
+	}{
+		{"its own record in flight, not yet visible", inFlight, false,
+			statelog.OutcomeUnknown},
+		{"a store closed under it, not yet visible", closed, false,
+			statelog.OutcomeUnknown},
+		// RESOLVED WHEN IT CAN BE: the record is on the stream and this
+		// node applied it, so the ledger answers for it.
+		{"its own record in flight, already visible", inFlight, true,
+			statelog.OutcomeApplied},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			first, err := h.write(probeSubject("a"), "op-0", "one")
+			if err != nil {
+				t.Fatalf("the first write: %v", err)
+			}
+			h.anchorAt(probeSubject("a"), first.Position.Seq)
+			appends, snapshots := h.appends.appends.Load(), h.rows.snapshots()
+
+			h.appends.fail(c.err, !c.landed)
+			res, err := h.write(probeSubject("a"), "op-1", "two")
+			if err != nil {
+				t.Fatalf("a write the broker answered %v = %v, want outcome %q — "+
+					"the record may yet land, so no refusal is true of it",
+					c.err, err, c.want)
+			}
+			if res.Outcome != c.want {
+				t.Fatalf("outcome = %q, want %q", res.Outcome, c.want)
+			}
+			if res.OpID != "op-1" {
+				t.Errorf("op id = %q, want op-1 — the same op id is the only safe "+
+					"retry, and it is what gets the broker's duplicate "+
+					"acknowledgement once the record lands", res.OpID)
+			}
+			if got := h.appends.appends.Load() - appends; res.Rounds != 1 || got != 1 {
+				t.Errorf("the write took %d round(s) and %d append(s), want one of "+
+					"each", res.Rounds, got)
+			}
+			if got := h.rows.snapshots() - snapshots; got != 1 {
+				t.Errorf("the write took %d snapshots, want one — a retake decides "+
+					"against a state about to hold this very write", got)
+			}
+		})
+	}
 }

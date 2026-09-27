@@ -48,6 +48,13 @@ different with each.
 - **`unknown`** — nothing can be established about the record. It may be on the
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
+  It is also what a write answers when the broker **says** the record may yet
+  land: on a clustered stream, a second append under an operation id whose
+  first record is proposed and not yet applied (`duplicate message id is in
+  process`), or a leader whose store closed under a record raft had already
+  committed (`store is closed`). Neither is a refusal — the record usually
+  applies a moment later — so the retry under the same id is answered by the
+  broker's duplicate acknowledgement once it lands.
 
 ### Two pendings, and only one says something about the node
 
