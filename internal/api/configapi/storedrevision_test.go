@@ -295,16 +295,6 @@ func TestAnOldChartIsServedAndNeverWrittenBack(t *testing.T) {
 	})
 }
 
-// mustJSON renders a value as JSON, which is also valid YAML.
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	raw, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(raw)
-}
-
 // A PATCH OVER A PEER-EXTENDED DOCUMENT RESTORES ITS MASKS BEFORE VALIDATING.
 //
 // The strict reader refuses the merged document for the peer's field, and the

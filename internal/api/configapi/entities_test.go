@@ -667,8 +667,9 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		{configapi.EntityLLMProviders, "yankee", `{"type":"anthropic","model":"m","api_kies":["${K}"]}`, "providers.llm.yankee.api_kies"},
 		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
 			"mcp_servers[0].comand"},
-		{configapi.EntityMCPServers, "notion", `{"name":"notion","command":"notion-mcp","enviroment":{}}`,
-			"mcp_servers[1].enviroment"},
+		// A MISSPELT KEY IS THIS CASE'S INPUT, as every row's is.
+		{configapi.EntityMCPServers, "notion", `{"name":"notion","command":"notion-mcp","enviroment":{}}`, //nolint:misspell // the typo is the input
+			"mcp_servers[1].enviroment"}, //nolint:misspell // the typo's path
 	} {
 		t.Run(tc.kind+"/"+tc.id, func(t *testing.T) {
 			t.Parallel()

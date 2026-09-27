@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -432,12 +431,6 @@ func TestBothSurfacesShowWhatTheProviderSentNotWhatWasRouted(t *testing.T) {
 	if _, present := publishedBody(t, e)["encryptedData"]; present {
 		t.Error("the relay's own field reached the transport")
 	}
-}
-
-// modulusOf is the suite key's modulus in the base64url form a JWK carries.
-func modulusOf(t *testing.T) string {
-	t.Helper()
-	return base64.RawURLEncoding.EncodeToString(forgeKey.PublicKey.N.Bytes())
 }
 
 // A RELAYED CLOUD EVENT CARRIES NO DELIVERY HEADER. forgeID is the Atlassian

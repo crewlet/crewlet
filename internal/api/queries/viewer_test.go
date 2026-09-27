@@ -479,7 +479,7 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 			if !errors.Is(err, c.want) {
 				t.Fatalf("work_inbox for a login nobody holds = %v, want %v", err, c.want)
 			}
-			if c.want == queries.ErrUnauthorized && errors.Is(err, queries.ErrNotFound) {
+			if errors.Is(c.want, queries.ErrUnauthorized) && errors.Is(err, queries.ErrNotFound) {
 				t.Error("a refused caller was told the login names nobody")
 			}
 			if work.inboxQuery.Handle != "" {
