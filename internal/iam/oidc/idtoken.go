@@ -114,11 +114,18 @@ type Keys interface {
 //
 // RS256 IS THE ONE EVERY PROVIDER SIGNS WITH, and the asymmetric families
 // beside it are here because some providers offer them and nothing is lost by
-// reading one. What is NOT here is every HMAC algorithm: a symmetric token is
-// verified with a shared secret, and the secret a provider shares is the
-// client secret — so accepting HS256 turns the client secret into a token
-// signing key, which is the confusion attack in its original form.
-var Algorithms = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}
+// reading one: the RSA-PSS variants over the same keys, and ES256 and ES384
+// over the P-256 and P-384 keys internal/jwks reads — which is also why ES512
+// is NOT here, since no key a set yields could verify it. Each algorithm is
+// bound to its key's TYPE by the verifier itself: an ES256 header over an RSA
+// key, or ES384 over a P-256 one, fails before any signature arithmetic.
+//
+// What is NOT here is every HMAC algorithm: a symmetric token is verified
+// with a shared secret, and the secret a provider shares is the client secret
+// — so accepting HS256 turns the client secret into a token signing key,
+// which is the confusion attack in its original form.
+var Algorithms = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512",
+	"ES256", "ES384"}
 
 // Verify checks an ID token and returns what it asserts.
 //

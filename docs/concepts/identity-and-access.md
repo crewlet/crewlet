@@ -1350,7 +1350,7 @@ removed, is a different way to sign in as somebody else.
 | Check | Removed, it means |
 |---|---|
 | The signature, under a key the **issuer** publishes | Anybody who can reach the callback signs in as anybody |
-| The **algorithm**, pinned to the asymmetric families | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes) |
+| The **algorithm**, pinned to the asymmetric families — RS256/384/512, PS256/384/512, and ES256 and ES384 over P-256 and P-384 keys | A key source handing back bytes turns a published symmetric key into a signing secret. (The classic confusion attack is refused by the key *type* first; the pin is what still stands when the key source changes. Each algorithm is bound to its key's type too: an ES256 header naming an RSA key, or ES384 naming a P-256 key, fails before any arithmetic) |
 | The **issuer**, compared exactly | Any provider's token is accepted — including a free tenant the attacker registered |
 | The **audience**, which must contain this client | Every other application at that provider becomes a way in here |
 | The **nonce**, from the flight cookie | An ID token captured from any other login replays into this one |

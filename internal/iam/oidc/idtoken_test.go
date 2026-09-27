@@ -2,6 +2,8 @@ package oidc_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
@@ -476,6 +478,61 @@ func TestEveryTimeClaimIsJudgedWithinTheSkew(t *testing.T) {
 					"off this node's clock would fail every sign-in here", tc.name, err)
 			case !tc.want && err == nil:
 				t.Errorf("accepted a token %s, which is past any clock's skew", tc.name)
+			}
+		})
+	}
+}
+
+// AN ID TOKEN SIGNED WITH AN ELLIPTIC-CURVE KEY VERIFIES, ON ITS OWN CURVE ONLY.
+//
+// Some providers sign ES256 or ES384, and an allowlist of RSA families alone
+// refused every sign-in at one of them. Each algorithm is bound to its key by
+// the verifier's own type check — an ES256 header over the RSA key a set
+// publishes, or ES384 over a P-256 key, is refused before any arithmetic — and
+// ES512 stays out, since no key the key set yields could verify it.
+//
+// Mutation: take ES256 and ES384 out of the allowlist and the first two cases
+// are refused.
+func TestAnEllipticCurveIDTokenVerifiesOnItsOwnCurve(t *testing.T) {
+	t.Parallel()
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p521, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keySource{pub: map[string]any{
+		"p256": &p256.PublicKey, "p384": &p384.PublicKey,
+		"p521": &p521.PublicKey, testKID: &signingKey.PublicKey,
+	}}
+	for _, tc := range []struct {
+		name   string
+		method jwt.SigningMethod
+		kid    string
+		key    any
+		want   bool
+	}{
+		{"ES256 over a P-256 key", jwt.SigningMethodES256, "p256", p256, true},
+		{"ES384 over a P-384 key", jwt.SigningMethodES384, "p384", p384, true},
+		{"ES256 naming the RSA key", jwt.SigningMethodES256, testKID, p256, false},
+		{"ES384 naming a P-256 key", jwt.SigningMethodES384, "p256", p384, false},
+		{"ES512, which nothing here verifies", jwt.SigningMethodES512, "p521", p521, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := testConfig().Verify(t.Context(), keys,
+				sign(t, claims(), tc.method, tc.kid, tc.key), testNonce, at)
+			switch {
+			case tc.want && err != nil:
+				t.Errorf("refused: %v", err)
+			case !tc.want && err == nil:
+				t.Error("accepted")
 			}
 		})
 	}
