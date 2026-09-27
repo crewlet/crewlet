@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // THE SETTINGS DOCUMENT: what a stored revision holds once the org chart has
@@ -123,8 +121,22 @@ var ErrRevisionCarriesAChart = fmt.Errorf("config: this revision still carries a
 //
 // It holds the revision to no rule beyond the chart: the caller validates, and
 // which rules it holds it to is the caller's question — see [DecodeCompany].
+//
+// # The chart is looked for with the decoder's own parser
+//
+// The top-level keys are read as JSON, exactly as the decode below reads the
+// document, so there is no revision the decode accepts that the refusal could
+// not look inside. The probe used to be YAML's, and "a document the probe
+// cannot parse is one the decode will refuse" was true of neither parser's
+// errors in general: yaml.v3 refuses a duplicated key that encoding/json
+// accepts, so a revision naming a field twice decoded cleanly with its chart
+// silently dropped — the one outcome this function exists to prevent.
 func DecodeSettings(payload []byte) (*Settings, error) {
-	if err := refuseChart(payload); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &top); err != nil {
+		return nil, &Fault{Kind: ErrShape, Detail: err.Error()}
+	}
+	if err := refuseChart(top); err != nil {
 		return nil, err
 	}
 	defaults := DefaultCompany()
@@ -135,24 +147,18 @@ func DecodeSettings(payload []byte) (*Settings, error) {
 	return out, nil
 }
 
-// refuseChart reports a document that still holds the org chart's own keys.
+// refuseChart reports a document whose top-level keys include the org chart's
+// own.
 //
-// IT READS THE DOCUMENT rather than the decoded value, because a strict decode
-// would already have failed on the unknown field — with a message about an
-// unknown key, which sends an operator looking for a typo. This one runs first
-// and says what actually happened.
-func refuseChart(data []byte) error {
-	var probe map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &probe); err != nil {
-		// NOT AN ERROR HERE. A document this cannot parse is one the
-		// decode below will refuse with a better message, and reporting
-		// a malformed document as "it carries a chart" would be wrong in
-		// the one direction that matters.
-		return nil
-	}
+// IT READS THE KEYS rather than the decoded value, and runs before the decode,
+// because a strict decode would already have failed on the unknown field —
+// with a message about an unknown key, which sends an operator looking for a
+// typo — and a lenient one drops it without a word. This one says what
+// actually happened.
+func refuseChart(top map[string]json.RawMessage) error {
 	var held []string
 	for _, key := range chartKeys() {
-		if _, carries := probe[key]; carries {
+		if _, carries := top[key]; carries {
 			held = append(held, key)
 		}
 	}

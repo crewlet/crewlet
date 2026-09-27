@@ -3,6 +3,7 @@ package config_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,31 +22,34 @@ import (
 // cleanly.
 
 // A REVISION THAT STILL CARRIES A CHART IS REFUSED, NAMING THE PROCEDURE.
+//
+// Every document here is in the STORED form — JSON, as marshalling a
+// [config.Company] writes it — because that is the only form this reader ever
+// meets, and a case in the authored YAML would be testing a probe against
+// bytes the apply path never hands it.
 func TestDecodeSettingsRefusesARevisionCarryingAChart(t *testing.T) {
 	t.Parallel()
 
+	indented, err := json.MarshalIndent(config.Company{
+		Name:  "Acme",
+		Roles: []config.Role{{Name: "CEO", Handle: "ceo"}},
+	}, "", "\t")
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
 	for name, document := range map[string]string{
-		"seats and units": `
-name: Acme
-roles:
-  - name: CEO
-    handle: ceo
-units:
-  - name: Engineering
-    id: engineering
-`,
-		"seats alone": `
-name: Acme
-roles:
-  - name: CEO
-    handle: ceo
-`,
-		"units alone": `
-name: Acme
-units:
-  - name: Engineering
-    id: engineering
-`,
+		"seats and units": `{"name":"Acme",` +
+			`"roles":[{"name":"CEO","handle":"ceo"}],` +
+			`"units":[{"name":"Engineering","id":"engineering"}]}`,
+		"seats alone": `{"name":"Acme","roles":[{"name":"CEO","handle":"ceo"}]}`,
+		"units alone": `{"name":"Acme","units":[{"name":"Engineering","id":"engineering"}]}`,
+		"indented":    string(indented),
+		// A KEY NAMED TWICE is a document encoding/json decodes (the last
+		// one wins) and yaml.v3 refuses. While the chart was looked for
+		// with the YAML parser, this revision slipped past the refusal
+		// and decoded cleanly with its seats dropped.
+		"a key named twice": `{"name":"Acme","name":"Acme",` +
+			`"roles":[{"name":"CEO","handle":"ceo"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -158,6 +162,33 @@ func TestTheChartKeysAreExactlyWhatTheFileHasAndTheSettingsDoNot(t *testing.T) {
 			"here that is neither is a SETTING missing from config.Settings, "+
 			"and the config door now refuses every document carrying it",
 			chart)
+	}
+}
+
+// A CHART KEY IS SPELT THE SAME IN BOTH FORMS.
+//
+// The chart keys are derived from the YAML tags, because that is what an
+// operator authors and what the config door reads — but [config.DecodeSettings]
+// looks for them in a STORED revision, which is JSON. A chart field whose JSON
+// name differed from its YAML one would be a key that refusal never finds, and
+// the revision carrying it would decode with its chart silently dropped.
+func TestEveryChartKeyIsSpeltTheSameInTheStoredForm(t *testing.T) {
+	t.Parallel()
+
+	chart := config.ChartKeys()
+	company := reflect.TypeFor[config.Company]()
+	for i := range company.NumField() {
+		field := company.Field(i)
+		yamlName, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if !slices.Contains(chart, yamlName) {
+			continue
+		}
+		jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if jsonName != yamlName {
+			t.Errorf("config.Company.%s is %q in YAML and %q in JSON — "+
+				"a stored revision carrying it would not be refused",
+				field.Name, yamlName, jsonName)
+		}
 	}
 }
 
