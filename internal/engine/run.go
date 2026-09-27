@@ -748,7 +748,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 
 	// THE AUDIT TRAIL BEFORE THE NATIVE BACKENDS, whose identity writer and
 	// appliers announce through it.
-	if err = e.startAuthEvents(); err != nil {
+	if err = e.startAuthEvents(ctx); err != nil {
 		return nil, err
 	}
 

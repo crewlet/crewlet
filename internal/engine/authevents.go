@@ -22,7 +22,7 @@ import (
 // BEFORE THE NATIVE ESTATE, because both the identity writer and the state log's
 // appliers announce through it, and AFTER New's failure guard is armed, so a
 // boot that fails later stops the loop with everything else.
-func (e *Engine) startAuthEvents() error {
+func (e *Engine) startAuthEvents(ctx context.Context) error {
 	// NIL COUNTS NOTHING, and a nil *Recorder is not nil once it is an
 	// interface — so the absence is passed as an absent interface.
 	var counter authevents.Counter
@@ -38,12 +38,13 @@ func (e *Engine) startAuthEvents() error {
 	// DETACHED, like every loop the node owns: SIGTERM does not end it,
 	// [Engine.stopAuthEvents] does — and its last act is to publish the
 	// minute still open, which a loop that died with the caller's context
-	// would drop.
-	ctx, cancel := context.WithCancel(context.Background())
+	// would drop. Detached from the boot's CANCELLATION and nothing else,
+	// so the loop keeps the values the boot context carries.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		trail.Run(ctx)
+		trail.Run(runCtx)
 	}()
 	e.authEvents = trail
 	e.stopAuthTrail = func() {
