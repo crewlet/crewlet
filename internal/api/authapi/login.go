@@ -80,7 +80,31 @@ type loginResponse struct {
 	// needs it, because the bearer carries the same number and every node
 	// validates against its own applier.
 	Position string `json:"position"`
+
+	// Status is what the session just opened may do: everything its
+	// grants allow, or — on a deployment that requires a second factor
+	// the person does not hold — nothing but enrol one.
+	//
+	// IN THE ANSWER, and not only in the refusal every other route would
+	// give, because a client has to render the enrolment rather than
+	// discover it: a sign-in that succeeded and then answered 403 on the
+	// first screen reads as a broken deployment.
+	Status sessionStatus `json:"status"`
 }
+
+// sessionStatus is what a session may do, as a sign-in and `GET /auth/session`
+// report it.
+type sessionStatus string
+
+const (
+	// statusSignedIn is an ordinary session.
+	statusSignedIn sessionStatus = "signed_in"
+
+	// statusEnrolmentRequired is a session that may only enrol a second
+	// factor — the code the guard refuses every other route with, so a
+	// client matches one string wherever it meets it.
+	statusEnrolmentRequired = sessionStatus(httpjson.CodeSecondFactorEnrolmentRequired)
+)
 
 // Login signs somebody in with what they know.
 //
@@ -360,11 +384,11 @@ func firstCredential(held []iamdomain.Credential, method iamdomain.CredentialMet
 
 // holdsSecondFactor reports whether this person holds any second factor.
 //
-// HELD RATHER THAN CONFIGURED, and the difference is what makes
-// `second_factor: optional` mean anything: the deployment says whether one may
-// be required, and the PERSON's own credentials say whether one is. A
-// deployment that requires it refuses a person who holds none at enrolment
-// rather than here, which is where somebody can still do something about it.
+// HELD RATHER THAN CONFIGURED: what a sign-in asks for is what the PERSON
+// holds, so somebody holding a factor is always asked for it, whatever the
+// deployment says. A deployment that REQUIRES one does not refuse a person who
+// holds none here — they could never sign in to enrol it — but opens them a
+// session that may do nothing else ([Service.enrolmentOnly]).
 func holdsSecondFactor(held iamdomain.Sighting) bool {
 	for _, method := range iamdomain.SecondFactorMethods {
 		if _, ok := firstCredential(held.Credentials, method); ok {
@@ -650,6 +674,48 @@ type signIn struct {
 	// time when the provider did not say. Every other way in was proved
 	// HERE, at this instant, and ignores it.
 	provedAt time.Time
+
+	// because is what the replaced session's close records as its reason,
+	// and empty for a step-up's own ("replaced by a step-up").
+	because string
+}
+
+// enrolmentOnly reports whether a sign-in opens a session that may do nothing
+// but enrol a second factor.
+//
+// # A sign-in that proved a password and nothing else, where one is required
+//
+// `api.auth.local.totp: required` says nobody signs in on a password alone. So
+// a sign-in THIS SURFACE verified — the password route, a password step-up, an
+// invitation's redemption, the founding — that proved no second factor opens
+// a restricted session. Proving none means holding none: the password route
+// and the step-up demand a code from anybody who holds a factor, and a new
+// person holds none yet.
+//
+// A PROVIDER'S SIGN-IN IS NEVER RESTRICTED, because its second factor is the
+// provider's and invisible here — asking for one on top would be a factor on
+// top of a factor the engine cannot see. A Tier A exchange never reaches this.
+func (s *Service) enrolmentOnly(how signIn) bool {
+	switch how.method {
+	case types.SignInPassword, types.SignInInvite, types.SignInBootstrap:
+		return how.factor == "" && s.secondFactorRequired()
+	}
+	return false
+}
+
+// secondFactorRequired reports whether this deployment requires a second factor
+// of somebody who signs in with a password: the `api.auth.local` block's own
+// `totp`, and nothing where there is no such block.
+//
+// THE BLOCK AND NOT THE RESOLVED BACKEND, because the block is what states what
+// a password sign-in needs: a deployment whose people sign in through a
+// provider can still found its company and redeem invitations by password, and
+// the local block — where there is one — is what says whether those need a
+// factor. [iam.SecondFactor.Requires] reads a value this build does not know
+// as required, which is the safe direction for "must you prove more".
+func (s *Service) secondFactorRequired() bool {
+	local := s.boot.API.Auth.Local
+	return local != nil && local.TOTP.Requires()
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the provider's own
@@ -662,15 +728,39 @@ func (s *Service) proofOf(how signIn) time.Time {
 	return s.now()
 }
 
-// completeSignIn opens the session and sets the cookie.
+// completeSignIn opens the session, sets the cookie and answers.
 func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting, how signIn) {
+
+	answer, ok := s.openSignIn(w, r, held, how)
+	if !ok {
+		return
+	}
+	if how.redirect != "" {
+		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
+		// cookie is on this response, so the page it lands on is signed
+		// in; a JSON body here was what the provider's callback answered,
+		// which a browser renders as text and goes nowhere.
+		http.Redirect(w, r, how.redirect, http.StatusFound)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, answer)
+}
+
+// openSignIn opens the session, sets its cookie and announces it, answering
+// what a JSON caller is told — or false once it has written a refusal.
+//
+// SEPARATE FROM THE ANSWER because one caller answers in a shape of its own: a
+// second factor's enrolment that replaces an enrolment-only session reports
+// the enrolment, with the session it opened beside it.
+func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
+	held iamdomain.Sighting, how signIn) (loginResponse, bool) {
 
 	lineage, err := uuid.NewV7()
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_lineage_failed", "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
+		return loginResponse{}, false
 	}
 	expires := s.now().Add(s.boot.API.Auth.Session.Absolute())
 	if !how.absolute.IsZero() {
@@ -685,22 +775,27 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// may not have applied. This way round a failure changes nothing
 		// and the retry is clean; the one residue, an open that fails
 		// after the close landed, is a person asked to sign in again.
+		because := how.because
+		if because == "" {
+			because = "replaced by a step-up"
+		}
 		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
-			held.ID, "replaced by a step-up", "step-up:"+how.replaces)
+			held.ID, because, "step-up:"+how.replaces)
 		if closeErr != nil {
 			log.WarnContext(r.Context(), "api_step_up_close_failed",
 				"error", closeErr, "lineage", how.replaces)
 			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
-			return
+			return loginResponse{}, false
 		}
 		if !landed(closed) {
 			// THE SAME GESTURE FAILING, for the same reason: opening the
 			// replacement beside a close nothing can confirm is the
 			// second live session this order exists to prevent.
 			unresolved(w, r, "api_step_up_close_unresolved", closed)
-			return
+			return loginResponse{}, false
 		}
 	}
+	restricted := s.enrolmentOnly(how)
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
@@ -715,7 +810,10 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// from last week — see [Service.proofOf].
 		ProvedAt:    s.proofOf(how),
 		GroupGrants: how.groupGrants,
-		OpID:        "session:" + lineage.String(),
+		// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED opens a
+		// session that may only enrol one — see [Service.enrolmentOnly].
+		EnrolmentOnly: restricted,
+		OpID:          "session:" + lineage.String(),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
 		// nothing in this answer reads the row: the bearer carries the
 		// position and every node validates against its own applier.
@@ -724,7 +822,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
-		return
+		return loginResponse{}, false
 	}
 	if !landed(opened.Result) {
 		// NO BEARER FROM AN UNRESOLVED START. It would carry position
@@ -732,12 +830,12 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// session that ended — a cookie that signs its holder out on
 		// their first request, beside an event saying they signed in.
 		unresolved(w, r, "api_sign_in_session_unresolved", opened.Result)
-		return
+		return loginResponse{}, false
 	}
 	at := opened.Result.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
-		return
+		return loginResponse{}, false
 	}
 
 	// THE EPOCH AND THE GENERATION THE SESSION WAS OPENED AT, as the
@@ -753,12 +851,12 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_mint_failed", "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
+		return loginResponse{}, false
 	}
 	http.SetCookie(w, session.Cookie(s.boot.API.ExternalBase(), bearer, expires))
 	log.InfoContext(r.Context(), "api_sign_in",
 		"person", held.ID, "login", held.Login, "seat", held.Seat,
-		"position", at.String())
+		"position", at.String(), "enrolment_only", restricted)
 	if how.stepUp {
 		s.audit.Emit(r.Context(), types.IAMStepUpCompleted{
 			Person: held.ID, Login: held.Login, Lineage: lineage.String(),
@@ -772,18 +870,14 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 			SecondFactor: how.factor, ACR: how.acr, ExpiresAt: expires,
 		})
 	}
-	if how.redirect != "" {
-		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
-		// cookie is on this response, so the page it lands on is signed
-		// in; a JSON body here was what the provider's callback answered,
-		// which a browser renders as text and goes nowhere.
-		http.Redirect(w, r, how.redirect, http.StatusFound)
-		return
+	status := statusSignedIn
+	if restricted {
+		status = statusEnrolmentRequired
 	}
-	httpjson.Write(w, http.StatusOK, loginResponse{
+	return loginResponse{
 		Person: held.ID, Login: held.Login, Seat: held.Seat,
-		ExpiresAt: expires, Position: at.String(),
-	})
+		ExpiresAt: expires, Position: at.String(), Status: status,
+	}, true
 }
 
 // keep takes custody of a provider sign-in's refresh token, reporting whether

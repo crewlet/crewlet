@@ -150,6 +150,29 @@ const (
 	PathAuthPrefix = "/auth/"
 )
 
+// The four GUARDED routes an enrolment-only session may reach — see
+// [EnrolmentAdmits] — named here for the exemption list's reason: the refusal
+// and the registration are one spelling, so a route authapi moved without
+// moving this would not compile rather than quietly lock a new person out of
+// the one route that lets them in.
+const (
+	// PathAuthSession is who the caller is — and, for an enrolment-only
+	// session, that it is one.
+	PathAuthSession = "/auth/session"
+
+	// PathAuthTOTP enrols a second factor: the one gesture an
+	// enrolment-only session exists to make.
+	PathAuthTOTP = "/auth/totp"
+
+	// PathAuthStepUp re-confirms the password on a session, which an
+	// enrolment-only session needs when enrolling asks for a proof fresher
+	// than the one it was opened with.
+	PathAuthStepUp = "/auth/step-up"
+
+	// PathAuthLogout ends THIS session.
+	PathAuthLogout = "/auth/logout"
+)
+
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the
 // API's drain gate refuses the first and serves the second, and a prefix it
@@ -497,21 +520,22 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		principal, how := iam.From(r.Context())
 		if Unguarded(path) {
 			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
-			// ever a credential whose SEAT is gone — a signed-in
-			// person or a bound Tier A token — and the routes that
-			// are unguarded are how somebody signs out and how the
-			// sign-in screen renders — locking a leaver out of those
-			// would leave them holding a live cookie with no way to
-			// end it.
+			// ever a credential whose SEAT is gone, or a session that
+			// may only enrol a second factor, and the routes that are
+			// unguarded are how somebody signs in and how the sign-in
+			// screen renders — locking either person out of those
+			// would leave them holding a live cookie with no way on.
 			next.ServeHTTP(w, r)
 			return
 		}
-		if refusal != nil && !ActsAsThemselves(path) {
-			// RESOLVED AND STILL REFUSED. Logged at info rather than
-			// warn: a seat removed under somebody who is still signed
-			// in is an ordinary consequence of an offboarding, and
-			// the remedy is a rebind rather than an investigation.
-			log.Info("api_auth_seat_refused",
+		if refusal != nil && refusal.Applies(r) {
+			// RESOLVED AND STILL REFUSED, on a route the refusal does
+			// not leave them — see [Refusal.Applies]. Logged at info
+			// rather than warn: a seat removed under somebody who is
+			// still signed in is an ordinary consequence of an
+			// offboarding, and a person who has not enrolled their
+			// second factor yet is an ordinary first day.
+			log.Info("api_auth_refused_resolved",
 				"route", path, "code", refusal.Code,
 				"detail", refusal.Detail, "remote", g.Client(r))
 			httpjson.FailWith(w, refusal.Status, refusal.Code,

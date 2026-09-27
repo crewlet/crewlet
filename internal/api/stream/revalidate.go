@@ -168,9 +168,10 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 		//nolint:contextcheck // derived from ctx; see the paragraph above
 		principal, how := iam.From(r.Context())
 		switch {
-		case refusal != nil:
-			// RESOLVED AND STILL REFUSED — the person's seat is gone.
-			log.InfoContext(ctx, "stream_closed_seat_refused",
+		case refusal != nil && refusal.Applies(r):
+			// RESOLVED AND STILL REFUSED — the person's seat is gone,
+			// or their session may only enrol a second factor.
+			log.InfoContext(ctx, "stream_closed_refused",
 				"code", string(refusal.Code), "detail", refusal.Detail)
 			_ = conn.Close(CloseUnauthorized, string(refusal.Code))
 			return

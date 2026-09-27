@@ -75,12 +75,12 @@ func (s *Service) Routes(mux auth.Mux) {
 	}
 
 	// Guarded.
-	mux.HandleFunc("GET /auth/session", s.Session)
+	mux.HandleFunc("GET "+auth.PathAuthSession, s.Session)
 	mux.HandleFunc("POST /auth/token", s.Token)
-	mux.HandleFunc("POST /auth/step-up", s.StepUp)
-	mux.HandleFunc("POST /auth/totp", s.EnrolTOTP)
+	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
+	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
-	mux.HandleFunc("POST /auth/logout", s.Logout)
+	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one
@@ -235,6 +235,9 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, loginResponse{
 		Person: principal.ID.String(), Login: principal.Login,
 		Seat: principal.Seat, ExpiresAt: expires, Position: at.String(),
+		// A TOKEN'S SESSION IS NEVER RESTRICTED: presenting the token
+		// was the whole proof, and it holds no second factor to enrol.
+		Status: statusSignedIn,
 	})
 }
 

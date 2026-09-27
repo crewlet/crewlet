@@ -81,7 +81,7 @@ var errSecondFactor = errors.New("this person holds a second factor")
 // the one this command promised not to leave. A sign-out that does not land is
 // reported on warn, with what to do, and never replaces the mint's answer.
 func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, error) {
-	cookie, err := m.signIn(ctx)
+	cookie, restricted, err := m.signIn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +98,13 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 				endErr, session.Idle)
 		}
 	}()
+	if restricted {
+		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR mints nothing,
+		// and asking would only be refused: said here, with the remedy,
+		// rather than as the node's 403 on the mint. The deferred
+		// sign-out still ends it.
+		return nil, errEnrolFirst
+	}
 	answer, status, raw, err := m.send(ctx, http.MethodPost, "/iam/credentials",
 		cookie, m.body)
 	if err != nil {
@@ -109,30 +116,38 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 	return answer, nil
 }
 
-// signIn posts the credentials and answers the session cookie that came back.
-func (m selfMint) signIn(ctx context.Context) (*http.Cookie, error) {
+// errEnrolFirst is a sign-in that succeeded into a session that may only enrol
+// a second factor: the deployment requires one and this person holds none.
+var errEnrolFirst = errors.New("this deployment requires a second factor and " +
+	"you have not enrolled one, so a password alone signs you in to nothing " +
+	"but the enrolment: sign in to the dashboard, add an authenticator app, " +
+	"then run this again with a code from it")
+
+// signIn posts the credentials and answers the session cookie that came back,
+// and whether that session may only enrol a second factor.
+func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 	body := map[string]any{"login": m.login, "password": m.password}
 	if m.code != "" {
 		body["code"] = m.code
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		m.base+auth.PathAuthLogin, bytes.NewReader(encoded))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach %s: %w", m.base+auth.PathAuthLogin, err)
+		return nil, false, fmt.Errorf("reach %s: %w", m.base+auth.PathAuthLogin, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, iamMaxAnswer))
 	if err != nil {
-		return nil, fmt.Errorf("read the sign-in's answer: %w", err)
+		return nil, false, fmt.Errorf("read the sign-in's answer: %w", err)
 	}
 	var answer map[string]any
 	_ = json.Unmarshal(raw, &answer)
@@ -140,28 +155,33 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, error) {
 	switch {
 	case resp.StatusCode == http.StatusOK:
 	case code == string(httpjson.CodeSecondFactorRequired):
-		return nil, errSecondFactor
+		return nil, false, errSecondFactor
 	case code == string(httpjson.CodeSignInRefused):
 		// ONE SENTENCE FOR EVERY MISTAKE, because the node gives one
 		// answer for every mistake: telling a caller which part was wrong
 		// is telling a stranger who works here.
-		return nil, errors.New("the node refused the sign-in: check the " +
+		return nil, false, errors.New("the node refused the sign-in: check the " +
 			"login, the password and any second-factor code — it answers " +
 			"the same way whichever was wrong")
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, errors.New("this deployment does not sign in with " +
+		return nil, false, errors.New("this deployment does not sign in with " +
 			"passwords, so a terminal cannot sign in to it: mint your token " +
 			"from a signed-in browser session (POST /iam/credentials with no " +
 			"?person=)")
 	default:
-		return nil, selfRefusal(resp.StatusCode, answer, raw)
+		return nil, false, selfRefusal(resp.StatusCode, answer, raw)
 	}
+	// THE SESSION'S OWN STATUS, which is how a sign-in that succeeded on a
+	// password alone, where a second factor is required, says it may do
+	// nothing but enrol one.
+	status, _ := answer["status"].(string)
+	restricted := status == string(httpjson.CodeSecondFactorEnrolmentRequired)
 	for _, c := range resp.Cookies() {
 		if slices.Contains(session.CookieNames, c.Name) && c.Value != "" {
-			return &http.Cookie{Name: c.Name, Value: c.Value}, nil
+			return &http.Cookie{Name: c.Name, Value: c.Value}, restricted, nil
 		}
 	}
-	return nil, errors.New("the node answered the sign-in without a " +
+	return nil, false, errors.New("the node answered the sign-in without a " +
 		"session cookie, so there is nothing to mint with")
 }
 

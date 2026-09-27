@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -220,6 +221,7 @@ type recordingWriter struct {
 	refusals []error
 	enrolled []iamdomain.Enrolment
 	spent    []iamdomain.InvitationSpend
+	starts   []iamdomain.SessionStart
 
 	// unresolved makes every enrolment past the refusals answer `unknown`
 	// under its own op id: nothing can say whether it landed.
@@ -250,6 +252,22 @@ func (w *recordingWriter) SpendInvitation(_ context.Context,
 	defer w.mu.Unlock()
 	w.spent = append(w.spent, in)
 	return applied(statelog.Position{}), nil
+}
+
+func (w *recordingWriter) OpenSession(ctx context.Context,
+	in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+
+	w.mu.Lock()
+	w.starts = append(w.starts, in)
+	w.mu.Unlock()
+	return w.stubWriter.OpenSession(ctx, in)
+}
+
+// opened is every session this writer was asked to open.
+func (w *recordingWriter) opened() []iamdomain.SessionStart {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.starts)
 }
 
 // redeem posts one redemption with a login and answers its status.

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
@@ -189,7 +190,71 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		OperatorID: iam.ActorFor(principal).OperatorID, Reason: reason,
 	})
 	log.InfoContext(r.Context(), "api_totp_enrolled", "person", person)
-	httpjson.Write(w, http.StatusOK, map[string]string{"status": "enrolled"})
+	if replaced, restricted := s.enrolmentSession(r, person); restricted {
+		s.completeEnrolment(w, r, principal, replaced)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, totpEnrolled{Status: "enrolled"})
+}
+
+// totpEnrolled is what a completed enrolment answers.
+type totpEnrolled struct {
+	// Status is `enrolled`.
+	Status string `json:"status"`
+
+	// Session is the session the enrolment OPENED, present only when the
+	// request carried an enrolment-only one — which the enrolment ended,
+	// its cookie on this response replacing it. See
+	// [Service.completeEnrolment].
+	Session *loginResponse `json:"session,omitempty"`
+}
+
+// enrolmentSession is the session this request presented when it is one that
+// may only enrol a second factor, and the person's own — or false.
+//
+// READ UNDER THE SIGNATURE AND THE ROWS, as a step-up reads the session it
+// replaces: the lineage it ends and the deadline it keeps are the presented
+// session's, and neither may come off a cookie nobody verified.
+func (s *Service) enrolmentSession(r *http.Request, person string) (
+	session.Validation, bool) {
+
+	if r.Header.Get("Authorization") != "" {
+		return session.Validation{}, false
+	}
+	v := s.presentedSession(r)
+	return v, v.Row == session.RowValid && v.Session.EnrolmentOnly &&
+		v.Bearer.Person == person
+}
+
+// completeEnrolment replaces an enrolment-only session with a whole one, once
+// the second factor it was restricted for is enrolled.
+//
+// # Why the session is replaced rather than lifted
+//
+// What restricted it is what its SIGN-IN proved — a password alone — and that
+// is a fact about the session, recorded once when it opened. Enrolling proves
+// the factor now: the code that proved the seed was typed at this request. So
+// the gesture opens the session that proof earns, and ENDS the restricted one
+// first, exactly as a step-up does — the same deadline, the same carried
+// grants, one live session and not two. A restriction lifted in place would be
+// a session that proved one thing and is trusted for another.
+func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
+	principal iam.Principal, replaced session.Validation) {
+
+	answer, ok := s.openSignIn(w, r, iamdomain.Sighting{
+		ID: principal.ID.String(), Kind: principal.Kind, Stage: principal.Stage,
+		Login: principal.Login, Seat: principal.Seat,
+	}, signIn{
+		method: types.SignInPassword, factor: types.FactorTOTP,
+		stepUp: true, replaces: replaced.Bearer.Lineage.String(),
+		absolute:    replaced.Bearer.AbsoluteExpiresAt,
+		groupGrants: replaced.Session.GroupGrants,
+		because:     "replaced by a second factor's enrolment",
+	})
+	if !ok {
+		return
+	}
+	httpjson.Write(w, http.StatusOK, totpEnrolled{Status: "enrolled", Session: &answer})
 }
 
 // RegenerateRecovery issues a fresh set of single-use codes, retiring the old.

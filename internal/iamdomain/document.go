@@ -263,6 +263,28 @@ type Session struct {
 	// mapping exists for.
 	GroupGrants []iam.Grant `json:"group_grants,omitempty"`
 
+	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
+	// FACTOR: opened by a password alone — a sign-in, a step-up, an
+	// invitation's redemption or the founding — for a person who holds
+	// none, on a deployment whose `api.auth.local.totp` requires one.
+	//
+	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
+	// than re-derived per request from the person's credentials and the
+	// node's configuration: what makes a session restricted is what its
+	// SIGN-IN proved, and a person who enrols afterwards has proved
+	// nothing more on this session — completing the enrolment REPLACES it
+	// with a full one, as a step-up does. Derived per request, the answer
+	// would also move with every node's own setting, and one browser would
+	// be restricted on one node and free on the next.
+	//
+	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session that
+	// existed before this field and every one a provider or a Tier A token
+	// opens. What stops an older build reading a restricted one as free is
+	// the record's VERSION ([ConditionRecordVersion]), not this field: a
+	// build that cannot decode it defers the record rather than dropping
+	// the field and serving the session whole.
+	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
+
 	// EndedReason is why a session stopped, on the CLOSE record: signed
 	// out, revoked, expired, or reuse detected. "This session was ended by
 	// reuse detection" is the sentence an investigation is looking for,

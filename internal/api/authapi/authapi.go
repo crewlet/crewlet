@@ -52,6 +52,18 @@
 // session: signing somebody in on a code that stays usable is the replay the
 // spend exists to close.
 //
+// # A required second factor is enrolled before anything else
+//
+// `api.auth.local.totp: required` says nobody acts on a password alone, and a
+// person who holds no second factor has nothing else to present. So a sign-in
+// this surface verified that proved a password and no second factor opens a
+// session marked ENROLMENT-ONLY on its own start record, and answers
+// `status: second_factor_enrolment_required`; internal/api/auth refuses that
+// session every route but the four that let its person in, and enrolling an
+// authenticator through it REPLACES it with a whole session, as a step-up
+// does. The mark is the session's because what restricts it is what its
+// sign-in proved — see [Service.enrolmentOnly].
+//
 // # Three outcomes stay three, on every write
 //
 // A spend whose outcome nobody can establish is the same 503 as one that could

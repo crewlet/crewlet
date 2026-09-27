@@ -778,7 +778,10 @@ api:
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
                         #   longer than `changes`
     local:              # present on the `local` backend
-      totp: required    # required | optional. NO DEFAULT: state one
+      totp: required    # required | optional. NO DEFAULT: state one.
+                        #   required: a password sign-in by somebody who
+                        #   holds no second factor opens a session that may
+                        #   only enrol one (POST /auth/totp)
       accept_insecure: false   # acknowledge an insecure posture off loopback
       min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
                                #   Enforced wherever a person sets a password

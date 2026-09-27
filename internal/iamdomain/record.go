@@ -22,8 +22,9 @@ import (
 // because a record a peer cannot read is deferred on that peer: written at the
 // ceiling for no reason, every record of a rolling upgrade would be deferred on
 // every older node. Two is [SweepRecordVersion], three is
-// [OperatorRecordVersion], and nothing else has moved.
-const RecordVersion = 3
+// [OperatorRecordVersion], four is [ConditionRecordVersion], and nothing else
+// has moved.
+const RecordVersion = 4
 
 // BaseRecordVersion is what every record carries whose meaning has not changed
 // since this domain landed: every op but a sweep, written by a party that
@@ -71,6 +72,42 @@ const SweepRecordVersion = 2
 // gestures somebody made through `/iam`. See [namesOperator] for which records
 // carry one.
 const OperatorRecordVersion = 3
+
+// ConditionRecordVersion is what a record carries that states a CONDITION on
+// what it permits — a condition an older build does not know, would carry past
+// as an unknown field, and would therefore apply as permitting MORE than its
+// writer said.
+//
+// Two records state one:
+//
+//   - a SESSION START that may only enrol a second factor
+//     ([Session.EnrolmentOnly]): an older node would serve it as a whole
+//     session, so a password alone would reach every surface there on a
+//     deployment that requires a second factor.
+//   - an INVITATION that is redeemable only with its link's secret and that
+//     binds a seat when it is redeemed ([Invitation.Verifier],
+//     [Invitation.Seat]): an older node would redeem it on its id alone, which
+//     every snapshot and backup holds in the clear, and enrol the person with
+//     no seat.
+//
+// A VERSION AND NOT JUST A FIELD, for [SweepRecordVersion]'s reason turned
+// round: there a field an older build skipped made two nodes' rows differ,
+// and here it would make one node's rows say a condition does not exist. At
+// version 4 an older node DEFERS the record, and a deferred record is the
+// unknown arm on every read of its bucket — a 503 on a restricted session or
+// an invitation there, never the wider answer.
+//
+// ONLY THE RECORDS THAT CARRY A CONDITION: an ordinary session start stays at
+// the base, or every sign-in of a rolling upgrade would be deferred on every
+// older node. The versions are cumulative, so a version-4 record that also
+// names a credential needs nothing more.
+const ConditionRecordVersion = 4
+
+// conditioned raises a record to the version that carries a condition on what
+// it permits — see [ConditionRecordVersion].
+func conditioned(rec *MutationRecord) {
+	rec.V = max(rec.V, ConditionRecordVersion)
+}
 
 // writeVersion is the version a record of op is written at: the lowest that
 // carries its meaning, given whether it names the credential its actor acted

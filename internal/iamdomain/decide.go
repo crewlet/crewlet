@@ -1522,6 +1522,12 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	if err != nil {
 		return SessionOpened{}, err
 	}
+	if in.EnrolmentOnly {
+		// A RESTRICTED SESSION AT THE VERSION THAT STATES THE
+		// RESTRICTION, so a node that cannot read it defers it rather
+		// than serving it whole — see [ConditionRecordVersion].
+		conditioned(&rec)
+	}
 	// THE LAST RUN'S COUNTERS, which is what the landed record carries: a
 	// decide may run again against a fresh snapshot.
 	var opened SessionOpened
@@ -1540,6 +1546,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
 			ProvedAt:          in.ProvedAt,
 			GroupGrants:       slices.Clone(in.GroupGrants),
+			EnrolmentOnly:     in.EnrolmentOnly,
 		})
 		return err
 	}
@@ -1632,6 +1639,12 @@ type SessionStart struct {
 	// asserted, and every node clamps them to its own ceiling at decision
 	// time rather than here.
 	GroupGrants []iam.Grant
+
+	// EnrolmentOnly opens a session that may do nothing but enrol a second
+	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
+	// what it proved and the deployment's own `api.auth.local.totp`, and
+	// the record carrying it is written at [ConditionRecordVersion].
+	EnrolmentOnly bool
 
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.

@@ -91,6 +91,13 @@ type LineageRow struct {
 	// them. The guard unions them with the person's declared set and
 	// clamps both to its ceiling.
 	GroupGrants []iam.Grant
+
+	// EnrolmentOnly marks a session its sign-in opened on a password alone
+	// where the deployment requires a second factor the person does not
+	// hold: it may enrol one and do nothing else. The session's fact, like
+	// ProvedAt — decided once, by what the sign-in proved — and what the
+	// request guard refuses every other route on.
+	EnrolmentOnly bool
 }
 
 // PersonRow is the holder's row.

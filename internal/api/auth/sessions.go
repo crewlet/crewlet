@@ -96,17 +96,38 @@ func ActsAsThemselves(path string) bool {
 // Refusal is an answer the guard writes itself, rather than one a route
 // derives from the resolution it was handed.
 //
-// IT EXISTS FOR EXACTLY ONE CASE and is not a fourth resolution arm: a
-// credential that validated and whose SEAT did not — a person whose session is
-// live, or a Tier A token the directory binds, bound to a seat the chart will
-// not let them act as. Every other outcome is one of [iam.Resolution]'s three,
-// which is what every surface downstream already reads.
+// IT EXISTS FOR EXACTLY TWO CASES and is not a fourth resolution arm, because
+// in both the caller is somebody this node knows perfectly well and what is
+// refused is what they may reach: a credential that validated and whose SEAT
+// did not — a person whose session is live, or a Tier A token the directory
+// binds, bound to a seat the chart will not let them act as — and a session
+// that may only ENROL A SECOND FACTOR. Every other outcome is one of
+// [iam.Resolution]'s three, which is what every surface downstream already
+// reads.
 type Refusal struct {
 	// Status is the HTTP status, Code the machine-readable reason, and
-	// Detail the sentence that names the seat.
+	// Detail the sentence that says what was refused and why.
 	Status int
 	Code   httpjson.Code
 	Detail string
+
+	// spares names the routes this refusal does not reach — see
+	// [Refusal.Applies].
+	spares func(r *http.Request) bool
+}
+
+// Applies reports whether this refusal answers r, or whether r is one of the
+// routes it leaves the caller.
+//
+// EACH REFUSAL CARRIES ITS OWN, because the two leave different things: a seat
+// refusal leaves the whole `/auth/` surface, whose subject is the person's own
+// credential rather than the seat ([ActsAsThemselves]), and an enrolment
+// refusal leaves exactly the four routes that let a person in
+// ([EnrolmentAdmits]). One rule in the middleware for both was either an
+// enrolment-only session reaching every `/auth/` route — recovery codes and
+// signing everybody out included — or an offboarded person unable to sign out.
+func (f *Refusal) Applies(r *http.Request) bool {
+	return f.spares == nil || !f.spares(r)
 }
 
 // seatRefusal is the answer to a credential resolved to a seat the chart will
@@ -121,7 +142,70 @@ func seatRefusal(binding session.Binding) *Refusal {
 		Status: http.StatusForbidden,
 		Code:   httpjson.CodeSeatUnavailable,
 		Detail: binding.Detail,
+		spares: func(r *http.Request) bool { return ActsAsThemselves(r.URL.Path) },
 	}
+}
+
+// enrolmentRefusal is the answer to a session that may only enrol a second
+// factor, on every route but the four [EnrolmentAdmits] names: 403
+// `second_factor_enrolment_required`.
+//
+// # Why a session and not a sign-in refusal
+//
+// `api.auth.local.totp: required` says nobody signs in on a password alone,
+// and a person who holds no second factor — freshly invited, the founder, one
+// an administrator reset — has nothing else to present. Refusing the sign-in
+// would lock them out of the one gesture that satisfies the rule, so the
+// sign-in succeeds into a session that can make THAT gesture and nothing else,
+// and enrolling replaces it with a whole one. It was never built: the setting
+// was validated, documented and read by nothing, so a deployment that
+// required a second factor admitted a password alone everywhere.
+//
+// THE PERSON IS STILL RESOLVED, as a seat refusal's is: this node knows exactly
+// who they are, the four routes need to, and the cookie is not cleared —
+// signing in again reaches the same restricted session.
+func enrolmentRefusal() *Refusal {
+	return &Refusal{
+		Status: http.StatusForbidden,
+		Code:   httpjson.CodeSecondFactorEnrolmentRequired,
+		Detail: "this session was opened with a password alone, and this " +
+			"deployment requires a second factor you do not hold yet: enrol " +
+			"one with POST " + PathAuthTOTP + " — until you do, this session " +
+			"can do nothing else",
+		spares: EnrolmentAdmits,
+	}
+}
+
+// EnrolmentAdmits reports whether r is one of the four routes an
+// enrolment-only session may reach.
+//
+// # Exactly these, and why each
+//
+//   - `GET /auth/session`, so a client can learn it holds such a session and
+//     render the enrolment rather than an error page;
+//   - `POST /auth/totp`, the enrolment itself, both legs — whose completion
+//     replaces this session with a whole one;
+//   - `POST /auth/step-up`, because enrolling asks a proof inside the
+//     sensitive window, and a person who took longer than that to find their
+//     phone must be able to re-confirm the password without signing out; it
+//     opens another enrolment-only session, since a password is still all
+//     they hold;
+//   - `POST /auth/logout`, to leave.
+//
+// AN EXACT LIST OF METHOD AND PATH, never a prefix, for the exemption list's
+// reason: the same surface regenerates recovery codes, signs a person out
+// everywhere and ends other people's sessions, and a prefix would hand those to
+// a password alone. Recovery codes wait for the whole session the enrolment
+// opens, because they are the second factor's own backup and a set minted on a
+// password alone would satisfy the rule without an authenticator at all.
+func EnrolmentAdmits(r *http.Request) bool {
+	switch r.URL.Path {
+	case PathAuthSession:
+		return r.Method == http.MethodGet || r.Method == http.MethodHead
+	case PathAuthTOTP, PathAuthStepUp, PathAuthLogout:
+		return r.Method == http.MethodPost
+	}
+	return false
 }
 
 // RetryIdentitySeconds is the `Retry-After` on an identity 503 — the guard's,
@@ -451,6 +535,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 
 	binding := session.ResolveSeat(r.Context(), s.chart, v.Person)
+	var refusal *Refusal
+	reissue := true
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
 		log.WarnContext(r.Context(), "api_session_seat_unavailable",
@@ -475,16 +561,25 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// bearer is live and works the moment somebody rebinds them,
 		// and discarding it would sign out a person whose only problem
 		// is a chart edit.
-		return sessionAnswer{
-			principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-			refusal: seatRefusal(binding), presented: true,
-		}
+		refusal, reissue = seatRefusal(binding), false
 	}
-
-	s.reissue(w, v)
+	if v.Session.EnrolmentOnly {
+		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR, refused as
+		// that whatever its seat: the seat refusal leaves the whole of
+		// /auth/ and this one only four routes of it, so the narrower
+		// answer is the one that holds — and enrolling is the first
+		// thing either person has to do. The cookie is kept and
+		// re-issued as any live session's is — its holder is working
+		// through the enrolment — and signing in again would only reach
+		// the same restricted session.
+		refusal, reissue = enrolmentRefusal(), true
+	}
+	if reissue {
+		s.reissue(w, v)
+	}
 	return sessionAnswer{
 		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-		presented: true,
+		refusal: refusal, presented: true,
 	}
 }
 

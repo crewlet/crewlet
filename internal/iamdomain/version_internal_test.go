@@ -21,7 +21,8 @@ import (
 // whatever it would otherwise carry.
 func TestEveryRecordIsWrittenAtTheLowestVersionThatCarriesIt(t *testing.T) {
 	t.Parallel()
-	for _, written := range []int{SweepRecordVersion, OperatorRecordVersion} {
+	for _, written := range []int{SweepRecordVersion, OperatorRecordVersion,
+		ConditionRecordVersion} {
 		if RecordVersion < written {
 			t.Fatalf("this build writes version %d and reads only up to %d",
 				written, RecordVersion)

@@ -149,6 +149,14 @@ type sessionResponse struct {
 	// can say so before they start rather than after.
 	StepUpDue          bool `json:"step_up_due"`
 	SensitiveStepUpDue bool `json:"sensitive_step_up_due"`
+
+	// Status is what the session this request carried may do: `signed_in`,
+	// or `second_factor_enrolment_required` for one that may only enrol a
+	// second factor — which is how a client that holds such a session,
+	// and is refused everything else, learns to render the enrolment. A
+	// request whose credential was a header carries no session and is
+	// `signed_in`.
+	Status sessionStatus `json:"status"`
 }
 
 // Session answers who the caller is.
@@ -178,8 +186,13 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	// the year 1. A request whose credential was a header carries no
 	// session, and the zero bearer omits it.
 	var expires time.Time
+	status := statusSignedIn
 	if r.Header.Get("Authorization") == "" {
-		expires = s.presentedSession(r).Bearer.AbsoluteExpiresAt
+		presented := s.presentedSession(r)
+		expires = presented.Bearer.AbsoluteExpiresAt
+		if presented.Session.EnrolmentOnly {
+			status = statusEnrolmentRequired
+		}
 	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
 		Person: principal.ID.String(), Login: principal.Login,
@@ -193,6 +206,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		SensitiveReauthAt:  principal.SensitiveReauthAt,
 		StepUpDue:          s.stepUpDue(principal),
 		SensitiveStepUpDue: !principal.Proved(iam.RecencySensitive, s.now()),
+		Status:             status,
 	})
 }
 

@@ -405,6 +405,17 @@ const (
 	// identity recently enough for what it just asked to do.
 	CodeStepUpRequired Code = "step_up_required"
 
+	// CodeSecondFactorEnrolmentRequired is a session opened on a password
+	// alone where the deployment requires a second factor its person does
+	// not hold: it may enrol one (`POST /auth/totp`), read who it is,
+	// re-confirm its password and sign out, and every other route answers
+	// this, 403.
+	//
+	// ITS OWN CODE, not `step_up_required`: no fresher proof of the same
+	// kind changes the answer — enrolling a factor does — and a client that
+	// read it as a step-up would ask for the password in a loop.
+	CodeSecondFactorEnrolmentRequired Code = "second_factor_enrolment_required"
+
 	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out,
 	// revoked, expired, or ended by reuse detection.
 	//
@@ -641,6 +652,9 @@ var codes = map[Code]string{
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
 		"recently. Confirm it, then try again.",
+	CodeSecondFactorEnrolmentRequired: "This company requires a second factor " +
+		"and you have not set one up yet. Add an authenticator app to your " +
+		"account, and everything else opens once you have.",
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeBootstrapClosed: "The first-operator setup is not available on this " +
 		"deployment. Ask somebody who already has an account to invite you.",

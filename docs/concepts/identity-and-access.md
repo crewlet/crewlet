@@ -769,6 +769,51 @@ verifier still verifies, so the next sign-in asks again — and every attempt to
 retire one verifier is one operation, its id derived from the person and the
 verifier it replaces.
 
+### A required second factor is enrolled before anything else
+
+`api.auth.local.totp: required` means **nobody acts on a password alone**. A
+person who holds a second factor is asked for it at every password sign-in and
+step-up, as they always were. A person who holds **none** — freshly invited,
+the founder, somebody an administrator reset — has nothing else to present, so
+refusing their sign-in would lock them out of the one gesture that satisfies
+the rule. Instead the sign-in succeeds into a session that may do **nothing but
+enrol one**:
+
+- `POST /auth/login`, `POST /auth/bootstrap`, `POST /auth/invite/{id}` and a
+  password `POST /auth/step-up` that proved a password and no second factor
+  answer `200` with `"status": "second_factor_enrolment_required"` and the
+  cookie of that session. `GET /auth/session` says the same.
+- The request guard answers **every other route** `403
+  second_factor_enrolment_required` for that session — `/iam`, `/work`, the
+  socket, and the rest of `/auth` too, which regenerates recovery codes and
+  signs a person out everywhere. It admits exactly four: `GET /auth/session`,
+  `POST /auth/totp`, `POST /auth/step-up` (enrolling asks a proof inside
+  `step_up_sensitive`, and somebody who took longer than that to find their
+  phone re-confirms the password without signing out) and `POST /auth/logout`.
+- Completing `POST /auth/totp` through that session **replaces it** with a
+  whole one, as a step-up does: the restricted session is ended first, the new
+  one keeps its absolute deadline and carried grants, and the enrolment's
+  answer carries the new session beside `"status": "enrolled"`, its cookie on
+  the response. The code that proved the seed is the second factor the new
+  session was proved with. Recovery codes come after, from the whole session.
+
+The restriction is **the session's own fact**, recorded on its start record by
+the sign-in that opened it, rather than re-derived on each request from the
+person's credentials and the node's configuration: what restricts it is what
+its sign-in proved, and a per-node derivation would restrict one browser on one
+node and free it on the next. A restricted session's start record is written
+at the identity log's condition version, so a node running an older build
+defers it — answering `503` for that session — rather than serving it whole.
+`GET /iam/people/{id}/sessions` marks it `"enrolment_only": true`, so an
+administrator can tell a person part-way through their first sign-in from one
+who is working.
+
+A sign-in through an **identity provider** is never restricted: its second
+factor is the provider's and invisible here. A Tier A token's exchanged
+session is never restricted either. `optional` opens whole sessions on a
+password alone, which is why it is refused off loopback unless
+`accept_insecure` says so.
+
 ### A code is spent when it is used
 
 Either second factor works at a sign-in or a step-up, whichever the person

@@ -320,6 +320,7 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	out.Epoch = uint64(epoch)
 	out.ProvedAt = doc.ProvedAt
 	out.GroupGrants = doc.GroupGrants
+	out.EnrolmentOnly = doc.EnrolmentOnly
 	return nil
 }
 

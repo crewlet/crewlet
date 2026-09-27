@@ -24,6 +24,10 @@ type sessionView struct {
 	EndedAt   time.Time `json:"ended_at,omitzero"`
 	EndedWhy  string    `json:"ended_reason,omitempty"`
 	Live      bool      `json:"live"`
+
+	// EnrolmentOnly is a session opened on a password alone where a second
+	// factor is required, which may do nothing but enrol one.
+	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 }
 
 // GetSessions is `GET /iam/people/{id}/sessions`.
@@ -40,7 +44,7 @@ func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
 			Lineage: row.Lineage, Person: row.PersonID, Epoch: row.Epoch,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 			EndedAt: row.EndedAt, EndedWhy: row.EndedWhy,
-			Live: row.Live(now),
+			Live: row.Live(now), EnrolmentOnly: row.EnrolmentOnly,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"sessions": out})
