@@ -39,14 +39,17 @@
 // supplies the POSTURE — which credentials exist and what ceiling their grants
 // are cut to — never the existence of a check.
 //
-// # A bearer meets a curve before it is compared
+// # A bearer is compared as it arrives, and its value is what protects it
 //
-// On a guarded route a presented bearer is admitted by this node's own curve,
-// keyed on the source, before any comparison runs — ten refusals free, then a
-// wait that doubles to thirty seconds, `429` with a `Retry-After` past five.
-// Without it every guarded route answered a guessed bearer as fast as it
-// arrived. bearers.go carries the argument, including why the curve is local
-// and why a match clears nothing.
+// No curve stands in front of the comparison. A bearer names nobody until it is
+// compared, so the only key a curve there could have is the SOURCE, and a
+// refusal decided on an address is one anybody sharing it holds shut for
+// everybody else — every pipeline and the break-glass token at an office, a
+// VPN's egress, or the whole internet behind a proxy this deployment does not
+// trust. What makes guessing hopeless is the value — crypto/rand bytes, a
+// keyring HMAC, a Tier A value config refuses short — and what a guess costs is
+// a line in the audit trail's failure tally. bearers.go carries the argument,
+// including the curve that was tried and what it cost.
 //
 // # And two gates beside it
 //

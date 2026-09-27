@@ -783,12 +783,25 @@ means the engine is fine and the protocol was wrong. A node that cannot read
 its identity estate answers `503` rather than `401`, and a person whose seat
 the chart no longer holds gets the guard's `403` naming the seat.
 
-**The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
-existence of a check. An API built with no Tier A at all therefore has no token
-that can match, and every guarded route answers `401`. That is the only safe
-reading of "an app was built without being told who may act", and it removes the
-possibility of a process serving `/config` writes with nothing in front of them.
+**The guard is mounted whether or not `api.auth` is configured, and it decides
+who is asking — never what they may do.** Every request leaves its middleware
+carrying one of three answers: **resolved** (a session cookie, a Tier A token
+or a machine token matched, and the principal it names), **anonymous** (nothing
+was presented, or what was presented is refused), or **unknown** (this node
+could not read what it needed to tell — answered `503` with a `Retry-After`,
+never the `401` that tells a browser to sign in again). What is not guarded is
+exactly the list above; every other route is, whatever its method, and there is
+no second list of routes that are "especially" guarded. What a resolved caller
+may then *do* is each surface's own question, asked where it is enforced: every
+route states the grant its verb takes, and `internal/authz`'s router decides it
+against the principal — `401` for somebody unresolved, `403` for a grant they do
+not hold or a proof of who they are that is too old (`step_up_required`). Tier
+A supplies the *posture* — which credentials exist and the ceiling their grants
+are cut to — never the existence of a check: an API built with no Tier A at all
+has no token that can match, and every guarded route answers `401`. That is the
+only safe reading of "an app was built without being told who may act", and it
+removes the possibility of a process serving `/config` writes with nothing in
+front of them.
 
 ### What Tier A must state once the API is served
 

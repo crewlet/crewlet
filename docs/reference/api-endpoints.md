@@ -219,11 +219,26 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-> **Auth.** Every route requires `Authorization: Bearer <token>`, reads
-> included — `/ws/stream` too, and it accepts `?token=…` since browsers cannot
-> set headers on a WebSocket. Only there: a token in the query string of any
-> other route authenticates nobody, because a URL lands in proxy logs and
-> browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
+> **Auth.** Every route needs a credential, reads included, and three shapes
+> of one reach every route: a **session cookie** a person gets by signing in
+> (`__Host-crewlet_session` on an https deployment, `crewlet_session` on plain
+> http); `Authorization: Bearer` with a **Tier A token**, the deployment's own
+> machine credential from `api.auth.tokens`; and `Authorization: Bearer` with a
+> **[machine token](#post-iamcredentials-mints-a-machine-token)** (`cwl_pat_…`),
+> somebody in the directory — a person's own token or a service account's —
+> acting as its owner. The two bearers are told apart by the value's shape,
+> which picks how it is checked and admits nothing by itself, and all three
+> resolve to the same principal, so no route knows which arrived. **When a
+> request carries a header and a cookie, the header decides**: a browser sends
+> its cookie whether or not the caller meant to, and an `Authorization` header
+> is only ever there because somebody put it there — so a request presenting a
+> *wrong* header stays anonymous rather than being upgraded by whatever cookie
+> is in the jar. `/ws/stream` also accepts a token as `?token=…`, since a
+> browser cannot set a header on a WebSocket and the shipped dashboard opens
+> its socket that way; the session cookie a browser sends on the handshake
+> works there too. Only there: a token in the query string of any other route
+> authenticates nobody, because a URL lands in proxy logs and browser
+> history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
 > `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
 > and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
 > login. That is an **exact list and not a `/auth/` prefix**: the same surface
@@ -245,20 +260,6 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > never opened sends no close frame — so the dashboard re-asks over plain HTTP
 > to tell "your token is wrong" from "the engine is down". Without it a reader
 > holding a stale token sees "retrying" for ever.
->
-> **Three credential shapes reach every route, and the header wins.** A Tier A
-> bearer in `Authorization` is the deployment's own machine credential; a
-> [machine token](#post-iamcredentials-mints-a-machine-token) (`cwl_pat_…`)
-> in the same header is somebody in the directory — a person's own token, or a
-> service account's — and acts as its owner; a `crewlet_session` cookie is a
-> person who signed in. The two bearers are told apart by the value's shape,
-> which picks how it is checked and admits nothing by itself. All three
-> resolve to the same principal, so no route knows which arrived. When a
-> request carries a header and a cookie, the **header** decides — a browser
-> sends its cookie whether or not the caller meant to, and an `Authorization`
-> header is only ever there because somebody put it there. A request presenting
-> a *wrong* header therefore stays anonymous rather than being upgraded by
-> whatever cookie is in the jar.
 >
 > **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
 > ceiling is applied when the request is resolved, not written anywhere, so
